@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lexis"
+version = "0.1.1"
+description = "A professional linguistic platform to manage your teaching knowledge wiki."
+readme = "README.md"
+requires-python = ">=3.7"
+authors = [
+    { name = "Gemini CLI Agent" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "requests",
+    "youtube-transcript-api",
+    "yt-dlp",
+]
+
+[project.optional-dependencies]
+video = [
+    "faster-whisper",
+    "pyinstaller",
+]
+test = [
+    "pytest",
+]
+
+[project.scripts]
+lexis = "librarian.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["librarian*"]
+
+[tool.setuptools.package-data]
+librarian = ["prompts/*.md", "templates/*.html"]

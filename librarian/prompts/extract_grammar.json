@@ -1,0 +1,108 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Title for the extraction.",
+      "minLength": 1
+    },
+    "overall_cefr_level": {
+      "type": "string",
+      "enum": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "C1",
+        "C2"
+      ],
+      "description": "The holistic CEFR difficulty rating for the entire text."
+    },
+    "grammar_patterns": {
+      "type": "array",
+      "maxItems": "{count}",
+      "items": {
+        "type": "object",
+        "properties": {
+          "design_audit": {
+            "type": "string",
+            "description": "Thinking Step. Verify that the verbatim quote contains a genuine instance of the selected grammar category. Format: 'DRAFT: [Verbatim Quote] -> [Grammar Category] -> [Structural Verification]'.",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Concessive clauses",
+              "Conditional clauses",
+              "Participial clauses",
+              "Inversion",
+              "Cleft sentences",
+              "Nominalization",
+              "Abstract frames",
+              "Rhetorical parallelism",
+              "Non-finite structures",
+              "Hedging devices",
+              "Anaphoric and cataphoric nouns",
+              "Evaluative It-frameworks"
+            ]
+          },
+          "quote": {
+            "type": "string",
+            "description": "Extract short verbatim quote or core segment demonstrating the pattern.",
+            "minLength": 1
+          },
+          "pattern_formula": {
+            "type": "string",
+            "description": "Generalize pattern following Slot-Filling Template: 'He + [Past Tense Verb] + [Object] + .'",
+            "minLength": 1
+          },
+          "pedagogical_function": {
+            "type": "string",
+            "description": "Rhetorical purpose: why writers use this structure and what effect it creates.",
+            "minLength": 1
+          },
+          "imitation_example": {
+            "type": "string",
+            "description": "Create new sentence demonstrating the pattern. not from the original text but similar in style and complexity.",
+            "minLength": 1
+          },
+          "common_mistakes": {
+            "type": "string",
+            "description": "common ESL learner mistakes with this pattern.",
+            "minLength": 1
+          },
+          "cefr_level": {
+            "type": "string",
+            "enum": [
+              "A1",
+              "A2",
+              "B1",
+              "B2",
+              "C1",
+              "C2"
+            ],
+            "description": "CEFR difficulty level of this pattern."
+          }
+        },
+        "required": [
+          "design_audit",
+          "category",
+          "quote",
+          "pattern_formula",
+          "pedagogical_function",
+          "imitation_example",
+          "common_mistakes",
+          "cefr_level"
+        ],
+        "additionalProperties": false
+      },
+      "description": "List of {count} unique, diverse advanced grammar patterns found in the text across different categories."
+    }
+  },
+  "required": [
+    "title",
+    "overall_cefr_level",
+    "grammar_patterns"
+  ],
+  "additionalProperties": false
+}

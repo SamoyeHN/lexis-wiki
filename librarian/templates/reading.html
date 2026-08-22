@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reading Comprehension Handout</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg-page: linear-gradient(135deg, #EEF2FF 0%, #FAF5FF 50%, #F5F3FF 100%);
+            --color-text-main: #1F2937;
+            --color-text-muted: #6B7280;
+            --color-text-dark: #374151;
+            --color-text-body-alt: #4B5563;
+            --color-gradient-primary: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+            --color-primary: #4F46E5;
+            --color-accent-purple: #7C3AED;
+            --color-indigo-subtle: #EEF2FF;
+            --color-indigo-border: #C7D2FE;
+            --color-indigo-light-border: #E0E7FF;
+            --color-border-subtle: #E5E7EB;
+            --color-gray-bg: #F3F4F6;
+            --color-bg-card: #F9FAFB;
+            --color-success-border: #10B981;
+            --color-success-bg: #ECFDF5;
+            --color-success-text: #065F46;
+            --color-success-title: #059669;
+            --color-danger-border: #EF4444;
+            --color-danger-bg: #FEF2F2;
+            --color-danger-text: #991B1B;
+            --color-danger-title: #DC2626;
+            --color-bg-hover: #F8FAFC;
+            --color-border-hover: #818CF8;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            background: var(--color-bg-page);
+            color: var(--color-text-main);
+            padding: 24px;
+        }
+
+        header {
+            max-width: 1400px;
+            margin: 0 auto 24px;
+            text-align: center;
+            padding: 16px;
+            animation: fadeInDown 0.6s ease-out;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 36px;
+            font-weight: 800;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: var(--color-text-muted);
+            font-weight: 500;
+        }
+
+        .split-container {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 32px;
+            max-width: 1400px;
+            margin: 0 auto;
+            align-items: start;
+        }
+
+        @media (max-width: 1024px) {
+            .split-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(16px);
+            border-radius: 24px;
+            border: 1px solid rgba(224, 231, 255, 0.8);
+            box-shadow: 0 10px 30px rgba(79, 70, 229, 0.05);
+            padding: 32px;
+            min-height: 500px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .passage-panel {
+            max-height: 75vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        /* Custom Scrollbar for passage */
+        .passage-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+        .passage-panel::-webkit-scrollbar-track {
+            background: rgba(243, 244, 246, 0.5);
+            border-radius: 4px;
+        }
+        .passage-panel::-webkit-scrollbar-thumb {
+            background: rgba(124, 58, 237, 0.2);
+            border-radius: 4px;
+        }
+        .passage-panel::-webkit-scrollbar-thumb:hover {
+            background: rgba(124, 58, 237, 0.4);
+        }
+
+        h2.panel-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--color-primary);
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--color-indigo-subtle);
+            padding-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .passage-content {
+            font-size: 16px;
+            line-height: 1.8;
+            color: var(--color-text-dark);
+            text-align: justify;
+        }
+
+        .passage-content p {
+            margin-bottom: 20px;
+        }
+
+        /* Vocabulary Tooltip Highlight */
+        .vocab-highlight {
+            background: linear-gradient(120deg, rgba(167, 139, 250, 0.15) 0%, rgba(196, 181, 253, 0.3) 100%);
+            border-bottom: 2px dashed var(--color-accent-purple);
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0 2px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .vocab-highlight:hover {
+            background: linear-gradient(120deg, rgba(124, 58, 237, 0.25) 0%, rgba(139, 92, 246, 0.35) 100%);
+            color: var(--color-primary);
+        }
+
+        /* Quiz Panel Styling */
+        .quiz-panel {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .start-screen, .quiz-screen, .results-screen {
+            display: none;
+            flex-direction: column;
+            height: 100%;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .start-screen.active, .quiz-screen.active, .results-screen.active {
+            display: flex;
+        }
+
+        .btn {
+            background: var(--color-gradient-primary);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 12px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);
+            transition: all 0.2s ease;
+            font-family: 'Outfit', sans-serif;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: fit-content;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--color-primary);
+            border: 2px solid var(--color-indigo-border);
+            box-shadow: none;
+        }
+
+        .btn-outline:hover {
+            background: var(--color-indigo-subtle);
+            border-color: var(--color-primary);
+            box-shadow: none;
+            transform: none;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-bottom: 24px;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            color: var(--color-text-muted);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .progress-bar-outer {
+            height: 8px;
+            background-color: var(--color-border-subtle);
+            border-radius: 9999px;
+            overflow: hidden;
+        }
+
+        .progress-bar-inner {
+            height: 100%;
+            background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent-purple) 100%);
+            width: 0%;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 9999px;
+        }
+
+        /* Question and Options */
+        .question-text {
+            font-size: 18px;
+            font-weight: 600;
+            line-height: 1.5;
+            color: var(--color-text-main);
+            margin-bottom: 24px;
+        }
+
+        .options-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .option-item {
+            display: flex;
+            align-items: center;
+            padding: 16px 20px;
+            background: white;
+            border: 1px solid var(--color-border-subtle);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            color: var(--color-text-dark);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .option-item:hover {
+            border-color: var(--color-border-hover);
+            background: var(--color-bg-hover);
+        }
+
+        .option-item.selected {
+            border-color: var(--color-primary);
+            background: var(--color-indigo-subtle);
+            color: var(--color-primary);
+        }
+
+        .option-item.correct {
+            border-color: var(--color-success-border);
+            background: var(--color-success-bg);
+            color: var(--color-success-text);
+        }
+
+        .option-item.wrong {
+            border-color: var(--color-danger-border);
+            background: var(--color-danger-bg);
+            color: var(--color-danger-text);
+        }
+
+        .option-label {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--color-gray-bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--color-text-body-alt);
+            margin-right: 16px;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .option-item.selected .option-label {
+            background: var(--color-primary);
+            color: white;
+        }
+
+        .option-item.correct .option-label {
+            background: var(--color-success-border);
+            color: white;
+        }
+
+        .option-item.wrong .option-label {
+            background: var(--color-danger-border);
+            color: white;
+        }
+
+        /* Feedback Area */
+        .feedback-area {
+            background: var(--color-bg-card);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid var(--color-indigo-subtle);
+            margin-top: 16px;
+            display: none;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        .feedback-area.active {
+            display: block;
+        }
+
+        .feedback-title {
+            font-weight: 700;
+            font-size: 16px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feedback-title.correct { color: var(--color-success-title); }
+        .feedback-title.wrong { color: var(--color-danger-title); }
+
+        .feedback-desc {
+            font-size: 14px;
+            color: var(--color-text-body-alt);
+            line-height: 1.6;
+        }
+
+        /* Floating Tooltip Custom Styling */
+        .floating-tooltip {
+            position: fixed;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--color-border-subtle);
+            padding: 20px;
+            width: 280px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease;
+            transform: translateY(8px);
+            pointer-events: none;
+        }
+
+        .floating-tooltip.active {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .tooltip-word {
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--color-primary);
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .tooltip-part_of_speech {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: var(--color-indigo-subtle);
+            color: var(--color-primary);
+            padding: 2px 8px;
+            border-radius: 9999px;
+        }
+
+        .tooltip-def {
+            font-size: 13px;
+            color: var(--color-text-dark);
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+
+        .tooltip-ex {
+            font-size: 12px;
+            color: var(--color-text-muted);
+            font-style: italic;
+            border-left: 2px solid var(--color-indigo-light-border);
+            padding-left: 8px;
+        }
+
+        /* Score Display styling */
+        .results-score-box {
+            background: linear-gradient(135deg, var(--color-bg-hover) 0%, var(--color-indigo-subtle) 100%);
+            border: 1px solid var(--color-indigo-light-border);
+            border-radius: 20px;
+            padding: 32px;
+            text-align: center;
+            margin-bottom: 32px;
+            animation: pulse 2s infinite;
+        }
+
+        .score-circle {
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            background: white;
+            box-shadow: 0 8px 24px rgba(79, 70, 229, 0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            border: 4px solid var(--color-accent-purple);
+        }
+
+        .score-num {
+            font-family: 'Outfit', sans-serif;
+            font-size: 40px;
+            font-weight: 800;
+            color: var(--color-primary);
+            line-height: 1;
+        }
+
+        .score-total {
+            font-size: 14px;
+            color: var(--color-text-muted);
+            font-weight: 500;
+        }
+
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.1); }
+            70% { box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        }
+
+</style>
+</head>
+<body><header>
+        <h1 id="quiz-main-title">Reading Comprehension</h1>
+        <div class="subtitle">Read the text on the left and hover over highlighted vocabulary words for definitions. Answer the questions on the right.</div>
+    </header>
+
+    <div class="split-container">
+        <!-- Passage Panel -->
+        <div class="panel passage-panel">
+            <h2 class="panel-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                Reading Passage
+            </h2>
+            <div id="passage" class="passage-content">
+                <!-- Passage will be populated by JS -->
+            </div>
+        </div>
+
+        <!-- Quiz Panel -->
+        <div class="panel quiz-panel">
+            <!-- Start Screen -->
+            <div class="start-screen active" id="start-screen">
+                <h2 class="panel-title">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                    Assessment Ready
+                </h2>
+                <p style="font-size: 15px; color: var(--color-text-body-alt); line-height: 1.6; margin-bottom: 24px;">
+                    This customized handout includes a reading comprehension test based on the passage. Take your time to review the text first. 
+                </p>
+                <div style="background: var(--color-gray-bg); padding: 20px; border-radius: 12px; margin-bottom: 32px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; font-weight: 600;">
+                        <span>Questions:</span> <span id="start-question-count">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: 600;">
+                        <span>Vocabulary Words Highlighted:</span> <span id="start-vocab-count">0</span>
+                    </div>
+                </div>
+                <button class="btn" id="start-btn">
+                    Start Assessment
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                </button>
+            </div>
+
+            <!-- Quiz Screen -->
+            <div class="quiz-screen" id="quiz-screen">
+                <div class="progress-container">
+                    <div class="progress-header">
+                        <span>Question <span id="current-q-num">1</span> of <span id="total-q-num">10</span></span>
+                        <span id="score-ticker">Correct: 0</span>
+                    </div>
+                    <div class="progress-bar-outer">
+                        <div class="progress-bar-inner" id="progress-bar"></div>
+                    </div>
+                </div>
+
+                <div class="question-text" id="question-text">
+                    <!-- Question will be populated here -->
+                </div>
+
+                <div class="options-list" id="options-list">
+                    <!-- Options will be populated here -->
+                </div>
+
+                <div class="feedback-area" id="feedback-area">
+                    <div class="feedback-title" id="feedback-title">
+                        <!-- Icon and Title -->
+                    </div>
+                    <div class="feedback-desc" id="feedback-desc">
+                        <!-- Explainer text -->
+                    </div>
+                </div>
+
+                <div style="margin-top: auto; display: flex; justify-content: space-between; gap: 16px;">
+                    <button class="btn btn-outline" id="prev-btn" style="display: none;">Previous</button>
+                    <button class="btn" id="next-btn" style="margin-left: auto;">
+                        Submit Answer
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results Screen -->
+            <div class="results-screen" id="results-screen">
+                <h2 class="panel-title">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    Assessment Completed
+                </h2>
+                
+                <div class="results-score-box">
+                    <div class="score-circle">
+                        <span class="score-num" id="score-val">0</span>
+                        <span class="score-total">of <span id="score-out-of">0</span></span>
+                    </div>
+                    <h3 style="font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 700; color: var(--color-text-main); margin-bottom: 8px;" id="achievement-title">Well Done!</h3>
+                    <p style="font-size: 14px; color: var(--color-text-muted);" id="achievement-desc">Keep practicing to improve your reading comprehension skills.</p>
+                </div>
+
+                <button class="btn" id="restart-btn" style="width: 100%;">
+                    Retry Quiz
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Tooltip Box -->
+    <div class="floating-tooltip" id="tooltip">
+        <div class="tooltip-word">
+            <span id="tooltip-word-text">word</span>
+            <span class="tooltip-part_of_speech" id="tooltip-word-part_of_speech">noun</span>
+        </div>
+        <div class="tooltip-def" id="tooltip-word-def">Definition here.</div>
+        <div class="tooltip-ex" id="tooltip-word-ex">Example sentence here.</div>
+    </div>
+
+    <script>
+        // Quiz Data injection target
+        const quizData = { /* QUIZ_DATA */ };
+
+        let currentQuestionIndex = 0;
+        let score = 0;
+        let answersState = []; // Track user's answer index for each question
+        let isSubmitted = false;
+
+        document.addEventListener("DOMContentLoaded", () => {
+            initQuiz();
+            setupEvents();
+        });
+
+        function initQuiz() {
+            // Setup title
+            document.title = quizData.title || "Reading Comprehension Handout";
+            document.getElementById("quiz-main-title").innerText = quizData.title || "Reading Comprehension";
+
+            // Process and highlight passage text
+            renderPassage();
+
+            // Populate counts
+            document.getElementById("start-question-count").innerText = quizData.questions.length;
+            document.getElementById("start-vocab-count").innerText = quizData.vocabulary.length;
+            document.getElementById("total-q-num").innerText = quizData.questions.length;
+            document.getElementById("score-out-of").innerText = quizData.questions.length;
+
+            answersState = new Array(quizData.questions.length).fill(null);
+        }
+
+        function renderPassage() {
+            let passageRaw = quizData.passage || "";
+            
+            // 1. Strip YAML Frontmatter if present
+            if (passageRaw.startsWith("---")) {
+                const parts = passageRaw.split("---");
+                if (parts.length >= 3) {
+                    passageRaw = parts.slice(2).join("---").trim();
+                }
+            }
+
+            // 2. Clean common markdown markers
+            let passageHtml = passageRaw
+                .replace(/^##\s+Text\s*$/gm, "")
+                .replace(/^###\s+.*$/gm, (match) => `<strong>${match.replace("###", "").trim()}</strong>`)
+                .replace(/\n\n+/g, "\n\n")
+                .trim();
+            
+            // 3. Format paragraphs
+            passageHtml = passageHtml.split("\n\n").map(para => `<p>${para}</p>`).join("");
+
+            const foundMatches = {}; // index -> actual text matched
+
+            quizData.vocabulary.forEach((vocab, index) => {
+                const escapedWord = vocab.word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                // Regex for the word and common inflections
+                const inflectionRegex = new RegExp(`\\b${escapedWord}(?:s|es|ed|ing|ly)?\\b`, "i");
+
+                let targetFound = false;
+                const replacer = (match) => {
+                    if (targetFound) return match; // Ensure only one occurrence is replaced per vocab item
+                    targetFound = true;
+                    foundMatches[index] = match;
+                    return `__H_${index}__`;
+                };
+
+                // 1. Try to find inside the specific context sentence if provided
+                if (vocab.context_sentence) {
+                    const sentenceIndex = passageHtml.indexOf(vocab.context_sentence);
+                    if (sentenceIndex !== -1) {
+                        const pre = passageHtml.substring(0, sentenceIndex);
+                        const post = passageHtml.substring(sentenceIndex + vocab.context_sentence.length);
+                        const sentence = passageHtml.substring(sentenceIndex, sentenceIndex + vocab.context_sentence.length);
+                        
+                        const newSentence = sentence.replace(inflectionRegex, replacer);
+                        passageHtml = pre + newSentence + post;
+                    }
+                }
+
+                // 2. Fallback to global first-match if context sentence missing or word not found in it
+                if (!targetFound) {
+                    passageHtml = passageHtml.replace(inflectionRegex, replacer);
+                }
+            });
+
+            // Final step: replace placeholders with actual highlighting HTML
+            Object.keys(foundMatches).forEach(index => {
+                passageHtml = passageHtml.replace(`__H_${index}__`, `<span class="vocab-highlight" data-vocab-idx="${index}">${foundMatches[index]}</span>`);
+            });
+
+            document.getElementById("passage").innerHTML = passageHtml;
+        }
+
+        function setupEvents() {
+            // Tooltip interactive functionality
+            const tooltip = document.getElementById("tooltip");
+            let activeHighlight = null;
+
+            document.getElementById("passage").addEventListener("mouseover", (e) => {
+                const target = e.target;
+                if (target.classList.contains("vocab-highlight")) {
+                    const vocabIdx = parseInt(target.getAttribute("data-vocab-idx"));
+                    const vocab = quizData.vocabulary[vocabIdx];
+
+                    // Populate tooltip content
+                    document.getElementById("tooltip-word-text").innerText = vocab.word;
+                    document.getElementById("tooltip-word-part_of_speech").innerText = vocab.part_of_speech;
+                    document.getElementById("tooltip-word-def").innerText = vocab.definition;
+                    document.getElementById("tooltip-word-ex").innerText = vocab.example_usage ? `"${vocab.example_usage}"` : "";
+
+                    // Robust fixed positioning
+                    const rect = target.getBoundingClientRect();
+                    const tooltipWidth = 280;
+                    
+                    let left = rect.left;
+                    if (left + tooltipWidth > window.innerWidth) {
+                        left = window.innerWidth - tooltipWidth - 20;
+                    }
+
+                    tooltip.style.top = `${rect.bottom + 10}px`;
+                    tooltip.style.left = `${left}px`;
+                    
+                    tooltip.classList.add("active");
+                    activeHighlight = target;
+                }
+            });
+
+            document.getElementById("passage").addEventListener("mouseout", (e) => {
+                if (e.target.classList.contains("vocab-highlight")) {
+                    tooltip.classList.remove("active");
+                    activeHighlight = null;
+                }
+            });
+
+            // Start quiz button
+            document.getElementById("start-btn").addEventListener("click", () => {
+                document.getElementById("start-screen").classList.remove("active");
+                document.getElementById("quiz-screen").classList.add("active");
+                showQuestion(0);
+            });
+
+            // Next / Submit button
+            document.getElementById("next-btn").addEventListener("click", () => {
+                const currentQuestion = quizData.questions[currentQuestionIndex];
+                
+                if (!isSubmitted) {
+                    const selectedOption = document.querySelector(".option-item.selected");
+                    if (!selectedOption) {
+                        alert("Please select an answer option.");
+                        return;
+                    }
+
+                    const answerIdx = parseInt(selectedOption.getAttribute("data-opt-idx"));
+                    answersState[currentQuestionIndex] = answerIdx;
+                    isSubmitted = true;
+
+                    const isCorrect = (answerIdx === currentQuestion.correct_answer_index);
+                    if (isCorrect) {
+                        score++;
+                        document.getElementById("score-ticker").innerText = `Correct: ${score}`;
+                    }
+
+                    revealOptionResult(answerIdx, currentQuestion.correct_answer_index);
+                    
+                    const feedbackArea = document.getElementById("feedback-area");
+                    const feedbackTitle = document.getElementById("feedback-title");
+                    
+                    if (isCorrect) {
+                        feedbackTitle.className = "feedback-title correct";
+                        feedbackTitle.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Correct Answer`;
+                    } else {
+                        feedbackTitle.className = "feedback-title wrong";
+                        feedbackTitle.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Incorrect Answer`;
+                    }
+                    
+                    document.getElementById("feedback-desc").innerText = currentQuestion.explanation;
+                    feedbackArea.classList.add("active");
+
+                    const isLastQ = (currentQuestionIndex === quizData.questions.length - 1);
+                    document.getElementById("next-btn").innerText = isLastQ ? "Finish & View Results" : "Next Question";
+
+                } else {
+                    if (currentQuestionIndex < quizData.questions.length - 1) {
+                        currentQuestionIndex++;
+                        showQuestion(currentQuestionIndex);
+                    } else {
+                        showResults();
+                    }
+                }
+            });
+
+            document.getElementById("restart-btn").addEventListener("click", () => {
+                currentQuestionIndex = 0;
+                score = 0;
+                answersState = new Array(quizData.questions.length).fill(null);
+                isSubmitted = false;
+                document.getElementById("score-ticker").innerText = "Correct: 0";
+                document.getElementById("results-screen").classList.remove("active");
+                document.getElementById("quiz-screen").classList.add("active");
+                showQuestion(0);
+            });
+        }
+
+        function showQuestion(index) {
+            currentQuestionIndex = index;
+            isSubmitted = false;
+            const question = quizData.questions[index];
+            document.getElementById("current-q-num").innerText = index + 1;
+            const progressPercent = ((index) / quizData.questions.length) * 100;
+            document.getElementById("progress-bar").style.width = `${progressPercent}%`;
+            document.getElementById("next-btn").innerText = "Submit Answer";
+            document.getElementById("feedback-area").classList.remove("active");
+            document.getElementById("question-text").innerText = question.question;
+            const optionsList = document.getElementById("options-list");
+            optionsList.innerHTML = "";
+
+            question.options.forEach((opt, optIdx) => {
+                const label = String.fromCharCode(65 + optIdx);
+                const optItem = document.createElement("div");
+                optItem.className = "option-item";
+                optItem.setAttribute("data-opt-idx", optIdx);
+                optItem.innerHTML = `<div class="option-label">${label}</div><div>${opt}</div>`;
+                optItem.addEventListener("click", () => {
+                    if (isSubmitted) return;
+                    document.querySelectorAll(".option-item").forEach(item => item.classList.remove("selected"));
+                    optItem.classList.add("selected");
+                });
+                optionsList.appendChild(optItem);
+            });
+        }
+
+        function revealOptionResult(chosenIdx, correctIdx) {
+            document.querySelectorAll(".option-item").forEach(item => {
+                item.classList.remove("selected");
+                const itemIdx = parseInt(item.getAttribute("data-opt-idx"));
+                if (itemIdx === correctIdx) item.classList.add("correct");
+                if (itemIdx === chosenIdx && chosenIdx !== correctIdx) item.classList.add("wrong");
+            });
+        }
+
+        function showResults() {
+            document.getElementById("quiz-screen").classList.remove("active");
+            document.getElementById("results-screen").classList.add("active");
+            document.getElementById("score-val").innerText = score;
+            const percentage = (score / quizData.questions.length) * 100;
+            const titleElement = document.getElementById("achievement-title");
+            const descElement = document.getElementById("achievement-desc");
+            if (percentage === 100) {
+                titleElement.innerText = "Distinguished! Perfect Score";
+                descElement.innerText = "You have fully mastered the comprehension of this reading passage!";
+            } else if (percentage >= 80) {
+                titleElement.innerText = "Excellent Achievement!";
+                descElement.innerText = "Superb reading comprehension and extensive vocabulary control.";
+            } else if (percentage >= 60) {
+                titleElement.innerText = "Good Effort!";
+                descElement.innerText = "You successfully understood most of the text. Keep practicing!";
+            } else {
+                titleElement.innerText = "Keep Practicing!";
+                descElement.innerText = "Reread the text, study the highlighted definitions, and try again!";
+            }
+        }
+    </script>
+</body>
+</html>

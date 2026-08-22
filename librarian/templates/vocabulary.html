@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>English Vocabulary Quiz</title>
+    <style>
+        :root {
+            --color-bg-page: linear-gradient(135deg, #EEF2FF 0%, #FAF5FF 50%, #FCE7F3 100%);
+            --color-text-main: #1F2937;
+            --color-text-muted: #6B7280;
+            --color-text-body: #374151;
+            --color-border: #E5E7EB;
+            --color-primary: #9333EA;
+            --color-primary-light: #F3E8FF;
+            --color-primary-border: #E9D5FF;
+            --color-primary-hover: #A855F7;
+            --color-primary-active: #C084FC;
+            --color-gradient-primary: linear-gradient(135deg, #9333EA 0%, #DB2777 100%);
+            --color-gradient-icon: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+            --color-success-bg: #D1FAE5;
+            --color-success-border: #10B981;
+            --color-success-text: #065F46;
+            --color-success-gradient: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+            --color-danger-bg: #FEE2E2;
+            --color-danger-border: #EF4444;
+            --color-danger-text: #991B1B;
+            --color-danger-gradient: linear-gradient(135deg, #FED7AA 0%, #FCA5A5 100%);
+            --color-accent-pink: #DB2777;
+            --color-gradient-feature-1: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+            --color-gradient-feature-2: linear-gradient(135deg, #F3E8FF 0%, #E9D5FF 100%);
+            --color-gradient-feature-3: linear-gradient(135deg, #FCE7F3 0%, #FBCFE8 100%);
+            --color-blue-stroke: #2563EB;
+            --color-orange-stroke: #F97316;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+            min-height: 100vh;
+            background: var(--color-bg-page);
+            margin: 0;
+            padding: 0;
+            width: 100%;
+        }
+
+        .container {
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 48px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.1);
+            border: 2px solid var(--color-primary-border);
+            max-width: 800px;
+            width: 100%;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes scaleIn {
+            from {
+                transform: scale(0);
+            }
+            to {
+                transform: scale(1);
+            }
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .icon-circle {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            background: var(--color-gradient-icon);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(168, 85, 247, 0.3);
+            animation: scaleIn 0.5s ease-out 0.2s both;
+        }
+
+        .icon-circle-round {
+            width: 96px;
+            height: 96px;
+            border-radius: 50%;
+        }
+
+        .icon {
+            width: 40px;
+            height: 40px;
+            stroke: white;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .icon-lg {
+            width: 48px;
+            height: 48px;
+        }
+
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+
+        h2 {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--color-text-main);
+            margin-bottom: 32px;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: var(--color-text-muted);
+            margin-bottom: 24px;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin: 32px 0;
+        }
+
+        .feature-card {
+            padding: 16px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .feature-card:nth-child(1) {
+            background: var(--color-gradient-feature-1);
+        }
+
+        .feature-card:nth-child(2) {
+            background: var(--color-gradient-feature-2);
+        }
+
+        .feature-card:nth-child(3) {
+            background: var(--color-gradient-feature-3);
+        }
+
+        .feature-icon {
+            width: 32px;
+            height: 32px;
+            margin-bottom: 8px;
+        }
+
+        .feature-text {
+            font-size: 14px;
+            color: var(--color-text-body);
+        }
+
+        .btn {
+            padding: 16px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: var(--color-gradient-primary);
+            color: white;
+            box-shadow: 0 10px 30px rgba(147, 51, 234, 0.3);
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 40px rgba(147, 51, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-full {
+            width: 100%;
+        }
+
+        .progress-container {
+            margin-bottom: 24px;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .progress-text {
+            font-size: 14px;
+            color: var(--color-text-muted);
+        }
+
+        .badge {
+            padding: 4px 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--color-text-muted);
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--color-border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent-pink) 100%);
+            transition: width 0.3s ease;
+        }
+
+        .options-container {
+            margin-bottom: 32px;
+        }
+
+        .option-btn {
+            width: 100%;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-radius: 12px;
+            border: 2px solid var(--color-border);
+            background: white;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 16px;
+            color: var(--color-text-main);
+        }
+
+        .option-btn:hover:not(:disabled) {
+            border-color: var(--color-primary-active);
+            transform: scale(1.02);
+        }
+
+        .option-btn:disabled {
+            cursor: not-allowed;
+        }
+
+        .option-btn.selected {
+            border-color: var(--color-primary-hover);
+            background: var(--color-primary-light);
+        }
+
+        .option-btn.correct {
+            border-color: var(--color-success-border);
+            background: var(--color-success-bg);
+        }
+
+        .option-btn.incorrect {
+            border-color: var(--color-danger-border);
+            background: var(--color-danger-bg);
+        }
+
+        .option-btn.faded {
+            opacity: 0.5;
+        }
+
+        .check-icon, .x-icon {
+            width: 24px;
+            height: 24px;
+            animation: scaleIn 0.3s ease-out;
+        }
+
+        .check-icon {
+            stroke: var(--color-success-border);
+        }
+
+        .x-icon {
+            stroke: var(--color-danger-border);
+        }
+
+        .feedback {
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .feedback.correct {
+            background: var(--color-success-bg);
+            color: var(--color-success-text);
+        }
+
+        .feedback.incorrect {
+            background: var(--color-danger-bg);
+            color: var(--color-danger-text);
+        }
+
+        .score-display {
+            font-size: 72px;
+            font-weight: 700;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin: 24px 0;
+            animation: scaleIn 0.5s ease-out 0.4s both;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            max-width: 400px;
+            margin: 32px auto;
+        }
+
+        .stat-card {
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-card.correct {
+            background: var(--color-success-gradient);
+        }
+
+        .stat-card.incorrect {
+            background: var(--color-danger-gradient);
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--color-text-muted);
+        }
+
+        .review-section {
+            margin: 32px 0;
+            text-align: left;
+        }
+
+        .review-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--color-text-body);
+            margin-bottom: 16px;
+        }
+
+        .review-item {
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            border: 2px solid;
+        }
+
+        .review-item.correct {
+            background: var(--color-success-bg);
+            border-color: var(--color-success-gradient);
+        }
+
+        .review-item.incorrect {
+            background: var(--color-danger-bg);
+            border-color: var(--color-danger-gradient);
+        }
+
+        .review-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .review-status {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .review-status.correct {
+            color: var(--color-success-text);
+        }
+
+        .review-status.incorrect {
+            color: var(--color-danger-text);
+        }
+
+        .review-question {
+            font-size: 14px;
+            color: var(--color-text-body);
+            margin-bottom: 4px;
+        }
+
+        .review-answer {
+            font-size: 14px;
+            color: var(--color-text-muted);
+        }
+
+        .review-answer span {
+            color: var(--color-success-text);
+            font-weight: 500;
+        }
+
+        @media (max-width: 768px) {
+            .card {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 36px;
+            }
+
+            h2 {
+                font-size: 24px;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .score-display {
+                font-size: 56px;
+            }
+        }70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+</style>
+</head>
+<body><div id="root"></div>
+
+        <script>
+            // Quiz Data injection target
+            const quizData = { /* QUIZ_DATA */ };
+
+            class QuizApp {
+
+                constructor(quizData) {
+
+                    this.quizTitle = quizData.title;
+
+                    this.quizQuestions = quizData.questions;
+
+                    this.currentScreen = 'welcome';
+
+                    this.currentQuestionIndex = 0;
+
+                    this.selectedAnswer = null;
+
+                    this.answers = new Array(this.quizQuestions.length).fill(null);
+
+                    this.showFeedback = false;
+
+                    this.score = 0;
+
+                    this.render();
+
+                }
+
+    
+
+                startQuiz() {
+
+                    this.currentScreen = 'quiz';
+
+                    this.currentQuestionIndex = 0;
+
+                    this.selectedAnswer = null;
+
+                    this.answers = new Array(this.quizQuestions.length).fill(null);
+
+                    this.showFeedback = false;
+
+                    this.score = 0;
+
+                    this.render();
+
+                }
+
+    
+
+                selectAnswer(index) {
+
+                    if (this.showFeedback) return;
+
+                    this.selectedAnswer = index;
+
+                    this.showFeedback = true;
+
+                    this.render();
+
+                }
+
+    
+
+                nextQuestion() {
+
+                    if (this.selectedAnswer === null) return;
+
+    
+
+                    this.answers[this.currentQuestionIndex] = this.selectedAnswer;
+
+    
+
+                    if (this.currentQuestionIndex < this.quizQuestions.length - 1) {
+
+                        this.currentQuestionIndex++;
+
+                        this.selectedAnswer = null;
+
+                        this.showFeedback = false;
+
+                        this.render();
+
+                    } else {
+
+                        this.score = this.answers.reduce((score, answer, index) => {
+
+                            return score + (answer === this.quizQuestions[index].correct_answer_index ? 1 : 0);
+
+                        }, 0);
+
+                        this.currentScreen = 'results';
+
+                        this.render();
+
+                    }
+
+                }
+
+    
+
+                restart() {
+
+                    this.currentScreen = 'welcome';
+
+                    this.render();
+
+                }
+
+    
+
+                render() {
+
+                    const root = document.getElementById('root');
+
+                    
+
+                    if (this.currentScreen === 'welcome') {
+
+                        root.innerHTML = this.renderWelcome();
+
+                    } else if (this.currentScreen === 'quiz') {
+
+                        root.innerHTML = this.renderQuiz();
+
+                    } else if (this.currentScreen === 'results') {
+
+                        root.innerHTML = this.renderResults();
+
+                    }
+
+                }
+
+    
+
+                renderWelcome() {
+
+                    return `
+
+                        <div class="container">
+
+                            <div class="card">
+
+                                <div class="text-center">
+
+                                    <div class="icon-circle">
+
+                                        <svg class="icon" viewBox="0 0 24 24">
+
+                                            <path d="M2 15.5c0-3.866 3.134-7 7-7s7 3.134 7 7-3.134 7-7 7-7-3.134-7-7z"/>
+
+                                            <path d="M13 8.5a5 5 0 1 1 8.001 4"/>
+
+                                            <path d="M5 19.5v-1a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v1"/>
+
+                                            <path d="M15 14v-1a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v1"/>
+
+                                        </svg>
+
+                                    </div>
+
+                                    <h1>${this.quizTitle}</h1>
+
+                                    <p class="subtitle">Expand your English vocabulary with synonyms, antonyms, and definitions</p>
+
+                                    
+
+                                    <div class="features-grid">
+
+                                        <div class="feature-card">
+
+                                            <svg class="feature-icon" style="stroke: var(--color-blue-stroke)" viewBox="0 0 24 24" fill="none" stroke-width="2">
+
+                                                <circle cx="12" cy="12" r="10"/>
+
+                                                <path d="M12 16v-4M12 8h.01"/>
+
+                                            </svg>
+
+                                            <p class="feature-text">Learn & Practice</p>
+
+                                        </div>
+
+                                        <div class="feature-card">
+
+                                            <svg class="feature-icon" style="stroke: var(--color-primary)" viewBox="0 0 24 24" fill="none" stroke-width="2">
+
+                                                <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+
+                                            </svg>
+
+                                            <p class="feature-text">${this.quizQuestions.length} Questions</p>
+
+                                        </div>
+
+                                        <div class="feature-card">
+
+                                            <svg class="feature-icon" style="stroke: var(--color-accent-pink)" viewBox="0 0 24 24" fill="none" stroke-width="2">
+
+                                                <path d="M12 15l-8.5-8.5L2 8l10 10 10-10-1.5-1.5L12 15z"/>
+
+                                            </svg>
+
+                                            <p class="feature-text">Track Progress</p>
+
+                                        </div>
+
+                                    </div>
+
+                                    
+
+                                    <button class="btn" onclick="app.startQuiz()">Start Quiz</button>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    `;
+
+                }
+
+    
+
+                renderQuiz() {
+
+                    const question = this.quizQuestions[this.currentQuestionIndex];
+
+                    const progress = ((this.currentQuestionIndex + 1) / this.quizQuestions.length) * 100;
+
+                    const isCorrect = this.selectedAnswer === question.correct_answer_index;
+
+    
+
+                    let optionsHTML = '';
+
+                    question.options.forEach((option, index) => {
+
+                        const isSelected = this.selectedAnswer === index;
+
+                        const isCorrectAnswer = index === question.correct_answer_index;
+
+                        const showCorrect = this.showFeedback && isCorrectAnswer;
+
+                        const showIncorrect = this.showFeedback && isSelected && !isCorrect;
+
+                        
+
+                        let className = 'option-btn';
+
+                        if (!this.showFeedback && isSelected) className += ' selected';
+
+                        if (showCorrect) className += ' correct';
+
+                        if (showIncorrect) className += ' incorrect';
+
+                        if (this.showFeedback && !isSelected && !isCorrectAnswer) className += ' faded';
+
+    
+
+                        let iconHTML = '';
+
+                        if (showCorrect) {
+
+                            iconHTML = '<svg class="check-icon icon" viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>';
+
+                        } else if (showIncorrect) {
+
+                            iconHTML = '<svg class="x-icon icon" viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+
+                        }
+
+    
+
+                        optionsHTML += `
+
+                            <button class="${className}" onclick="app.selectAnswer(${index})" ${this.showFeedback ? 'disabled' : ''}>
+
+                                <span>${option}</span>
+
+                                ${iconHTML}
+
+                            </button>
+
+                        `;
+
+                    });
+
+    
+
+                    let feedbackHTML = '';
+                    if (this.showFeedback) {
+                        const definition = question.definition ? `<p style="margin-top: 12px; font-size: 14px; color: var(--color-text-body);"><strong>Definition:</strong> ${question.definition}</p>` : '';
+                        const explanation = question.explanation ? `<p style="margin-top: 8px; font-size: 14px; color: var(--color-text-body); font-style: italic;"><strong>Usage Note:</strong> ${question.explanation}</p>` : '';
+                        if (isCorrect) {
+                            feedbackHTML = `
+                                <div class="feedback correct">
+                                    ✨ Correct! Well done!
+                                    ${definition}
+                                    ${explanation}
+                                </div>
+                            `;
+                        } else {
+                            feedbackHTML = `
+                                <div class="feedback incorrect">
+                                    ❌ Incorrect. The correct answer is "<strong>${question.options[question.correct_answer_index]}</strong>".
+                                    ${definition}
+                                    ${explanation}
+                                </div>
+                            `;
+                        }
+                    }
+
+
+    
+
+                    return `
+
+                        <div class="container">
+
+                            <div style="width: 100%; max-width: 800px;">
+
+                                <div class="progress-container">
+
+                                    <div class="progress-header">
+
+                                        <span class="progress-text">Question ${this.currentQuestionIndex + 1} of ${this.quizQuestions.length}</span>
+
+                                        <span class="badge">Vocabulary</span>
+
+                                    </div>
+
+                                    <div class="progress-bar">
+
+                                        <div class="progress-fill" style="width: ${progress}%"></div>
+
+                                    </div>
+
+                                </div>
+
+                                
+
+                                <div class="card">
+
+                                    <h2>${question.question}</h2>
+
+                                    <div class="options-container">
+
+                                        ${optionsHTML}
+
+                                    </div>
+
+                                    ${feedbackHTML}
+
+                                    <button class="btn btn-full" onclick="app.nextQuestion()" ${this.selectedAnswer === null ? 'disabled' : ''}>
+
+                                        ${this.currentQuestionIndex === this.quizQuestions.length - 1 ? 'Finish Quiz' : 'Next Question'}
+
+                                        <svg style="display: inline; width: 20px; height: 20px; vertical-align: middle; margin-left: 8px;" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+
+                                            <path d="M9 18l6-6-6-6"/>
+
+                                        </svg>
+
+                                    </button>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    `;
+
+                }
+
+    
+
+                renderResults() {
+
+                    const percentage = Math.round((this.score / this.quizQuestions.length) * 100);
+
+                    let message = "Don't Give Up! 📚";
+
+                    if (percentage === 100) message = "Perfect Score! 🎉";
+
+                    else if (percentage >= 80) message = "Excellent Work! 🌟";
+
+                    else if (percentage >= 60) message = "Good Job! 👍";
+
+                    else if (percentage >= 40) message = "Keep Practicing! 💪";
+
+    
+
+                    let reviewHTML = '';
+
+                    this.quizQuestions.forEach((question, index) => {
+
+                        const userAnswer = this.answers[index];
+
+                        const isCorrect = userAnswer === question.correct_answer_index;
+
+                        
+
+                        reviewHTML += `
+                            <div class="review-item ${isCorrect ? 'correct' : 'incorrect'}">
+                                <div class="review-header">
+                                    <span class="badge">Vocabulary</span>
+                                    <span class="review-status ${isCorrect ? 'correct' : 'incorrect'}">
+                                        ${isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                                    </span>
+                                </div>
+                                <p class="review-question">${question.question}</p>
+                                ${!isCorrect ? `<p class="review-answer">Correct answer: <span>${question.options[question.correct_answer_index]}</span></p>` : ''}
+                                ${question.explanation ? `<p class="review-answer" style="margin-top: 4px; font-style: italic;">Note: ${question.explanation}</p>` : ''}
+                            </div>
+                        `;
+
+
+                    });
+
+    
+
+                    return `
+
+                        <div class="container">
+
+                            <div class="card">
+
+                                <div class="text-center">
+
+                                    <div class="icon-circle icon-circle-round">
+
+                                        <svg class="icon icon-lg" viewBox="0 0 24 24">
+
+                                            <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+
+                                            <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+
+                                            <path d="M4 22h16"/>
+
+                                            <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>
+
+                                            <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>
+
+                                            <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+
+                                        </svg>
+
+                                    </div>
+
+                                    <h1>${message}</h1>
+
+                                    <p class="subtitle">Quiz Complete</p>
+
+                                    <div class="score-display">${percentage}%</div>
+
+                                    
+
+                                    <div class="stats-grid">
+
+                                        <div class="stat-card correct">
+
+                                            <div class="stat-value">
+
+                                                <svg style="width: 20px; height: 20px; stroke: var(--color-success-border);" viewBox="0 0 24 24" fill="none" stroke-width="2">
+
+                                                    <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+
+                                                </svg>
+
+                                                ${this.score}
+
+                                            </div>
+
+                                            <p class="stat-label">Correct</p>
+
+                                        </div>
+
+                                        <div class="stat-card incorrect">
+
+                                            <div class="stat-value">
+
+                                                <svg style="width: 20px; height: 20px; stroke: var(--color-orange-stroke);" viewBox="0 0 24 24" fill="none" stroke-width="2">
+
+                                                    <circle cx="12" cy="12" r="10"/>
+
+                                                    <circle cx="12" cy="12" r="6"/>
+
+                                                    <circle cx="12" cy="12" r="2"/>
+
+                                                </svg>
+
+                                                ${this.quizQuestions.length - this.score}
+
+                                            </div>
+
+                                            <p class="stat-label">Incorrect</p>
+
+                                        </div>
+
+                                    </div>
+
+                                </div>
+
+                                
+
+                                <div class="review-section">
+
+                                    <h3 class="review-title">Review Answers:</h3>
+
+                                    ${reviewHTML}
+
+                                </div>
+
+                                
+
+                                <button class="btn btn-full" onclick="app.restart()">
+
+                                    <svg style="display: inline; width: 20px; height: 20px; vertical-align: middle; margin-right: 8px;" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+
+                                        <path d="M1 4v6h6"/>
+
+                                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+
+                                    </svg>
+
+                                    Try Again
+
+                                </button>
+
+                            </div>
+
+                        </div>
+
+                    `;
+
+                }
+
+            }
+
+    
+
+            // Initialize the app
+            let app;
+            document.addEventListener('DOMContentLoaded', () => {
+                app = new QuizApp(quizData);
+            });
+
+        </script>
+</body>
+</html>

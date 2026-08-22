@@ -1,0 +1,23 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.class
+*.egg-info/
+dist/
+build/
+.venv/
+env/
+venv/
+
+# Environment and IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Execution logs
+logs/
+*.log
+
+# Exclude all user wiki content (users generate their own units via 'lexis init' / 'lexis compile')
+wiki/

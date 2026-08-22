@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Listening Comprehension Quiz</title>
+    <style>
+        :root {
+            --color-page-bg: linear-gradient(135deg, #FAF8FF 0%, #F3EFFF 100%);
+            --color-container-bg: #FCFCFF;
+            --color-container-border: #EEECFC;
+            --color-border-card: #EAE8F5;
+            --color-border-hover: #D3CFFC;
+            --color-border-subtle: #ECE9FF;
+            --color-bg-subtle: #F8F7FF;
+            --color-primary: #3B2FD9;
+            --color-primary-dark: #2A1DB2;
+            --color-primary-light: #F5F3FF;
+            --color-primary-disabled: #C4C0FB;
+            --color-text-main: #121132;
+            --color-text-muted: #82819B;
+            --color-text-muted-alt: #64748B;
+            --color-text-body: #555375;
+            --color-teal-bg: #E6FFFA;
+            --color-teal-text: #0D9488;
+            --color-slate-bg: #F1F5F9;
+            --color-slate-text: #475569;
+            --color-success-bg: #ECFDF5;
+            --color-success-border: #10B981;
+            --color-success-border-accent: #A7F3D0;
+            --color-success-text: #065F46;
+            --color-danger-bg: #FEF2F2;
+            --color-danger-border: #EF4444;
+            --color-danger-border-accent: #FCA5A5;
+            --color-danger-text: #991B1B;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            background: var(--color-page-bg);
+            padding: 40px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container { 
+            width: 100%; 
+            max-width: 960px; 
+            margin: 0 auto; 
+            min-height: 80vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+        }
+        .card {
+            background: white;
+            border-radius: 24px;
+            padding: 48px;
+            box-shadow: 0 10px 40px rgba(59, 47, 217, 0.04), 0 2px 10px rgba(0,0,0,0.01);
+            width: 100%;
+            border: 1px solid var(--color-border-card);
+            transition: all 0.3s ease;
+        }
+        
+        /* Two-Column Welcome Layout */
+        .welcome-layout {
+            display: flex;
+            gap: 48px;
+            align-items: stretch;
+            text-align: left;
+        }
+        .welcome-left {
+            flex: 1.1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            justify-content: center;
+        }
+        .welcome-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+            justify-content: center;
+        }
+        @media (max-width: 850px) {
+            body { padding: 20px 10px; }
+            .card { padding: 28px; }
+            .welcome-layout {
+                flex-direction: column-reverse;
+                gap: 36px;
+            }
+        }
+
+        /* Speaker Profile Cards (Left Column) */
+        .speaker-card {
+            background: var(--color-container-bg);
+            border: 1px solid var(--color-container-border);
+            border-radius: 18px;
+            padding: 24px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            box-shadow: 0 4px 12px rgba(59, 47, 217, 0.01);
+            transition: all 0.25s ease;
+        }
+        .speaker-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(59, 47, 217, 0.05);
+            border-color: var(--color-border-hover);
+        }
+        .avatar-container {
+            width: 76px;
+            height: 76px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            padding: 3px;
+            background: white;
+            box-shadow: 0 2px 10px rgba(59, 47, 217, 0.06);
+        }
+        .speaker-details {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .speaker-meet {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--color-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .speaker-name-bold {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--color-text-main);
+            line-height: 1.15;
+            margin-bottom: 2px;
+        }
+        .speaker-job {
+            font-size: 14px;
+            color: var(--color-text-body);
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+        .badge-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .badge-role {
+            background: var(--color-teal-bg);
+            color: var(--color-teal-text);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .badge-accent {
+            background: var(--color-slate-bg);
+            color: var(--color-slate-text);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Right Column UI Elements */
+        .cefr-badge {
+            background: var(--color-primary);
+            color: white;
+            font-weight: 700;
+            font-size: 12px;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            width: fit-content;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .dialogue-title {
+            font-size: 42px;
+            font-weight: 800;
+            color: var(--color-text-main);
+            line-height: 1.15;
+            letter-spacing: -0.02em;
+        }
+        .dialogue-desc {
+            font-size: 16px;
+            color: var(--color-text-body);
+            line-height: 1.6;
+        }
+        
+        /* Stats Cards Container */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .stat-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .stat-icon {
+            background: var(--color-container-border);
+            color: var(--color-primary);
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .stat-text {
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-value {
+            font-weight: 700;
+            font-size: 15px;
+            color: var(--color-text-main);
+        }
+        .stat-label {
+            font-size: 12px;
+            color: var(--color-text-muted);
+        }
+
+        /* Start Button & Base Buttons */
+        .btn {
+            background: var(--color-primary);
+            color: white;
+            padding: 14px 28px;
+            border: none;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(59, 47, 217, 0.2);
+            width: fit-content;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn:hover:not(:disabled) {
+            background: var(--color-primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(59, 47, 217, 0.3);
+        }
+        .btn:disabled {
+            background: var(--color-primary-disabled);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .btn-full {
+            width: 100%;
+            justify-content: center;
+        }
+
+        /* Compact Speaker Badge for Quiz View */
+        .speakers-section {
+            background: var(--color-bg-subtle);
+            border: 1px solid var(--color-border-subtle);
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            text-align: left;
+        }
+        .speakers-section-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--color-text-muted-alt);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .speaker-badges {
+            display: flex;
+            gap: 16px;
+        }
+        .speaker-badge {
+            flex: 1;
+            background: white;
+            border: 1px solid var(--color-border-subtle);
+            border-radius: 12px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .speaker-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .speaker-info {
+            display: flex;
+            flex-direction: column;
+        }
+        .speaker-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--color-text-main);
+        }
+        .speaker-role {
+            font-size: 10px;
+            color: var(--color-teal-text);
+            font-weight: 700;
+            background: var(--color-teal-bg);
+            padding: 1px 6px;
+            border-radius: 9999px;
+            width: fit-content;
+            margin-top: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Audio Player Styles */
+        .audio-player {
+            background: var(--color-bg-subtle);
+            border: 1px solid var(--color-border-subtle);
+            padding: 16px 20px;
+            border-radius: 16px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        /* Options & Quiz Specifics */
+        .question-card { animation: fadeIn 0.4s ease; text-align: left; }
+        .question-meta {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--color-text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .question-title {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--color-text-main);
+            margin-bottom: 24px;
+            line-height: 1.3;
+        }
+        .option-btn {
+            width: 100%; 
+            padding: 16px 20px; 
+            margin-bottom: 12px; 
+            border-radius: 14px;
+            border: 2px solid var(--color-container-border); 
+            background: white; 
+            text-align: left;
+            cursor: pointer; 
+            transition: all 0.2s; 
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--color-text-main);
+        }
+        .option-btn:hover:not(:disabled) { 
+            border-color: var(--color-primary); 
+            background: var(--color-primary-light); 
+        }
+        .option-btn.selected {
+            border-color: var(--color-primary);
+            background: var(--color-page-bg);
+            font-weight: 600;
+        }
+        .option-btn.correct { 
+            background: var(--color-success-bg); 
+            border-color: var(--color-success-border); 
+            color: var(--color-success-text);
+            font-weight: 600;
+        }
+        .option-btn.incorrect { 
+            background: var(--color-danger-bg); 
+            border-color: var(--color-danger-border); 
+            color: var(--color-danger-text);
+        }
+        
+        /* Feedback Box */
+        .feedback-box {
+            margin-top: 16px; 
+            padding: 18px 24px; 
+            border-radius: 14px; 
+            font-size: 15px;
+            line-height: 1.5;
+        }
+        .feedback-correct {
+            background: var(--color-success-bg);
+            border: 1px solid var(--color-success-border-accent);
+            color: var(--color-success-text);
+        }
+        .feedback-incorrect {
+            background: var(--color-danger-bg);
+            border: 1px solid var(--color-danger-border-accent);
+            color: var(--color-danger-text);
+        }
+
+        .results-pct {
+            font-size: 72px; 
+            font-weight: 900;
+            margin: 24px 0; 
+            color: var(--color-primary);
+            letter-spacing: -0.03em;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root" class="container"></div>
+
+    <script>
+        const quizData = { /* QUIZ_DATA */ };
+
+        class ListeningApp {
+            constructor(data) {
+                this.data = data;
+                this.state = 'welcome';
+                this.currentIdx = 0;
+                this.score = 0;
+                this.selected = null;
+                this.showFeedback = false;
+                this.render();
+            }
+
+            render() {
+                const root = document.getElementById('root');
+                if (this.state === 'welcome') root.innerHTML = this.viewWelcome();
+                else if (this.state === 'quiz') root.innerHTML = this.viewQuiz();
+                else root.innerHTML = this.viewResults();
+            }
+
+            getSpeakerAvatar(gender) {
+                const g = String(gender || '').toLowerCase();
+                if (g === 'female') {
+                    return `
+                    <svg viewBox="0 0 100 100" style="width: 100%; height: 100%;">
+                        <defs>
+                            <linearGradient id="femGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#FF6B6B" />
+                                <stop offset="100%" stop-color="#8B5CF6" />
+                            </linearGradient>
+                        </defs>
+                        <circle cx="50" cy="50" r="50" fill="url(#femGrad)" />
+                        <path d="M25 60 C20 40, 20 20, 50 20 C80 20, 80 40, 75 60 Z" fill="#2E1065" />
+                        <rect x="44" y="55" width="12" height="15" fill="#FBCFE8" rx="2" />
+                        <circle cx="50" cy="42" r="16" fill="#FCE7F3" />
+                        <path d="M34 40 C34 28, 66 28, 66 40 C66 32, 34 32, 34 40 Z" fill="#2E1065" />
+                        <path d="M34 34 C40 24, 50 28, 50 34" stroke="#2E1065" stroke-width="3" stroke-linecap="round" fill="none" />
+                        <path d="M25 78 C25 65, 35 62, 42 63 L45 78 Z" fill="#4C1D95" />
+                        <path d="M75 78 C75 65, 65 62, 58 63 L55 78 Z" fill="#4C1D95" />
+                        <path d="M42 63 L50 72 L58 63 Z" fill="#FFFFFF" />
+                        <path d="M41 62 L47 70" stroke="#7C3AED" stroke-width="1.5" stroke-linecap="round" />
+                        <path d="M59 62 L53 70" stroke="#7C3AED" stroke-width="1.5" stroke-linecap="round" />
+                    </svg>
+                    `;
+                } else {
+                    return `
+                    <svg viewBox="0 0 100 100" style="width: 100%; height: 100%;">
+                        <defs>
+                            <linearGradient id="maleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#06B6D4" />
+                                <stop offset="100%" stop-color="#3B82F6" />
+                            </linearGradient>
+                        </defs>
+                        <circle cx="50" cy="50" r="50" fill="url(#maleGrad)" />
+                        <rect x="44" y="55" width="12" height="15" fill="#CFFAFE" rx="2" />
+                        <circle cx="50" cy="42" r="16" fill="#ECFEFF" />
+                        <path d="M34 35 C32 25, 45 20, 50 24 C55 20, 68 25, 66 35 C64 33, 36 33, 34 35 Z" fill="#1E293B" />
+                        <path d="M25 78 C25 65, 35 62, 42 63 L45 78 Z" fill="#0F172A" />
+                        <path d="M75 78 C75 65, 65 62, 58 63 L55 78 Z" fill="#0F172A" />
+                        <path d="M42 63 L50 72 L58 63 Z" fill="#FFFFFF" />
+                        <path d="M48 68 L52 68 L51 78 L49 78 Z" fill="#EF4444" />
+                    </svg>
+                    `;
+                }
+            }
+
+            renderWelcomeSpeakerProfiles() {
+                const s1 = this.data.speaker_1 || 'Speaker 1';
+                const s2 = this.data.speaker_2 || 'Speaker 2';
+                const g1 = this.data.speaker_1_gender || 'female';
+                const g2 = this.data.speaker_2_gender || 'male';
+                const r1 = this.data.speaker_1_role || 'Creative Director';
+                const r2 = this.data.speaker_2_role || 'Technical Lead';
+                const a1 = this.data.speaker_1_accent || 'Accent: British';
+                const a2 = this.data.speaker_2_accent || 'Accent: American';
+                
+                return `
+                    <div class="speaker-card">
+                        <div class="avatar-container">
+                            ${this.getSpeakerAvatar(g1)}
+                        </div>
+                        <div class="speaker-details">
+                            <span class="speaker-meet">Meet</span>
+                            <span class="speaker-name-bold">${s1}</span>
+                            <span class="speaker-job">${r1}</span>
+                            <div class="badge-row">
+                                <span class="badge-role">Speaker A</span>
+                                <span class="badge-accent">${a1}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="speaker-card">
+                        <div class="avatar-container">
+                            ${this.getSpeakerAvatar(g2)}
+                        </div>
+                        <div class="speaker-details">
+                            <span class="speaker-meet">Meet</span>
+                            <span class="speaker-name-bold">${s2}</span>
+                            <span class="speaker-job">${r2}</span>
+                            <div class="badge-row">
+                                <span class="badge-role">Speaker B</span>
+                                <span class="badge-accent">${a2}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            renderSpeakerProfiles() {
+                const s1 = this.data.speaker_1 || 'Speaker 1';
+                const s2 = this.data.speaker_2 || 'Speaker 2';
+                const g1 = this.data.speaker_1_gender || 'female';
+                const g2 = this.data.speaker_2_gender || 'male';
+                
+                return `
+                    <div class="speakers-section">
+                        <div class="speakers-section-title">🗣️ Conversation Characters</div>
+                        <div class="speaker-badges">
+                            <div class="speaker-badge">
+                                <span class="speaker-icon">
+                                    ${this.getSpeakerAvatar(g1)}
+                                </span>
+                                <div class="speaker-info">
+                                    <span class="speaker-name">${s1}</span>
+                                    <span class="speaker-role">Speaker A</span>
+                                </div>
+                            </div>
+                            <div class="speaker-badge">
+                                <span class="speaker-icon">
+                                    ${this.getSpeakerAvatar(g2)}
+                                </span>
+                                <div class="speaker-info">
+                                    <span class="speaker-name">${s2}</span>
+                                    <span class="speaker-role">Speaker B</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            viewWelcome() {
+                const cefr = this.data.cefr_level || 'B2';
+                const title = this.data.title || 'Dialogue Title';
+                const qCount = this.data.questions ? this.data.questions.length : 10;
+                
+                return `
+                    <div class="card">
+                        <div class="welcome-layout">
+                            <!-- Left Column -->
+                            <div class="welcome-left">
+                                ${this.renderWelcomeSpeakerProfiles()}
+                            </div>
+                            
+                            <!-- Right Column -->
+                            <div class="welcome-right">
+                                <div class="cefr-badge">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                        <line x1="18" y1="20" x2="18" y2="4"></line>
+                                        <line x1="12" y1="20" x2="12" y2="10"></line>
+                                        <line x1="6" y1="20" x2="6" y2="15"></line>
+                                    </svg>
+                                    CEFR Level ${cefr}
+                                </div>
+                                
+                                <h1 class="dialogue-title">${title}</h1>
+                                <p class="dialogue-desc">
+                                    ${this.data.topic || 'Challenge your listening skills with real-world dialogue scenarios, from ordering at a cafe to navigating professional small talk.'}
+                                </p>
+                                
+                                <div class="stats-grid">
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <svg width="20" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <circle cx="12" cy="12" r="10"></circle>
+                                                <polyline points="12 6 12 12 16 14"></polyline>
+                                            </svg>
+                                        </div>
+                                        <div class="stat-text">
+                                            <span class="stat-value">15 Mins</span>
+                                            <span class="stat-label">Completion time.</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <svg width="20" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                <polyline points="14 2 14 8 20 8"></polyline>
+                                                <line x1="16" y1="13" x2="8" y2="13"></line>
+                                                <line x1="16" y1="17" x2="8" y2="17"></line>
+                                                <polyline points="10 9 9 9 8 9"></polyline>
+                                            </svg>
+                                        </div>
+                                        <div class="stat-text">
+                                            <span class="stat-value">${qCount} Questions</span>
+                                            <span class="stat-label">Multiple choice tasks.</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <button class="btn" onclick="app.start()">
+                                    Start Quiz 
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                                        <polyline points="12 5 19 12 12 19"></polyline>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            viewQuiz() {
+                const q = this.data.questions[this.currentIdx];
+                
+                return `
+                    <div class="card" style="max-width: 680px; margin: 0 auto;">
+                        <div class="audio-player">
+                            <audio id="player" src="${this.data.audio_url}" controls style="width: 100%"></audio>
+                        </div>
+                        
+                        ${this.renderSpeakerProfiles()}
+                        
+                        <div class="question-card">
+                            <div class="question-meta">Question ${this.currentIdx + 1} of ${this.data.questions.length}</div>
+                            <h2 class="question-title">${q.question}</h2>
+                            <div class="options">
+                                ${q.options.map((opt, i) => `
+                                    <button class="option-btn ${this.getBtnClass(i)}" 
+                                            onclick="app.select(${i})" 
+                                            ${this.showFeedback ? 'disabled' : ''}>
+                                        ${opt}
+                                    </button>
+                                `).join('')}
+                            </div>
+                            
+                            ${this.showFeedback ? `
+                                <div class="feedback-box ${this.selected === q.correct_answer_index ? 'feedback-correct' : 'feedback-incorrect'}">
+                                    <strong>${this.selected === q.correct_answer_index ? '✓ Correct!' : '✗ Incorrect'}</strong>
+                                    <p style="margin-top: 6px;">${q.explanation || ''}</p>
+                                </div>
+                            ` : ''}
+                            
+                            <button class="btn btn-full" style="margin-top: 24px;" 
+                                    onclick="app.next()" ${this.selected === null ? 'disabled' : ''}>
+                                ${this.currentIdx === this.data.questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                    <polyline points="12 5 19 12 12 19"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            viewResults() {
+                const pct = Math.round((this.score / this.data.questions.length) * 100);
+                return `
+                    <div class="card text-center" style="max-width: 500px; margin: 0 auto; text-align: center;">
+                        <h1 style="color: var(--color-text-main);">Quiz Complete!</h1>
+                        <div class="results-pct">${pct}%</div>
+                        <p style="font-size: 16px; color: var(--color-text-body); margin-bottom: 24px;">
+                            You got <strong>${this.score}</strong> out of <strong>${this.data.questions.length}</strong> questions correct.
+                        </p>
+                        <button class="btn" style="width: 100%; justify-content: center;" onclick="location.reload()">
+                            Restart Quiz
+                        </button>
+                    </div>
+                `;
+            }
+
+            getBtnClass(i) {
+                if (!this.showFeedback) return this.selected === i ? 'selected' : '';
+                if (i === this.data.questions[this.currentIdx].correct_answer_index) return 'correct';
+                if (i === this.selected) return 'incorrect';
+                return '';
+            }
+
+            start() { this.state = 'quiz'; this.render(); }
+            select(i) { this.selected = i; this.showFeedback = true; if(i === this.data.questions[this.currentIdx].correct_answer_index) this.score++; this.render(); }
+            next() {
+                if (this.currentIdx < this.data.questions.length - 1) {
+                    this.currentIdx++; this.selected = null; this.showFeedback = false; this.render();
+                } else {
+                    this.state = 'results'; this.render();
+                }
+            }
+        }
+
+        const app = new ListeningApp(quizData);
+    </script>
+</body>
+</html>

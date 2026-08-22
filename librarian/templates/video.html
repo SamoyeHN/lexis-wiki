@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    <title>Interactive Video Handout</title>
+    <style>
+        :root {
+            --color-bg-page: linear-gradient(135deg, #F0FDFA 0%, #F5F3FF 100%);
+            --color-text-main: #1F2937;
+            --color-text-dark: #111827;
+            --color-text-muted: #6B7280;
+            --color-text-body: #374151;
+            --color-text-body-alt: #4B5563;
+            --color-text-light: #94A3B8;
+            --color-border: #E5E7EB;
+            --color-primary: #8B5CF6;
+            --color-primary-hover: #7C3AED;
+            --color-primary-light: #F5F3FF;
+            --color-primary-active: #ECE9FE;
+            --color-primary-dark: #6D28D9;
+            --color-accent-pink: #EC4899;
+            --color-gradient-primary: linear-gradient(to right, #8B5CF6, #EC4899);
+            --color-bg-gray: #F3F4F6;
+            --color-bg-clue: #FCE7F3;
+            --color-text-clue: #DB2777;
+            --color-border-clue: #FBCFE8;
+            --color-success-bg: #D1FAE5;
+            --color-success-border: #10B981;
+            --color-success-text: #065F46;
+            --color-danger-bg: #FEE2E2;
+            --color-danger-border: #EF4444;
+            --color-danger-text: #991B1B;
+            --color-disabled-bg: #E5E7EB;
+            --color-disabled-text: #9CA3AF;
+            --color-warning-bg: #FFFBEB;
+            --color-warning-border: #FDE68A;
+            --color-warning-text: #B45309;
+            --color-warning-icon-bg: #F59E0B;
+            --color-indigo-text: #818CF8;
+            --color-indigo-border: #6366F1;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            background: var(--color-bg-page);
+            color: var(--color-text-main);
+            padding: 24px;
+        }
+        .header {
+            max-width: 1400px;
+            margin: 0 auto 20px auto;
+            text-align: left;
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 15px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header p {
+            color: var(--color-text-muted);
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        .main-layout {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 24px;
+            height: calc(100vh - 120px);
+            min-height: 550px;
+        }
+        @media (max-width: 1024px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+        }
+        .video-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background: white;
+            border: 1px solid var(--color-border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .video-container iframe, .video-container video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        .tab-panel {
+            background: white;
+            border: 1px solid var(--color-border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            height: 100%;
+        }
+        .tab-headers {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 10px;
+            flex-shrink: 0;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--color-text-muted);
+            font-size: 16px;
+            font-weight: 600;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover {
+            color: var(--color-text-dark);
+            background: var(--color-bg-gray);
+        }
+        .tab-btn.active {
+            color: white;
+            background: var(--color-primary);
+        }
+        .tab-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        .tab-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        .tab-content::-webkit-scrollbar-thumb {
+            background: var(--color-border);
+            border-radius: 3px;
+        }
+        
+        /* Interactive Transcript Styles */
+        .transcript-line {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 5px;
+        }
+        .transcript-line:hover {
+            background: var(--color-primary-light);
+        }
+        .transcript-line.active {
+            background: var(--color-primary-active);
+            border-left: 3px solid var(--color-primary);
+        }
+        .timestamp-badge {
+            background: var(--color-primary-active);
+            color: var(--color-primary-dark);
+            font-size: 12px;
+            font-weight: 700;
+            font-family: monospace;
+            padding: 2px 6px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .line-text {
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--color-text-body);
+        }
+        
+        /* Quiz Styles */
+        .quiz-intro {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .quiz-intro h2 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .quiz-intro p {
+            color: var(--color-text-muted);
+            margin-bottom: 25px;
+        }
+        .question-card {
+            animation: fadeIn 0.4s ease;
+        }
+        .clue-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--color-bg-clue);
+            color: var(--color-text-clue);
+            border: 1px solid var(--color-border-clue);
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 4px 10px;
+            cursor: pointer;
+            margin-bottom: 15px;
+            transition: all 0.2s;
+        }
+        .clue-button:hover {
+            background: var(--color-border-clue);
+            transform: scale(1.03);
+        }
+        .option-btn {
+            width: 100%;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            border-radius: 10px;
+            border: 2px solid var(--color-border);
+            background: white;
+            color: var(--color-text-main);
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 15px;
+        }
+        .option-btn:hover:not(:disabled) {
+            border-color: var(--color-primary);
+            background: var(--color-primary-light);
+        }
+        .option-btn.correct {
+            background: var(--color-success-bg) !important;
+            border-color: var(--color-success-border) !important;
+            color: var(--color-success-text) !important;
+        }
+        .option-btn.incorrect {
+            background: var(--color-danger-bg) !important;
+            border-color: var(--color-danger-border) !important;
+            color: var(--color-danger-text) !important;
+        }
+        .feedback-box {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 8px;
+            background: var(--color-bg-gray);
+            border-left: 4px solid var(--color-primary);
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--color-text-body-alt);
+        }
+        .nav-btn {
+            background: var(--color-primary);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+            margin-top: 15px;
+        }
+        .nav-btn:hover {
+            background: var(--color-primary-hover);
+        }
+        .nav-btn:disabled {
+            background: var(--color-disabled-bg);
+            color: var(--color-disabled-text);
+            cursor: not-allowed;
+        }
+        .results-view {
+            text-align: center;
+            padding: 30px;
+        }
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 4px solid var(--color-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--color-primary);
+            margin: 20px auto;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1 id="main-title">Interactive Video Handout</h1>
+        <p id="main-meta">Language Learning Lab</p>
+    </div>
+
+    <div class="main-layout">
+        <!-- Left Panel: Video Player -->
+        <div class="video-panel">
+            <div class="video-container" id="player-container">
+                <!-- Injected automatically by JS depending on video type -->
+            </div>
+            <div style="font-size: 14px; color: var(--color-text-light);">
+                <strong>Pro-Tip:</strong> Click on any line of the transcript to seek the video player to that sentence.
+            </div>
+        </div>
+
+        <!-- Right Panel: Tabs for Transcript and Quiz -->
+        <div class="tab-panel">
+            <div class="tab-headers">
+                <button class="tab-btn active" id="tab-transcript-btn" onclick="switchTab('transcript')">Transcript</button>
+                <button class="tab-btn" id="tab-quiz-btn" onclick="switchTab('quiz')">Comprehension Quiz</button>
+            </div>
+
+            <!-- Scrollable Tab Contents -->
+            <div class="tab-content" id="tab-transcript">
+                <div id="transcript-lines-list"></div>
+            </div>
+
+            <div class="tab-content" id="tab-quiz" style="display: none;">
+                <div id="quiz-flow-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Injected data placeholder - do NOT replace with hardcoded data
+        const quizData = { "title": "Sample", "video_url": "", "video_type": "youtube", "questions": [], "transcript": "" };
+
+        let currentTab = 'transcript';
+        let currentIdx = 0;
+        let score = 0;
+        let selectedOption = null;
+        let isSubmitted = false;
+
+        // Player seekers and handles
+        let localPlayer = null;
+        let ytPlayer = null;
+
+        function initApp() {
+            document.getElementById('main-title').innerText = quizData.title;
+            const meta = `Type: ${quizData.video_type.toUpperCase()} | ${quizData.questions.length} Quiz Questions`;
+            document.getElementById('main-meta').innerText = meta;
+
+            renderVideoPlayer();
+            renderTranscript();
+            renderQuiz();
+        }
+
+        function parseTimeToSeconds(timeStr) {
+            timeStr = timeStr.replace(/[\[\]]/g, '').trim();
+            const parts = timeStr.split(':');
+            let secs = 0;
+            if (parts.length === 3) {
+                secs = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseFloat(parts[2]);
+            } else if (parts.length === 2) {
+                secs = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+            } else {
+                secs = parseFloat(parts[0]);
+            }
+            return secs;
+        }
+
+        function renderVideoPlayer() {
+            const container = document.getElementById('player-container');
+            const type = quizData.video_type;
+            const url = quizData.video_url;
+
+            if (!url || type === 'none' || type === '') {
+                container.innerHTML = `
+                    <div style="padding: 24px; color: var(--color-text-main); background: var(--color-bg-gray); border: 1px solid var(--color-border); border-radius: 12px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+                        <div style="background: var(--color-disabled-text); color: white; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 4px;">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                        </div>
+                        <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--color-text-body-alt);">No Video Source Found</h3>
+                        <p style="font-size: 13px; color: var(--color-text-muted); max-width: 480px; margin: 0; line-height: 1.5;">
+                            This unit's source material does not specify an interactive video URL in its frontmatter (using <code>video_url</code> or <code>source_url</code>).
+                        </p>
+                        <div style="font-size: 12px; text-align: left; color: var(--color-text-muted); background: white; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); width: 100%; max-width: 480px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                            <strong style="color: var(--color-text-body-alt); display: block; margin-bottom: 4px;">To attach a video to this quiz:</strong>
+                            <ol style="margin: 0; padding-left: 18px; line-height: 1.6;">
+                                <li>Open the raw unit markdown file in <code>sources/</code>.</li>
+                                <li>Add <code style="background: var(--color-bg-gray); padding: 1px 4px; border-radius: 3px;">video_url: "YOUR_YOUTUBE_LINK"</code> to the YAML frontmatter.</li>
+                                <li>Re-compile this unit using the Lexis Dashboard.</li>
+                            </ol>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            if (type === 'youtube') {
+                let videoId = url;
+                if (url.includes('v=')) {
+                    videoId = url.split('v=')[1].split('&')[0];
+                } else if (url.includes('youtu.be/')) {
+                    videoId = url.split('youtu.be/')[1].split('?')[0];
+                }
+                // If loaded via file:// protocol, show beautiful local warning and fallback link
+                if (window.location.protocol === 'file:') {
+                    container.innerHTML = `
+                        <div style="padding: 24px; color: var(--color-text-main); background: var(--color-warning-bg); border: 1px solid var(--color-warning-border); border-radius: 12px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+                            <div style="background: var(--color-warning-icon-bg); color: white; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 4px;">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                            </div>
+                            <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--color-warning-text);">Local File Protocol Restriction</h3>
+                            <p style="font-size: 13px; color: var(--color-text-body-alt); max-width: 480px; margin: 0; line-height: 1.5;">
+                                YouTube's security features block embedded video playback when opening HTML files directly from local disks (using <code>file://</code> URLs).
+                            </p>
+                            <div style="font-size: 12px; text-align: left; color: var(--color-text-body-alt); background: white; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); width: 100%; max-width: 480px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                                <strong style="color: var(--color-text-main); display: block; margin-bottom: 4px;">To view the video, please do one of the following:</strong>
+                                <ul style="margin: 0; padding-left: 18px; line-height: 1.6;">
+                                    <li>View inside the <strong>Lexis Dashboard</strong> (which serves files via local server).</li>
+                                    <li>Run a Python command in this folder: <code style="background: var(--color-bg-gray); padding: 1px 4px; border-radius: 3px;">python -m http.server 8000</code> and visit <a href="http://localhost:8000" target="_blank" style="color: var(--color-primary); font-weight: 600;">localhost:8000</a>.</li>
+                                    <li>Open in VS Code and use the <strong>Live Server</strong> extension.</li>
+                                </ul>
+                            </div>
+                            <a href="https://www.youtube.com/watch?v=${videoId}" target="_blank" style="text-decoration: none; font-size: 14px; font-weight: 600; margin-top: 4px; background: var(--color-danger-border); color: white; border: none; padding: 10px 20px; border-radius: 8px; display: inline-flex; align-items: center; gap: 8px; transition: background 0.2s, transform 0.2s; box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2);" onmouseover="this.style.background='var(--color-primary-hover)'; this.style.transform='scale(1.02)'" onmouseout="this.style.background='var(--color-danger-border)'; this.style.transform='scale(1)'">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                Watch Video on YouTube
+                            </a>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?enablejsapi=1`;
+                if (window.location.origin && window.location.origin !== 'null' && window.location.protocol !== 'file:') {
+                    embedUrl += `&origin=${encodeURIComponent(window.location.origin)}`;
+                }
+                container.innerHTML = `<iframe id="yt-player-iframe" src="${embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+                
+                // Initialize Youtube IFrame API
+                window.onYouTubeIframeAPIReady = function() {
+                    ytPlayer = new YT.Player('yt-player-iframe');
+                };
+                const tag = document.createElement('script');
+                tag.src = "https://www.youtube.com/iframe_api";
+                const firstScriptTag = document.getElementsByTagName('script')[0];
+                firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+            } else {
+                // Local HTML5 Video Player
+                const filename = url.substring(url.lastIndexOf('/') + 1);
+                container.innerHTML = `
+                    <video id="local-player" controls preload="metadata">
+                        <source src="${url}" type="video/mp4">
+                        <source src="../../raw/media/${filename}" type="video/mp4">
+                        <source src="${filename}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                `;
+                localPlayer = document.getElementById('local-player');
+            }
+        }
+
+        function seekVideo(seconds) {
+            if (localPlayer) {
+                localPlayer.currentTime = seconds;
+                localPlayer.play().catch(() => {});
+            } else if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
+                ytPlayer.seekTo(seconds, true);
+                ytPlayer.playVideo();
+            } else {
+                console.log(`Video player seeking only natively supported for Local and YouTube interfaces. Seeking to ${seconds}s.`);
+            }
+        }
+
+        function renderTranscript() {
+            const container = document.getElementById('transcript-lines-list');
+            const rawText = quizData.transcript;
+            
+            // Extract individual dialogue lines: e.g. [00:15.20] Hello World
+            const lineRegex = /(\[[0-9:.]+\])\s*(.+)/g;
+            let match;
+            let linesHtml = "";
+            let idx = 0;
+
+            while ((match = lineRegex.exec(rawText)) !== null) {
+                const timestamp = match[1];
+                const text = match[2];
+                const seconds = parseTimeToSeconds(timestamp);
+
+                linesHtml += `
+                    <div class="transcript-line" id="line-${idx}" onclick="seekVideo(${seconds}); highlightLine(${idx})">
+                        <span class="timestamp-badge">${timestamp.replace(/[\[\]]/g, '')}</span>
+                        <div class="line-text">${text}</div>
+                    </div>
+                `;
+                idx++;
+            }
+
+            if (!linesHtml) {
+                // Fallback for simple line-by-line paragraph parsing
+                const simpleLines = rawText.split('\n').filter(l => l.trim().length > 0);
+                linesHtml = simpleLines.map((line, i) => `
+                    <div class="transcript-line" id="line-${i}">
+                        <div class="line-text">${line}</div>
+                    </div>
+                `).join('');
+            }
+
+            container.innerHTML = linesHtml;
+        }
+
+        function highlightLine(idx) {
+            document.querySelectorAll('.transcript-line').forEach(el => el.classList.remove('active'));
+            const currentLine = document.getElementById(`line-${idx}`);
+            if (currentLine) {
+                currentLine.classList.add('active');
+                currentLine.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        function renderQuiz() {
+            const container = document.getElementById('quiz-flow-container');
+            if (quizData.questions.length === 0) {
+                container.innerHTML = `
+                    <div class="quiz-intro">
+                        <h2>No Questions Available</h2>
+                        <p>This video transcript does not contain any compiled quiz questions.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (currentIdx >= quizData.questions.length) {
+                renderResults();
+                return;
+            }
+
+            const q = quizData.questions[currentIdx];
+            const progressPct = ((currentIdx + 1) / quizData.questions.length) * 100;
+            const targetSecs = parseTimeToSeconds(q.timestamp);
+
+            container.innerHTML = `
+                <div class="question-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span style="font-size: 13px; color: var(--color-text-light);">Question ${currentIdx + 1} of ${quizData.questions.length}</span>
+                        <span style="font-size: 13px; color: var(--color-indigo-text); font-weight: 600;">Score: ${score}/${currentIdx}</span>
+                    </div>
+                    
+                    <button class="clue-button" onclick="seekVideo(${targetSecs})">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        Listen to Clue at ${q.timestamp}
+                    </button>
+ 
+                    <h2 style="font-size: 18px; line-height: 1.5; margin-bottom: 20px;">${q.question}</h2>
+
+                    <div class="options-list">
+                        ${q.options.map((opt, i) => `
+                            <button class="option-btn" id="option-${i}" onclick="selectOption(${i})" ${isSubmitted ? 'disabled' : ''}>
+                                ${opt}
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    ${isSubmitted ? `
+                        <div class="feedback-box">
+                            <strong>Explanation:</strong> ${q.explanation}
+                        </div>
+                    ` : ''}
+
+                    <button class="nav-btn" id="submit-next-btn" onclick="handleNavigation()" ${selectedOption === null ? 'disabled' : ''}>
+                        ${isSubmitted ? (currentIdx === quizData.questions.length - 1 ? 'Finish' : 'Next Question') : 'Submit Answer'}
+                    </button>
+                </div>
+            `;
+
+            // If already submitted, restore button styles
+            if (isSubmitted) {
+                revealAnswers();
+            }
+        }
+
+        function selectOption(idx) {
+            if (isSubmitted) return;
+            selectedOption = idx;
+            document.querySelectorAll('.option-btn').forEach(btn => btn.style.borderColor = 'rgba(255,255,255,0.1)');
+            document.getElementById(`option-${idx}`).style.borderColor = 'var(--color-indigo-border)';
+            document.getElementById('submit-next-btn').disabled = false;
+        }
+
+        function handleNavigation() {
+            const q = quizData.questions[currentIdx];
+            if (!isSubmitted) {
+                isSubmitted = true;
+                if (selectedOption === q.correct_answer_index) {
+                    score++;
+                }
+                renderQuiz();
+            } else {
+                currentIdx++;
+                selectedOption = null;
+                isSubmitted = false;
+                renderQuiz();
+            }
+        }
+
+        function revealAnswers() {
+            const q = quizData.questions[currentIdx];
+            q.options.forEach((_, i) => {
+                const btn = document.getElementById(`option-${i}`);
+                if (i === q.correct_answer_index) {
+                    btn.classList.add('correct');
+                } else if (i === selectedOption) {
+                    btn.classList.add('incorrect');
+                }
+            });
+        }
+
+        function renderResults() {
+            const container = document.getElementById('quiz-flow-container');
+            const pct = Math.round((score / quizData.questions.length) * 100);
+
+            container.innerHTML = `
+                <div class="results-view animate">
+                    <h2>Quiz Completed!</h2>
+                    <div class="score-circle">${score}/${quizData.questions.length}</div>
+                    <p style="color: var(--color-text-light); margin-bottom: 20px;">You scored <strong>${pct}%</strong> on this video quiz.</p>
+                    <button class="nav-btn" onclick="restartQuiz()">Restart Quiz</button>
+                </div>
+            `;
+        }
+
+        function restartQuiz() {
+            currentIdx = 0;
+            score = 0;
+            selectedOption = null;
+            isSubmitted = false;
+            renderQuiz();
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tab-transcript-btn').classList.toggle('active', tab === 'transcript');
+            document.getElementById('tab-quiz-btn').classList.toggle('active', tab === 'quiz');
+            document.getElementById('tab-transcript').style.display = tab === 'transcript' ? 'block' : 'none';
+            document.getElementById('tab-quiz').style.display = tab === 'quiz' ? 'block' : 'none';
+        }
+
+        // Initialize application when DOM loads
+        window.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+</html>

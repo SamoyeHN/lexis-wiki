@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Concise assessment title."
+    },
+    "questions": {
+      "type": "array",
+      "minItems": "{count}",
+      "maxItems": "{count}",
+      "items": {
+        "type": "object",
+        "properties": {
+          "design_audit": {
+            "type": "string",
+            "description": "MANDATED THINKING STEP. Format: 'DRAFT: [Vocab + Grammar Pair] -> [Scenario] -> [English Gold Standard (CEFR {cefr_level})] -> [3 L1 Interference Traps (Word Order / False Cognate / Collocation)]'. Must show explicit pairing and scenario planning. Must be 100% original and must NOT reuse or resemble any source examples.",
+            "minLength": 1
+          },
+          "translated_sentence": {
+            "type": "string",
+            "description": "A natural, academic sentence in {target_language} (e.g. Simplified Chinese) to be translated into English, integrating the selected vocabulary item and grammar pattern.",
+            "minLength": 1
+          },
+          "correct_english_answer": {
+            "type": "string",
+            "description": "The gold-standard correct English translation of the translated_sentence, written at CEFR {cefr_level} level.",
+            "minLength": 1
+          },
+          "hint": {
+            "type": "string",
+            "description": "A pedagogical hint referencing meaning, grammar, or context—not the answer directly.",
+            "minLength": 1
+          },
+          "options": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Exactly 4 unique English options (1 correct_english_answer and 3 distinct plausible distractors modeling L1 interference). Each option must be a full sentence. Return literal text without labels or quotation marks."
+          },
+          "correct_answer_index": {
+            "type": "integer",
+            "description": "Zero-based index (0-3) of the correct_english_answer inside the options array (options[correct_answer_index] must equal correct_english_answer).",
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ]
+          },
+          "explanation": {
+            "type": "string",
+            "description": "A clear explanation of why the correct answer matches the {target_language} sentence, referencing vocabulary meaning and grammar pattern usage, and why key distractors are incorrect.",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "design_audit",
+          "translated_sentence",
+          "correct_english_answer",
+          "hint",
+          "options",
+          "correct_answer_index",
+          "explanation"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Exactly {count} unique translation items. Each item must use a different vocabulary-grammar pair and a distinct scenario."
+    }
+  },
+  "required": [
+    "title",
+    "questions"
+  ],
+  "additionalProperties": false
+}

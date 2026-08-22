@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translation Practice Handout</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg-page: linear-gradient(135deg, #FAF5FF 0%, #EEF2FF 50%, #FCE7F3 100%);
+            --color-text-main: #1F2937;
+            --color-text-muted: #6B7280;
+            --color-text-dark: #374151;
+            --color-text-body-alt: #4B5563;
+            --color-gradient-primary: linear-gradient(135deg, #7C3AED 0%, #EC4899 100%);
+            --color-gradient-subtle: linear-gradient(135deg, #F3E8FF 0%, #E9D5FF 100%);
+            --color-gradient-hover: linear-gradient(135deg, #F3E8FF 0%, #EEF2FF 100%);
+            --color-primary: #7C3AED;
+            --color-accent-pink: #EC4899;
+            --color-purple-dark: #4B0082;
+            --color-border-card: #F3E8FF;
+            --color-border-hover: #E9D5FF;
+            --color-border-indigo: #C7D2FE;
+            --color-border-subtle: #E5E7EB;
+            --color-border-gray: #D1D5DB;
+            --color-border-subtle-indigo: #EEF2FF;
+            --color-bg-subtle: #FAF8FF;
+            --color-bg-light: #F5F3FF;
+            --color-bg-gray: #F3F4F6;
+            --color-success-border: #10B981;
+            --color-success-bg: #ECFDF5;
+            --color-success-text: #065F46;
+            --color-success-title: #059669;
+            --color-danger-border: #EF4444;
+            --color-danger-bg: #FEF2F2;
+            --color-danger-text: #991B1B;
+            --color-danger-title: #DC2626;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            background: var(--color-bg-page);
+            color: var(--color-text-main);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto 32px;
+            text-align: center;
+            padding: 16px;
+            animation: fadeInDown 0.6s ease-out;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 36px;
+            font-weight: 800;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: var(--color-text-muted);
+            font-weight: 500;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(16px);
+            border-radius: 24px;
+            border: 2px solid var(--color-border-card);
+            box-shadow: 0 20px 40px rgba(124, 58, 237, 0.08);
+            padding: 40px;
+            width: 100%;
+            min-height: 520px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            animation: fadeIn 0.5s ease-out;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        /* Mode Tabs */
+        .tabs-header {
+            display: flex;
+            background: rgba(243, 244, 246, 0.8);
+            border-radius: 12px;
+            padding: 4px;
+            gap: 4px;
+            margin-bottom: 28px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            padding: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--color-text-muted);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .tab-btn.active {
+            background: white;
+            color: var(--color-primary);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        /* Source Sentence */
+        .source-sentence-box {
+            background: var(--color-gradient-subtle);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border-left: 5px solid var(--color-primary);
+        }
+
+        .source-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--color-primary);
+            margin-bottom: 6px;
+        }
+
+        .source-text {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--color-purple-dark);
+            line-height: 1.5;
+        }
+
+        .clue-badge {
+            font-size: 12px;
+            color: var(--color-text-muted);
+            background: var(--color-bg-gray);
+            padding: 6px 12px;
+            border-radius: 8px;
+            width: fit-content;
+            margin-bottom: 24px;
+            font-weight: 500;
+            border: 1px solid var(--color-border-subtle);
+        }
+
+        /* Mode Container */
+        .mode-container {
+            min-height: 160px;
+            margin-bottom: 24px;
+        }
+
+        .mode-view {
+            display: none;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .mode-view.active {
+            display: block;
+        }
+
+        /* --- 🧩 Sentence Builder Styling --- */
+        .workspace-area {
+            border: 2px dashed var(--color-border-indigo);
+            border-radius: 12px;
+            min-height: 60px;
+            padding: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 16px;
+            background: white;
+            align-content: flex-start;
+        }
+
+        .word-bank {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            min-height: 60px;
+            padding: 12px;
+            background: rgba(243, 244, 246, 0.5);
+            border-radius: 12px;
+            border: 1px solid var(--color-border-subtle);
+            align-content: flex-start;
+        }
+
+        .word-block {
+            background: white;
+            border: 1px solid var(--color-border-subtle);
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            user-select: none;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            color: var(--color-text-dark);
+        }
+
+        .word-block:hover {
+            border-color: var(--color-primary);
+            color: var(--color-primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(124, 58, 237, 0.15);
+        }
+
+        .word-block:active {
+            transform: translateY(0);
+        }
+
+        .word-block.used {
+            opacity: 0.3;
+            pointer-events: none;
+        }
+
+        /* --- ✍️ Free Text Styling --- */
+        .text-input-box {
+            width: 100%;
+            height: 90px;
+            padding: 16px;
+            border: 1px solid var(--color-border-gray);
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 16px;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .text-input-box:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+        }
+
+        /* --- 🔘 Multiple Choice Styling --- */
+        .options-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .option-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 18px;
+            background: white;
+            border: 1px solid var(--color-border-subtle);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            color: var(--color-text-dark);
+            font-size: 15px;
+        }
+
+        .option-item:hover {
+            border-color: var(--color-border-card);
+            background: var(--color-bg-subtle);
+        }
+
+        .option-item.selected {
+            border-color: var(--color-primary);
+            background: var(--color-bg-light);
+            color: var(--color-primary);
+        }
+
+        .option-item.correct {
+            border-color: var(--color-success-border);
+            background: var(--color-success-bg);
+            color: var(--color-success-text);
+        }
+
+        .option-item.wrong {
+            border-color: var(--color-danger-border);
+            background: var(--color-danger-bg);
+            color: var(--color-danger-text);
+        }
+
+        .option-label {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--color-bg-gray);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--color-text-body-alt);
+            margin-right: 12px;
+            flex-shrink: 0;
+        }
+
+        .option-item.selected .option-label {
+            background: var(--color-primary);
+            color: white;
+        }
+
+        .option-item.correct .option-label {
+            background: var(--color-success-border);
+            color: white;
+        }
+
+        .option-item.wrong .option-label {
+            background: var(--color-danger-border);
+            color: white;
+        }
+
+        /* Actions Footer */
+        .actions-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 24px;
+            border-top: 1px solid var(--color-border-subtle-indigo);
+            padding-top: 24px;
+        }
+
+        .progress-indicator {
+            font-size: 14px;
+            color: var(--color-text-muted);
+            font-weight: 600;
+        }
+
+        .btn {
+            background: var(--color-gradient-primary);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.2);
+            transition: all 0.2s ease;
+            font-family: 'Outfit', sans-serif;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(124, 58, 237, 0.3);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--color-primary);
+            border: 2px solid var(--color-border-hover);
+            box-shadow: none;
+        }
+
+        .btn-outline:hover {
+            background: var(--color-bg-light);
+            border-color: var(--color-primary);
+            box-shadow: none;
+            transform: none;
+        }
+
+        /* Feedback Section */
+        .feedback-area {
+            background: var(--color-bg-subtle);
+            border-radius: 12px;
+            padding: 16px 20px;
+            border: 1px solid var(--color-border-card);
+            margin-top: 16px;
+            display: none;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        .feedback-area.active {
+            display: block;
+        }
+
+        .feedback-title {
+            font-weight: 700;
+            font-size: 15px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .feedback-title.correct { color: var(--color-success-title); }
+        .feedback-title.wrong { color: var(--color-danger-title); }
+
+        .feedback-desc {
+            font-size: 13.5px;
+            color: var(--color-text-body-alt);
+            line-height: 1.6;
+        }
+
+        /* Comparison Area (Other Options) */
+        .comparison-area {
+            margin-top: 20px;
+            border-top: 1px solid var(--color-border-hover);
+            padding-top: 16px;
+        }
+        
+        .comparison-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--color-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+        }
+
+        .comparison-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .comparison-item {
+            font-size: 13px;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 8px;
+            border-left: 3px solid var(--color-border-subtle);
+            color: var(--color-text-body-alt);
+        }
+
+        .comparison-item.correct { border-left-color: var(--color-success-border); background: var(--color-success-bg); }
+        .comparison-item.wrong { border-left-color: var(--color-danger-border); }
+
+        /* Scoring Dashboard (Start and Results Screen) */
+        .start-screen, .results-screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            min-height: 440px;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .start-screen.active, .results-screen.active {
+            display: flex;
+        }
+
+        .icon-circle {
+            width: 72px;
+            height: 72px;
+            margin-bottom: 20px;
+            background: var(--color-gradient-primary);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 24px rgba(124, 58, 237, 0.25);
+        }
+
+        .icon {
+            width: 36px;
+            height: 36px;
+            stroke: white;
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .results-score-box {
+            background: var(--color-gradient-hover);
+            border: 1px solid var(--color-border-hover);
+            border-radius: 20px;
+            padding: 32px;
+            width: 100%;
+            max-width: 420px;
+            margin-bottom: 32px;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: white;
+            box-shadow: 0 8px 20px rgba(124, 58, 237, 0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            border: 3px solid var(--color-primary);
+        }
+
+        .score-num {
+            font-family: 'Outfit', sans-serif;
+            font-size: 36px;
+            font-weight: 800;
+            color: var(--color-primary);
+            line-height: 1;
+        }
+
+        .score-total {
+            font-size: 13px;
+            color: var(--color-text-muted);
+            font-weight: 500;
+        }
+
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+</style>
+</head>
+<body><header>
+        <h1 id="quiz-main-title">Translation Practice</h1>
+        <div class="subtitle">Improve your English by translating from your native language. Select the best English version!</div>
+    </header>
+
+    <div class="container">
+        <!-- Start Screen -->
+        <div class="card start-screen active" id="start-screen">
+            <div class="icon-circle">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            </div>
+            <h2 style="font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 800; color: var(--color-text-main); margin-bottom: 8px;">Translation Cards</h2>
+            <p style="font-size: 15px; color: var(--color-text-muted); max-width: 480px; line-height: 1.6; margin-bottom: 32px;">
+                Reinforce your learning by translating sentences back into English. Choose your mode: Word Builder, Writing, or Multiple Choice.
+            </p>
+            <div style="background: var(--color-bg-subtle); border: 1px solid var(--color-border-hover); border-radius: 12px; padding: 16px 32px; margin-bottom: 32px; font-weight: 600; font-size: 14px; color: var(--color-primary);">
+                Total Cards: <span id="start-total-cards">0</span>
+            </div>
+            <button class="btn" id="start-btn">
+                Start Practicing
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
+        </div>
+
+        <!-- Practice Screen -->
+        <div class="card" id="practice-screen" style="display: none;">
+            <div>
+                <!-- Tabs Selector -->
+                <div class="tabs-header">
+                    <button class="tab-btn active" data-mode="builder">🧩 Word Builder</button>
+                    <button class="tab-btn" data-mode="writing">✍️ Write Translation</button>
+                    <button class="tab-btn" data-mode="choice">🔘 Multiple Choice</button>
+                </div>
+
+                <!-- Source Sentence Box -->
+                <div class="source-sentence-box">
+                    <div class="source-label" id="source-label-text">Source Sentence</div>
+                    <div class="source-text" id="source-sentence-text">---</div>
+                </div>
+
+                <!-- Clue badge -->
+                <div class="clue-badge" id="clue-text">Hint: ---</div>
+
+                <!-- Active Mode Views -->
+                <div class="mode-container" id="mode-container">
+                    <!-- 🧩 Word Builder Mode -->
+                    <div class="mode-view active" id="mode-builder-view">
+                        <div class="workspace-area" id="workspace" placeholder="Click scrambled word blocks to place them here..."></div>
+                        <div class="word-bank" id="word-bank"></div>
+                    </div>
+
+                    <!-- ✍️ Write Translation Mode -->
+                    <div class="mode-view" id="mode-writing-view">
+                        <textarea class="text-input-box" id="writing-input" placeholder="Type your English translation here..."></textarea>
+                    </div>
+
+                    <!-- 🔘 Multiple Choice Mode -->
+                    <div class="mode-view" id="mode-choice-view">
+                        <div class="options-list" id="options-list"></div>
+                    </div>
+                </div>
+
+                <!-- Feedback Area -->
+                <div class="feedback-area" id="feedback-area">
+                    <div class="feedback-title" id="feedback-title"></div>
+                    <div class="feedback-desc" id="feedback-desc"></div>
+                    
+                    <!-- Comparison Area -->
+                    <div class="comparison-area" id="comparison-area">
+                        <div class="comparison-title">Compare Versions</div>
+                        <div class="comparison-list" id="comparison-list">
+                            <!-- Populated on check -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card Action Footer -->
+            <div class="actions-footer">
+                <span class="progress-indicator">Card <span id="current-card-num">1</span> of <span id="total-card-num">5</span></span>
+                <div style="display: flex; gap: 12px;">
+                    <button class="btn btn-outline" id="check-btn">Check Answer</button>
+                    <button class="btn" id="next-btn" style="display: none;">Next Card</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Screen -->
+        <div class="card results-screen" id="results-screen">
+            <div class="icon-circle">
+                <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            </div>
+            <h2 style="font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 800; color: var(--color-text-main); margin-bottom: 8px;">Practice Finished!</h2>
+            <p style="font-size: 15px; color: var(--color-text-muted); margin-bottom: 24px;">Excellent vocabulary and grammar reinforcement exercise completed.</p>
+            
+            <div class="results-score-box">
+                <div class="score-circle">
+                    <span class="score-num" id="score-val">0</span>
+                    <span class="score-total">of <span id="score-out-of">0</span></span>
+                </div>
+                <h3 style="font-family: 'Outfit', sans-serif; font-size: 18px; font-weight: 700; color: var(--color-text-main);" id="achievement-title">Well Done!</h3>
+            </div>
+
+            <button class="btn" id="restart-btn" style="width: 100%; max-width: 420px;">
+                Restart Practice
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Target JSON data injection
+        const quizData = { /* QUIZ_DATA */ };
+
+        let currentCardIndex = 0;
+        let score = 0;
+        let activeMode = "builder"; // "builder", "writing", "choice"
+        let isCurrentCardChecked = false;
+        let cardScores = []; // Track correct cards
+
+        document.addEventListener("DOMContentLoaded", () => {
+            initPractice();
+            setupEvents();
+        });
+
+        function initPractice() {
+            // Setup title
+            document.title = quizData.title || "Translation Practice Handout";
+            document.getElementById("quiz-main-title").innerText = quizData.title || "Target-to-English Translation";
+
+            // Set total card indicators
+            document.getElementById("start-total-cards").innerText = quizData.questions.length;
+            document.getElementById("total-card-num").innerText = quizData.questions.length;
+            document.getElementById("score-out-of").innerText = quizData.questions.length;
+
+            cardScores = new Array(quizData.questions.length).fill(false);
+        }
+
+        function setupEvents() {
+            // Start practicing
+            document.getElementById("start-btn").addEventListener("click", () => {
+                document.getElementById("start-screen").classList.remove("active");
+                document.getElementById("practice-screen").style.display = "flex";
+                showCard(0);
+            });
+
+            // Toggle Modes tabs
+            document.querySelectorAll(".tab-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    if (isCurrentCardChecked) return; // Prevent mode switching after checking answer
+
+                    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+
+                    activeMode = btn.getAttribute("data-mode");
+                    document.querySelectorAll(".mode-view").forEach(v => v.classList.remove("active"));
+                    document.getElementById(`mode-${activeMode}-view`).classList.add("active");
+                });
+            });
+
+            // Check Answer
+            document.getElementById("check-btn").addEventListener("click", () => {
+                const question = quizData.questions[currentCardIndex];
+                let isCorrect = false;
+                let userVal = "";
+
+                // Get Ground Truth
+                const correctEnglish = question.correct_english_answer || "";
+
+                if (activeMode === "builder") {
+                    // Extract assembled sentence text
+                    const blocks = document.querySelectorAll("#workspace .word-block");
+                    userVal = Array.from(blocks).map(b => b.innerText).join(" ");
+                    
+                    const cleanUser = userVal.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ").trim();
+                    const cleanTarget = correctEnglish.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ").trim();
+                    isCorrect = (cleanUser === cleanTarget);
+
+                } else if (activeMode === "writing") {
+                    // Extract typed text
+                    userVal = document.getElementById("writing-input").value.trim();
+                    if (!userVal) {
+                        alert("Please type a translation before checking.");
+                        return;
+                    }
+                    
+                    const cleanUser = userVal.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+                    const cleanTarget = correctEnglish.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+                    
+                    if (cleanUser === cleanTarget) {
+                        isCorrect = true;
+                    } else {
+                        const targetWords = cleanTarget.split(" ");
+                        let matchCount = 0;
+                        targetWords.forEach(w => {
+                            if (cleanUser.includes(w)) matchCount++;
+                        });
+                        const matchRatio = matchCount / targetWords.length;
+                        isCorrect = (matchRatio >= 0.85);
+                    }
+
+                } else if (activeMode === "choice") {
+                    const selected = document.querySelector(".option-item.selected");
+                    if (!selected) {
+                        alert("Please select an option before checking.");
+                        return;
+                    }
+                    const correctIdx = question.correct_answer_index;
+                    const selectedIdx = parseInt(selected.getAttribute("data-opt-idx"));
+                    isCorrect = (selectedIdx === correctIdx);
+                    revealChoiceResult(selectedIdx, correctIdx);
+                }
+
+                isCurrentCardChecked = true;
+                cardScores[currentCardIndex] = isCorrect;
+                if (isCorrect) score++;
+
+                lockInputs();
+
+                const feedbackArea = document.getElementById("feedback-area");
+                const feedbackTitle = document.getElementById("feedback-title");
+                const feedbackDesc = document.getElementById("feedback-desc");
+
+                if (isCorrect) {
+                    feedbackTitle.className = "feedback-title correct";
+                    feedbackTitle.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Correct!`;
+                } else {
+                    feedbackTitle.className = "feedback-title wrong";
+                    feedbackTitle.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Analysis`;
+                }
+
+                let descHtml = `<strong>Best English Version:</strong><br><span style="color: var(--color-primary); font-weight:700; font-size:15px;">${correctEnglish}</span><br><br>`;
+                descHtml += `<strong>Why?</strong> ${question.explanation}`;
+                feedbackDesc.innerHTML = descHtml;
+                
+                const compList = document.getElementById("comparison-list");
+                compList.innerHTML = "";
+                const correctIdx = question.correct_answer_index;
+                question.options.forEach((opt, idx) => {
+                    const item = document.createElement("div");
+                    item.className = (idx === correctIdx) ? "comparison-item correct" : "comparison-item wrong";
+                    item.innerHTML = `<strong>${String.fromCharCode(65 + idx)}:</strong> ${opt}`;
+                    compList.appendChild(item);
+                });
+
+                feedbackArea.classList.add("active");
+                document.getElementById("check-btn").style.display = "none";
+                document.getElementById("next-btn").style.display = "inline-flex";
+                const isLast = (currentCardIndex === quizData.questions.length - 1);
+                document.getElementById("next-btn").innerText = isLast ? "Finish & View Results" : "Next Card";
+            });
+
+            document.getElementById("next-btn").addEventListener("click", () => {
+                if (currentCardIndex < quizData.questions.length - 1) {
+                    currentCardIndex++;
+                    showCard(currentCardIndex);
+                } else {
+                    showResults();
+                }
+            });
+
+            document.getElementById("restart-btn").addEventListener("click", () => {
+                currentCardIndex = 0;
+                score = 0;
+                cardScores = new Array(quizData.questions.length).fill(false);
+                isCurrentCardChecked = false;
+                document.getElementById("results-screen").classList.remove("active");
+                document.getElementById("practice-screen").style.display = "flex";
+                showCard(0);
+            });
+        }
+
+        function showCard(index) {
+            currentCardIndex = index;
+            isCurrentCardChecked = false;
+            const question = quizData.questions[index];
+            document.getElementById("current-card-num").innerText = index + 1;
+
+            const langName = quizData.target_language || "Chinese";
+            document.getElementById("source-label-text").innerText = `Source ${langName} Sentence`;
+
+            const sourceText = question.translated_sentence || "No sentence provided";
+            document.getElementById("source-sentence-text").innerText = sourceText;
+            document.getElementById("clue-text").innerText = question.hint ? `Hint: ${question.hint}` : "Select the best English translation.";
+
+            document.getElementById("check-btn").style.display = "inline-flex";
+            document.getElementById("next-btn").style.display = "none";
+            document.getElementById("feedback-area").classList.remove("active");
+            document.querySelectorAll(".tab-btn").forEach(btn => btn.style.pointerEvents = "auto");
+
+            const workspace = document.getElementById("workspace");
+            const wordBank = document.getElementById("word-bank");
+            workspace.innerHTML = "";
+            wordBank.innerHTML = "";
+
+            const correctEnglish = question.correct_english_answer || "";
+            let rawScrambled = question.word_bank || [];
+            
+            // --- SAFETY CHECK: Detect Incomplete Scrambling ---
+            // If the LLM provided a list that is too short (e.g. only keywords), 
+            // we auto-split the correct answer string to ensure the user has all the words.
+            const actualWordCount = correctEnglish.trim().split(/\s+/).length;
+            if (rawScrambled.length < (actualWordCount * 0.8)) {
+                console.warn("Incomplete scrambled words detected from LLM. Auto-splitting target sentence instead.");
+                // Clean punctuation before splitting for the word bank
+                rawScrambled = correctEnglish.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").split(/\s+/).filter(w => w.length > 0);
+            }
+
+            const shuffledWords = [...rawScrambled].sort(() => Math.random() - 0.5);
+            shuffledWords.forEach((word, wordIdx) => {
+                const block = document.createElement("div");
+                block.className = "word-block";
+                block.innerText = word;
+                block.setAttribute("data-word-idx", wordIdx);
+                block.addEventListener("click", () => {
+                    if (isCurrentCardChecked) return;
+                    if (block.parentNode === wordBank) workspace.appendChild(block);
+                    else wordBank.appendChild(block);
+                });
+                wordBank.appendChild(block);
+            });
+
+            document.getElementById("writing-input").value = "";
+            document.getElementById("writing-input").disabled = false;
+
+            const optionsList = document.getElementById("options-list");
+            optionsList.innerHTML = "";
+            question.options.forEach((opt, optIdx) => {
+                const label = String.fromCharCode(65 + optIdx);
+                const optItem = document.createElement("div");
+                optItem.className = "option-item";
+                optItem.setAttribute("data-opt-idx", optIdx);
+                optItem.innerHTML = `<div class="option-label">${label}</div><div>${opt}</div>`;
+                optItem.addEventListener("click", () => {
+                    if (isCurrentCardChecked) return;
+                    document.querySelectorAll(".option-item").forEach(item => item.classList.remove("selected"));
+                    optItem.classList.add("selected");
+                });
+                optionsList.appendChild(optItem);
+            });
+        }
+
+        function revealChoiceResult(chosenIdx, correctIdx) {
+            document.querySelectorAll(".option-item").forEach(item => {
+                item.classList.remove("selected");
+                const itemIdx = parseInt(item.getAttribute("data-opt-idx"));
+                if (itemIdx === correctIdx) item.classList.add("correct");
+                if (itemIdx === chosenIdx && chosenIdx !== correctIdx) item.classList.add("wrong");
+            });
+        }
+
+        function lockInputs() {
+            document.querySelectorAll(".tab-btn").forEach(btn => btn.style.pointerEvents = "none");
+            document.getElementById("writing-input").disabled = true;
+            document.querySelectorAll(".word-block").forEach(block => {
+                block.style.pointerEvents = "none";
+                block.style.cursor = "default";
+            });
+            document.querySelectorAll(".option-item").forEach(item => item.style.pointerEvents = "none");
+        }
+
+        function showResults() {
+            document.getElementById("practice-screen").style.display = "none";
+            document.getElementById("results-screen").classList.add("active");
+            document.getElementById("score-val").innerText = score;
+            const percentage = (score / quizData.questions.length) * 100;
+            const titleElement = document.getElementById("achievement-title");
+            if (percentage === 100) titleElement.innerText = "Distinguished! Perfect accuracy.";
+            else if (percentage >= 80) titleElement.innerText = "Excellent control of the language!";
+            else if (percentage >= 60) titleElement.innerText = "Good attempt! Keep practicing.";
+            else titleElement.innerText = "Keep practicing to refine your skills.";
+        }
+    </script>
+</body>
+</html>

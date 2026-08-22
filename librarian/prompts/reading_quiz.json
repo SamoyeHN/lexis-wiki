@@ -1,0 +1,122 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Title for the quiz."
+    },
+    "vocabulary": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "word": {
+            "type": "string",
+            "minLength": 1
+          },
+          "context_sentence": {
+            "type": "string",
+            "description": "The exact sentence from the passage where this word first appears.",
+            "minLength": 1
+          },
+          "part_of_speech": {
+            "type": "string",
+            "minLength": 1
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "example_usage": {
+            "type": "string",
+            "description": "A new, original example sentence.",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "word",
+          "context_sentence",
+          "part_of_speech",
+          "definition",
+          "example_usage"
+        ],
+        "additionalProperties": false
+      },
+      "description": "List of 5-8 glossary items identified organically from the text to assist the reader."
+    },
+    "questions": {
+      "type": "array",
+      "minItems": "{count}",
+      "maxItems": "{count}",
+      "items": {
+        "type": "object",
+        "properties": {
+          "design_audit": {
+            "type": "string",
+            "description": "Thinking Step. Format: 'DRAFT: [Tested Skill] -> [Text Evidence Location] -> [3 Distractor Traps (Literal Matching / Scope / Logic Shift)]'. Must match CEFR {cefr_level}.",
+            "minLength": 25
+          },
+          "question": {
+            "type": "string",
+            "description": "Comprehension question (match {cefr_level}) addressing the planned skill.",
+            "minLength": 1
+          },
+          "options": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Exactly 4 options containing the correct answer and 3 planned distractors. Return ONLY the literal phrase without labels like 'A)' or surrounding quotes (\" \")."
+          },
+          "correct_answer_index": {
+            "type": "integer",
+            "description": "Index of the correct answer (0-3) inside the options array.",
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Main Idea",
+              "Detail/Recall",
+              "Inference",
+              "Author's Tone/Purpose"
+            ],
+            "description": "The specific skill tested by this question."
+          },
+          "explanation": {
+            "type": "string",
+            "description": "Detailed reasoning supported by specific text evidence, explaining why the correct answer is valid and why distractors are incorrect.",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "design_audit",
+          "question",
+          "options",
+          "correct_answer_index",
+          "category",
+          "explanation"
+        ],
+        "additionalProperties": false
+      },
+      "description": "List of {count} generated comprehension questions."
+    }
+  },
+  "required": [
+    "title",
+    "vocabulary",
+    "questions"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Mind Map</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%);
+            --node-bg: rgba(255, 255, 255, 0.75);
+            --node-border: rgba(0, 0, 0, 0.06);
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --root-bg: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
+            --root-border: #4338CA;
+            
+            /* Theme Colors */
+            --color-pink: #EC4899;
+            --color-orange: #F97316;
+            --color-blue: #3B82F6;
+            --color-green: #10B981;
+            --color-purple: #8B5CF6;
+            --color-indigo: #4F46E5;
+            --color-indigo-light: #6366F1;
+            --color-indigo-hover: #818CF8;
+            --color-indigo-dark: #312E81;
+            --color-white: #FFFFFF;
+            
+            /* Light/Dark Overrides */
+            --glow-opacity: 0.12;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-gradient);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+
+        /* Top Header Control Bar */
+        header {
+            position: fixed;
+            top: 10px;
+            left: 12px;
+            right: 12px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 8px 16px;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+        }
+
+        .header-title-section h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--color-indigo) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header-title-section p {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 1px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .badge-cefr {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--color-indigo);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            font-size: 9px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+        }
+
+        /* Toolbar Controls */
+        .controls-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .btn-control {
+            background: rgba(255, 255, 255, 0.85);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            color: var(--text-primary);
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .btn-control:hover {
+            background: var(--color-white);
+            border-color: rgba(0, 0, 0, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .btn-control svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2.5;
+        }
+
+        /* Immersive Map Container */
+        .viewport {
+            flex: 1;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            cursor: grab;
+        }
+
+        .viewport:active {
+            cursor: grabbing;
+        }
+
+        .canvas {
+            position: absolute;
+            transform-origin: 0 0;
+            padding: 200px 300px;
+            display: flex;
+            align-items: center;
+        }
+
+        /* SVG Background Connections */
+        .svg-connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .svg-connections path {
+            fill: none;
+            stroke-width: 2.5;
+            transition: stroke-width 0.2s, stroke-dashoffset 0.4s, filter 0.2s;
+            stroke-linecap: round;
+            opacity: 0.35;
+        }
+
+        /* Active branch hover line effect */
+        .svg-connections path.active {
+            opacity: 0.95;
+            stroke-width: 3.5;
+            filter: drop-shadow(0 0 6px var(--glow-color));
+        }
+
+        /* Hierarchical Flexbox Nodes Structure */
+        .tree-layout {
+            position: relative;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            gap: 120px; /* distance between columns */
+        }
+
+        .column {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 40px; /* spacing between nodes inside a column */
+        }
+
+        /* Sub-Tree Wrappers */
+        .sub-tree-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 120px;
+        }
+
+        /* Mind Map Cards/Nodes styling */
+        .node {
+            background: var(--node-bg);
+            border: 1.5px solid var(--node-border);
+            border-radius: 16px;
+            padding: 14px 22px;
+            color: var(--text-primary);
+            font-size: 15px;
+            font-weight: 500;
+            white-space: nowrap;
+            width: fit-content;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.04);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Hover animations */
+        .node:hover {
+            transform: translateX(4px) scale(1.02);
+            border-color: var(--theme-color);
+            box-shadow: 0 8px 25px var(--shadow-color);
+            background: var(--color-white);
+        }
+
+        /* Root node special styling */
+        .node-root {
+            background: var(--root-bg);
+            border: 2px solid var(--root-border);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            padding: 20px 32px;
+            border-radius: 20px;
+            color: var(--color-white) !important;
+            box-shadow: 0 10px 40px rgba(99, 102, 241, 0.15);
+            letter-spacing: -0.01em;
+            --theme-color: var(--color-indigo-light);
+            --shadow-color: rgba(99, 102, 241, 0.25);
+        }
+        .node-root:hover {
+            transform: scale(1.03);
+            border-color: var(--color-indigo-hover);
+            background: var(--root-bg);
+        }
+
+        /* Node theme-specific accent styling */
+        .node.pink {
+            --theme-color: var(--color-pink);
+            --shadow-color: rgba(236, 72, 153, var(--glow-opacity));
+        }
+        .node.orange {
+            --theme-color: var(--color-orange);
+            --shadow-color: rgba(249, 115, 22, var(--glow-opacity));
+        }
+        .node.blue {
+            --theme-color: var(--color-blue);
+            --shadow-color: rgba(59, 130, 246, var(--glow-opacity));
+        }
+        .node.green {
+            --theme-color: var(--color-green);
+            --shadow-color: rgba(16, 185, 129, var(--glow-opacity));
+        }
+        .node.purple {
+            --theme-color: var(--color-purple);
+            --shadow-color: rgba(139, 92, 246, var(--glow-opacity));
+        }
+
+        /* Primary Branch Nodes special styling */
+        .node-branch {
+            font-weight: 700;
+            font-size: 16px;
+            border-left-width: 5px;
+            border-left-color: var(--theme-color);
+            padding-left: 18px;
+        }
+
+        /* Intermediate Sub-Branch Nodes styling */
+        .node-sub-branch {
+            font-weight: 600;
+            font-size: 14px;
+            border-color: rgba(0, 0, 0, 0.08);
+        }
+
+        /* Leaf Nodes (Details) styling */
+        .node-leaf {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 400;
+            border-color: rgba(0, 0, 0, 0.05);
+            max-width: 280px;
+            white-space: normal;
+            line-height: 1.4;
+        }
+
+        /* Hover Path Highlight Trigger Classes */
+        .node.highlighted {
+            border-color: var(--theme-color);
+            box-shadow: 0 6px 20px var(--shadow-color);
+            background: var(--theme-color) !important;
+            color: var(--color-white) !important;
+        }
+
+        /* Collapse / Expand Badge Trigger styling */
+        .collapse-toggle {
+            width: 18px;
+            height: 18px;
+            background: rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-primary);
+        }
+        .collapse-toggle:hover {
+            background: var(--theme-color);
+            border-color: var(--theme-color);
+            color: white;
+        }
+
+        /* Hidden Branch animation */
+        .collapsed-branch {
+            display: none !important;
+        }
+
+        /* Dynamic Indicator on collapsed state */
+        .node.is-collapsed {
+            border-style: dashed;
+        }
+
+        /* Legend Footer */
+        footer {
+            position: fixed;
+            bottom: 10px;
+            left: 12px;
+            right: 12px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 6px 16px;
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: auto;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+        }
+
+        .legend {
+            display: flex;
+            gap: 12px;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.pink { background-color: var(--color-pink); }
+        .legend-dot.orange { background-color: var(--color-orange); }
+        .legend-dot.blue { background-color: var(--color-blue); }
+        .legend-dot.green { background-color: var(--color-green); }
+        .legend-dot.purple { background-color: var(--color-purple); }
+
+        .footer-tips {
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header Control Bar -->
+    <header>
+        <div class="header-title-section">
+            <h1 id="map-title">Interactive Unit Mind Map</h1>
+            <p>
+                <span class="badge-cefr" id="cefr-badge">CEFR B2</span>
+                <span>• Left-click nodes to collapse branches. Hover to highlight structure. Drag to pan.</span>
+            </p>
+        </div>
+        
+        <div class="controls-group">
+            <button class="btn-control" id="btn-open-fullscreen" title="Open in Fullscreen" onclick="window.open(window.location.href, '_blank')">
+                <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </button>
+            <button class="btn-control" id="btn-zoom-in" title="Zoom In">
+                <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button class="btn-control" id="btn-zoom-out" title="Zoom Out">
+                <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button class="btn-control" id="btn-reset" title="Recenter Map">
+                <svg viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Map Viewport -->
+    <div class="viewport" id="viewport">
+        <div class="canvas" id="canvas">
+            <svg class="svg-connections" id="svg-layer"></svg>
+            <div class="tree-layout" id="tree-container">
+                <!-- Content will be dynamically populated here from data -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend Footer -->
+    <footer>
+        <div class="legend" id="color-legend">
+            <!-- Dynamic color themes list -->
+        </div>
+        <div class="footer-tips">
+            Use scroll wheel to zoom. Drag workspace to navigate.
+        </div>
+    </footer>
+
+    <script>
+        // Sample fallback data block if mindmapData isn't injected
+        const mindmapData = {
+            "title": "Surviving an Economic Crisis Mind Map",
+            "overall_cefr_level": "B2",
+            "root_name": "Surviving an Economic Crisis",
+            "branches": [
+                {
+                    "branch_name": "Origins of the Slump",
+                    "color_theme": "pink",
+                    "sub_branches": [
+                        {
+                            "sub_branch_name": "",
+                            "leaves": [
+                                "US Mortgage Regulatory Failure",
+                                "Company and Shareholder Losses",
+                                "Slow Economic Rebound"
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "branch_name": "Impact on Employment",
+                    "color_theme": "orange",
+                    "sub_branches": [
+                        {
+                            "sub_branch_name": "",
+                            "leaves": [
+                                "Widespread Lay-offs",
+                                "Record Long-term Unemployment",
+                                "The '99ers' Group",
+                                "Exhausted Insurance Benefits"
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "branch_name": "Sue Johnson's Downward Spiral",
+                    "color_theme": "green",
+                    "sub_branches": [
+                        {
+                            "sub_branch_name": "Former Middle-Class Life",
+                            "leaves": [
+                                "Corporate Director Position",
+                                "Graduate Business School",
+                                "Annual Salary of $56,000"
+                            ]
+                        },
+                        {
+                            "sub_branch_name": "Economic Collapse",
+                            "leaves": [
+                                "Tenant Eviction",
+                                "Negative Checking Account",
+                                "Car Repossession Threat",
+                                "Profound Grief and Despair"
+                            ]
+                        },
+                        {
+                            "sub_branch_name": "Migrant Existence",
+                            "leaves": [
+                                "Living in a Motel",
+                                "Selling Personal Belongings",
+                                "Subsistence Diet"
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "branch_name": "Challenges and Obstacles",
+                    "color_theme": "blue",
+                    "sub_branches": [
+                        {
+                            "sub_branch_name": "",
+                            "leaves": [
+                                "Constant Financial Stress",
+                                "Job Application Barriers",
+                                "Lack of Permanent Address",
+                                "Risk of Phone Disconnection",
+                                "Silent Job Market Rejections"
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "branch_name": "Support and Survival Efforts",
+                    "color_theme": "purple",
+                    "sub_branches": [
+                        {
+                            "sub_branch_name": "",
+                            "leaves": [
+                                "Financial Aid from Friends",
+                                "Church Gas Cards",
+                                "Hometown Safety Net",
+                                "Shelter Waiting Lists",
+                                "Self-Reliance Resolve"
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        // Zoom and Pan State Variables
+        let zoom = 0.85;
+        let panX = 100;
+        let panY = 50;
+        
+        // Detect if loaded inside an iframe (dashboard)
+        const isInIframe = window !== window.top;
+        let isDragging = false;
+        let startX, startY;
+
+        const viewport = document.getElementById('viewport');
+        const canvas = document.getElementById('canvas');
+        const treeContainer = document.getElementById('tree-container');
+        const svgLayer = document.getElementById('svg-layer');
+
+        // Render the Mind Map DOM Nodes dynamically from the JSON
+        function renderTree() {
+            // Apply Document Level Title
+            document.title = mindmapData.title;
+            document.getElementById('map-title').innerText = mindmapData.title;
+            document.getElementById('cefr-badge').innerText = `CEFR ${mindmapData.overall_cefr_level || 'B2'}`;
+
+            // Clear old contents
+            treeContainer.innerHTML = '';
+            
+            // 1. Create and append ROOT NODE Column
+            const rootCol = document.createElement('div');
+            rootCol.className = 'column';
+            const rootNode = document.createElement('div');
+            rootNode.id = 'root-node';
+            rootNode.className = 'node node-root';
+            rootNode.innerText = mindmapData.root_name;
+            rootCol.appendChild(rootNode);
+            treeContainer.appendChild(rootCol);
+
+            // 2. Create the BRANCHES Column
+            const branchesCol = document.createElement('div');
+            branchesCol.className = 'column';
+            branchesCol.style.gap = '50px';
+
+            const colorsLegend = document.getElementById('color-legend');
+            colorsLegend.innerHTML = '';
+
+            mindmapData.branches.forEach((branch, bIdx) => {
+                const color = branch.color_theme || 'blue';
+                const branchId = `branch-${bIdx}`;
+
+                // Add to footer legend
+                const legendItem = document.createElement('div');
+                legendItem.className = 'legend-item';
+                legendItem.innerHTML = `<span class="legend-dot ${color}"></span><span>${branch.branch_name}</span>`;
+                colorsLegend.appendChild(legendItem);
+
+                // Create individual Branch Sub-Tree Layout wrapper
+                const subTreeLayout = document.createElement('div');
+                subTreeLayout.className = 'sub-tree-wrapper';
+                subTreeLayout.id = `tree-${branchId}`;
+
+                // Create the Branch Node itself
+                const branchCard = document.createElement('div');
+                branchCard.id = branchId;
+                branchCard.className = `node node-branch ${color} is-collapsed`;
+                branchCard.dataset.color = color;
+                branchCard.innerHTML = `<span>${branch.branch_name}</span>`;
+                
+                // Add Collapse Toggle button if there are sub-branches/leaves
+                if (branch.sub_branches && branch.sub_branches.length > 0) {
+                    const toggle = document.createElement('div');
+                    toggle.className = 'collapse-toggle';
+                    toggle.innerText = '+';
+                    toggle.onclick = (e) => {
+                        e.stopPropagation();
+                        toggleBranch(branchId, toggle, subBranchesCol);
+                    };
+                    branchCard.appendChild(toggle);
+                }
+                
+                subTreeLayout.appendChild(branchCard);
+
+                // Create Column for sub-branches (children)
+                const subBranchesCol = document.createElement('div');
+                subBranchesCol.className = 'column collapsed-branch';
+                subBranchesCol.style.gap = '25px';
+
+                branch.sub_branches.forEach((sub, sIdx) => {
+                    const subId = `${branchId}-sub-${sIdx}`;
+                    const hasSubName = sub.sub_branch_name && sub.sub_branch_name.trim() !== '';
+
+                    const leafGroupWrapper = document.createElement('div');
+                    leafGroupWrapper.className = 'sub-tree-wrapper';
+
+                    if (hasSubName) {
+                        // We have an intermediate named Sub-Branch Card
+                        const subBranchCard = document.createElement('div');
+                        subBranchCard.id = subId;
+                        subBranchCard.className = `node node-sub-branch ${color} is-collapsed`;
+                        subBranchCard.dataset.color = color;
+                        subBranchCard.innerHTML = `<span>${sub.sub_branch_name}</span>`;
+                        
+                        if (sub.leaves && sub.leaves.length > 0) {
+                            const subToggle = document.createElement('div');
+                            subToggle.className = 'collapse-toggle';
+                            subToggle.innerText = '+';
+                            subToggle.onclick = (e) => {
+                                e.stopPropagation();
+                                toggleBranch(subId, subToggle, leavesCol);
+                            };
+                            subBranchCard.appendChild(subToggle);
+                        }
+
+                        leafGroupWrapper.appendChild(subBranchCard);
+                    }
+
+                    // Create leaves column
+                    const leavesCol = document.createElement('div');
+                    // Only start collapsed if there's a named sub-branch toggle to expand it
+                    leavesCol.className = hasSubName ? 'column collapsed-branch' : 'column';
+                    leavesCol.style.gap = '15px';
+
+                    sub.leaves.forEach((leafText, lIdx) => {
+                        const leafId = hasSubName ? `${subId}-leaf-${lIdx}` : `${branchId}-sub-${sIdx}-leaf-${lIdx}`;
+                        const leafCard = document.createElement('div');
+                        leafCard.id = leafId;
+                        leafCard.className = `node node-leaf ${color}`;
+                        leafCard.dataset.color = color;
+                        leafCard.innerText = leafText;
+                        leavesCol.appendChild(leafCard);
+                    });
+
+                    leafGroupWrapper.appendChild(leavesCol);
+                    subBranchesCol.appendChild(leafGroupWrapper);
+                });
+
+                subTreeLayout.appendChild(subBranchesCol);
+                branchesCol.appendChild(subTreeLayout);
+            });
+
+            treeContainer.appendChild(branchesCol);
+            
+            // Bind premium highlighting hover listeners to all nodes
+            bindHoverEffects();
+        }
+
+        // Toggle collapsible branch branches
+        function toggleBranch(nodeId, buttonEl, targetColumnEl) {
+            const isCollapsed = targetColumnEl.classList.toggle('collapsed-branch');
+            const nodeEl = document.getElementById(nodeId);
+            
+            if (isCollapsed) {
+                buttonEl.innerText = '+';
+                nodeEl.classList.add('is-collapsed');
+            } else {
+                buttonEl.innerText = '−';
+                nodeEl.classList.remove('is-collapsed');
+            }
+            
+            // Re-render the connector curves smoothly
+            requestAnimationFrame(drawLines);
+        }
+
+        // Color mapper helper
+        const hexMap = {
+            "pink": getComputedStyle(document.documentElement).getPropertyValue('--color-pink').trim() || "#EC4899",
+            "orange": getComputedStyle(document.documentElement).getPropertyValue('--color-orange').trim() || "#F97316",
+            "blue": getComputedStyle(document.documentElement).getPropertyValue('--color-blue').trim() || "#3B82F6",
+            "green": getComputedStyle(document.documentElement).getPropertyValue('--color-green').trim() || "#10B981",
+            "purple": getComputedStyle(document.documentElement).getPropertyValue('--color-purple').trim() || "#8B5CF6"
+        };
+
+        // Dynamic Bezier Curves drawing logic
+        function drawLines() {
+            svgLayer.innerHTML = '';
+            const canvasRect = canvas.getBoundingClientRect();
+            
+            const rootNode = document.getElementById('root-node');
+            if (!rootNode) return;
+
+            // Fit SVG Layer size to the content bounding box
+            const scrollWidth = canvas.scrollWidth;
+            const scrollHeight = canvas.scrollHeight;
+            svgLayer.setAttribute('width', scrollWidth);
+            svgLayer.setAttribute('height', scrollHeight);
+
+            // Connect Root Node to Primary Branches
+            mindmapData.branches.forEach((branch, bIdx) => {
+                const branchId = `branch-${bIdx}`;
+                const branchEl = document.getElementById(branchId);
+                if (!branchEl) return;
+
+                drawBezierBetween(rootNode, branchEl, branch.color_theme, `path-root-${branchId}`);
+
+                // Connect Branch to Sub-Branches/Leaves
+                const branchSubTree = document.getElementById(`tree-${branchId}`);
+                if (!branchSubTree) return;
+
+                branch.sub_branches.forEach((sub, sIdx) => {
+                    const subId = `${branchId}-sub-${sIdx}`;
+                    const subEl = document.getElementById(subId);
+                    const hasSubName = subEl !== null;
+
+                    const parentEl = hasSubName ? subEl : branchEl;
+
+                    // Draw connecting line to sub-branch card if named
+                    if (hasSubName) {
+                        drawBezierBetween(branchEl, subEl, branch.color_theme, `path-${branchId}-${subId}`);
+                    }
+
+                    // Connect parentEl (sub-branch or main branch) to individual leaves
+                    sub.leaves.forEach((leafText, lIdx) => {
+                        const leafId = hasSubName ? `${subId}-leaf-${lIdx}` : `${branchId}-sub-${sIdx}-leaf-${lIdx}`;
+                        const leafEl = document.getElementById(leafId);
+                        if (!leafEl) return;
+
+                        drawBezierBetween(parentEl, leafEl, branch.color_theme, `path-${parentEl.id}-${leafId}`);
+                    });
+                });
+            });
+        }
+
+        // Draw individual curve
+        function drawBezierBetween(elStart, elEnd, themeColor, pathId) {
+            // If any node is hidden, don't draw its lines
+            if (elStart.offsetParent === null || elEnd.offsetParent === null) return;
+
+            const canvasRect = canvas.getBoundingClientRect();
+            const rStart = elStart.getBoundingClientRect();
+            const rEnd = elEnd.getBoundingClientRect();
+
+            // Calculate exact start/end offset coordinates relative to scrollable canvas container
+            const x1 = (rStart.right - canvasRect.left) / zoom;
+            const y1 = ((rStart.top + rStart.height / 2) - canvasRect.top) / zoom;
+            
+            const x2 = (rEnd.left - canvasRect.left) / zoom;
+            const y2 = ((rEnd.top + rEnd.height / 2) - canvasRect.top) / zoom;
+
+            // Generate control points for a smooth, organic left-to-right tree path
+            const dx = Math.abs(x2 - x1) * 0.45;
+            
+            const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.id = pathId;
+            path.setAttribute("d", d);
+            const defaultStroke = getComputedStyle(document.documentElement).getPropertyValue('--color-indigo-dark').trim() || "#312E81";
+            path.setAttribute("stroke", hexMap[themeColor] || defaultStroke);
+            path.style.setProperty("--glow-color", hexMap[themeColor]);
+            svgLayer.appendChild(path);
+        }
+
+        // Hover structure highlighting logic
+        function bindHoverEffects() {
+            const allNodes = document.querySelectorAll('.node');
+            
+            allNodes.forEach(node => {
+                node.addEventListener('mouseenter', () => {
+                    const targetId = node.id;
+                    if (targetId === 'root-node') return;
+
+                    // Trace path up or down based on nodes
+                    highlightBranchStructure(node, true);
+                });
+
+                node.addEventListener('mouseleave', () => {
+                    highlightBranchStructure(node, false);
+                });
+            });
+        }
+
+        function highlightBranchStructure(node, isActive) {
+            const color = node.dataset.color;
+            if (!color) return;
+
+            const nodeId = node.id;
+            const svgPaths = svgLayer.querySelectorAll('path');
+            
+            // Highlight connections that have the node ID in their path ID
+            svgPaths.forEach(path => {
+                if (path.id.includes(nodeId) || (nodeId.startsWith('branch-') && path.id.includes(nodeId.split('-')[0] + '-' + nodeId.split('-')[1]))) {
+                    if (isActive) {
+                        path.classList.add('active');
+                    } else {
+                        path.classList.remove('active');
+                    }
+                }
+            });
+
+            // Highlight node itself and children/parent cards
+            if (isActive) {
+                node.classList.add('highlighted');
+            } else {
+                node.classList.remove('highlighted');
+            }
+        }
+
+        // Zoom and Recenter Viewport Controls
+        const STORAGE_KEY = `mindmap_view_${encodeURIComponent(mindmapData.title || 'default')}`;
+
+        function saveSettings() {
+            // Don't persist settings when in iframe - always auto-fit
+            if (!isInIframe) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ zoom, panX, panY }));
+            }
+        }
+
+        function loadSettings() {
+            // Don't load saved settings when in iframe - always auto-fit
+            if (isInIframe) return false;
+            
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                try {
+                    const data = JSON.parse(saved);
+                    zoom = data.zoom;
+                    panX = data.panX;
+                    panY = data.panY;
+                    return true;
+                } catch (e) {
+                    console.error("Failed to load mindmap view settings", e);
+                }
+            }
+            return false;
+        }
+
+        function updateTransform() {
+            canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+            // SVG coordinate lines need dynamic alignment updates
+            requestAnimationFrame(drawLines);
+            saveSettings();
+        }
+
+        // Centering helper
+        function recenterMap() {
+            const vpRect = viewport.getBoundingClientRect();
+            if (vpRect.width === 0 || vpRect.height === 0) {
+                zoom = 0.85;
+                panX = 100;
+                panY = 120;
+                updateTransform();
+                return;
+            }
+
+            const treeWidth = treeContainer.offsetWidth;
+            const treeHeight = treeContainer.offsetHeight;
+
+            if (treeWidth > 0 && treeHeight > 0) {
+                // Determine best fit zoom with 50px of padding around the tree
+                const pad = 50;
+                const availableW = vpRect.width - pad * 2;
+                const availableH = vpRect.height - pad * 2;
+
+                const zoomX = availableW / treeWidth;
+                const zoomY = availableH / treeHeight;
+                
+                // Pick the smaller zoom to fit both, allow zooming out enough to fit iframe
+                zoom = Math.min(1.1, Math.max(0.1, Math.min(zoomX, zoomY)));
+
+                // Calculate the offsets to center the tree in the viewport.
+                const treeOffsetLeft = treeContainer.offsetLeft || 0;
+                const treeOffsetTop = treeContainer.offsetTop || 0;
+
+                panX = (vpRect.width - treeWidth * zoom) / 2 - treeOffsetLeft * zoom;
+                panY = (vpRect.height - treeHeight * zoom) / 2 - treeOffsetTop * zoom;
+            } else {
+                const rootNode = document.getElementById('root-node');
+                zoom = 0.85;
+                if (rootNode) {
+                    const rootOffsetLeft = rootNode.offsetLeft;
+                    const rootOffsetTop = rootNode.offsetTop;
+                    panX = (vpRect.width * 0.25) - (rootNode.offsetWidth / 2) * zoom - rootOffsetLeft * zoom;
+                    panY = (vpRect.height / 2) - (rootNode.offsetHeight / 2) * zoom - rootOffsetTop * zoom;
+                } else {
+                    panX = 100;
+                    panY = 120;
+                }
+            }
+            updateTransform();
+        }
+
+        // Bind events
+        document.getElementById('btn-zoom-in').onclick = () => { zoom = Math.min(2, zoom + 0.1); updateTransform(); };
+        document.getElementById('btn-zoom-out').onclick = () => { zoom = Math.max(0.1, zoom - 0.1); updateTransform(); };
+        document.getElementById('btn-reset').onclick = recenterMap;
+
+        // Viewport Drag-to-Pan implementation
+        viewport.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.node') || e.target.closest('.btn-control') || e.target.closest('.collapse-toggle')) return;
+            isDragging = true;
+            viewport.style.cursor = 'grabbing';
+            startX = e.clientX - panX;
+            startY = e.clientY - panY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            panX = e.clientX - startX;
+            panY = e.clientY - startY;
+            updateTransform();
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            viewport.style.cursor = 'grab';
+        });
+
+        // Scroll wheel zooming
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const scaleAmount = -e.deltaY * 0.0015;
+            zoom = Math.min(2, Math.max(0.1, zoom + scaleAmount));
+            updateTransform();
+        }, { passive: false });
+
+        // Initialize App
+        window.addEventListener('load', () => {
+            renderTree();
+            if (!loadSettings()) {
+                recenterMap();
+            } else {
+                updateTransform();
+            }
+            
+            // Periodic recalculation fallback for browser layout latency
+            setTimeout(drawLines, 100);
+            setTimeout(drawLines, 500);
+        });
+
+        // Recalculate connections and recenter on screen resize (especially important in iframe)
+        let resizeTimeout = null;
+        window.addEventListener('resize', () => {
+            if (isInIframe) {
+                // Debounce recenter for smooth iframe resizing
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(recenterMap, 150);
+            } else {
+                drawLines();
+            }
+        });
+    </script>
+</body>
+</html>

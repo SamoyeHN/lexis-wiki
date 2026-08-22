@@ -1,0 +1,95 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Title for the extraction (e.g. 'Book 3 Unit 4 Expressions').",
+      "minLength": 1
+    },
+    "overall_cefr_level": {
+      "type": "string",
+      "enum": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "C1",
+        "C2"
+      ],
+      "description": "The holistic CEFR difficulty rating for the entire set of expressions."
+    },
+    "expressions": {
+      "type": "array",
+      "maxItems": "{count}",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "design_audit": {
+            "type": "string",
+            "description": "Thinking Step. Verify that this candidate phrasal verb or idiom is present in the text, identified in its base dictionary form, and has not been used in previous list items. Format: 'DRAFT: [Surface Form] -> [Base Phrase Form] -> [Uniqueness Check (New/Repeat)]'.",
+            "minLength": 1
+          },
+          "word": {
+            "type": "string",
+            "description": "The standardized dictionary headword entry form using slot-filling placeholders (e.g. 'keep one's chin up', 'fill [someone] with [emotion]', 'pose a threat to [entity]').",
+            "minLength": 1
+          },
+          "part_of_speech": {
+            "type": "string",
+            "enum": [
+              "phrasal verb",
+              "idiom",
+              "collocation"
+            ],
+            "description": "The classification of the multi-word expression."
+          },
+          "definition": {
+            "type": "string",
+            "description": "A concise, clear definition of the phrasal verb or idiom.",
+            "minLength": 1
+          },
+          "word_cefr_level": {
+            "type": "string",
+            "enum": [
+              "A1",
+              "A2",
+              "B1",
+              "B2",
+              "C1",
+              "C2"
+            ],
+            "description": "The specific CEFR difficulty level of this phrasal verb or idiom."
+          },
+          "quoted_sentence": {
+            "type": "string",
+            "description": "The exact sentence where the phrasal verb or idiom appears in the text.",
+            "minLength": 1
+          },
+          "example_usage": {
+            "type": "string",
+            "description": "A new, original example sentence demonstrating correct usage of the phrasal verb or idiom.",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "design_audit",
+          "word",
+          "part_of_speech",
+          "definition",
+          "word_cefr_level",
+          "quoted_sentence",
+          "example_usage"
+        ],
+        "additionalProperties": false
+      },
+      "description": "List of up to {count} unique phrasal verbs, idioms, or collocations found in the text."
+    }
+  },
+  "required": [
+    "title",
+    "overall_cefr_level",
+    "expressions"
+  ],
+  "additionalProperties": false
+}
