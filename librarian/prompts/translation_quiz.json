@@ -7,7 +7,6 @@
     },
     "questions": {
       "type": "array",
-      "minItems": "{count}",
       "maxItems": "{count}",
       "items": {
         "type": "object",

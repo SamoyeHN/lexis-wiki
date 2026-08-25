@@ -2,7 +2,7 @@
     "api_type": "ollama",
     "api_url": "http://192.168.1.20:11434",
     "api_key": "ollama",
-    "model": "gemma4:12b",
+    "model": "gpt-oss:20b",
     "wiki_dir": "wiki",
     "quiz_defaults": {
         "reading": 10,

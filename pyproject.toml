@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lexis"
 version = "0.1.1"
-description = "A professional linguistic platform to manage your teaching knowledge wiki."
+description = "A professional linguistic platform to manage your ESL teaching knowledge wiki."
 readme = "README.md"
 requires-python = ">=3.7"
 authors = [

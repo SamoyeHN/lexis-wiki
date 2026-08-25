@@ -306,7 +306,7 @@ class QuizQuestion:
 @dataclasses.dataclass
 class VocabularyQuiz:
     title: str = dataclasses.field(metadata={"description": "Title for the quiz."})
-    questions: List[QuizQuestion] = dataclasses.field(metadata={"description": "List of {count} distinct multiple-choice questions.", "minItems": "{count}", "maxItems": "{count}"})
+    questions: List[QuizQuestion] = dataclasses.field(metadata={"description": "List of {count} distinct multiple-choice questions.", "maxItems": "{count}"})
 
 @dataclasses.dataclass
 class ReadingQuizQuestion:
@@ -329,7 +329,7 @@ class ReadingVocabItem:
 class ReadingQuiz:
     title: str = dataclasses.field(metadata={"description": "Title for the quiz."})
     vocabulary: List[ReadingVocabItem] = dataclasses.field(metadata={"description": "List of 5-8 glossary items identified organically from the text to assist the reader.", "minItems": 5, "maxItems": 8})
-    questions: List[ReadingQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} generated comprehension questions.", "minItems": "{count}", "maxItems": "{count}"})
+    questions: List[ReadingQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} generated comprehension questions.", "maxItems": "{count}"})
 
 @dataclasses.dataclass
 class TranslationQuestion:
@@ -345,7 +345,7 @@ class TranslationQuestion:
 @dataclasses.dataclass
 class TranslationQuiz:
     title: str = dataclasses.field(metadata={"description": "Concise assessment title."})
-    questions: List[TranslationQuestion] = dataclasses.field(metadata={"description": "Exactly {count} unique translation items. Each item must use a different vocabulary-grammar pair and a distinct scenario.", "minItems": "{count}", "maxItems": "{count}"})
+    questions: List[TranslationQuestion] = dataclasses.field(metadata={"description": "Exactly {count} unique translation items. Each item must use a different vocabulary-grammar pair and a distinct scenario.", "maxItems": "{count}"})
 
 @dataclasses.dataclass
 class ListeningQuizTurn:
@@ -369,7 +369,7 @@ class ListeningQuiz:
     speaker_1: str = dataclasses.field(metadata={"description": "Name of the first character (MANDATE: must be a {speaker_1_gender} name).", "minLength": 1})
     speaker_2: str = dataclasses.field(metadata={"description": "Name of the second character (MANDATE: must be a {speaker_2_gender} name).", "minLength": 1})
     script: List[ListeningQuizTurn] = dataclasses.field(metadata={"description": "A natural academic dialogue (150-250 words) incorporating 5-8 items from the vocabulary list. MANDATE: Speaker 1 ({speaker_1_gender}) and Speaker 2 ({speaker_2_gender}) must alternate speaking, starting with Speaker 1."})
-    questions: List[ListeningQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} multiple-choice questions based on the script.", "minItems": "{count}", "maxItems": "{count}"})
+    questions: List[ListeningQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} multiple-choice questions based on the script.", "maxItems": "{count}"})
     speaker_1_gender: str = dataclasses.field(default="female", metadata={"description": "MANDATE: must be exactly '{speaker_1_gender}'."})
     speaker_2_gender: str = dataclasses.field(default="male", metadata={"description": "MANDATE: must be exactly '{speaker_2_gender}'."})
     speaker_1_role: str = dataclasses.field(default="Creative Director", metadata={"description": "Role of speaker 1."})
@@ -385,7 +385,7 @@ class RoutingResult:
 class VideoQuizQuestion:
     design_audit: str = dataclasses.field(metadata={"description": "Thinking Step. Format: 'DRAFT: [Timestamp Range] -> [Verbatim Clue] -> [3 Distractor Traps (False Claim / Wrong Segment / Misinterpreted Context)]'. Must match CEFR {cefr_level}.", "minLength": 1})
     question: str = dataclasses.field(metadata={"description": "The comprehension question (match {cefr_level}) based on what is spoken in the video segment.", "minLength": 1})
-    options: List[str] = dataclasses.field(metadata={"description": "Exactly 4 options containing the correct answer and 3 planned distractors. Return ONLY the literal phrase without labels or surrounding quotes (\" \").", "minItems": 4, "maxItems": 4, "item_minLength": 1})
+    options: List[str] = dataclasses.field(metadata={"description": "Exactly 4 options containing the correct answer and 3 planned distractors. Return ONLY the literal phrase without labels like 'A)' or surrounding quotes (\" \").", "minItems": 4, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(metadata={"description": "Index of the correct answer (0-3).", "enum": [0, 1, 2, 3]})
     timestamp: str = dataclasses.field(metadata={"description": "The starting timestamp of the video segment where the clue/answer is discussed (e.g. '01:25' or '10:45'). Must exist verbatim in the transcript.", "minLength": 1})
     explanation: str = dataclasses.field(metadata={"description": "Detailed explanation of the correct answer referencing the video dialogue and why distractors do not match.", "minLength": 1})
@@ -395,7 +395,7 @@ class VideoQuiz:
     title: str = dataclasses.field(metadata={"description": "Title for the video quiz.", "minLength": 1})
     video_url: str = dataclasses.field(metadata={"description": "The original video URL or identifier.", "minLength": 1})
     video_type: Literal["youtube", "local"] = dataclasses.field(metadata={"description": "Type of the video."})
-    questions: List[VideoQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} timestamp-aware video comprehension questions.", "minItems": "{count}", "maxItems": "{count}"})
+    questions: List[VideoQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} timestamp-aware video comprehension questions.", "maxItems": "{count}"})
 
 
 @dataclasses.dataclass
