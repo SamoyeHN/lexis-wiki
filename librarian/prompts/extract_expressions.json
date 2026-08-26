@@ -21,7 +21,6 @@
     "expressions": {
       "type": "array",
       "maxItems": "{count}",
-      "uniqueItems": true,
       "items": {
         "type": "object",
         "properties": {

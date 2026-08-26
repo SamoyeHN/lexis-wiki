@@ -798,15 +798,31 @@ class WikiProcessor:
                 else:
                     item_fields = [(k, v) for k, v in item.items() if k != "design_audit"]
 
-                # The first field is treated as the Header
-                header_name, header_val = item_fields[0]
+                if not item_fields:
+                    continue
+
+                # Locate canonical primary header field
+                primary_key = None
+                for hk in ["word", "pattern_formula", "name", "concept_name", "title"]:
+                    if any(k == hk for k, v in item_fields):
+                        primary_key = hk
+                        break
+
+                if primary_key:
+                    header_entry = next((k, v) for k, v in item_fields if k == primary_key)
+                    body_entries = [entry for entry in item_fields if entry[0] != primary_key]
+                else:
+                    header_entry = item_fields[0]
+                    body_entries = item_fields[1:]
+
+                header_name, header_val = header_entry
                 if not (str(header_val).startswith("[[") and str(header_val).endswith("]]")):
                     header_val = f"[[{header_val}]]"
                 
                 lines.append(f"## {header_val}")
                 
                 # Iterate remaining fields as bullet points
-                for fname, fval in item_fields[1:]:
+                for fname, fval in body_entries:
                     label = fname.replace("_", " ").title()
                     if fval:
                         lines.append(f"- **{label}**: {fval}")

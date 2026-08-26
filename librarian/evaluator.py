@@ -195,12 +195,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str):
                 if not original_example: reasons.append("non-original example usage")
                 flags.append(f"⚠️ Vocabulary item '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "expressions":
-            word = str(item.get("word", ""))
+            word = str(item.get("word", "")).strip()
             checks += 1
-            if re.search(r"\[.+?\]|one's", word, re.IGNORECASE) or len(word.split()) > 1:
+            is_multiword = bool(re.search(r"\[.+?\]|one's", word, re.IGNORECASE) or len(word.split()) > 1)
+            is_trivial = word.lower() in ("talk", "listen", "turn", "watch", "sit down", "talk to", "listen to", "look at")
+            if is_multiword and not is_trivial:
                 passes += 1
             else:
-                flags.append(f"⚠️ Expression lacks slot placeholders/multiword form: '{word}'")
+                flags.append(f"⚠️ Expression lacks multi-word/slot form or is too basic: '{word}'")
         elif task_type == "grammar":
             pattern = str(item.get("pattern_formula", ""))
             audit = str(item.get("design_audit", "")).strip()
@@ -243,6 +245,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str):
             else:
                 flags.append("⚠️ MindMap branch missing branch name")
     if checks == 0:
+        if task_type in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap"):
+            return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
         return W_PEDAGOGY, []
     return round((passes / checks) * W_PEDAGOGY, 1), flags
 
