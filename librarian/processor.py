@@ -803,7 +803,7 @@ class WikiProcessor:
 
                 # Locate canonical primary header field
                 primary_key = None
-                for hk in ["word", "pattern_formula", "name", "concept_name", "title"]:
+                for hk in ["word", "category", "name", "concept_name", "title"]:
                     if any(k == hk for k, v in item_fields):
                         primary_key = hk
                         break
