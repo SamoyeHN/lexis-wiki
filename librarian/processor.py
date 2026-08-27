@@ -501,7 +501,9 @@ class WikiProcessor:
                         script_dicts, 
                         return_binary=True,
                         speaker_1=s1,
-                        speaker_2=s2
+                        speaker_2=s2,
+                        speaker_1_gender=g1,
+                        speaker_2_gender=g2
                     )
                     
                     if audio_binary:

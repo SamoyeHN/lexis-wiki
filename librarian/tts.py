@@ -94,7 +94,15 @@ class TTSService:
             return True
         return False
 
-    def process_script(self, script, output_dir=None, file_prefix=None, speaker_1=None, speaker_2=None, return_binary=False):
+    def _get_gender(self, voice_name):
+        v = str(voice_name or "").lower()
+        if any(v.startswith(p) for p in ["af_", "bf_"]): return "female"
+        if any(v.startswith(p) for p in ["am_", "bm_"]): return "male"
+        if any(x in v for x in ["aria", "jenny", "sonia", "libby"]): return "female"
+        if any(x in v for x in ["guy", "christopher", "ryan", "thomas"]): return "male"
+        return "female"
+
+    def process_script(self, script, output_dir=None, file_prefix=None, speaker_1=None, speaker_2=None, speaker_1_gender=None, speaker_2_gender=None, return_binary=False):
         """
         Processes a full dialogue script with dual-speaker support.
         Concatenates turns into a single MP3 binary or file.
@@ -104,12 +112,29 @@ class TTSService:
         combined_audio = b""
         print(f"    - Generating dual-speaker audio for {len(script)} turns...")
 
-        # Dynamically map speakers to voices
+        voice_a_gender = self._get_gender(self.voice_a)
+        voice_b_gender = self._get_gender(self.voice_b)
+
+        # Dynamically map speakers to voices based on gender matching
         speaker_map = {}
-        if speaker_1:
-            speaker_map[speaker_1] = self.voice_a
-        if speaker_2:
-            speaker_map[speaker_2] = self.voice_b
+        s1_g = str(speaker_1_gender or "").lower()
+        s2_g = str(speaker_2_gender or "").lower()
+
+        if speaker_1 and speaker_2 and s1_g and s2_g:
+            if s1_g == voice_a_gender and s2_g == voice_b_gender:
+                speaker_map[speaker_1] = self.voice_a
+                speaker_map[speaker_2] = self.voice_b
+            elif s1_g == voice_b_gender and s2_g == voice_a_gender:
+                speaker_map[speaker_1] = self.voice_b
+                speaker_map[speaker_2] = self.voice_a
+            else:
+                speaker_map[speaker_1] = self.voice_a
+                speaker_map[speaker_2] = self.voice_b
+        else:
+            if speaker_1:
+                speaker_map[speaker_1] = self.voice_a
+            if speaker_2:
+                speaker_map[speaker_2] = self.voice_b
 
         # Detect any additional/unmapped speakers from the script
         unique_speakers = []

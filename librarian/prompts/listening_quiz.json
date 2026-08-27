@@ -121,11 +121,17 @@
     },
     "speaker_1_gender": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_1_gender}'."
+      "description": "MANDATE: must be exactly '{speaker_1_gender}'.",
+      "enum": [
+        "{speaker_1_gender}"
+      ]
     },
     "speaker_2_gender": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_2_gender}'."
+      "description": "MANDATE: must be exactly '{speaker_2_gender}'.",
+      "enum": [
+        "{speaker_2_gender}"
+      ]
     },
     "speaker_1_role": {
       "type": "string",
@@ -137,11 +143,17 @@
     },
     "speaker_1_accent": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_1_accent}'."
+      "description": "MANDATE: must be exactly '{speaker_1_accent}'.",
+      "enum": [
+        "{speaker_1_accent}"
+      ]
     },
     "speaker_2_accent": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_2_accent}'."
+      "description": "MANDATE: must be exactly '{speaker_2_accent}'.",
+      "enum": [
+        "{speaker_2_accent}"
+      ]
     }
   },
   "required": [

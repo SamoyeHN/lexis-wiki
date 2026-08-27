@@ -370,12 +370,12 @@ class ListeningQuiz:
     speaker_2: str = dataclasses.field(metadata={"description": "Name of the second character (MANDATE: must be a {speaker_2_gender} name).", "minLength": 1})
     script: List[ListeningQuizTurn] = dataclasses.field(metadata={"description": "A natural academic dialogue (150-250 words) incorporating 5-8 items from the vocabulary list. MANDATE: Speaker 1 ({speaker_1_gender}) and Speaker 2 ({speaker_2_gender}) must alternate speaking, starting with Speaker 1."})
     questions: List[ListeningQuizQuestion] = dataclasses.field(metadata={"description": "List of {count} multiple-choice questions based on the script.", "maxItems": "{count}"})
-    speaker_1_gender: str = dataclasses.field(default="female", metadata={"description": "MANDATE: must be exactly '{speaker_1_gender}'."})
-    speaker_2_gender: str = dataclasses.field(default="male", metadata={"description": "MANDATE: must be exactly '{speaker_2_gender}'."})
+    speaker_1_gender: str = dataclasses.field(default="female", metadata={"description": "MANDATE: must be exactly '{speaker_1_gender}'.", "enum": ["{speaker_1_gender}"]})
+    speaker_2_gender: str = dataclasses.field(default="male", metadata={"description": "MANDATE: must be exactly '{speaker_2_gender}'.", "enum": ["{speaker_2_gender}"]})
     speaker_1_role: str = dataclasses.field(default="Creative Director", metadata={"description": "Role of speaker 1."})
     speaker_2_role: str = dataclasses.field(default="Technical Lead", metadata={"description": "Role of speaker 2."})
-    speaker_1_accent: str = dataclasses.field(default="Accent: British", metadata={"description": "MANDATE: must be exactly '{speaker_1_accent}'."})
-    speaker_2_accent: str = dataclasses.field(default="Accent: American", metadata={"description": "MANDATE: must be exactly '{speaker_2_accent}'."})
+    speaker_1_accent: str = dataclasses.field(default="Accent: British", metadata={"description": "MANDATE: must be exactly '{speaker_1_accent}'.", "enum": ["{speaker_1_accent}"]})
+    speaker_2_accent: str = dataclasses.field(default="Accent: American", metadata={"description": "MANDATE: must be exactly '{speaker_2_accent}'.", "enum": ["{speaker_2_accent}"]})
 
 @dataclasses.dataclass
 class RoutingResult:
