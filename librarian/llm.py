@@ -301,6 +301,8 @@ class LLMClient:
             "options": options,
             **kwargs
         }
+        if "think" in kwargs:
+            payload["think"] = kwargs.pop("think")
         
         use_gbnf = config.get("enforce_gbnf", False)
         if schema and use_gbnf:

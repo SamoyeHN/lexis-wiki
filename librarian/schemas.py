@@ -294,7 +294,7 @@ class SummaryExtraction:
 
 @dataclasses.dataclass
 class QuizQuestion:
-    design_audit: str = dataclasses.field(metadata={"description": "Thinking Step. Format: 'DRAFT: [target word] -> [Original Academic Sentence Plan] -> [3 Distractor Traps (Near-synonym / Register / Collocation Trap)]'. Must match CEFR {cefr_level}.", "minLength": 1})
+    design_audit: str = dataclasses.field(metadata={"description": "Concise 1-line thinking step (max 25 words). Format: 'DRAFT: [target word] -> [Sentence Plan] -> [3 Distractor Traps]'.", "minLength": 1})
 
     target_word: str = dataclasses.field(metadata={"description": "The specific vocabulary word selected from the list for this question.", "minLength": 1})
     question: str = dataclasses.field(metadata={"description": "The assessment sentence. Use exactly four underscores (____) for the blank. Do NOT include options or labels (A, B, C, D) inside this field.", "minLength": 1})
