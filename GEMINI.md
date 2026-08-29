@@ -10,8 +10,12 @@ Prompts drive pedagogical quality and assessment design; JSON schemas enforce ou
 - **Clean Separation of Responsibilities**:
   - **Schema = Structure**: `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs.
   - **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, distractor engineering, and `MANDATE:` rules—completely free of mechanical JSON formatting instructions.
-- **Removal of Auto-Injected Schema Descriptions**:
-  - Runtime injection of `### SCHEMA FIELD REQUIREMENTS ###` in `llm.py` has been completely removed. Structural enforcement is handled directly by JSON schema engines without prompt text pollution.
+- **Dual-Mode Structured Output Architecture**:
+  - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: When calling local engines (Ollama), `format: "json"` is active (`"enforce_gbnf": false` in `wiki_config.json`). The system automatically injects the JSON Schema derived programmatically from `schemas.py` into the system role. This eliminates GBNF grammar parser stalls, tokenizer conflicts (e.g. 131k tokenizers in Nemotron/Gemma), and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
+  - **Strict GBNF / Native Schema Mode**: Supported via `"enforce_gbnf": true` in `wiki_config.json` for engines with hardware-accelerated grammar transducers (e.g., OpenAI `json_schema` strict mode).
+  - **Automatic Empty-Output Fallback**: If strict GBNF mode fails or returns empty tokens, `llm.py` automatically catches the failure, logs a warning, and retries seamlessly in `format: "json"`.
+- **Human-Readable Logging**:
+  - `librarian/logger.py` automatically indents and formats `--- RAW RESPONSE ---` with 2-space pretty-printed JSON in all task logs under `logs/`.
 
 ---
 

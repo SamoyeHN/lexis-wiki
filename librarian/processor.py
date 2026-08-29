@@ -778,6 +778,29 @@ class WikiProcessor:
                 list_field_name = next((k for k, v in fields if isinstance(v, list)), None)
                 if list_field_name: items = data.get(list_field_name, [])
 
+            # Automatic Deduplication: filter out repeated entries with identical primary key (e.g. word / headword)
+            seen_keys = set()
+            unique_items = []
+            for item in items:
+                k_val = None
+                if dataclasses.is_dataclass(item):
+                    for attr in ["word", "name", "concept_name", "quote"]:
+                        if hasattr(item, attr) and getattr(item, attr):
+                            k_val = str(getattr(item, attr)).strip().lower()
+                            break
+                elif isinstance(item, dict):
+                    for attr in ["word", "name", "concept_name", "quote"]:
+                        if attr in item and item[attr]:
+                            k_val = str(item[attr]).strip().lower()
+                            break
+                
+                if k_val:
+                    if k_val in seen_keys:
+                        continue
+                    seen_keys.add(k_val)
+                unique_items.append(item)
+            
+            items = unique_items
             item_count = len(items)
 
             lines = [

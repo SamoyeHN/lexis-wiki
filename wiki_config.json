@@ -2,7 +2,7 @@
     "api_type": "ollama",
     "api_url": "http://192.168.1.20:11434",
     "api_key": "ollama",
-    "model": "granite4.2:8b",
+    "model": "qwen2.5:32b",
     "wiki_dir": "wiki",
     "quiz_defaults": {
         "reading": 10,
@@ -19,9 +19,10 @@
     },
     "tts_engine": "kokoro",
     "tts_url": "http://192.168.1.20:8880/v1/audio/speech",
-    "tts_voice_a": "af_sarah",
-    "tts_voice_b": "am_michael",
+    "tts_voice_a": "af_bella",
+    "tts_voice_b": "af_sarah",
     "tts_model": "tts-1",
     "tts_api_key": "any_string",
-    "target_language": "Simplified Chinese"
+    "target_language": "Simplified Chinese",
+    "enforce_gbnf": false
 }

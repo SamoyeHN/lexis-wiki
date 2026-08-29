@@ -89,14 +89,24 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_guidance})
 
-        # 3. Clean system prompt handling (JSON schema is passed directly via API/grammar enforcement)
-        pass
+        # 3. Prompt-Guided JSON Mode: Inject JSON schema into System message if GBNF is disabled
+        use_gbnf = config.get("enforce_gbnf", False)
+        if schema and not use_gbnf:
+            schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=True)
+            schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
+            schema_prompt = f"### JSON SCHEMA REQUIREMENT ###\nRespond strictly with a valid JSON object matching this schema definition:\n```json\n{schema_json_str}\n```"
+            system_msg = next((m for m in messages if m["role"] == "system"), None)
+            if system_msg:
+                if "### JSON SCHEMA REQUIREMENT ###" not in system_msg["content"]:
+                    system_msg["content"] += f"\n\n{schema_prompt}"
+            else:
+                messages.insert(0, {"role": "system", "content": schema_prompt})
 
         # 4. Handle Constraints
         schema_for_api = schema
-        force_json_mode = json_format
+        force_json_mode = json_format or bool(schema and not use_gbnf)
 
-        # 4. Call API
+        # 5. Call API
         if self.api_type == "openai":
             content = self._chat_openai(messages, stream, force_json_mode, schema_for_api, **kwargs)
         else:
@@ -124,6 +134,8 @@ class LLMClient:
             try:
                 # 6.1. CLEANING: Extract JSON from markdown or clutter
                 json_str = content.strip()
+                if not json_str:
+                    raise LLMError(f"LLM returned empty response for task '{task_name or 'chat'}'.")
                 
                 # Remove ```json ... ``` blocks
                 if "```" in json_str:
@@ -290,9 +302,10 @@ class LLMClient:
             **kwargs
         }
         
-        if schema:
+        use_gbnf = config.get("enforce_gbnf", False)
+        if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=True)
-        elif json_format:
+        elif json_format or schema:
             payload["format"] = "json"
             
         try:
@@ -302,6 +315,21 @@ class LLMClient:
             data = response.json()
             if "error" in data: raise LLMError(f"Ollama API Error: {data['error']}")
             content = data.get("message", {}).get("content", "")
+            
+            # Automatic fallback for empty response under strict GBNF schema format
+            if schema and use_gbnf and not content.strip():
+                import logging
+                logging.getLogger("librarian").warning(
+                    f"Model '{self.model}' returned empty content under GBNF schema constraint. Automatically falling back to JSON mode..."
+                )
+                fallback_payload = dict(payload)
+                fallback_payload["format"] = "json"
+                fb_response = requests.post(url, json=fallback_payload, timeout=(5, 600))
+                fb_response.raise_for_status()
+                fb_data = fb_response.json()
+                if "error" in fb_data: raise LLMError(f"Ollama API Error: {fb_data['error']}")
+                content = fb_data.get("message", {}).get("content", "")
+
             self.last_raw_response = content
             return content
         except Exception as e:
@@ -331,12 +359,14 @@ class LLMClient:
             "max_tokens": 4096,
             **kwargs
         }
-        if schema:
+        use_gbnf = config.get("enforce_gbnf", False)
+        if schema and use_gbnf:
+            schema_name = getattr(schema, "__name__", "ResponseSchema") if not isinstance(schema, dict) else "ResponseSchema"
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": schema.__name__, "strict": True, "schema": get_json_schema(schema, include_descriptions=True)}
+                "json_schema": {"name": schema_name, "strict": True, "schema": get_json_schema(schema, include_descriptions=True)}
             }
-        elif json_format:
+        elif json_format or schema:
             payload["response_format"] = {"type": "json_object"}
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=(5, 600) if not stream else (5, None), stream=stream)
