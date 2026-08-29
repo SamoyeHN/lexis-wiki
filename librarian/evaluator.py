@@ -126,7 +126,7 @@ def _score_schema(parsed: Any, raw_response: str = ""):
     """Dimension 1 (0–25). Always applicable."""
     if isinstance(parsed, dict):
         if len(parsed) == 0:
-            return 15.0, ["⚠️ Valid JSON but empty object"]
+            return 0.0, ["❌ Valid JSON but empty object"]
         
         # Check if raw response was truncated or required brace balancing
         flags = []
@@ -144,9 +144,11 @@ def _score_schema(parsed: Any, raw_response: str = ""):
 
 
 def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: str):
-    """Dimension 2 (0–30). Applies to extraction tasks only; N/A (no penalty) otherwise."""
+    """Dimension 2 (0–30). Applies to extraction tasks only; N/A (no penalty) for valid non-extraction tasks."""
+    if not items:
+        return 0.0, ["❌ No items to evaluate for source faithfulness"]
     if task_type not in ("vocabulary", "expressions", "grammar"):
-        return W_VERBATIM, []  # N/A -> no penalty (e.g. quizzes generate questions)
+        return W_VERBATIM, []  # N/A -> no penalty for tasks that generate new material
     flags: List[str] = []
     source = _extract_source_content(user_prompt)
     norm_src = _normalize_text(source)
@@ -168,9 +170,9 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
 def _score_pedagogy(items: List[Dict[str, Any]], task_type: str):
     """Dimension 3 (0–25). Evaluates pedagogical quality across extraction and assessment types."""
-    if task_type not in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap"):
-        return W_PEDAGOGY, []
     if not items:
+        return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
+    if task_type not in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap"):
         return W_PEDAGOGY, []
     flags: List[str] = []
     checks = passes = 0
@@ -245,14 +247,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str):
             else:
                 flags.append("⚠️ MindMap branch missing branch name")
     if checks == 0:
-        if task_type in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap"):
-            return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
-        return W_PEDAGOGY, []
+        return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
     return round((passes / checks) * W_PEDAGOGY, 1), flags
 
 
 def _score_uniqueness(items: List[Dict[str, Any]], task_type: str):
     """Dimension 4 (0–20). Deduplicate by the task's primary identifying field."""
+    if not items:
+        return 0.0, ["❌ No items to evaluate for uniqueness"]
     key_by_type = {
         "vocabulary": ("word",),
         "expressions": ("word",),
@@ -270,7 +272,7 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str):
                 headwords.append(str(value).strip().lower())
                 break
     if not headwords:
-        return W_UNIQUENESS, []
+        return 0.0, ["⚠️ Missing identifying keys for uniqueness check"]
     unique = len(set(headwords))
     if unique < len(headwords):
         dup = len(headwords) - unique
