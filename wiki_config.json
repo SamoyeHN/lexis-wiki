@@ -2,7 +2,7 @@
     "api_type": "ollama",
     "api_url": "http://192.168.1.20:11434",
     "api_key": "ollama",
-    "model": "qwen3.6:35b-a3b",
+    "model": "muse-glimmer:30b",
     "wiki_dir": "wiki",
     "quiz_defaults": {
         "reading": 10,
@@ -24,5 +24,9 @@
     "tts_model": "tts-1",
     "tts_api_key": "any_string",
     "target_language": "Simplified Chinese",
-    "enforce_gbnf": false
+    "enforce_gbnf": false,
+    "model_options": {
+        "ornith-1.5:9b": { "think": false },
+        "granite4.2:30b": { "think": false }
+    }
 }

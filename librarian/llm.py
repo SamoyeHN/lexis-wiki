@@ -248,6 +248,9 @@ class LLMClient:
         if not json_str:
             return "{}"
 
+        # 0. Strip <think>...</think> reasoning blocks if present in text output
+        json_str = re.sub(r"<think>.*?</think>", "", json_str, flags=re.DOTALL).strip()
+
         # 1. Normalize whitespace (tabs to spaces)
         json_str = json_str.replace('\t', ' ')
 
@@ -301,8 +304,18 @@ class LLMClient:
             "options": options,
             **kwargs
         }
+        
+        # Smart thinking handling: suppress runaway thinking loops for known reasoning models during structured extraction/quiz
+        reasoning_models_to_suppress_think = ("ornith", "granite", "deepseek-r1", "qwq")
+        model_lower = (self.model or "").lower()
+        model_opts = config.get("model_options", {}).get(self.model, {})
+
         if "think" in kwargs:
             payload["think"] = kwargs.pop("think")
+        elif "think" in model_opts:
+            payload["think"] = model_opts["think"]
+        elif any(k in model_lower for k in reasoning_models_to_suppress_think):
+            payload["think"] = False
         
         use_gbnf = config.get("enforce_gbnf", False)
         if schema and use_gbnf:

@@ -101,6 +101,8 @@ def _extract_json(text: Any) -> Any:
     """Best-effort JSON extraction: direct, fenced ```json, or first balanced brace."""
     if not text or not isinstance(text, str):
         return None
+    # Strip <think>...</think> reasoning blocks if present
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     try:
         return json.loads(text)
     except Exception:
