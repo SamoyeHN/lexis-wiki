@@ -89,7 +89,7 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_guidance})
 
-        # 3. Prompt-Guided JSON Mode: Inject JSON schema into System message if GBNF is disabled
+        # 3. Prompt-Guided JSON Mode: Inject JSON schema if GBNF is disabled
         use_gbnf = config.get("enforce_gbnf", False)
         if schema and not use_gbnf:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=True)
@@ -102,8 +102,19 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_prompt})
 
+        # 3.1 Gemma-Family Compatibility: Flatten ALL system messages into user prompt
+        # Google Gemma tokenizer only supports user and model turns. Multiple turns break alignment.
+        is_gemma_family = "gemma" in (self.model or "").lower()
+        if is_gemma_family:
+            sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
+            user_msg = next((m for m in messages if m["role"] == "user"), None)
+            if sys_msgs and user_msg:
+                combined_sys = "\n\n".join(sys_msgs)
+                user_msg["content"] = f"{combined_sys}\n\n{user_msg['content']}"
+                messages = [m for m in messages if m["role"] != "system"]
+
         # 4. Handle Constraints
-        schema_for_api = schema
+        schema_for_api = schema if use_gbnf else None
         force_json_mode = json_format or bool(schema and not use_gbnf)
 
         # 5. Call API
@@ -112,22 +123,12 @@ class LLMClient:
         else:
             content = self._chat_ollama(messages, stream, force_json_mode, schema_for_api, **kwargs)
 
-        # 5. Logging
-        if not stream:
-            from .logger import log_task
-            mode_str = "STRICT_SCHEMA" if schema_for_api else ("JSON_MODE" if force_json_mode else "TEXT_MODE")
-            system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
-            user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
-            
-            # Schema logging: handle dict or dataclass
-            schema_dict = None
-            if isinstance(schema, dict):
-                schema_dict = schema
-            elif schema:
-                schema_dict = get_json_schema(schema, include_descriptions=True)
-                
-            t_name = task_name or "chat"
-            log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict)
+        # Prompts for logging
+        mode_str = "STRICT_SCHEMA" if (schema and use_gbnf) else ("JSON_MODE" if force_json_mode else "TEXT_MODE")
+        system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
+        user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
+        t_name = task_name or "chat"
+        schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=True) if schema else None)
 
         # 6. Post-Processing & Parsing
         if schema and not stream:
@@ -160,8 +161,6 @@ class LLMClient:
                     data = json.loads(final_json)
                 except json.JSONDecodeError:
                     # Light cleaning of unescaped newlines in values
-                    # IMPROVED REGEX: Ignore newlines followed by valid JSON structural tokens
-                    # Valid token starts: { [ } ] " , - 0-9 t f n :
                     final_json = re.sub(r'\n(?!\s*[, "\}\]\{\[0-9tfn\-\:])', r'\\n', final_json)
                     was_healed = True
                     data = json.loads(final_json)
@@ -172,8 +171,6 @@ class LLMClient:
                 
                 # 6.3. MAPPING
                 if isinstance(schema, dict):
-                    # If schema is a dict, return the data dict directly
-                    # But we'll add a helper property if it's a list for auto-wrapping
                     if isinstance(data, list):
                         props = schema.get("properties", {})
                         list_field = next((k for k, v in props.items() if v.get("type") == "array"), "items")
@@ -182,7 +179,6 @@ class LLMClient:
                 result_obj = validate_and_map(schema, data) if not isinstance(schema, dict) else data
 
                 # 6.4. QA EVALUATION & RETRY LOOP
-                # GEMINI.md mandate: retry loop at <80% quality threshold (one retry max)
                 retry_count = kwargs.pop("_qa_retry_count", 0)
                 if retry_count == 0 and not kwargs.get("_disable_qa_retry", False):
                     try:
@@ -194,7 +190,7 @@ class LLMClient:
                                 "task": t_name,
                                 "model": self.model or "unknown",
                                 "user_prompt": user_prompt,
-                                "raw_response": content,
+                                "raw_response": final_json,
                                 "parsed_json": dict_to_eval,
                             }
                             audit = LogEvaluator.evaluate_log(simulated_log)
@@ -203,7 +199,6 @@ class LLMClient:
                             if composite < 80.0:
                                 flags = audit.get("flags", [])
                                 scores = audit.get("scores", {})
-                                # Identify lowest scoring dimension
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogy"
                                 feedback_note = (
                                     f"\n\n[QUALITY AUDIT RETRY: Previous attempt scored {composite}/100. "
@@ -219,7 +214,11 @@ class LLMClient:
                                 if sys_msg:
                                     sys_msg["content"] += feedback_note
                                 else:
-                                    retry_messages.insert(0, {"role": "system", "content": feedback_note})
+                                    user_target = next((m for m in retry_messages if m["role"] == "user"), None)
+                                    if user_target:
+                                        user_target["content"] += feedback_note
+                                    else:
+                                        retry_messages.insert(0, {"role": "system", "content": feedback_note})
                                 
                                 return self.chat(
                                     retry_messages,
@@ -234,14 +233,25 @@ class LLMClient:
                         import logging
                         logging.getLogger("librarian").warning(f"Evaluator check skipped due to error: {eval_err}")
 
+                # 6.5. LOG FINAL HEALED & VALIDATED RESPONSE
+                from .logger import log_task
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict)
+
                 return result_obj
-            except LLMError:
-                raise
+
             except Exception as e:
-                snippet = content[:200].replace('\n', ' ')
-                raise LLMError(f"Structured parsing failure: {e}. Snippet: {snippet}...")
-        
-        return content
+                import logging
+                logging.getLogger("librarian").error(f"JSON Parsing / Schema Validation Failed for {task_name or 'chat'}: {e}")
+                # Log even on parse failure so failure is auditable
+                from .logger import log_task
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict)
+                raise LLMError(f"Failed to generate structured data matching schema: {e}")
+        else:
+            if not stream:
+                from .logger import log_task
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict)
+            return content
+
 
     def _heal_json(self, json_str):
         """Attempts to fix common LLM structural errors with minimal intrusion."""
@@ -318,9 +328,10 @@ class LLMClient:
             payload["think"] = False
         
         use_gbnf = config.get("enforce_gbnf", False)
+        is_gemma_family = "gemma" in (self.model or "").lower()
         if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=True)
-        elif json_format or schema:
+        elif (json_format or schema) and not is_gemma_family:
             payload["format"] = "json"
             
         try:
@@ -331,11 +342,12 @@ class LLMClient:
             if "error" in data: raise LLMError(f"Ollama API Error: {data['error']}")
             content = data.get("message", {}).get("content", "")
             
-            # Automatic fallback for empty response under strict GBNF schema format
-            if schema and use_gbnf and not content.strip():
+            # Automatic fallback for empty/trivial response under strict GBNF schema format
+            is_empty_or_trivial = not content.strip() or content.strip() in ("{}", "[]", "null")
+            if schema and use_gbnf and is_empty_or_trivial:
                 import logging
                 logging.getLogger("librarian").warning(
-                    f"Model '{self.model}' returned empty content under GBNF schema constraint. Automatically falling back to JSON mode..."
+                    f"Model '{self.model}' returned empty/trivial content ('{content.strip()}') under GBNF schema constraint. Automatically falling back to JSON mode..."
                 )
                 fallback_payload = dict(payload)
                 fallback_payload["format"] = "json"
