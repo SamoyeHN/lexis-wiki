@@ -207,7 +207,8 @@ def _map_value(t: Any, val: Any) -> Any:
 # --- Schema Definitions ---
 
 CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
-PARTS_OF_SPEECH = Literal["noun", "verb", "adjective", "adverb", "preposition", "conjunction"]
+PARTS_OF_SPEECH = Literal["noun", "verb", "adjective", "adverb", "preposition", "conjunction", "phrasal verb", "idiom", "collocation", "set phrase"]
+EXPRESSION_TYPES = Literal["phrasal verb", "idiom", "collocation", "set phrase"]
 
 @dataclasses.dataclass
 class VocabularyItem:
@@ -227,19 +228,19 @@ class VocabularyExtraction:
 
 @dataclasses.dataclass
 class ExpressionItem:
-    design_audit: str = dataclasses.field(default="", metadata={"description": "Thinking Step. Verify that this candidate phrasal verb or idiom is present in the text, identified in its base dictionary form, and has not been used in previous list items. Format: 'DRAFT: [Surface Form] -> [Base Phrase Form] -> [Uniqueness Check (New/Repeat)]'.", "minLength": 1})
-    word: str = dataclasses.field(default="", metadata={"description": "The standardized dictionary headword entry form using slot-filling placeholders (e.g. 'keep one's chin up', 'fill [someone] with [emotion]', 'pose a threat to [entity]').", "minLength": 1})
-    part_of_speech: Literal["phrasal verb", "idiom", "collocation"] = dataclasses.field(default="phrasal verb", metadata={"description": "The classification of the multi-word expression."})
-    definition: str = dataclasses.field(default="", metadata={"description": "A concise, clear definition of the phrasal verb or idiom.", "minLength": 1})
-    word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2", metadata={"description": "The specific CEFR difficulty level of this phrasal verb or idiom."})
-    quoted_sentence: str = dataclasses.field(default="", metadata={"description": "The exact sentence where the phrasal verb or idiom appears in the text.", "minLength": 1})
-    example_usage: str = dataclasses.field(default="", metadata={"description": "A new, original example sentence demonstrating correct usage of the phrasal verb or idiom.", "minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"description": "Thinking Step. Verify that this candidate expression is inherently multi-word (minimum 2 words, NOT a standalone verb taking an object), identified in its base dictionary form, and correctly classified. Format: 'DRAFT: [Surface Text Phrase] -> [Base Canonical Form] -> [Category: phrasal verb/collocation/idiom/set phrase] -> [Uniqueness Check]'.", "minLength": 1})
+    word: str = dataclasses.field(default="", metadata={"description": "The standardized canonical headword entry form using slot-filling placeholders (e.g. 'factor [something] into [something]', 'pose a risk to [entity]', 'for the time being'). Must be an inherently multi-word expression (at least 2 words), never a single base verb alone.", "minLength": 1})
+    part_of_speech: EXPRESSION_TYPES = dataclasses.field(default="phrasal verb", metadata={"description": "The linguistic classification: 'phrasal verb' (verb + particle/preposition, e.g. 'hinge on', 'factor in', 'tap into'), 'collocation' (habitual multi-word pairing e.g. 'pose a risk to', 'hail [entity] as'), 'idiom' (figurative fixed expression e.g. 'easier said than done'), or 'set phrase' (fixed structural phrase e.g. 'for the time being', 'on a regular basis')."})
+    definition: str = dataclasses.field(default="", metadata={"description": "A concise, clear definition of the multi-word expression in academic ESL context.", "minLength": 1})
+    word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2", metadata={"description": "The specific CEFR difficulty level of this multi-word expression."})
+    quoted_sentence: str = dataclasses.field(default="", metadata={"description": "The exact verbatim sentence where the multi-word expression appears in the source text.", "minLength": 1})
+    example_usage: str = dataclasses.field(default="", metadata={"description": "A new, original example sentence demonstrating correct natural usage of the multi-word expression.", "minLength": 1})
 
 @dataclasses.dataclass
 class ExpressionsExtraction:
     title: str = dataclasses.field(metadata={"description": "Title for the extraction (e.g. 'Book 3 Unit 4 Expressions').", "minLength": 1})
     overall_cefr_level: CEFR_LEVELS = dataclasses.field(metadata={"description": "The holistic CEFR difficulty rating for the entire set of expressions."})
-    expressions: List[ExpressionItem] = dataclasses.field(metadata={"description": "List of up to {count} unique phrasal verbs, idioms, or collocations found in the text.", "maxItems": "{count}"})
+    expressions: List[ExpressionItem] = dataclasses.field(metadata={"description": "List of up to {count} unique phrasal verbs, idioms, collocations, or set phrases found in the text.", "maxItems": "{count}"})
 
 @dataclasses.dataclass
 class GrammarItem:
