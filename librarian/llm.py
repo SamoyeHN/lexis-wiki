@@ -90,7 +90,8 @@ class LLMClient:
                 messages.insert(0, {"role": "system", "content": schema_guidance})
 
         # 3. Prompt-Guided JSON Mode: Inject JSON schema if GBNF is disabled
-        use_gbnf = config.get("enforce_gbnf", False)
+        model_opts = config.get("model_options", {}).get(self.model, {})
+        use_gbnf = model_opts.get("enforce_gbnf", config.get("enforce_gbnf", False))
         if schema and not use_gbnf:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=True)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
@@ -343,7 +344,7 @@ class LLMClient:
         elif any(k in model_lower for k in reasoning_models_to_suppress_think):
             payload["think"] = False
         
-        use_gbnf = config.get("enforce_gbnf", False)
+        use_gbnf = model_opts.get("enforce_gbnf", config.get("enforce_gbnf", False))
         is_gemma_family = "gemma" in (self.model or "").lower()
         if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=True)
@@ -358,15 +359,23 @@ class LLMClient:
             if "error" in data: raise LLMError(f"Ollama API Error: {data['error']}")
             content = data.get("message", {}).get("content", "")
             
-            # Automatic fallback for empty/trivial response under strict GBNF schema format
+            # Bidirectional automatic fallback for empty/trivial response
             is_empty_or_trivial = not content.strip() or content.strip() in ("{}", "[]", "null")
-            if schema and use_gbnf and is_empty_or_trivial:
+            if schema and is_empty_or_trivial:
                 import logging
-                logging.getLogger("librarian").warning(
-                    f"Model '{self.model}' returned empty/trivial content ('{content.strip()}') under GBNF schema constraint. Automatically falling back to JSON mode..."
-                )
-                fallback_payload = dict(payload)
-                fallback_payload["format"] = "json"
+                if use_gbnf:
+                    logging.getLogger("librarian").warning(
+                        f"Model '{self.model}' returned empty/trivial content ('{content.strip()}') under strict schema constraint. Automatically falling back to JSON mode..."
+                    )
+                    fallback_payload = dict(payload)
+                    fallback_payload["format"] = "json"
+                else:
+                    logging.getLogger("librarian").warning(
+                        f"Model '{self.model}' returned empty/trivial content ('{content.strip()}') in prompt-guided mode. Automatically retrying with strict JSON schema constraint..."
+                    )
+                    fallback_payload = dict(payload)
+                    fallback_payload["format"] = get_json_schema(schema, include_descriptions=True)
+
                 fb_response = requests.post(url, json=fallback_payload, timeout=(5, 600))
                 fb_response.raise_for_status()
                 fb_data = fb_response.json()
