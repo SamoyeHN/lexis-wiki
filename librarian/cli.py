@@ -237,16 +237,72 @@ def main():
         import socketserver
         import webbrowser
         import threading
+        import subprocess
+        import os
+        import signal
+        import time
         from .dashboard import DashboardHTTPRequestHandler
 
         port = args.port
+
+        # 1. Clean up any existing dashboard instance or process occupying the port
+        def _free_port(target_port: int):
+            current_pid = os.getpid()
+            if sys.platform == "win32":
+                try:
+                    out = subprocess.check_output("netstat -ano -p tcp", shell=True, text=True, stderr=subprocess.DEVNULL)
+                    for line in out.splitlines():
+                        line = line.strip()
+                        if f":{target_port}" in line and ("LISTENING" in line or "LISTEN" in line):
+                            parts = line.split()
+                            try:
+                                pid = int(parts[-1])
+                                if pid and pid != current_pid and pid != 0:
+                                    print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
+                                    subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+                                    time.sleep(0.5)
+                            except (ValueError, IndexError):
+                                pass
+                except Exception:
+                    pass
+            else:
+                try:
+                    out = subprocess.check_output(f"lsof -ti tcp:{target_port}", shell=True, text=True, stderr=subprocess.DEVNULL)
+                    for pid_str in out.strip().split():
+                        try:
+                            pid = int(pid_str)
+                            if pid and pid != current_pid:
+                                print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
+                                os.kill(pid, signal.SIGKILL)
+                                time.sleep(0.5)
+                        except (ValueError, ProcessLookupError, PermissionError):
+                            pass
+                except Exception:
+                    pass
+
+        _free_port(port)
+
         print(f"Starting Lexis Interactive Dashboard on port {port}...")
         
         # Use a multi-threaded server so blocking calls (like model tags fetch) do not freeze the UI
         class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             allow_reuse_address = True
         
-        with ThreadingHTTPServer(("", port), DashboardHTTPRequestHandler) as httpd:
+        server_created = False
+        for attempt in range(3):
+            try:
+                httpd = ThreadingHTTPServer(("", port), DashboardHTTPRequestHandler)
+                server_created = True
+                break
+            except OSError as bind_err:
+                if attempt < 2:
+                    print(f"Port {port} busy, retrying cleanup (attempt {attempt+1}/3)...")
+                    _free_port(port)
+                    time.sleep(1.0)
+                else:
+                    raise bind_err
+
+        with httpd:
             httpd.timeout = 0.5  # Check for KeyboardInterrupt every 0.5s on Windows
             url = f"http://localhost:{port}"
             print(f"Dashboard server is running at: {url}")
