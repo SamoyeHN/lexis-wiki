@@ -22,8 +22,8 @@ def get_model_profile(model_name: str) -> dict:
     m_lower = (model_name or "").lower()
     
     # Architectural Defaults
-    strict_gbnf_families = ("qwen", "llama", "mistral", "mixtral", "codestral", "muse", "hermes", "phi")
-    prompt_json_families = ("gemma", "nemotron")
+    strict_gbnf_families = ("qwen", "llama", "mistral", "mixtral", "codestral", "muse", "hermes")
+    prompt_json_families = ("gemma", "nemotron", "phi")
     reasoning_families = ("ornith", "granite", "deepseek-r1", "qwq")
     
     inferred_gbnf = None
