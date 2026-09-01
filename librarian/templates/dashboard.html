@@ -1253,12 +1253,12 @@
 
                             <!-- Dropdown Menu -->
                             <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size: 0.75rem; z-index: 1050;">
-                                <li><button class="dropdown-item fw-semibold" onclick="selectCompileCategory(null)"><i class="bi bi-play-all-fill text-primary me-2"></i>Compile All</button></li>
+                                <li><button type="button" class="dropdown-item fw-semibold compile-category-item" data-category="" onclick="selectCompileCategory(null)"><i class="bi bi-play-all-fill text-primary me-2"></i>Compile All</button></li>
                                 <li><hr class="dropdown-divider"></li>
-                                <li><button class="dropdown-item" onclick="selectCompileCategory('vocabulary')"><i class="bi bi-book me-2"></i>Compile Vocabulary</button></li>
-                                <li><button class="dropdown-item" onclick="selectCompileCategory('grammar')"><i class="bi bi-journal-text me-2"></i>Compile Grammar</button></li>
-                                <li><button class="dropdown-item" onclick="selectCompileCategory('summary')"><i class="bi bi-list-stars me-2"></i>Compile Summary</button></li>
-                                <li><button class="dropdown-item" onclick="selectCompileCategory('mindmap')"><i class="bi bi-diagram-3 me-2"></i>Compile Mindmap</button></li>
+                                <li><button type="button" class="dropdown-item compile-category-item" data-category="vocabulary" onclick="selectCompileCategory('vocabulary')"><i class="bi bi-book me-2"></i>Compile Vocabulary</button></li>
+                                <li><button type="button" class="dropdown-item compile-category-item" data-category="grammar" onclick="selectCompileCategory('grammar')"><i class="bi bi-journal-text me-2"></i>Compile Grammar</button></li>
+                                <li><button type="button" class="dropdown-item compile-category-item" data-category="summary" onclick="selectCompileCategory('summary')"><i class="bi bi-list-stars me-2"></i>Compile Summary</button></li>
+                                <li><button type="button" class="dropdown-item compile-category-item" data-category="mindmap" onclick="selectCompileCategory('mindmap')"><i class="bi bi-diagram-3 me-2"></i>Compile Mindmap</button></li>
                             </ul>
                         </div>
                     </div>
@@ -2004,6 +2004,7 @@
     function openUnitWorkspace(filename) {
         if (currentUnit !== filename) {
             activePreviewPath = null;
+            selectedCompileCategory = null;
         }
         currentUnit = filename;
         const file = rawFiles.find(f => f.name === filename);
@@ -2159,12 +2160,8 @@
             if (tabsEl) tabsEl.classList.remove('d-none');
             if (transcribingPanel) transcribingPanel.classList.add('d-none');
             
-            // Restore compile button
-            const compileBtn = document.getElementById('workspace-compile-btn');
-            if (compileBtn) {
-                compileBtn.disabled = false;
-                compileBtn.innerHTML = `<i class="bi bi-play-fill me-1"></i> COMPILE ALL`;
-            }
+            // Restore compile button via unified state manager
+            updateCompileButtonUI();
         }
         // -----------------------------------------------------------------
         
@@ -2603,19 +2600,35 @@
     let selectedCompileCategory = null; // null = Compile All
     let isCompiling = false;
 
-    function selectCompileCategory(category) {
-        selectedCompileCategory = category;
-        
-        // Update main button UI text
+    function updateCompileButtonUI() {
         const btn = document.getElementById('workspace-compile-btn');
         if (btn) {
-            if (!category) {
-                btn.innerHTML = `<i class="bi bi-play-fill me-1"></i> COMPILE ALL`;
+            if (isCompiling) {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1" style="width: 0.8rem; height: 0.8rem;"></span> COMPILING...`;
             } else {
-                btn.innerHTML = `<i class="bi bi-play-fill me-1"></i> COMPILE ${category.toUpperCase()}`;
+                btn.disabled = false;
+                if (!selectedCompileCategory) {
+                    btn.innerHTML = `<i class="bi bi-play-fill me-1"></i> COMPILE ALL`;
+                } else {
+                    btn.innerHTML = `<i class="bi bi-play-fill me-1"></i> COMPILE ${selectedCompileCategory.toUpperCase()}`;
+                }
             }
         }
-        // Let the user decide when to trigger compile. Do not auto-compile here!
+        // Update active class in dropdown menu items
+        document.querySelectorAll('.compile-category-item').forEach(el => {
+            const cat = el.getAttribute('data-category') || null;
+            if ((!cat && !selectedCompileCategory) || (cat && cat === selectedCompileCategory)) {
+                el.classList.add('active');
+            } else {
+                el.classList.remove('active');
+            }
+        });
+    }
+
+    function selectCompileCategory(category) {
+        selectedCompileCategory = category ? category.trim() : null;
+        updateCompileButtonUI();
     }
 
     function triggerWorkspaceCompileDirect() {
@@ -2632,6 +2645,7 @@
         }
 
         isCompiling = true;
+        updateCompileButtonUI();
 
         // Expand logs panel automatically
         const colLog = document.getElementById('collapseWorkspaceTerminal');
@@ -2640,11 +2654,12 @@
         }
 
         const term = document.getElementById('workspace-compiler-terminal');
-        term.innerHTML = `<div class="log-entry text-info">🔨 Building ${category ? category : 'everything'} for '${currentUnit}'...</div>`;
+        const catTarget = (category !== undefined) ? category : selectedCompileCategory;
+        term.innerHTML = `<div class="log-entry text-info">🔨 Building ${catTarget ? catTarget : 'everything'} for '${currentUnit}'...</div>`;
 
         const payload = { filename: currentUnit };
-        if (category) {
-            payload.categories = [category];
+        if (catTarget) {
+            payload.categories = [catTarget];
         }
 
         fetch('/api/compile', {
@@ -2662,11 +2677,13 @@
             } else {
                 term.innerHTML += `<div class="log-entry text-danger">[ERROR] Compilation dispatch failed: ${data.error}</div>`;
                 isCompiling = false;
+                updateCompileButtonUI();
             }
         })
         .catch(err => {
             if (term) term.innerHTML += `<div class="log-entry text-danger">[ERROR] Dispatch failed: ${err.message}</div>`;
             isCompiling = false;
+            updateCompileButtonUI();
         });
     }
 
@@ -3681,6 +3698,7 @@
                     
                     if (service === 'compiler') {
                         isCompiling = false;
+                        updateCompileButtonUI();
                     }
                     
                     if (service === 'quiz' && job.status === 'completed' && job.saved_files.length > 0) {
