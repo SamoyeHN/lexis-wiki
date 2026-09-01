@@ -11,6 +11,56 @@ class LLMError(Exception):
     """Base exception for LLM related errors."""
     pass
 
+def get_model_profile(model_name: str) -> dict:
+    """
+    Intelligently determines optimal execution profile for a model.
+    Merges:
+    1. Built-in model architecture heuristics (Qwen, Llama, Mistral, Gemma, DeepSeek, etc.)
+    2. Explicit user overrides in wiki_config.json['model_options']
+    3. Global wiki_config.json settings
+    """
+    m_lower = (model_name or "").lower()
+    
+    # Architectural Defaults
+    strict_gbnf_families = ("qwen", "llama", "mistral", "mixtral", "codestral", "muse", "hermes", "phi")
+    prompt_json_families = ("gemma", "nemotron")
+    reasoning_families = ("ornith", "granite", "deepseek-r1", "qwq")
+    
+    inferred_gbnf = None
+    if any(k in m_lower for k in strict_gbnf_families):
+        inferred_gbnf = True
+    elif any(k in m_lower for k in prompt_json_families):
+        inferred_gbnf = False
+        
+    inferred_think = None
+    if any(k in m_lower for k in reasoning_families):
+        inferred_think = False
+        
+    # User Config Overrides (Highest Precedence)
+    model_opts = config.get("model_options", {}).get(model_name, {})
+    global_gbnf = config.get("enforce_gbnf", False)
+    
+    if "enforce_gbnf" in model_opts:
+        resolved_gbnf = model_opts["enforce_gbnf"]
+    elif inferred_gbnf is not None:
+        resolved_gbnf = inferred_gbnf
+    else:
+        resolved_gbnf = global_gbnf
+        
+    if "think" in model_opts:
+        resolved_think = model_opts["think"]
+    elif inferred_think is not None:
+        resolved_think = inferred_think
+    else:
+        resolved_think = None
+        
+    profile = dict(model_opts)
+    profile["enforce_gbnf"] = resolved_gbnf
+    if resolved_think is not None:
+        profile["think"] = resolved_think
+        
+    return profile
+
 class LLMClient:
     def __init__(self):
         self._refresh_config()
@@ -90,8 +140,8 @@ class LLMClient:
                 messages.insert(0, {"role": "system", "content": schema_guidance})
 
         # 3. Prompt-Guided JSON Mode: Inject JSON schema if GBNF is disabled
-        model_opts = config.get("model_options", {}).get(self.model, {})
-        use_gbnf = model_opts.get("enforce_gbnf", config.get("enforce_gbnf", False))
+        profile = get_model_profile(self.model)
+        use_gbnf = profile.get("enforce_gbnf", False)
         if schema and not use_gbnf:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=True)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
@@ -332,20 +382,17 @@ class LLMClient:
             **kwargs
         }
         
-        # Smart thinking handling: suppress runaway thinking loops for known reasoning models during structured extraction/quiz
-        reasoning_models_to_suppress_think = ("ornith", "granite", "deepseek-r1", "qwq")
+        # Smart profile resolution (GBNF, think, etc.)
+        profile = get_model_profile(self.model)
         model_lower = (self.model or "").lower()
-        model_opts = config.get("model_options", {}).get(self.model, {})
 
         if "think" in kwargs:
             payload["think"] = kwargs.pop("think")
-        elif "think" in model_opts:
-            payload["think"] = model_opts["think"]
-        elif any(k in model_lower for k in reasoning_models_to_suppress_think):
-            payload["think"] = False
+        elif "think" in profile:
+            payload["think"] = profile["think"]
         
-        use_gbnf = model_opts.get("enforce_gbnf", config.get("enforce_gbnf", False))
-        is_gemma_family = "gemma" in (self.model or "").lower()
+        use_gbnf = profile.get("enforce_gbnf", False)
+        is_gemma_family = "gemma" in model_lower
         if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=True)
         elif (json_format or schema) and not is_gemma_family:
