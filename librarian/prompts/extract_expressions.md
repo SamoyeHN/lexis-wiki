@@ -13,8 +13,9 @@ Extract genuine multi-word expressions (phrasal verbs, idioms, fixed collocation
    - **`phrasal verb`**: Must consist of a **Verb + Particle/Preposition** (e.g., `hinge on`, `factor in`, `tap into`, `clear up`, `give up`, `turn down`). The particle is an integral part of the verb unit that creates a distinct idiomatic meaning. (Example: `factor in` is a phrasal verb; `launch [something]` is NOT).
    - **`collocation` / `set phrase`**: Fixed multi-word pairings, particularly **Verb + Noun/Object + Preposition** (e.g., `pose a risk to [entity]`, `play a key role in [domain]`, `take [something] for granted`, `hail [entity] as [descriptor]`), or fixed structural chunks (e.g., `for the time being`, `on a regular basis`, `in the long run`).
    - **`idiom`**: Fixed figurative multi-word expressions whose overall meaning is metaphorical and cannot be deduced literally (e.g., `easier said than done`, `keep one's chin up`, `the honeymoon is over`).
-4. **Canonical Base Form & Slot-Filling**:
-   - Convert expressions to base dictionary forms using bracketed placeholders for variable arguments (e.g., `factor [something] into [something]`, `pose a risk to [entity]`, `keep one's chin up`).
+4. **Canonical Base Form & Mandatory Slot Retention in `word`**:
+   - In `design_audit`, step from the verbatim surface text to the slotted canonical headword: `DRAFT: [Surface Text in Article] -> [Canonical Headword with Slots] -> [Category] -> [Uniqueness]`. (Example: `DRAFT: putting out graphic brochures -> put [something] out -> phrasal verb -> New`).
+   - **MANDATORY**: The `"word"` field MUST directly preserve the bracketed slot placeholders (e.g., `"word": "put [something] out"`, `"word": "lay siege to [entity]"`, `"word": "bring about [something]"`, `"word": "take [something] for granted"`). Never strip the slot placeholders when writing the `"word"` property.
 5. **Absolute Uniqueness & Verbatim Sourcing**:
    - Every entry in the final list must be completely distinct with no duplicate headwords.
    - `quoted_sentence`: Must contain the exact verbatim sentence from the source text where the expression appears.

@@ -167,8 +167,24 @@ class LLMClient:
                 
                 if was_healed:
                     import logging
-                    logging.getLogger("librarian").warning(f"LLM JSON response for {task_name or 'chat'} required structural healing.")
-                
+                # Auto-sync slotted form from design_audit to word for expressions if needed
+                if isinstance(data, dict) and "expressions" in data and isinstance(data["expressions"], list):
+                    for expr_item in data["expressions"]:
+                        if isinstance(expr_item, dict):
+                            cur_word = expr_item.get("word", "").strip()
+                            cur_audit = expr_item.get("design_audit", "")
+                            if ("[" not in cur_word and "one's" not in cur_word) and ("[" in cur_audit or "one's" in cur_audit):
+                                parts = [p.strip() for p in cur_audit.replace("->", "➔").split("➔")]
+                                for p in parts:
+                                    if ("[" in p or "one's" in p):
+                                        cand = p[5:].strip().lstrip(':').strip() if p.upper().startswith("DRAFT") else p
+                                        candidate = cand.split(" -")[0].split(" (")[0].strip()
+                                        cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
+                                        word_tokens = re.findall(r'[a-zA-Z]+', cur_word)
+                                        if cand_tokens and word_tokens and cand_tokens[0].lower() == word_tokens[0].lower():
+                                            expr_item["word"] = candidate
+                                            break
+
                 # 6.3. MAPPING
                 if isinstance(schema, dict):
                     if isinstance(data, list):

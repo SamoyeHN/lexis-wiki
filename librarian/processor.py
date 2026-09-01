@@ -255,12 +255,28 @@ class WikiProcessor:
                     merged_vocab.extend(vocab_data.get("vocabulary", []))
 
                 if expressions_data:
+                    def _resolve_slotted_word(expr_obj):
+                        w = expr_obj.get("word", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "word", "")
+                        aud = expr_obj.get("design_audit", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "design_audit", "")
+                        if ("[" not in w and "one's" not in w) and ("[" in aud or "one's" in aud):
+                            parts = [p.strip() for p in aud.replace("->", "➔").split("➔")]
+                            for p in parts:
+                                if ("[" in p or "one's" in p):
+                                    cand = p[5:].strip().lstrip(':').strip() if p.upper().startswith("DRAFT") else p
+                                    candidate = cand.split(" -")[0].split(" (")[0].strip()
+                                    cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
+                                    w_tokens = re.findall(r'[a-zA-Z]+', w)
+                                    if cand_tokens and w_tokens and cand_tokens[0].lower() == w_tokens[0].lower():
+                                        return candidate
+                        return w
+
                     expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                     for expr in expr_list:
+                        resolved_word = _resolve_slotted_word(expr)
                         if isinstance(expr, dict):
                             mapped_item = {
                                 "design_audit": expr.get("design_audit", ""),
-                                "word": expr.get("word", ""),
+                                "word": resolved_word,
                                 "part_of_speech": expr.get("part_of_speech", "phrasal verb"),
                                 "definition": expr.get("definition", ""),
                                 "word_cefr_level": expr.get("word_cefr_level", "B2"),
@@ -271,7 +287,7 @@ class WikiProcessor:
                             from .schemas import VocabularyItem
                             mapped_item = VocabularyItem(
                                 design_audit=getattr(expr, "design_audit", ""),
-                                word=getattr(expr, "word", ""),
+                                word=resolved_word,
                                 part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                                 definition=getattr(expr, "definition", ""),
                                 word_cefr_level=getattr(expr, "word_cefr_level", "B2"),
@@ -291,9 +307,10 @@ class WikiProcessor:
                 vocab_list = []
                 expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                 for expr in expr_list:
+                    resolved_word = _resolve_slotted_word(expr) if '_resolve_slotted_word' in locals() else getattr(expr, "word", "")
                     vocab_list.append(VocabularyItem(
                         design_audit=getattr(expr, "design_audit", ""),
-                        word=getattr(expr, "word", ""),
+                        word=resolved_word,
                         part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                         definition=getattr(expr, "definition", ""),
                         word_cefr_level=getattr(expr, "word_cefr_level", "B2"),
