@@ -38,14 +38,20 @@ def get_model_profile(model_name: str) -> dict:
         
     # User Config Overrides (Highest Precedence)
     model_opts = config.get("model_options", {}).get(model_name, {})
-    global_gbnf = config.get("enforce_gbnf", False)
+    user_config_dict = config.data
     
+    # 1. Per-model explicit override in model_options takes highest precedence
     if "enforce_gbnf" in model_opts:
         resolved_gbnf = model_opts["enforce_gbnf"]
+    # 2. Global explicit setting in wiki_config.json (if set to True, user explicitly wants strict schema)
+    elif user_config_dict.get("enforce_gbnf", False) is True:
+        resolved_gbnf = True
+    # 3. Model family architectural defaults
     elif inferred_gbnf is not None:
         resolved_gbnf = inferred_gbnf
+    # 4. Global fallback
     else:
-        resolved_gbnf = global_gbnf
+        resolved_gbnf = False
         
     if "think" in model_opts:
         resolved_think = model_opts["think"]
@@ -369,6 +375,11 @@ class LLMClient:
 
         # 2. Fix trailing commas (e.g., [1, 2, ] -> [1, 2])
         json_str = re.sub(r',\s*([\]\}])', r'\1', json_str)
+
+        # 2.1. Fix missing commas between key-value pairs or array elements
+        # e.g., "imitation_example": "..."\n  "common_mistakes": "..."
+        json_str = re.sub(r'("|\d+|true|false|null|\}|\])\s*\n(\s*")', r'\1,\n\2', json_str)
+        json_str = re.sub(r'(\})\s*\n(\s*\{)', r'\1,\n\2', json_str)
 
         # 3. Fix unescaped newlines within values
         # This is a bit risky but common: "value": "line1\nline2"
