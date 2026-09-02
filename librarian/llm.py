@@ -290,12 +290,14 @@ class LLMClient:
                                 "parsed_json": dict_to_eval,
                             }
                             audit = LogEvaluator.evaluate_log(simulated_log)
-                            composite = audit.get("composite_score", 100.0)
+                            composite = audit.get("composite_score")
+                            if composite is None:
+                                composite = 100.0
                             
                             if composite < 80.0:
                                 flags = audit.get("flags", [])
-                                scores = audit.get("scores", {})
-                                lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogy"
+                                scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
+                                lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
                                 feedback_note = (
                                     f"\n\n[QUALITY AUDIT RETRY: Previous attempt scored {composite}/100. "
                                     f"Lowest dimension: {lowest_dim}. "

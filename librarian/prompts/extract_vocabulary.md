@@ -12,6 +12,8 @@ Extract academic vocabulary from the text.
 5. **Contextual Accuracy & Original Usage**:
    - `quoted_sentence`: Must contain the exact verbatim sentence from the source text where the word appears.
    - `example_usage`: Must be an original, high-quality sample sentence demonstrating how to use the word in a typical academic or professional context.
+6. **LEMMA & CEFR DESIGN AUDIT (`design_audit`)**:
+   - For every entry, `design_audit` MUST follow this exact reasoning pipeline: `DRAFT: [Surface Word in Text] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [Target CEFR Level (B1–C2)] -> [Uniqueness Check (New)]`. (Example: `DRAFT: alerting -> alert -> verb -> B2 -> New`).
 
 CONTENT:
 {content}

@@ -12,7 +12,8 @@ Create a **translation assessment** that integrates the provided vocabulary list
 6. **L1 INTERFERENCE DISTRACTORS**: Distractor options must model common L1 interference errors (e.g., literal word-for-word translation errors, misplaced modifiers, incorrect preposition collocations, or verb tense mismatches).
 7. **QUESTION FIELD MANDATE**: Do NOT wrap the 'question' or translated sentence text in outer quotation marks.
 8. **OPTIONS FIELD MANDATE**: Each item in 'options' must be a full English sentence. Return ONLY literal text without choice labels (e.g., 'A)', 'a.', '1.'). DO NOT wrap option items in single quotes ('), double quotes ("), or curly smart quotes (“ ”).
-9. **All items must follow the JSON schema exactly. No additional fields.**
+9. **TRANSLATION DESIGN AUDIT (`design_audit`)**: For every question, 'design_audit' MUST follow this 3-step planning format: `DRAFT: [Target Vocab + Grammar Pattern] -> [Academic Scenario & L1 Sentence] -> [3 Planned Distractor Traps (Literal Translation / Preposition Collocation / Tense Error)]`.
+10. **All items must follow the JSON schema exactly. No additional fields.**
 
 VOCABULARY:
 {vocabulary_content}

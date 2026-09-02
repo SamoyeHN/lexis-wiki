@@ -11,6 +11,8 @@ Extract unique advanced grammar patterns from the text.
 4. **Slot-Filling Pattern Formulas**: Formulate `pattern_formula` using clear bracketed slots (e.g., `Not only + [Auxiliary Verb] + [Subject] + [Main Verb], but also + [Clause]`).
 5. **Original Imitation Sentence**: `imitation_example` must be a high-quality original academic sentence demonstrating the formula in a new, distinct context.
 6. **ESL Learner Insight**: `common_mistakes` must explain typical learner errors (e.g., word order, missing auxiliaries, tense mismatch) associated with this specific pattern.
+7. **SYNTACTIC DESIGN AUDIT (`design_audit`)**:
+   - For every pattern, `design_audit` MUST follow this reasoning pipeline: `DRAFT: [Verbatim Excerpt] -> [Syntactic Category] -> [Target Formula with Slots] -> [Uniqueness Check (New)]`.
 
 CONTENT:
 {content}
