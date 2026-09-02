@@ -3,12 +3,10 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "Title for the video quiz.",
       "minLength": 1
     },
     "video_url": {
       "type": "string",
-      "description": "The original video URL or identifier.",
       "minLength": 1
     },
     "video_type": {
@@ -16,8 +14,7 @@
       "enum": [
         "youtube",
         "local"
-      ],
-      "description": "Type of the video."
+      ]
     },
     "questions": {
       "type": "array",
@@ -27,28 +24,23 @@
         "properties": {
           "design_audit": {
             "type": "string",
-            "description": "Thinking Step. Format: 'DRAFT: [Timestamp Range] -> [Verbatim Clue] -> [3 Distractor Traps (False Claim / Wrong Segment / Misinterpreted Context)]'. Must match CEFR {cefr_level}.",
             "minLength": 1
           },
           "question": {
             "type": "string",
-            "description": "The comprehension question (match {cefr_level}) based on what is spoken in the video segment.",
             "minLength": 1
           },
           "options": {
             "type": "array",
             "minItems": 4,
             "maxItems": 4,
-            "uniqueItems": true,
             "items": {
               "type": "string",
               "minLength": 1
-            },
-            "description": "Exactly 4 options containing the correct answer and 3 planned distractors. Return ONLY the literal phrase without labels or surrounding quotes (\" \")."
+            }
           },
           "correct_answer_index": {
             "type": "integer",
-            "description": "Index of the correct answer (0-3).",
             "enum": [
               0,
               1,
@@ -58,13 +50,10 @@
           },
           "timestamp": {
             "type": "string",
-            "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
-            "description": "The starting timestamp of the video segment where the clue/answer is discussed (e.g. '01:25' or '10:45'). Must exist verbatim in the transcript.",
             "minLength": 1
           },
           "explanation": {
             "type": "string",
-            "description": "Detailed explanation of the correct answer referencing the video dialogue and why distractors do not match.",
             "minLength": 1
           }
         },
@@ -77,8 +66,7 @@
           "explanation"
         ],
         "additionalProperties": false
-      },
-      "description": "List of {count} timestamp-aware video comprehension questions."
+      }
     }
   },
   "required": [

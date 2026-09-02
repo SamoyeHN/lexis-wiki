@@ -79,7 +79,7 @@ class Prompts:
         files_updated = 0
         for name, dataclass_cls in cls.INTERNAL_SCHEMAS.items():
             # 1. Generate JSON Schema
-            schema_dict = get_json_schema(dataclass_cls, include_descriptions=True)
+            schema_dict = get_json_schema(dataclass_cls, include_descriptions=False)
             schema_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
             json_path = factory_dir / f"{name}.json"
             

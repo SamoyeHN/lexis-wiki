@@ -3,7 +3,6 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "Title for the extraction (e.g. 'Book 3 Unit 4').",
       "minLength": 1
     },
     "overall_cefr_level": {
@@ -15,8 +14,7 @@
         "B2",
         "C1",
         "C2"
-      ],
-      "description": "The holistic CEFR difficulty rating for the entire text."
+      ]
     },
     "vocabulary": {
       "type": "array",
@@ -26,12 +24,10 @@
         "properties": {
           "design_audit": {
             "type": "string",
-            "description": "Thinking Step. Verify that this candidate word is present in the text, lemmatized to its headword form (preserving the exact Part of Speech as used in the text), and has not been used in previous list items. Format: 'DRAFT: [Surface Form] -> [Headword] -> [Uniqueness Check (New/Repeat)]'.",
             "minLength": 1
           },
           "word": {
             "type": "string",
-            "description": "The dictionary headword entry form (e.g., 'analyze' instead of 'analyzing'). It must match the exact Part of Speech used in the context.",
             "minLength": 1
           },
           "part_of_speech": {
@@ -42,13 +38,15 @@
               "adjective",
               "adverb",
               "preposition",
-              "conjunction"
-            ],
-            "description": "The grammatical category of the word as it is used within the quoted sentence."
+              "conjunction",
+              "phrasal verb",
+              "idiom",
+              "collocation",
+              "set phrase"
+            ]
           },
           "definition": {
             "type": "string",
-            "description": "A concise, clear academic definition suitable for ESL learners at this CEFR level.",
             "minLength": 1
           },
           "word_cefr_level": {
@@ -60,17 +58,14 @@
               "B2",
               "C1",
               "C2"
-            ],
-            "description": "The specific CEFR difficulty level of this individual word."
+            ]
           },
           "quoted_sentence": {
             "type": "string",
-            "description": "The exact verbatim sentence from the source text where this word appears.",
             "minLength": 1
           },
           "example_usage": {
             "type": "string",
-            "description": "An original, high-quality sample sentence demonstrating how to use the word in a typical academic or professional context.",
             "minLength": 1
           }
         },
@@ -84,8 +79,7 @@
           "example_usage"
         ],
         "additionalProperties": false
-      },
-      "description": "List of up to {count} academic vocabulary words found in the text."
+      }
     }
   },
   "required": [

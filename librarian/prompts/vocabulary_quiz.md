@@ -13,7 +13,7 @@ Create a high-quality multiple-choice vocabulary assessment based on the provide
    - The sentence MUST provide explicit contextual, syntactic, or collocational constraints (e.g., dependent prepositions, specific semantic collocations, or contrastive clauses) that make the target word the SINGLE, UNAMBIGUOUSLY correct choice.
 4. **PLAUSIBLE DISTRACTORS**: Distractors must be plausible near-synonyms or register matches at the same CEFR tier, rendered strictly incorrect by the specific preposition, collocation, or semantic context in the sentence.
 5. **CONTRASTIVE EXPLANATIONS**: In `explanation`, provide contrastive reasoning: clearly state why `target_word` is the precise fit in this context AND specifically why key distractors are incorrect (e.g., wrong dependent preposition, semantic mismatch, or improper register).
-6. **COMPACT DESIGN AUDIT**: Keep 'design_audit' extremely concise (1 single line, maximum 25 words). Format: 'DRAFT: [target word] -> [Sentence Plan] -> [3 Distractor Traps]'. DO NOT write long explanations or multi-paragraph thoughts in design_audit.
+6. **ALIGNMENT WITH DESIGN AUDIT**: The assessment sentence in 'question' must be the populated version of the advanced academic sentence planned in 'design_audit'.
 7. **QUESTION FIELD MANDATE**: Use exactly four underscores (____) for the blank in 'question'. Do NOT wrap the 'question' sentence in outer quotation marks.
 8. **OPTIONS FIELD MANDATE**: Return ONLY the literal word/phrase for each item in 'options'. DO NOT include option labels (e.g., 'A)', 'a.', '1.'). DO NOT wrap option items or target words in single quotes ('), double quotes ("), or curly smart quotes (“ ”).
 

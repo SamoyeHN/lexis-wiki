@@ -3,12 +3,10 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "A short, engaging title for the quiz (max 5 words).",
       "minLength": 1
     },
     "topic": {
       "type": "string",
-      "description": "A one-sentence outline or topic summarizing the dialogue.",
       "minLength": 1
     },
     "cefr_level": {
@@ -20,17 +18,14 @@
         "B2",
         "C1",
         "C2"
-      ],
-      "description": "Target CEFR level for the dialogue and questions."
+      ]
     },
     "speaker_1": {
       "type": "string",
-      "description": "Name of the first character (MANDATE: must be a {speaker_1_gender} name).",
       "minLength": 1
     },
     "speaker_2": {
       "type": "string",
-      "description": "Name of the second character (MANDATE: must be a {speaker_2_gender} name).",
       "minLength": 1
     },
     "script": {
@@ -52,8 +47,7 @@
           "text"
         ],
         "additionalProperties": false
-      },
-      "description": "A natural academic dialogue (150-250 words) incorporating 5-8 items from the vocabulary list. MANDATE: Speaker 1 ({speaker_1_gender}) and Speaker 2 ({speaker_2_gender}) must alternate speaking, starting with Speaker 1."
+      }
     },
     "questions": {
       "type": "array",
@@ -63,28 +57,23 @@
         "properties": {
           "design_audit": {
             "type": "string",
-            "description": "Thinking Step. Format: 'DRAFT: [Audio Evidence Turn] -> [3 Distractor Traps (Misheard Detail / Speaker Confusion / Logic Trap)]'. Must match CEFR {cefr_level}.",
             "minLength": 1
           },
           "question": {
             "type": "string",
-            "description": "Comprehension question (match {cefr_level}) based on the script.",
             "minLength": 1
           },
           "options": {
             "type": "array",
             "minItems": 4,
             "maxItems": 4,
-            "uniqueItems": true,
             "items": {
               "type": "string",
               "minLength": 1
-            },
-            "description": "Exactly 4 options. Return ONLY the literal word/phrase without labels or surrounding quotes (\" \")."
+            }
           },
           "correct_answer_index": {
             "type": "integer",
-            "description": "Index of the correct answer (0-3).",
             "enum": [
               0,
               1,
@@ -98,12 +87,10 @@
               "Detail",
               "Main Idea",
               "Inference"
-            ],
-            "description": "The skill tested."
+            ]
           },
           "explanation": {
             "type": "string",
-            "description": "Reasoning based on the script, explaining why the correct answer is supported and why distractors are incorrect.",
             "minLength": 1
           }
         },
@@ -116,41 +103,34 @@
           "explanation"
         ],
         "additionalProperties": false
-      },
-      "description": "List of {count} multiple-choice questions based on the script."
+      }
     },
     "speaker_1_gender": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_1_gender}'.",
       "enum": [
         "{speaker_1_gender}"
       ]
     },
     "speaker_2_gender": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_2_gender}'.",
       "enum": [
         "{speaker_2_gender}"
       ]
     },
     "speaker_1_role": {
-      "type": "string",
-      "description": "Role of speaker 1."
+      "type": "string"
     },
     "speaker_2_role": {
-      "type": "string",
-      "description": "Role of speaker 2."
+      "type": "string"
     },
     "speaker_1_accent": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_1_accent}'.",
       "enum": [
         "{speaker_1_accent}"
       ]
     },
     "speaker_2_accent": {
       "type": "string",
-      "description": "MANDATE: must be exactly '{speaker_2_accent}'.",
       "enum": [
         "{speaker_2_accent}"
       ]

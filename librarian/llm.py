@@ -145,7 +145,7 @@ class LLMClient:
         profile = get_model_profile(self.model)
         use_gbnf = profile.get("enforce_gbnf", False)
         if schema and not use_gbnf:
-            schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=True)
+            schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=False)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
             schema_prompt = f"### JSON SCHEMA REQUIREMENT ###\nRespond strictly with a valid JSON object matching this schema definition:\n```json\n{schema_json_str}\n```"
             system_msg = next((m for m in messages if m["role"] == "system"), None)
@@ -181,7 +181,7 @@ class LLMClient:
         system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
         user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
         t_name = task_name or "chat"
-        schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=True) if schema else None)
+        schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=False) if schema else None)
 
         # 6. Post-Processing & Parsing
         if schema and not stream:
@@ -430,7 +430,7 @@ class LLMClient:
         use_gbnf = profile.get("enforce_gbnf", False)
         is_gemma_family = "gemma" in model_lower
         if schema and use_gbnf:
-            payload["format"] = get_json_schema(schema, include_descriptions=True)
+            payload["format"] = get_json_schema(schema, include_descriptions=False)
         elif (json_format or schema) and not is_gemma_family:
             payload["format"] = "json"
             
@@ -459,7 +459,7 @@ class LLMClient:
                         f"Model '{self.model}' returned empty/trivial content ('{content.strip()}') in prompt-guided mode. Automatically retrying with strict JSON schema constraint..."
                     )
                     fallback_payload = dict(payload)
-                    fallback_payload["format"] = get_json_schema(schema, include_descriptions=True)
+                    fallback_payload["format"] = get_json_schema(schema, include_descriptions=False)
 
                 fb_response = requests.post(url, json=fallback_payload, timeout=(5, 600))
                 fb_response.raise_for_status()
@@ -504,7 +504,7 @@ class LLMClient:
             schema_name = getattr(schema, "__name__", "ResponseSchema") if not isinstance(schema, dict) else "ResponseSchema"
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": get_json_schema(schema, include_descriptions=True)}
+                "json_schema": {"name": schema_name, "strict": True, "schema": get_json_schema(schema, include_descriptions=False)}
             }
         elif json_format or schema:
             payload["response_format"] = {"type": "json_object"}

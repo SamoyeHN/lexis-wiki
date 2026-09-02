@@ -3,7 +3,7 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "Title for the quiz."
+      "minLength": 1
     },
     "questions": {
       "type": "array",
@@ -13,34 +13,27 @@
         "properties": {
           "design_audit": {
             "type": "string",
-            "description": "Thinking Step. Format: 'DRAFT: [target word] -> [Original Academic Sentence Plan] -> [3 Distractor Traps (Near-synonym / Register / Collocation Trap)]'. Must match CEFR {cefr_level}.",
             "minLength": 1
           },
           "target_word": {
             "type": "string",
-            "description": "The specific vocabulary word selected from the list for this question.",
             "minLength": 1
           },
           "question": {
             "type": "string",
-            "pattern": "^.*____.*$",
-            "description": "The assessment sentence. Use exactly four underscores (____) for the blank. Do NOT include options or labels (A, B, C, D) inside this field.",
             "minLength": 1
           },
           "options": {
             "type": "array",
             "minItems": 4,
             "maxItems": 4,
-            "uniqueItems": true,
             "items": {
               "type": "string",
               "minLength": 1
-            },
-            "description": "Exactly 4 options containing the target_word and the 3 planned distractors. Return ONLY the literal word/phrase without labels like 'A)' or surrounding quotes (\" \")."
+            }
           },
           "correct_answer_index": {
             "type": "integer",
-            "description": "Index of the target_word inside the options array (0-3).",
             "enum": [
               0,
               1,
@@ -50,12 +43,10 @@
           },
           "definition": {
             "type": "string",
-            "description": "A concise academic definition of the target word.",
             "minLength": 1
           },
           "explanation": {
             "type": "string",
-            "description": "Contrastive pedagogical explanation explaining why the target word is the most accurate/natural choice in this specific context AND why key distractors are invalid (e.g., preposition mismatch, register, semantic nuance).",
             "minLength": 1
           }
         },
@@ -69,8 +60,7 @@
           "explanation"
         ],
         "additionalProperties": false
-      },
-      "description": "List of {count} distinct multiple-choice questions."
+      }
     }
   },
   "required": [

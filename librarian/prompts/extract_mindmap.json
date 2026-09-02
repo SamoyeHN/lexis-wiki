@@ -3,7 +3,6 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "Title for the mind map.",
       "minLength": 1
     },
     "overall_cefr_level": {
@@ -15,12 +14,10 @@
         "B2",
         "C1",
         "C2"
-      ],
-      "description": "The overall CEFR level of the text."
+      ]
     },
     "root_name": {
       "type": "string",
-      "description": "The central root theme or core question of the unit.",
       "minLength": 1
     },
     "branches": {
@@ -32,7 +29,6 @@
         "properties": {
           "branch_name": {
             "type": "string",
-            "description": "The name of the primary branch representing a major sub-theme or narrative stage.",
             "minLength": 1
           },
           "color_theme": {
@@ -43,8 +39,7 @@
               "blue",
               "green",
               "purple"
-            ],
-            "description": "The color theme for this branch to visually group related ideas."
+            ]
           },
           "sub_branches": {
             "type": "array",
@@ -53,17 +48,14 @@
               "type": "object",
               "properties": {
                 "sub_branch_name": {
-                  "type": "string",
-                  "description": "The name of the sub-branch. Leave empty ('') if this branch does not have nested sub-branches and the details/leaves should connect directly to the main branch."
+                  "type": "string"
                 },
                 "leaves": {
                   "type": "array",
                   "minItems": 1,
                   "items": {
-                    "type": "string",
-                    "minLength": 2
-                  },
-                  "description": "A list of detailed points, key facts, or specific examples for this branch/sub-branch."
+                    "type": "string"
+                  }
                 }
               },
               "required": [
@@ -71,8 +63,7 @@
                 "leaves"
               ],
               "additionalProperties": false
-            },
-            "description": "List of sub-branches. If a branch has no sub-categories, provide a single sub-branch with sub_branch_name set to '' and list the items in leaves."
+            }
           }
         },
         "required": [
@@ -81,8 +72,7 @@
           "sub_branches"
         ],
         "additionalProperties": false
-      },
-      "description": "List of exactly 3 to 5 primary branches forming the first level of the mind map."
+      }
     }
   },
   "required": [
