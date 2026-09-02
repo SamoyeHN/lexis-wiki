@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from .config import config
 
-def log_task(task_name, system_prompt, user_prompt, response_text, schema=None):
+def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None):
     """
-    Logs an LLM task to the logs directory.
+    Logs an LLM task to the logs directory with structured status and failure categorization.
     """
     # Ensure we use an absolute path for logs
     logs_dir = Path(config.project_root).resolve() / "logs"
@@ -20,6 +20,9 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None):
     content.append(f"=== TASK: {task_name} ===")
     content.append(f"=== MODEL: {config.get('model')} ===")
     content.append(f"=== TIMESTAMP: {datetime.datetime.now().ctime()} ===")
+    content.append(f"=== STATUS: {status} ===")
+    if failure_category:
+        content.append(f"=== FAILURE_CATEGORY: {failure_category} ===")
     content.append("")
     
     if system_prompt:

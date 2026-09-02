@@ -1,5 +1,6 @@
 import json
 import dataclasses
+import re
 from typing import List, Dict, Any, Type, get_origin, get_args, Union, Literal
 
 def get_json_schema(cls: Type, include_descriptions: bool = False) -> Dict[str, Any]:
@@ -153,9 +154,58 @@ def _generate_dummy_value(t: Any) -> Any:
             
     return None
 
+def _normalize_enum(val: Any, allowed_args: tuple) -> Any:
+    """Fuzzy and case-insensitive normalization for Literal enum constraints."""
+    if not isinstance(val, str) or not allowed_args:
+        return val
+    
+    # 1. Exact match
+    if val in allowed_args:
+        return val
+    
+    clean_val = val.strip().lower().rstrip(".,;:")
+    
+    # 2. Case-insensitive exact match
+    for allowed in allowed_args:
+        if str(allowed).lower() == clean_val:
+            return allowed
+            
+    # 3. Cleaned character/punctuation match (e.g. "phrasal_verb" -> "phrasal verb", "set-phrase" -> "set phrase")
+    normalized_val = re.sub(r'[\-_]+', ' ', clean_val)
+    for allowed in allowed_args:
+        norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
+        if norm_allowed == normalized_val:
+            return allowed
+
+    # 4. Longest-first prefix / token / substring matching (so 'phrasal verb' matches before 'verb')
+    sorted_args = sorted(allowed_args, key=lambda x: len(str(x)), reverse=True)
+    
+    # 4.1. Stem/Plural check (e.g. 'phrasal verbs' -> 'phrasal verb', 'collocations' -> 'collocation')
+    val_singular = normalized_val.rstrip('s')
+    for allowed in sorted_args:
+        norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower()).rstrip('s')
+        if norm_allowed == val_singular:
+            return allowed
+
+    # 4.2. Prefix match
+    for allowed in sorted_args:
+        norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
+        if normalized_val.startswith(norm_allowed) or norm_allowed.startswith(normalized_val):
+            return allowed
+
+    # 4.3. Substring match
+    for allowed in sorted_args:
+        norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
+        if norm_allowed in normalized_val or normalized_val in norm_allowed:
+            return allowed
+
+    # 5. Safe fallback to default canonical enum
+    return allowed_args[0]
+
 def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
     """
-    Instantiates a dataclass from a dictionary, with recursive type mapping.
+    Instantiates a dataclass from a dictionary, with recursive type mapping,
+    enum normalization, and array length bounds enforcement.
     """
     if not dataclasses.is_dataclass(cls):
         return data
@@ -188,7 +238,18 @@ def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
                 else:
                     kwargs[field.name] = None
         else:
-            kwargs[field.name] = _map_value(field.type, val)
+            mapped_val = _map_value(field.type, val)
+            # Array length bounds protection
+            if isinstance(mapped_val, list):
+                if field.metadata and "maxItems" in field.metadata:
+                    raw_max = field.metadata["maxItems"]
+                    if isinstance(raw_max, int):
+                        mapped_val = mapped_val[:raw_max]
+                    elif isinstance(raw_max, str) and raw_max.isdigit():
+                        mapped_val = mapped_val[:int(raw_max)]
+                if field.name == "options" and len(mapped_val) > 4:
+                    mapped_val = mapped_val[:4]
+            kwargs[field.name] = mapped_val
     
     return cls(**kwargs)
 
@@ -196,12 +257,24 @@ def _map_value(t: Any, val: Any) -> Any:
     origin = get_origin(t)
     args = get_args(t)
 
+    # 1. Enum / Literal Constraint Validation & Normalization
+    if origin is Literal:
+        return _normalize_enum(val, args)
+
+    # 2. Nested Dataclass Mapping
     if dataclasses.is_dataclass(t) and isinstance(val, dict):
         return validate_and_map(t, val)
     
+    # 3. List Mapping
     if (origin is list or origin is List) and isinstance(val, list):
         return [_map_value(args[0], item) for item in val]
     
+    # 4. Optional / Union Mapping
+    if origin is Union:
+        actual_types = [a for a in args if a is not type(None)]
+        if actual_types:
+            return _map_value(actual_types[0], val)
+
     return val
 
 # --- Schema Definitions ---

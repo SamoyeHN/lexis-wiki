@@ -65,6 +65,7 @@ class LLMClient:
     def __init__(self):
         self._refresh_config()
         self.last_raw_response = None
+        self.last_done_reason = None
 
     def _refresh_config(self):
         """Refreshes configuration from the config object."""
@@ -96,6 +97,7 @@ class LLMClient:
         """
         self._refresh_config()
         self.last_raw_response = None
+        self.last_done_reason = None
 
         # 1. OPTIMIZATION: Move Personas to System Role
         if messages and messages[0]["role"] == "user":
@@ -183,11 +185,21 @@ class LLMClient:
 
         # 6. Post-Processing & Parsing
         if schema and not stream:
+            failure_cat = None
             try:
+                # 6.0. Truncation check
+                if getattr(self, "last_done_reason", None) == "length":
+                    failure_cat = "TRUNCATED"
+                    import logging
+                    logging.getLogger("librarian").warning(
+                        f"[TRUNCATION DETECTED] Generation hit context/token limit (done_reason='length') for task '{task_name or 'chat'}' on model '{self.model}'."
+                    )
+
                 # 6.1. CLEANING: Extract JSON from markdown or clutter
                 json_str = content.strip()
-                if not json_str:
-                    raise LLMError(f"LLM returned empty response for task '{task_name or 'chat'}'.")
+                if not json_str or json_str in ("{}", "[]", "null"):
+                    failure_cat = "EMPTY_RESPONSE"
+                    raise LLMError(f"LLM returned empty/trivial response for task '{task_name or 'chat'}'.")
                 
                 # Remove ```json ... ``` blocks
                 if "```" in json_str:
@@ -203,6 +215,9 @@ class LLMClient:
                 end = json_str.rfind('}')
                 if start != -1 and end != -1:
                     json_str = json_str[start:end+1]
+                elif start != -1 and end == -1:
+                    # Cut off before closing brace -> Truncated
+                    failure_cat = "TRUNCATED"
                 
                 # 6.2. HEALING
                 final_json = self._heal_json(json_str)
@@ -210,11 +225,15 @@ class LLMClient:
                 
                 try:
                     data = json.loads(final_json)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as jde:
                     # Light cleaning of unescaped newlines in values
                     final_json = re.sub(r'\n(?!\s*[, "\}\]\{\[0-9tfn\-\:])', r'\\n', final_json)
                     was_healed = True
-                    data = json.loads(final_json)
+                    try:
+                        data = json.loads(final_json)
+                    except json.JSONDecodeError:
+                        failure_cat = failure_cat or "INVALID_JSON"
+                        raise jde
                 
                 if was_healed:
                     import logging
@@ -243,7 +262,11 @@ class LLMClient:
                         list_field = next((k for k, v in props.items() if v.get("type") == "array"), "items")
                         data = {list_field: data}
                         if "title" in props: data["title"] = task_name or "Untitled"
-                result_obj = validate_and_map(schema, data) if not isinstance(schema, dict) else data
+                try:
+                    result_obj = validate_and_map(schema, data) if not isinstance(schema, dict) else data
+                except Exception as map_err:
+                    failure_cat = "SCHEMA_MISMATCH"
+                    raise map_err
 
                 # 6.4. QA EVALUATION & RETRY LOOP
                 retry_count = kwargs.pop("_qa_retry_count", 0)
@@ -276,6 +299,10 @@ class LLMClient:
                                 logging.getLogger("librarian").info(
                                     f"QA score {composite}/100 < 80% for {t_name}. Retrying once with feedback..."
                                 )
+                                # Log failed attempt with QA_LOW_SCORE
+                                from .logger import log_task
+                                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict, status="FAILED", failure_category="QA_LOW_SCORE")
+
                                 retry_messages = [dict(m) for m in messages]
                                 sys_msg = next((m for m in retry_messages if m["role"] == "system"), None)
                                 if sys_msg:
@@ -302,21 +329,30 @@ class LLMClient:
 
                 # 6.5. LOG FINAL HEALED & VALIDATED RESPONSE
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict)
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict, status="SUCCESS")
 
                 return result_obj
 
             except Exception as e:
                 import logging
                 logging.getLogger("librarian").error(f"JSON Parsing / Schema Validation Failed for {task_name or 'chat'}: {e}")
-                # Log even on parse failure so failure is auditable
+                # Categorize failure if not already set
+                if not failure_cat:
+                    if not content or not content.strip():
+                        failure_cat = "EMPTY_RESPONSE"
+                    elif "JSONDecodeError" in type(e).__name__ or "json" in str(e).lower():
+                        failure_cat = "INVALID_JSON"
+                    else:
+                        failure_cat = "SCHEMA_MISMATCH"
+
+                # Log even on parse failure with failure categorization so it is auditable
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict)
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict, status="FAILED", failure_category=failure_cat)
                 raise LLMError(f"Failed to generate structured data matching schema: {e}")
         else:
             if not stream:
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict)
+                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict, status="SUCCESS")
             return content
 
 
@@ -366,7 +402,7 @@ class LLMClient:
     def _chat_ollama(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/api/chat"
         options = {
-            "temperature": kwargs.pop("temperature", 0.7), # Schema-first deterministic output
+            "temperature": kwargs.pop("temperature", 0.2), # Deterministic temperature for schema extraction
             "num_predict": 16384,
             "num_ctx": 32768,
             "repeat_penalty": 1.1
@@ -404,6 +440,8 @@ class LLMClient:
             if stream: return self._iterate_ollama(response)
             data = response.json()
             if "error" in data: raise LLMError(f"Ollama API Error: {data['error']}")
+            
+            self.last_done_reason = data.get("done_reason")
             content = data.get("message", {}).get("content", "")
             
             # Bidirectional automatic fallback for empty/trivial response
@@ -427,6 +465,7 @@ class LLMClient:
                 fb_response.raise_for_status()
                 fb_data = fb_response.json()
                 if "error" in fb_data: raise LLMError(f"Ollama API Error: {fb_data['error']}")
+                self.last_done_reason = fb_data.get("done_reason")
                 content = fb_data.get("message", {}).get("content", "")
 
             self.last_raw_response = content
@@ -442,6 +481,8 @@ class LLMClient:
                     chunk = json.loads(line)
                     if "error" in chunk: raise LLMError(f"Ollama streaming error: {chunk['error']}")
                     content = chunk.get("message", {}).get("content", "")
+                    if chunk.get("done"):
+                        self.last_done_reason = chunk.get("done_reason")
                     if content: yield content
                     if chunk.get("done"): break
         except Exception as e:
@@ -454,7 +495,7 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "temperature": kwargs.pop("temperature", 0.7), # Schema-first output with standard 0.7 temperature
+            "temperature": kwargs.pop("temperature", 0.2), # Deterministic temperature for schema extraction
             "max_tokens": 4096,
             **kwargs
         }
@@ -472,7 +513,9 @@ class LLMClient:
             response.raise_for_status()
             if stream: return self._iterate_openai(response)
             data = response.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            choice = data.get("choices", [{}])[0]
+            self.last_done_reason = choice.get("finish_reason")
+            content = choice.get("message", {}).get("content", "")
             self.last_raw_response = content
             return content
         except Exception as e:
