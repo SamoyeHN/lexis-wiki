@@ -513,7 +513,8 @@ class LLMClient:
             "max_tokens": 4096,
             **kwargs
         }
-        use_gbnf = config.get("enforce_gbnf", False)
+        profile = get_model_profile(self.model)
+        use_gbnf = profile.get("enforce_gbnf", False)
         if schema and use_gbnf:
             schema_name = getattr(schema, "__name__", "ResponseSchema") if not isinstance(schema, dict) else "ResponseSchema"
             payload["response_format"] = {
