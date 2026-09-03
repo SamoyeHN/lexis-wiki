@@ -11,60 +11,61 @@ class LLMError(Exception):
     """Base exception for LLM related errors."""
     pass
 
+# Declarative architectural model capability profiles
+MODEL_CAPABILITY_PROFILES = [
+    {
+        # Reasoning models: Native strict schema, disable reasoning tokens during structured JSON extraction
+        "match": ["granite", "deepseek-r1", "qwq", "ornith"],
+        "enforce_gbnf": True,
+        "think": False,
+    },
+    {
+        # Tokenizer-constrained families (131k tokenizers / parser stalls): Prompt-guided JSON mode
+        "match": ["gemma", "nemotron", "phi"],
+        "enforce_gbnf": False,
+        "think": None,
+    },
+    {
+        # Native GBNF / strict grammar standard families
+        "match": ["qwen", "llama", "mistral", "mixtral", "codestral", "muse", "hermes", "vicuna"],
+        "enforce_gbnf": True,
+        "think": None,
+    },
+]
+
+
 def get_model_profile(model_name: str) -> dict:
     """
-    Intelligently determines optimal execution profile for a model.
-    Merges:
-    1. Built-in model architecture heuristics (Qwen, Llama, Mistral, Gemma, DeepSeek, etc.)
-    2. Explicit user overrides in wiki_config.json['model_options']
-    3. Global wiki_config.json settings
+    Intelligently determines optimal execution profile for a model via a 3-tier precedence hierarchy:
+    - Tier 1 (Base): Declarative architectural heuristics (Granite, Qwen, Gemma, etc.)
+    - Tier 2 (Global): Global settings in wiki_config.json (e.g. global enforce_gbnf)
+    - Tier 3 (Override): Explicit per-model overrides in wiki_config.json['model_options'][model_name]
     """
     m_lower = (model_name or "").lower()
     
-    # Architectural Defaults
-    strict_gbnf_families = ("qwen", "llama", "mistral", "mixtral", "codestral", "muse", "hermes")
-    prompt_json_families = ("gemma", "nemotron", "phi")
-    reasoning_families = ("ornith", "granite", "deepseek-r1", "qwq")
-    
-    inferred_gbnf = None
-    if any(k in m_lower for k in strict_gbnf_families):
-        inferred_gbnf = True
-    elif any(k in m_lower for k in prompt_json_families):
-        inferred_gbnf = False
-        
-    inferred_think = None
-    if any(k in m_lower for k in reasoning_families):
-        inferred_think = False
-        
-    # User Config Overrides (Highest Precedence)
+    # Tier 1: Base architectural profile matching
+    base_gbnf = False
+    base_think = None
+    for profile_rule in MODEL_CAPABILITY_PROFILES:
+        if any(keyword in m_lower for keyword in profile_rule["match"]):
+            base_gbnf = profile_rule["enforce_gbnf"]
+            base_think = profile_rule["think"]
+            break
+
+    # Tier 2: Global config settings (if explicitly enforced)
+    if config.data.get("enforce_gbnf") is True:
+        base_gbnf = True
+
+    # Tier 3: Per-model explicit overrides (Highest Precedence)
     model_opts = config.get("model_options", {}).get(model_name, {})
-    user_config_dict = config.data
-    
-    # 1. Per-model explicit override in model_options takes highest precedence
-    if "enforce_gbnf" in model_opts:
-        resolved_gbnf = model_opts["enforce_gbnf"]
-    # 2. Global explicit setting in wiki_config.json (if set to True, user explicitly wants strict schema)
-    elif user_config_dict.get("enforce_gbnf", False) is True:
-        resolved_gbnf = True
-    # 3. Model family architectural defaults
-    elif inferred_gbnf is not None:
-        resolved_gbnf = inferred_gbnf
-    # 4. Global fallback
-    else:
-        resolved_gbnf = False
-        
-    if "think" in model_opts:
-        resolved_think = model_opts["think"]
-    elif inferred_think is not None:
-        resolved_think = inferred_think
-    else:
-        resolved_think = None
-        
+    resolved_gbnf = model_opts.get("enforce_gbnf", base_gbnf)
+    resolved_think = model_opts.get("think", base_think)
+
     profile = dict(model_opts)
     profile["enforce_gbnf"] = resolved_gbnf
     if resolved_think is not None:
         profile["think"] = resolved_think
-        
+
     return profile
 
 class LLMClient:

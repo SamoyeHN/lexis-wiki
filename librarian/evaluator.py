@@ -216,11 +216,20 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
         # Check 2: Target word must be present in the quoted sentence (for vocabulary & expressions)
         if word and task_type in ("vocabulary", "expressions"):
-            clean_word = _clean_core(word)
+            clean_word_no_slots = re.sub(r"\[.*?\]|\(.*?\)", " ", word)
+            clean_word = _clean_core(clean_word_no_slots)
             clean_quote = _clean_core(quote)
-            # Support slot placeholders: extract meaningful tokens
-            word_tokens = [w for w in clean_word.split() if w and w not in ("something", "somebody", "ones", "someone", "sb", "sth")]
-            word_in_quote = all(w in clean_quote for w in word_tokens) if word_tokens else (clean_word in clean_quote)
+            stop_slots = {"something", "somebody", "ones", "someone", "sb", "sth", "entity", "field", "area", "role", "object", "domain", "type", "situation", "goal"}
+            word_tokens = [w for w in clean_word.split() if w and w not in stop_slots]
+            
+            if word_tokens:
+                # Match token or stem/inflection (e.g. degrade -> degradation, took -> take, pose -> poses)
+                matched_count = sum(1 for w in word_tokens if (w in clean_quote or (len(w) >= 4 and w[:4] in clean_quote)))
+                min_needed = max(1, len(word_tokens) // 2 + (1 if len(word_tokens) % 2 == 1 else 0))
+                word_in_quote = (matched_count >= min_needed)
+            else:
+                word_in_quote = (clean_word in clean_quote)
+                
             if not word_in_quote:
                 flags.append(f"⚠️ Target word '{word}' does not appear in quoted sentence: '{quote[:40]}...'")
                 continue

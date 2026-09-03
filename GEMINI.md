@@ -88,6 +88,7 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 ### Pending
 **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
 **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
+**QA & Assessment**: Expert Mode (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation)
 
 ---
 

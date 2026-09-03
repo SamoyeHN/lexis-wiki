@@ -78,6 +78,23 @@ He dedicated his entire life to public service."""
         self.assertIsNone(score)
         self.assertEqual(flags, [])
 
+    def test_slot_expressions_and_lemmatized_word_in_quote(self):
+        source = "CONTENT:\nExcessive exploitation of natural resources and greenhouse gas emissions pose a grave threat to the earth's essential ecology.\nWith the degradation of ecosystems, life will decline."
+        items = [
+            {
+                "word": "pose [something] grave threat to [entity]",
+                "quoted_sentence": "Excessive exploitation of natural resources and greenhouse gas emissions pose a grave threat to the earth's essential ecology."
+            },
+            {
+                "word": "degrade",
+                "quoted_sentence": "With the degradation of ecosystems, life will decline."
+            }
+        ]
+        score, flags = _score_verbatim(items, "expressions", source)
+        self.assertEqual(score, W_VERBATIM)
+        self.assertEqual(flags, [])
+
+
 
 class TestPedagogyEvaluation(unittest.TestCase):
     def test_all_schema_pos_are_valid(self):
