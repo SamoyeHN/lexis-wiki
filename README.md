@@ -1,6 +1,6 @@
 # Lexis Wiki
 
-AI-powered Obsidian-style wiki generator for educators. Transform source materials into structured learning content with automatic interlinking, vocabulary extraction, and interactive quiz generation.
+AI-powered Obsidian-style wiki generator for EFL educators. Transform source materials into structured learning content with automatic interlinking, vocabulary extraction, and interactive quiz generation.
 
 ---
 
