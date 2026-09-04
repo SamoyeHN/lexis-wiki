@@ -7,8 +7,12 @@ AI-powered Obsidian-style wiki generator for educators. Transform source materia
 ## Quick Start: Your First Unit in 60 Seconds
 
 ```bash
-# 1. Install
+# 1. Install (Standard)
 pip install -e .
+
+# Optional: Install Video & Local Audio Transcription dependencies (faster-whisper)
+pip install -e ".[video]"
+# Or directly: pip install faster-whisper
 
 # 2. Initialize project structure
 lexis init .

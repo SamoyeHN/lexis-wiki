@@ -22,7 +22,15 @@
           },
           "part_of_speech": {
             "type": "string",
-            "minLength": 1
+            "enum": [
+              "noun",
+              "verb",
+              "adjective",
+              "adverb",
+              "preposition",
+              "conjunction",
+              "interjection"
+            ]
           },
           "definition": {
             "type": "string",

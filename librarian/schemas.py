@@ -280,7 +280,8 @@ def _map_value(t: Any, val: Any) -> Any:
 # --- Schema Definitions ---
 
 CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
-PARTS_OF_SPEECH = Literal["noun", "verb", "adjective", "adverb", "preposition", "conjunction", "phrasal verb", "idiom", "collocation", "set phrase"]
+VOCAB_CEFR_LEVELS = Literal["B1", "B2", "C1", "C2"]
+PARTS_OF_SPEECH = Literal["noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection"]
 EXPRESSION_TYPES = Literal["phrasal verb", "idiom", "collocation", "set phrase"]
 
 @dataclasses.dataclass
@@ -289,7 +290,7 @@ class VocabularyItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
-    word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
+    word_cefr_level: VOCAB_CEFR_LEVELS = dataclasses.field(default="B2")
     quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
@@ -315,23 +316,28 @@ class ExpressionsExtraction:
     overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     expressions: List[ExpressionItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
+GRAMMAR_CATEGORIES = Literal[
+    "Concessive clauses",
+    "Conditional clauses",
+    "Participial clauses",
+    "Inversion",
+    "Cleft sentences",
+    "Relative clauses",
+    "Subjunctive mood",
+    "Passive voice structures",
+    "Nominalization",
+    "Abstract frames",
+    "Rhetorical parallelism",
+    "Non-finite structures",
+    "Hedging devices",
+    "Anaphoric and cataphoric nouns",
+    "Evaluative It-frameworks",
+]
+
 @dataclasses.dataclass
 class GrammarItem:
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
-    category: Literal[
-        "Concessive clauses",
-        "Conditional clauses",
-        "Participial clauses",
-        "Inversion",
-        "Cleft sentences",
-        "Nominalization",
-        "Abstract frames",
-        "Rhetorical parallelism",
-        "Non-finite structures",
-        "Hedging devices",
-        "Anaphoric and cataphoric nouns",
-        "Evaluative It-frameworks",
-    ] = "Concessive clauses"
+    category: GRAMMAR_CATEGORIES = "Concessive clauses"
     quote: str = dataclasses.field(default="", metadata={"minLength": 1})
     pattern_formula: str = dataclasses.field(default="", metadata={"minLength": 1})
     pedagogical_function: str = dataclasses.field(default="", metadata={"minLength": 1})
@@ -353,12 +359,13 @@ class ConceptItem:
     related_connections: List[str] = dataclasses.field(default_factory=list, metadata={
         "maxItems": 3,
         "item_minLength": 1,
-        "item_maxLength": 30
+        "item_maxLength": 50
     })
 
 @dataclasses.dataclass
 class SummaryExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
+    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     text_summary_or_plot: str = dataclasses.field(default="", metadata={"minLength": 1})
     estimated_reading_time: str = dataclasses.field(default="", metadata={"minLength": 1})
     essential_questions: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 2, "maxItems": 3})
@@ -393,7 +400,7 @@ class ReadingQuizQuestion:
 class ReadingVocabItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     context_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
-    part_of_speech: str = dataclasses.field(default="", metadata={"minLength": 1})
+    part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
@@ -471,13 +478,13 @@ class VideoQuiz:
 @dataclasses.dataclass
 class MindMapSubBranch:
     sub_branch_name: str = dataclasses.field(default="")
-    leaves: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 1})
+    leaves: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 0})
 
 @dataclasses.dataclass
 class MindMapBranch:
     branch_name: str = dataclasses.field(default="", metadata={"minLength": 1})
     color_theme: Literal["pink", "orange", "blue", "green", "purple"] = dataclasses.field(default="blue")
-    sub_branches: List[MindMapSubBranch] = dataclasses.field(default_factory=list, metadata={"minItems": 1})
+    sub_branches: List[MindMapSubBranch] = dataclasses.field(default_factory=list, metadata={"minItems": 0})
 
 @dataclasses.dataclass
 class MindMapExtraction:

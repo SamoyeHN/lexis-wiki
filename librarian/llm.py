@@ -162,8 +162,8 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_prompt})
 
-        # 3.1 Gemma-Family Compatibility: Flatten ALL system messages into user prompt
-        # Google Gemma tokenizer only supports user and model turns. Multiple turns break alignment.
+        # 3.1 Gemma compatibility: combine system instructions with the user message
+        # because the Gemma chat template does not render a separate system turn.
         is_gemma_family = "gemma" in (self.model or "").lower()
         if is_gemma_family:
             sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
@@ -254,12 +254,41 @@ class LLMClient:
                                 parts = [p.strip() for p in cur_audit.replace("->", "➔").split("➔")]
                                 for p in parts:
                                     if ("[" in p or "one's" in p):
-                                        cand = p[5:].strip().lstrip(':').strip() if p.upper().startswith("DRAFT") else p
+                                        # Strip common prefixes like AUDIT:, DRAFT:, STEP:
+                                        cand = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
                                         candidate = cand.split(" -")[0].split(" (")[0].strip()
-                                        cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
-                                        word_tokens = re.findall(r'[a-zA-Z]+', cur_word)
-                                        if cand_tokens and word_tokens and cand_tokens[0].lower() == word_tokens[0].lower():
+                                        cand_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))]
+                                        word_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', cur_word)]
+                                        
+                                        # Match by exact token or stem/inflection (e.g., turn vs turned, lay vs laid, put vs putting)
+                                        matched = False
+                                        if cand_tokens and word_tokens:
+                                            c0, w0 = cand_tokens[0], word_tokens[0]
+                                            if c0 == w0:
+                                                matched = True
+                                            elif c0.startswith(w0[:3]) or w0.startswith(c0[:3]):
+                                                matched = True
+                                            elif any(tok in cand_tokens for tok in word_tokens if len(tok) >= 4):
+                                                matched = True
+                                                
+                                        if matched:
                                             expr_item["word"] = candidate
+                                            break
+
+                # Auto-sync slotted pattern_formula from design_audit for grammar if missing slots
+                if isinstance(data, dict) and "grammar_patterns" in data and isinstance(data["grammar_patterns"], list):
+                    for g_item in data["grammar_patterns"]:
+                        if isinstance(g_item, dict):
+                            cur_formula = str(g_item.get("pattern_formula", "")).strip()
+                            cur_audit = str(g_item.get("design_audit", "")).strip()
+                            # If formula lacks brackets or is overly generic but design_audit derived a slotted formula
+                            if ("[" not in cur_formula) and ("[" in cur_audit):
+                                parts = [p.strip() for p in cur_audit.replace("->", "➔").split("➔")]
+                                for p in reversed(parts):
+                                    if "[" in p and "]" in p:
+                                        cand_formula = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
+                                        if "[" in cand_formula:
+                                            g_item["pattern_formula"] = cand_formula
                                             break
 
                 # 6.3. MAPPING
@@ -275,9 +304,10 @@ class LLMClient:
                     failure_cat = "SCHEMA_MISMATCH"
                     raise map_err
 
-                # 6.4. QA EVALUATION & RETRY LOOP
+                # 6.4. QA EVALUATION & RETRY LOOP (Max 2 Retries with Structured Surgical Feedback)
                 retry_count = kwargs.pop("_qa_retry_count", 0)
-                if retry_count == 0 and not kwargs.get("_disable_qa_retry", False):
+                max_qa_retries = 2
+                if retry_count < max_qa_retries and not kwargs.get("_disable_qa_retry", False):
                     try:
                         from .evaluator import LogEvaluator
                         dict_to_eval = data if isinstance(data, dict) else (dataclasses.asdict(result_obj) if dataclasses.is_dataclass(result_obj) else None)
@@ -295,22 +325,43 @@ class LLMClient:
                             if composite is None:
                                 composite = 100.0
                             
-                            if composite < 80.0:
-                                flags = audit.get("flags", [])
+                            flags = audit.get("flags", [])
+                            has_fatal_flags = any("does not appear in quoted sentence" in f or "duplicate" in f or "copy-pasted definition" in f for f in flags)
+
+                            if composite < 80.0 or has_fatal_flags:
                                 scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
+                                
+                                # Format clear, surgical feedback for the model
+                                issue_bullets = "\n".join([f"- {f}" for f in flags[:5]])
                                 feedback_note = (
-                                    f"\n\n[QUALITY AUDIT RETRY: Previous attempt scored {composite}/100. "
-                                    f"Lowest dimension: {lowest_dim}. "
-                                    f"Please address the following issues carefully: {'; '.join(flags[:3])}]"
+                                    f"\n\n### 🚨 [QUALITY AUDIT RETRY #{retry_count + 1}/{max_qa_retries} - Score: {composite}/100]\n"
+                                    f"Lowest dimension: {lowest_dim}.\n"
+                                    f"Please address and resolve these critical pedagogical issues:\n"
+                                    f"{issue_bullets}\n\n"
+                                    f"MANDATORY FIX RULES:\n"
+                                    f"1. ZERO HALLUCINATION: All words and quoted sentences MUST physically exist verbatim in the source text.\n"
+                                    f"2. Every quoted sentence MUST literally contain the target word/expression.\n"
+                                    f"3. Eliminate duplicate items and ensure each definition is distinct and context-specific.\n"
+                                    f"4. Quality > Quota: Do not pad with nonexistent words."
                                 )
                                 import logging
                                 logging.getLogger("librarian").info(
-                                    f"QA score {composite}/100 < 80% for {t_name}. Retrying once with feedback..."
+                                    f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) with surgical feedback..."
                                 )
                                 # Log failed attempt with QA_LOW_SCORE
                                 from .logger import log_task
-                                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict, status="FAILED", failure_category="QA_LOW_SCORE")
+                                log_task(
+                                    f"{t_name}_{mode_str}",
+                                    system_prompt,
+                                    user_prompt,
+                                    final_json,
+                                    schema=schema_dict,
+                                    status="FAILED",
+                                    failure_category="QA_LOW_SCORE",
+                                    mode=mode_str,
+                                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                                )
 
                                 retry_messages = [dict(m) for m in messages]
                                 sys_msg = next((m for m in retry_messages if m["role"] == "system"), None)
@@ -329,7 +380,7 @@ class LLMClient:
                                     json_format=json_format,
                                     schema=schema,
                                     task_name=task_name,
-                                    _qa_retry_count=1,
+                                    _qa_retry_count=retry_count + 1,
                                     **kwargs
                                 )
                     except Exception as eval_err:
@@ -338,7 +389,16 @@ class LLMClient:
 
                 # 6.5. LOG FINAL HEALED & VALIDATED RESPONSE
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, final_json, schema=schema_dict, status="SUCCESS")
+                log_task(
+                    f"{t_name}_{mode_str}",
+                    system_prompt,
+                    user_prompt,
+                    final_json,
+                    schema=schema_dict,
+                    status="SUCCESS",
+                    mode=mode_str,
+                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                )
 
                 return result_obj
 
@@ -356,12 +416,31 @@ class LLMClient:
 
                 # Log even on parse failure with failure categorization so it is auditable
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict, status="FAILED", failure_category=failure_cat)
+                log_task(
+                    f"{t_name}_{mode_str}",
+                    system_prompt,
+                    user_prompt,
+                    content,
+                    schema=schema_dict,
+                    status="FAILED",
+                    failure_category=failure_cat,
+                    mode=mode_str,
+                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                )
                 raise LLMError(f"Failed to generate structured data matching schema: {e}")
         else:
             if not stream:
                 from .logger import log_task
-                log_task(f"{t_name}_{mode_str}", system_prompt, user_prompt, content, schema=schema_dict, status="SUCCESS")
+                log_task(
+                    f"{t_name}_{mode_str}",
+                    system_prompt,
+                    user_prompt,
+                    content,
+                    schema=schema_dict,
+                    status="SUCCESS",
+                    mode=mode_str,
+                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                )
             return content
 
 
@@ -384,13 +463,19 @@ class LLMClient:
         json_str = re.sub(r'("|\d+|true|false|null|\}|\])\s*\n(\s*")', r'\1,\n\2', json_str)
         json_str = re.sub(r'(\})\s*\n(\s*\{)', r'\1,\n\2', json_str)
 
+        # 2.2. Strip dangling truncated elements at the end of arrays/objects
+        # e.g., [..., "{\n] or [..., "abc\n] or [..., {\n] where generation was cut off
+        json_str = re.sub(r',\s*["\']\{?["\']\s*([\]\}])', r'\1', json_str)
+        json_str = re.sub(r',\s*\{?\s*([\]\}])', r'\1', json_str)
+
         # 3. Fix unescaped newlines within values
         # This is a bit risky but common: "value": "line1\nline2"
         # We only escape newlines that are NOT followed by a potential key or object close
         # json_str = re.sub(r'\n(?!\s*["\}\]])', r'\\n', json_str)
 
-        # 4. Ensure balanced braces (String-aware brace tracker)
-        depth = 0
+        # 4. Ensure balanced braces and brackets (String-aware tracker)
+        brace_depth = 0
+        bracket_depth = 0
         in_string = False
         escaped = False
         for ch in json_str:
@@ -405,11 +490,23 @@ class LLMClient:
             if ch == '"':
                 in_string = True
             elif ch == '{':
-                depth += 1
+                brace_depth += 1
             elif ch == '}':
-                depth -= 1
-        if depth > 0:
-            json_str += '}' * depth
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == '[':
+                bracket_depth += 1
+            elif ch == ']':
+                bracket_depth = max(0, bracket_depth - 1)
+
+        # Close any dangling open string
+        if in_string:
+            json_str += '"'
+
+        # Close open brackets first, then open braces
+        if bracket_depth > 0:
+            json_str += ']' * bracket_depth
+        if brace_depth > 0:
+            json_str += '}' * brace_depth
 
         return json_str
 
@@ -442,10 +539,9 @@ class LLMClient:
             payload["think"] = profile["think"]
         
         use_gbnf = profile.get("enforce_gbnf", False)
-        is_gemma_family = "gemma" in model_lower
         if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=False)
-        elif (json_format or schema) and not is_gemma_family:
+        elif json_format or schema:
             payload["format"] = "json"
             
         try:

@@ -881,6 +881,7 @@ class WikiProcessor:
                 questions = getattr(data, "essential_questions", [])
                 lesson_hook = getattr(data, "lesson_hook", "")
                 concepts = getattr(data, "concepts", [])
+                overall_cefr = getattr(data, "overall_cefr_level", "B2")
             else:
                 title = data.get("title", display_title)
                 summary_text = data.get("text_summary_or_plot", "")
@@ -888,6 +889,7 @@ class WikiProcessor:
                 questions = data.get("essential_questions", [])
                 lesson_hook = data.get("lesson_hook", "")
                 concepts = data.get("concepts", [])
+                overall_cefr = data.get("overall_cefr_level", "B2")
 
             # Deterministic word count & reading time calculation (approx. 180-200 WPM)
             if hasattr(self, "_last_source_content") and self._last_source_content:
@@ -902,6 +904,7 @@ class WikiProcessor:
                 f"title: \"{title}\"",
                 f"source: \"{source_link}\"",
                 "category: [\"summary\", \"extraction\"]",
+                f"overall_cefr_level: \"{overall_cefr}\"",
                 f"item_count: {item_count}",
                 f"estimated_reading_time: \"{reading_time}\"",
                 "---",

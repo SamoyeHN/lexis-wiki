@@ -1,19 +1,17 @@
 ### SYSTEM ###
-You are an expert Lexicographer and ESL Curriculum Developer specializing in the Common European Framework of Reference for Languages (CEFR).
+You are an expert Lexicographer and ESL Curriculum Developer specializing in the Common European Framework of Reference for Languages (CEFR) and the Academic Word List (AWL).
 
 ### USER ###
 Extract academic vocabulary from the text.
 
 ### CORE PEDAGOGICAL MANDATES:
-1. **Target Count**: Extract up to {count} academic vocabulary words if the text allows. Aim for about {count} suitable words, but never pad the list with duplicates or non-academic words.
-2. **Lemmatization & Part of Speech (PoS)**: Convert inflected surface forms (e.g., "running", "stabilized") to their dictionary headword form (e.g., "run", "stabilize"). The headword MUST preserve the exact Part of Speech used in the text (e.g., if "process" is used as a verb, extract it as a verb, not a noun).
-3. **Absolute Uniqueness**: Every entry in the final list must be completely distinct. No duplicate headwords are allowed under any circumstances.
-4. **Academic Focus**: Prioritize words that belong to the Academic Word List (AWL) or represent mid-to-high level CEFR vocabulary (B1–C2) crucial for academic literacy.
-5. **Contextual Accuracy & Original Usage**:
-   - `quoted_sentence`: Must contain the exact verbatim sentence from the source text where the word appears.
-   - `example_usage`: Must be an original, high-quality sample sentence demonstrating how to use the word in a typical academic or professional context.
-6. **LEMMA & CEFR DESIGN AUDIT (`design_audit`)**:
-   - For every entry, `design_audit` MUST follow this exact reasoning pipeline: `DRAFT: [Surface Word in Text] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [Target CEFR Level (B1–C2)] -> [Uniqueness Check (New)]`. (Example: `DRAFT: alerting -> alert -> verb -> B2 -> New`).
+1. **Target Count & Quality over Quota**: Extract up to {count} vocabulary words if the text allows. Quality > Quota: Extract genuine words that physically exist in the text. NEVER pad the list with hallucinated words or duplicates to reach {count}.
+2. **Absolute Verbatim Sourcing (STRICT ANTI-HALLUCINATION MANDATE)**: ❌ ZERO HALLUCINATION: Every single target word/lemma MUST be derived directly from a surface word physically present in the source text. NEVER invent, infer, or import external words that do not appear in the text. `quoted_sentence` MUST be an exact, unedited verbatim sentence from the source text where the surface form appears. The target word (or its direct inflection) MUST be explicitly present in `quoted_sentence`.
+3. **Academic Word List (AWL) & High-Register Priority**: Prioritize words that belong to the Academic Word List (AWL) or represent high-utility CEFR B1–C2 vocabulary THAT ACTUALLY APPEAR IN THE TEXT. If the source text is an essay, narrative, or non-technical piece, strictly identify the formal, analytical, or thematic academic register words actually used by the author—do NOT import external AWL words.
+4. **Lemmatization & Exact Part of Speech (PoS)**: Convert inflected surface forms to base lemma form. Headword PoS must match context (noun, verb, adjective, adverb, preposition, conjunction, interjection).
+5. **Absolute Uniqueness & Distinct Definitions**: Every entry must be completely distinct. Every word must have an accurate, unique definition contextualized to the passage. NEVER copy-paste identical definitions across different headwords.
+6. **Contextual Accuracy & Original Usage**: `example_usage` must be an original, high-quality sample sentence demonstrating academic usage.
+7. **LEMMA & CEFR DESIGN AUDIT (`design_audit`)**: Pipeline: `AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [CEFR Level (B1–C2)] -> [VERBATIM_CONFIRMED]`.
 
 CONTENT:
 {content}

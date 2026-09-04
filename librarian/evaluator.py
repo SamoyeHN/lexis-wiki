@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple, get_args
 
 from .config import config
-from .schemas import PARTS_OF_SPEECH
+from .schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES
 
 # --- Dimension weights (max points per dimension). Single source of truth. ---
 W_SCHEMA = 25.0
@@ -17,6 +17,7 @@ W_UNIQUENESS = 20.0
 
 # Valid Part of Speech enum set derived directly from schemas.py
 VALID_POS_SET = set(get_args(PARTS_OF_SPEECH))
+VALID_EXPR_POS_SET = set(get_args(EXPRESSION_TYPES))
 
 # Top-level arrays that may hold gradeable items, in priority order.
 ITEM_KEYS = ["vocabulary", "expressions", "grammar_patterns", "questions", "concepts", "branches"]
@@ -231,7 +232,9 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 word_in_quote = (clean_word in clean_quote)
                 
             if not word_in_quote:
-                flags.append(f"⚠️ Target word '{word}' does not appear in quoted sentence: '{quote[:40]}...'")
+                flags.append(f"❌ Target word '{word}' does not appear in quoted sentence: '{quote[:40]}...'")
+                # Severe deduction: directly penalize verbatim score rather than neutral skip
+                matches = max(0, matches - 1)
                 continue
 
         # Check 3: Cleaned quote in source or high n-gram coverage
@@ -243,7 +246,7 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             
     if checks == 0:
         return W_VERBATIM, flags
-    return round((matches / checks) * W_VERBATIM, 1), flags
+    return max(0.0, round((matches / checks) * W_VERBATIM, 1)), flags
 
 
 def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Optional[float], List[str]]:
@@ -331,7 +334,17 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Option
                 
     if checks == 0:
         return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
-    return round((passes / checks) * W_PEDAGOGY, 1), flags
+    
+    # Check for copy-pasted/homogenized definitions in vocabulary
+    if task_type in ("vocabulary", "expressions"):
+        definitions = [_clean_core(item.get("definition", "")) for item in items if item.get("definition")]
+        if len(definitions) > 1:
+            dup_defs = len(definitions) - len(set(definitions))
+            if dup_defs > 0:
+                flags.append(f"❌ Found {dup_defs} duplicate or copy-pasted definition(s) across different terms")
+                passes = max(0, passes - dup_defs)
+
+    return max(0.0, round((passes / checks) * W_PEDAGOGY, 1)), flags
 
 
 def _score_uniqueness(items: List[Dict[str, Any]], task_type: str) -> Tuple[Optional[float], List[str]]:
@@ -359,7 +372,10 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str) -> Tuple[Opti
     unique = len(set(headwords))
     if unique < len(headwords):
         dup = len(headwords) - unique
-        return round((unique / len(headwords)) * W_UNIQUENESS, 1), [f"❌ Found {dup} duplicate item(s)"]
+        # Stricter deduction: duplicate items heavily reduce score
+        ratio = unique / len(headwords)
+        earned = 0.0 if ratio < 0.8 else round(ratio * W_UNIQUENESS, 1)
+        return earned, [f"❌ Found {dup} duplicate item(s)"]
     return W_UNIQUENESS, []
 
 

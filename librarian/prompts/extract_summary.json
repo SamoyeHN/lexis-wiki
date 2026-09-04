@@ -5,6 +5,17 @@
       "type": "string",
       "minLength": 1
     },
+    "overall_cefr_level": {
+      "type": "string",
+      "enum": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "C1",
+        "C2"
+      ]
+    },
     "text_summary_or_plot": {
       "type": "string",
       "minLength": 1
@@ -52,7 +63,7 @@
             "items": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 30
+              "maxLength": 50
             }
           }
         },
@@ -68,6 +79,7 @@
   },
   "required": [
     "title",
+    "overall_cefr_level",
     "text_summary_or_plot",
     "estimated_reading_time",
     "essential_questions",

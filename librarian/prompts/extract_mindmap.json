@@ -43,7 +43,7 @@
           },
           "sub_branches": {
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": {
               "type": "object",
               "properties": {
@@ -52,7 +52,7 @@
                 },
                 "leaves": {
                   "type": "array",
-                  "minItems": 1,
+                  "minItems": 0,
                   "items": {
                     "type": "string"
                   }

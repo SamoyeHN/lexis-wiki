@@ -19,7 +19,7 @@ from librarian.evaluator import (
     W_PEDAGOGY,
     W_UNIQUENESS,
 )
-from librarian.schemas import PARTS_OF_SPEECH
+from librarian.schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES
 
 
 class TestNormalizerAndCleanCore(unittest.TestCase):
@@ -100,10 +100,9 @@ class TestPedagogyEvaluation(unittest.TestCase):
     def test_all_schema_pos_are_valid(self):
         expected_pos = set(get_args(PARTS_OF_SPEECH))
         self.assertEqual(VALID_POS_SET, expected_pos)
-        self.assertIn("phrasal verb", VALID_POS_SET)
-        self.assertIn("idiom", VALID_POS_SET)
-        self.assertIn("collocation", VALID_POS_SET)
-        self.assertIn("set phrase", VALID_POS_SET)
+        self.assertIn("noun", VALID_POS_SET)
+        self.assertIn("verb", VALID_POS_SET)
+        self.assertIn("adjective", VALID_POS_SET)
 
     def test_phrasal_verb_and_slot_headword_accepted(self):
         items = [{
@@ -113,7 +112,7 @@ class TestPedagogyEvaluation(unittest.TestCase):
             "quoted_sentence": "Firefighters managed to put out the blaze.",
             "example_usage": "Please put your cigarette out before entering.",
         }]
-        score, flags = _score_pedagogy(items, "vocabulary")
+        score, flags = _score_pedagogy(items, "expressions")
         self.assertEqual(score, W_PEDAGOGY)
         self.assertEqual(flags, [])
 

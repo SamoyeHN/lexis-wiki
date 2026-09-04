@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from .config import config
 
-def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None):
+def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None):
     """
-    Logs an LLM task to the logs directory with structured status and failure categorization.
+    Logs an LLM task to the logs directory with structured status, true API constraints, and failure categorization.
     """
     # Ensure we use an absolute path for logs
     logs_dir = Path(config.project_root).resolve() / "logs"
@@ -21,18 +21,33 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
     content.append(f"=== MODEL: {config.get('model')} ===")
     content.append(f"=== TIMESTAMP: {datetime.datetime.now().ctime()} ===")
     content.append(f"=== STATUS: {status} ===")
+    if mode:
+        content.append(f"=== MODE: {mode} ===")
     if failure_category:
         content.append(f"=== FAILURE_CATEGORY: {failure_category} ===")
     content.append("")
     
+    # 1. Truthful representation of wire-level API constraints
+    # - In STRICT_SCHEMA: The schema is sent as an API payload constraint (token-level masking)
+    # - In JSON_MODE: The API constraint is format: "json", and the schema was injected into prompt
+    if mode == "STRICT_SCHEMA" or (api_constraint and isinstance(api_constraint, dict)):
+        content.append("--- API SCHEMA CONSTRAINT ---")
+        constraint_dict = api_constraint if isinstance(api_constraint, dict) else schema
+        if constraint_dict:
+            content.append(json.dumps(constraint_dict, indent=2, ensure_ascii=False))
+            content.append("")
+    elif mode == "JSON_MODE" or api_constraint == "json":
+        content.append("--- API FORMAT CONSTRAINT: \"json\" ---")
+        content.append("")
+    elif schema and not mode:
+        # Fallback for backward compatibility
+        content.append("--- JSON SCHEMA ---")
+        content.append(json.dumps(schema, indent=2, ensure_ascii=False))
+        content.append("")
+
     if system_prompt:
         content.append("--- SYSTEM PROMPT ---")
         content.append(system_prompt)
-        content.append("")
-
-    if schema:
-        content.append("--- JSON SCHEMA ---")
-        content.append(json.dumps(schema, indent=2, ensure_ascii=False))
         content.append("")
 
     content.append("--- USER PROMPT ---")

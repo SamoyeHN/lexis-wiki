@@ -3701,6 +3701,15 @@
                         updateCompileButtonUI();
                     }
                     
+                    if (job.status === 'failed') {
+                        const lastLog = (job.logs && job.logs.length > 0) ? job.logs[job.logs.length - 1] : "Job encountered an unexpected error.";
+                        let errorMsg = lastLog;
+                        if (lastLog.includes("faster-whisper is not installed")) {
+                            errorMsg = "<strong>faster-whisper is not installed.</strong><br><br>To transcribe local video/audio files, please run in your terminal:<br><pre class='p-2 bg-dark rounded border mt-2'>pip install faster-whisper</pre>";
+                        }
+                        showInfoModal("Task Execution Failed", errorMsg);
+                    }
+
                     if (service === 'quiz' && job.status === 'completed' && job.saved_files.length > 0) {
                         loadHandoutPreview(job.saved_files[0]);
                         document.getElementById('quiz-progress-section').style.display = 'none';

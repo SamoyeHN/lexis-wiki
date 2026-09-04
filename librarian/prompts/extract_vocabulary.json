@@ -39,10 +39,7 @@
               "adverb",
               "preposition",
               "conjunction",
-              "phrasal verb",
-              "idiom",
-              "collocation",
-              "set phrase"
+              "interjection"
             ]
           },
           "definition": {
@@ -52,8 +49,6 @@
           "word_cefr_level": {
             "type": "string",
             "enum": [
-              "A1",
-              "A2",
               "B1",
               "B2",
               "C1",

@@ -1,19 +1,36 @@
 ### SYSTEM ###
-You are an expert Bilingual Pedagogical Translator (English → {target_language}), specializing in CEFR‑aligned translation assessment design. You strictly follow schemas, avoid hallucinated categories, and produce fully original academic content.
+You are an expert Pedagogical Assessment Specialist and Translator, designing rigorous Chinese-to-English translation assessments for advanced Chinese ESL learners (CEFR B2-C1 standards, CET-6 / TEM-8 / IELTS / TOEFL translation level).
 ### USER ###
-Create a **translation assessment** that integrates the provided vocabulary list and grammar pattern list.
+Create a Chinese-to-English translation assessment that seamlessly integrates the provided vocabulary items and grammar pattern formulas.
 
-**MANDATES**
-1. **EXACT QUESTION COUNT**: Generate EXACTLY {count} unique translation items in the 'questions' array.
-2. **One vocabulary item + one grammar pattern per question.**  
-3. **No repetition** of vocabulary, grammar, or scenario themes.  
-4. **All English content must match CEFR {cefr_level}.**  
-5. **All {target_language} sentences must be natural, academic, and region‑appropriate.**  
-6. **L1 INTERFERENCE DISTRACTORS**: Distractor options must model common L1 interference errors (e.g., literal word-for-word translation errors, misplaced modifiers, incorrect preposition collocations, or verb tense mismatches).
-7. **QUESTION FIELD MANDATE**: Do NOT wrap the 'question' or translated sentence text in outer quotation marks.
-8. **OPTIONS FIELD MANDATE**: Each item in 'options' must be a full English sentence. Return ONLY literal text without choice labels (e.g., 'A)', 'a.', '1.'). DO NOT wrap option items in single quotes ('), double quotes ("), or curly smart quotes (“ ”).
-9. **TRANSLATION DESIGN AUDIT (`design_audit`)**: For every question, 'design_audit' MUST follow this 3-step planning format: `DRAFT: [Target Vocab + Grammar Pattern] -> [Academic Scenario & L1 Sentence] -> [3 Planned Distractor Traps (Literal Translation / Preposition Collocation / Tense Error)]`.
-10. **All items must follow the JSON schema exactly. No additional fields.**
+**PEDAGOGICAL ASSESSMENT MANDATES**
+
+1. **Count & Integration**:
+   - Generate EXACTLY {count} translation questions in the 'questions' array.
+   - Each question MUST integrate:
+     * One target vocabulary item from the VOCABULARY list.
+     * One target grammar pattern from the GRAMMAR list (applying its `pattern_formula` slot structure).
+   - Ensure diverse coverage without repeating vocabulary items, grammar patterns, or scenarios.
+
+2. **Original Academic Scenario (NO Copying Source Text)**:
+   - ❌ **STRICTLY PROHIBITED**: Copying, adapting, or echoing sentences from the input text or reading passage.
+   - Design a brand-new, intellectually mature academic or professional scenario (e.g., environmental policy, technology ethics, higher education, scientific research, socioeconomic development).
+   - `translated_sentence`: Provide a natural, polished, and formal Chinese prompt sentence.
+   - `correct_english_answer`: Provide the pristine English translation demonstrating natural syntax, academic register, and precise application of the target grammar formula and vocabulary.
+
+3. **Options (All English) & L1 Interference Taxonomy**:
+   - ⚠️ **MANDATORY**: ALL four items in 'options' MUST be complete English sentences. NEVER put Chinese sentences into 'options'.
+   - Return ONLY literal sentence text without choice labels ('A)', '1.') or wrapping quotation marks.
+   - 1 option is the `correct_english_answer` (matching `options[correct_answer_index]`).
+   - The other 3 options MUST model authentic Chinese learner errors (L1 negative transfer):
+     * *Trap 1: Word-for-Word Literal Trap (Chinglish)*: translates Chinese word order mechanically, resulting in verb stacking, missing formal subjects, or unnatural topic-comment structures.
+     * *Trap 2: Collocation & Preposition Shift*: misuses prepositions or colligations driven by Chinese semantic interference (e.g., *improve the problem*, *pay attention on*, *confront with*).
+     * *Trap 3: Structural & Formula Distortion*: subtly violates the target grammar pattern (e.g., failed subject-verb inversion, dangling participle, comma splice without coordinator, or tense/aspect flaw).
+
+4. **Design Audit & Explanation**:
+   - `design_audit`: `AUDIT: [Target Vocab + Grammar Formula] -> [Academic Scenario] -> [Trap 1 (Literal Chinglish), Trap 2 (Collocation Shift), Trap 3 (Formula Flaw)] -> [Why Distractors Fail]`
+   - `hint`: Concise pedagogical hint highlighting the key grammatical structure or functional phrase.
+   - `explanation`: Contrastively explain why the correct English translation is superior and explicitly identify the specific grammatical or stylistic flaw in each distractor.
 
 VOCABULARY:
 {vocabulary_content}
