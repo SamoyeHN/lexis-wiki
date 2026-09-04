@@ -331,12 +331,6 @@ class WikiProcessor:
             return f"Pipeline completed for {source_filename}. Generated {len(all_saved)} files.", all_saved
 
         except Exception as e:
-            if is_new_unit and unit_dir.exists():
-                try:
-                    import shutil
-                    shutil.rmtree(unit_dir)
-                except Exception:
-                    pass
             return f"Pipeline Error: {e}", all_saved
 
     def generate_quiz(self, unit_name, count=10, template_name="vocabulary"):

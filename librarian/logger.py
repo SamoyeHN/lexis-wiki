@@ -4,22 +4,27 @@ import json
 from pathlib import Path
 from .config import config
 
-def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None):
+def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None):
     """
-    Logs an LLM task to the logs directory with structured status, true API constraints, and failure categorization.
+    Logs an LLM task to the logs directory with structured status, true API constraints, timing metrics, and failure categorization.
     """
     # Ensure we use an absolute path for logs
     logs_dir = Path(config.project_root).resolve() / "logs"
     logs_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    finish_dt = end_time if isinstance(end_time, datetime.datetime) else datetime.datetime.now()
+    timestamp = finish_dt.strftime("%Y%m%d_%H%M%S_%f")[:-3]
     filename = f"{timestamp}_{task_name}.log"
     log_path = logs_dir / filename
 
     content = []
     content.append(f"=== TASK: {task_name} ===")
     content.append(f"=== MODEL: {config.get('model')} ===")
-    content.append(f"=== TIMESTAMP: {datetime.datetime.now().ctime()} ===")
+    content.append(f"=== TIMESTAMP: {finish_dt.ctime()} ===")
+    if duration is not None:
+        start_str = start_time.strftime("%H:%M:%S") if isinstance(start_time, datetime.datetime) else "N/A"
+        end_str = finish_dt.strftime("%H:%M:%S")
+        content.append(f"=== DURATION: {duration:.1f}s (Started: {start_str}, Finished: {end_str}) ===")
     content.append(f"=== STATUS: {status} ===")
     if mode:
         content.append(f"=== MODE: {mode} ===")
