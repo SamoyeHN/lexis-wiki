@@ -21,9 +21,15 @@ MODEL_CAPABILITY_PROFILES = [
         "think": False,
     },
     {
-        # Tokenizer-constrained or large-vocab families (Gemma, Nemotron, Phi, Qwen): Prompt-guided JSON mode
+        # Gemma family (including Gemma 4 reasoning models): disable CoT thinking during structured JSON extraction
+        "match": ["gemma"],
+        "enforce_gbnf": False,
+        "think": False,
+    },
+    {
+        # Tokenizer-constrained or large-vocab families (Nemotron, Phi, Qwen): Prompt-guided JSON mode
         # Eliminates CPU-bound GBNF token-masking bottlenecks across large tokenizers (131k/248k) while maintaining 100% schema fidelity
-        "match": ["gemma", "nemotron", "phi", "qwen"],
+        "match": ["nemotron", "phi", "qwen"],
         "enforce_gbnf": False,
         "think": None,
     },
@@ -86,19 +92,36 @@ class LLMClient:
         self.timeout = config.get("request_timeout", 1200)
 
     def list_models(self):
-        """Fetches models. Only supported for Ollama for now."""
+        """Fetches models from Ollama (/api/tags) or OpenAI-compatible servers like llama-server (/v1/models)."""
         self._refresh_config()
-        if self.api_type != "ollama":
-            return []
-            
-        url = f"{self.api_url}/api/tags"
-        try:
-            response = requests.get(url, timeout=2)
-            response.raise_for_status()
-            data = response.json()
-            return [m["name"] for m in data.get("models", [])]
-        except Exception:
-            return []
+        if self.api_type == "ollama":
+            url = f"{self.api_url}/api/tags"
+            try:
+                response = requests.get(url, timeout=2)
+                response.raise_for_status()
+                data = response.json()
+                return [m["name"] for m in data.get("models", [])]
+            except Exception:
+                return []
+        elif self.api_type == "openai":
+            url = f"{self.api_url}/v1/models"
+            headers = {}
+            if self.api_key and self.api_key != "ollama":
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            try:
+                response = requests.get(url, headers=headers, timeout=2)
+                response.raise_for_status()
+                data = response.json()
+                # Support OpenAI standard {"data": [{"id": "model_name"}]} and llama-server {"models": [...]}
+                models = []
+                if "data" in data and isinstance(data["data"], list):
+                    models.extend([m.get("id") for m in data["data"] if m.get("id")])
+                elif "models" in data and isinstance(data["models"], list):
+                    models.extend([m.get("name") or m.get("model") for m in data["models"] if (m.get("name") or m.get("model"))])
+                return models
+            except Exception:
+                return []
+        return []
 
     def chat(self, messages, stream=False, json_format=True, schema=None, task_name=None, **kwargs):
         """
@@ -623,10 +646,16 @@ class LLMClient:
             "messages": messages,
             "stream": stream,
             "temperature": kwargs.pop("temperature", 0.2), # Deterministic temperature for schema extraction
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             **kwargs
         }
         profile = get_model_profile(self.model)
+        think_setting = kwargs.pop("think", profile.get("think"))
+        if think_setting is False:
+            # Standard OpenAI / llama-server / vLLM parameters to suppress CoT thinking
+            payload["reasoning_effort"] = "none"
+            payload["chat_template_kwargs"] = {"thinking": False}
+
         use_gbnf = profile.get("enforce_gbnf", False)
         if schema and use_gbnf:
             schema_name = getattr(schema, "__name__", "ResponseSchema") if not isinstance(schema, dict) else "ResponseSchema"
