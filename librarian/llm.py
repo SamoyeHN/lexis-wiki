@@ -31,7 +31,7 @@ MODEL_CAPABILITY_PROFILES = [
         # Eliminates CPU-bound GBNF token-masking bottlenecks across large tokenizers (131k/248k) while maintaining 100% schema fidelity
         "match": ["nemotron", "phi", "qwen"],
         "enforce_gbnf": False,
-        "think": None,
+        "think": False,
     },
     {
         # Native GBNF / strict grammar standard families
@@ -91,23 +91,39 @@ class LLMClient:
         # Default read timeout: 1200 seconds (20 mins) to support deep reasoning and large parameter local models (27B-70B)
         self.timeout = config.get("request_timeout", 1200)
 
-    def list_models(self):
-        """Fetches models from Ollama (/api/tags) or OpenAI-compatible servers like llama-server (/v1/models)."""
+    def list_models(self, api_type=None, api_url=None, api_key=None):
+        """Fetches models from Ollama (/api/tags) or OpenAI-compatible servers like llama-server (/v1/models).
+
+        Optional overrides (api_type / api_url / api_key) allow previewing a different
+        engine/endpoint than the one currently saved in config. The dashboard uses this
+        when the user switches the API Engine dropdown before saving, so the model list
+        reflects the selected engine instead of silently staying on the saved one.
+        Falls back to the saved config when an override is not provided.
+        """
         self._refresh_config()
-        if self.api_type == "ollama":
-            url = f"{self.api_url}/api/tags"
+        api_type = api_type or self.api_type
+        api_url = (api_url or self.api_url).rstrip('/')
+        api_key = api_key if api_key else self.api_key
+        # Surface reachability so the dashboard can distinguish "server offline"
+        # (request failed) from "server online but lists no models".
+        self.last_models_ok = False
+        self.last_models_error = None
+        if api_type == "ollama":
+            url = f"{api_url}/api/tags"
             try:
                 response = requests.get(url, timeout=2)
                 response.raise_for_status()
                 data = response.json()
+                self.last_models_ok = True
                 return [m["name"] for m in data.get("models", [])]
-            except Exception:
+            except Exception as e:
+                self.last_models_error = str(e)
                 return []
-        elif self.api_type == "openai":
-            url = f"{self.api_url}/v1/models"
+        elif api_type == "openai":
+            url = f"{api_url}/v1/models"
             headers = {}
-            if self.api_key and self.api_key != "ollama":
-                headers["Authorization"] = f"Bearer {self.api_key}"
+            if api_key and api_key != "ollama":
+                headers["Authorization"] = f"Bearer {api_key}"
             try:
                 response = requests.get(url, headers=headers, timeout=2)
                 response.raise_for_status()
@@ -118,8 +134,10 @@ class LLMClient:
                     models.extend([m.get("id") for m in data["data"] if m.get("id")])
                 elif "models" in data and isinstance(data["models"], list):
                     models.extend([m.get("name") or m.get("model") for m in data["models"] if (m.get("name") or m.get("model"))])
+                self.last_models_ok = True
                 return models
-            except Exception:
+            except Exception as e:
+                self.last_models_error = str(e)
                 return []
         return []
 

@@ -285,13 +285,27 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == "/api/models":
             try:
-                models = llm.list_models()
+                # Allow the dashboard to preview models for the engine SELECTED in the
+                # dropdown (which may differ from the saved config until the user saves).
+                q = urllib.parse.parse_qs(query_str or "")
+                ov_api_type = (q.get("api_type", [None])[0] or None)
+                ov_api_url = (q.get("api_url", [None])[0] or None)
+                ov_api_key = (q.get("api_key", [None])[0] or None)
+                models = llm.list_models(api_type=ov_api_type, api_url=ov_api_url, api_key=ov_api_key)
+                resolved_api_type = ov_api_type or config.get("api_type")
+                # "offline" = the engine endpoint could not be reached (distinct from a
+                # reachable server that simply lists no models).
+                offline = not getattr(llm, "last_models_ok", False)
                 response_data = {
                     "models": models,
-                    "active_model": config.get("model")
+                    "active_model": config.get("model"),
+                    "api_type": resolved_api_type,
+                    "offline": offline,
+                    "error": getattr(llm, "last_models_error", None)
                 }
             except Exception as e:
-                response_data = {"error": str(e), "models": [], "active_model": config.get("model")}
+                response_data = {"error": str(e), "models": [], "active_model": config.get("model"),
+                                "api_type": config.get("api_type"), "offline": True}
 
         elif path == "/api/raw-files":
             wiki_dir = Path(config.project_root) / "wiki"

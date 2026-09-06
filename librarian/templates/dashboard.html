@@ -243,6 +243,15 @@
             transform: translateY(-2px);
         }
 
+        .spin-icon {
+            display: inline-block;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
         .label-md-system {
             font-family: var(--font-body);
             font-size: var(--font-size-label-sm);
@@ -1650,14 +1659,19 @@
                     </div>
                     <div class="col-md-3 col-sm-6">
                         <label class="font-monospace text-on-surface small mb-0.5 d-block" style="font-size: 9px;">Endpoint URL</label>
-                        <input type="text" id="config-api-url" class="form-control form-control-sm" placeholder="localhost:11434">
+                        <input type="text" id="config-api-url" class="form-control form-control-sm" placeholder="localhost:11434" oninput="onEndpointInput()" onchange="fetchModels(true)">
                     </div>
                     <div class="col-md-3 col-sm-6">
                         <label class="font-monospace text-on-surface small mb-0.5 d-block" style="font-size: 9px;">Access Token</label>
-                        <input type="text" id="config-api-key" class="form-control form-control-sm" placeholder="Bearer Key" autocomplete="new-password" style="-webkit-text-security: disc; text-security: disc;" spellcheck="false" autocapitalize="off" autocorrect="off">
+                        <input type="text" id="config-api-key" class="form-control form-control-sm" placeholder="Bearer Key" autocomplete="new-password" style="-webkit-text-security: disc; text-security: disc;" spellcheck="false" autocapitalize="off" autocorrect="off" oninput="onEndpointInput()" onchange="fetchModels(true)">
                     </div>
                     <div class="col-md-3 col-sm-6">
-                        <label class="font-monospace text-on-surface small mb-0.5 d-block" style="font-size: 9px;">Active Model</label>
+                        <div class="d-flex justify-content-between align-items-center mb-0.5">
+                            <label class="font-monospace text-on-surface small mb-0" style="font-size: 9px;">Active Model</label>
+                            <button type="button" class="btn btn-link p-0 text-decoration-none text-info font-monospace" style="font-size: 9px;" onclick="fetchModels(true)" title="Refresh model list from endpoint">
+                                <i class="bi bi-arrow-clockwise" id="model-refresh-icon"></i> Refresh
+                            </button>
+                        </div>
                         <select id="config-active-model" class="form-select form-select-sm"></select>
                     </div>
                 </div>
@@ -3004,56 +3018,101 @@
             .catch(() => { document.getElementById('headbar-model-name').innerText = 'Config unavailable'; });
     }
 
-    function fetchModels() {
-        fetch('/api/models')
+    let endpointInputTimer = null;
+    function onEndpointInput() {
+        if (endpointInputTimer) clearTimeout(endpointInputTimer);
+        endpointInputTimer = setTimeout(() => {
+            fetchModels(true);
+        }, 500);
+    }
+
+    function fetchModels(userTriggered = false) {
+        // Send the engine/endpoint SELECTED in the dropdown so the backend lists models
+        // for THAT engine (not just the saved one). This is what lets the list update live
+        // when the user switches API Engine or modifies URL/Token before saving.
+        const apiType = document.getElementById('config-api-type').value;
+        const apiUrl = (document.getElementById('config-api-url') || {}).value || '';
+        const apiKey = (document.getElementById('config-api-key') || {}).value || '';
+        const params = new URLSearchParams();
+        params.set('api_type', apiType);
+        if (apiUrl) params.set('api_url', apiUrl);
+        if (apiKey) params.set('api_key', apiKey);
+
+        const modelSelect = document.getElementById('config-active-model');
+        const refreshIcon = document.getElementById('model-refresh-icon');
+        if (refreshIcon) refreshIcon.classList.add('spin-icon');
+
+        // Check if the current form endpoint matches the saved server configuration
+        const savedApiType = (appConfig && appConfig.api_type) || '';
+        const savedApiUrl = (appConfig && appConfig.api_url) || '';
+        const savedApiKey = (appConfig && appConfig.api_key) || '';
+        const endpointChanged = (savedApiType !== apiType || savedApiUrl !== apiUrl || savedApiKey !== apiKey);
+
+        fetch('/api/models?' + params.toString())
             .then(res => res.json())
             .then(data => {
-                const activeModel = data.active_model || (appConfig ? appConfig.model : '');
-                document.getElementById('headbar-model-name').innerText = activeModel || 'Ollama offline';
-                const modelSelect = document.getElementById('config-active-model');
+                if (refreshIcon) refreshIcon.classList.remove('spin-icon');
+
+                // If endpoint changed or user triggered a switch, previously-saved model belongs
+                // to a different endpoint and must NOT linger in the Active Model list.
+                const savedActive = (appConfig && appConfig.model) || '';
+                const activeModel = endpointChanged ? '' : savedActive;
+                const offline = !!(data && data.offline);
+
                 modelSelect.innerHTML = '';
-                
+
+                // ENGINE OFFLINE: do NOT inject fake default model names.
+                if (offline) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.selected = true;
+                    opt.disabled = true;
+                    opt.innerText = `(Offline - endpoint unreachable)`;
+                    modelSelect.appendChild(opt);
+                    document.getElementById('headbar-model-name').innerText = activeModel || 'LLM offline';
+                    return;
+                }
+
+                // Engine reachable.
                 let modelsList = data.models || [];
-                const apiType = document.getElementById('config-api-type').value;
-                
-                // Provide OpenAI defaults if list is empty and api_type is openai
-                if (apiType === 'openai' && modelsList.length === 0) {
-                    modelsList = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-mini', 'o1-preview'];
+
+                if (modelsList.length === 0) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.selected = true;
+                    opt.disabled = true;
+                    opt.innerText = `(No models found)`;
+                    modelSelect.appendChild(opt);
+                    document.getElementById('headbar-model-name').innerText = activeModel || 'No models';
+                    return;
                 }
-                
-                // Ensure active model from config is always in the list
-                if (activeModel && !modelsList.includes(activeModel)) {
-                    modelsList.push(activeModel);
-                }
-                
+
+                // If saved active model exists on this endpoint, preserve it.
+                // Otherwise default to the first available model from this endpoint.
+                const targetSelected = (activeModel && modelsList.includes(activeModel)) ? activeModel : modelsList[0];
+
                 modelsList.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m;
-                    if (m === activeModel) {
+                    opt.innerText = m;
+                    if (m === targetSelected) {
                         opt.selected = true;
-                        if (apiType === 'ollama' && data.models && !data.models.includes(m)) {
-                            opt.innerText = `${m} (Not installed)`;
-                        } else {
-                            opt.innerText = m;
-                        }
-                    } else {
-                        opt.innerText = m;
                     }
                     modelSelect.appendChild(opt);
                 });
+
+                document.getElementById('headbar-model-name').innerText = targetSelected || 'Ready';
             })
             .catch(() => {
+                if (refreshIcon) refreshIcon.classList.remove('spin-icon');
                 document.getElementById('headbar-model-name').innerText = 'LLM offline';
-                const modelSelect = document.getElementById('config-active-model');
                 modelSelect.innerHTML = '';
-                const activeModel = appConfig ? appConfig.model : '';
-                if (activeModel) {
-                    const opt = document.createElement('option');
-                    opt.value = activeModel;
-                    opt.selected = true;
-                    opt.innerText = `${activeModel} (Offline)`;
-                    modelSelect.appendChild(opt);
-                }
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.selected = true;
+                opt.disabled = true;
+                opt.innerText = '(Endpoint unreachable)';
+                modelSelect.appendChild(opt);
             });
     }
 
