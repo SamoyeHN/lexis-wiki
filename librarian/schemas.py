@@ -213,6 +213,17 @@ def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
     if not isinstance(data, dict):
         return data
 
+    # Architectural Unwrapping: Models with internal agent conventions (e.g., Muse's "self",
+    # or generic API wrappers "response", "result", "data") often enclose the schema payload.
+    # If the target dataclass fields are not in the root but exist inside the wrapper, unwrap it.
+    cls_field_names = {f.name for f in dataclasses.fields(cls)}
+    if not (cls_field_names & set(data.keys())):
+        for wrapper_key in ("self", "response", "result", "data", "output", "content"):
+            inner = data.get(wrapper_key)
+            if isinstance(inner, dict) and (cls_field_names & set(inner.keys())):
+                data = inner
+                break
+
     kwargs = {}
     for field in dataclasses.fields(cls):
         val = data.get(field.name)

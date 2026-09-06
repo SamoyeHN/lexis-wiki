@@ -34,10 +34,27 @@ MODEL_CAPABILITY_PROFILES = [
         "think": False,
     },
     {
-        # Native GBNF / strict grammar standard families
-        "match": ["llama", "mistral", "mixtral", "codestral", "muse", "hermes", "vicuna"],
+        # Muse family (e.g., muse-glimmer): Prompt-guided JSON mode with thinking disabled
+        # Avoids 300s+ hidden reasoning loops and prompt regurgitation while preserving in-schema design_audit.
+        "match": ["muse"],
+        "enforce_gbnf": False,
+        "think": False,
+    },
+    {
+        # Fragile / Prompt-based families (Hermes custom tags, Vicuna legacy attention):
+        # Hermes uses native XML/markdown tags (<tool_call>, <thought>) which crash under rigid GBNF clamps.
+        # Vicuna lacks modern attention calibration for strict character-level grammar masking.
+        "match": ["hermes", "vicuna"],
+        "enforce_gbnf": False,
+        "think": False,
+    },
+    {
+        # Native GBNF / strict grammar standard families (Llama 3+, Mistral, Mixtral, Codestral):
+        # Perfectly compatible with context-free grammar parsers (llama.cpp, vLLM, SGLang).
+        # Defaults to think: False for speed; dynamically sets think: True if running a reasoning/thinking variant.
+        "match": ["llama", "mistral", "mixtral", "codestral"],
         "enforce_gbnf": True,
-        "think": None,
+        "think": False,
     },
 ]
 
@@ -45,7 +62,7 @@ MODEL_CAPABILITY_PROFILES = [
 def get_model_profile(model_name: str) -> dict:
     """
     Intelligently determines optimal execution profile for a model via a 3-tier precedence hierarchy:
-    - Tier 1 (Base): Declarative architectural heuristics (Granite, Qwen, Gemma, etc.)
+    - Tier 1 (Base): Declarative architectural heuristics (Granite, Qwen, Gemma, Llama, Hermes, etc.)
     - Tier 2 (Global): Global settings in wiki_config.json (e.g. global enforce_gbnf)
     - Tier 3 (Override): Explicit per-model overrides in wiki_config.json['model_options'][model_name]
     """
@@ -58,6 +75,11 @@ def get_model_profile(model_name: str) -> dict:
         if any(keyword in m_lower for keyword in profile_rule["match"]):
             base_gbnf = profile_rule["enforce_gbnf"]
             base_think = profile_rule["think"]
+            # Dynamic reasoning check for Native GBNF models:
+            # If running a thinking/reasoning fine-tune (e.g. Llama-3-Thinking), allow thinking unconstrained
+            # before the GBNF grammar clamp locks onto the final JSON output.
+            if base_gbnf is True and ("thinking" in m_lower or "reasoning" in m_lower):
+                base_think = True
             break
 
     # Tier 2: Global config settings (if explicitly enforced)
@@ -340,6 +362,13 @@ class LLMClient:
                                             break
 
                 # 6.3. MAPPING
+                # Auto-unwrap agentic wrappers (e.g. {"self": {...}}, {"response": {...}}, {"data": {...}})
+                if isinstance(data, dict):
+                    for wrapper_key in ("self", "response", "result", "data", "output", "content"):
+                        if wrapper_key in data and isinstance(data[wrapper_key], dict) and len(data) == 1:
+                            data = data[wrapper_key]
+                            break
+
                 if isinstance(schema, dict):
                     if isinstance(data, list):
                         props = schema.get("properties", {})
@@ -673,6 +702,10 @@ class LLMClient:
             # Standard OpenAI / llama-server / vLLM parameters to suppress CoT thinking
             payload["reasoning_effort"] = "none"
             payload["chat_template_kwargs"] = {"thinking": False}
+        elif think_setting is True:
+            # Enable CoT thinking for models that require reasoning traces (e.g. muse-glimmer)
+            payload["reasoning_effort"] = "high"
+            payload["chat_template_kwargs"] = {"thinking": True}
 
         use_gbnf = profile.get("enforce_gbnf", False)
         if schema and use_gbnf:

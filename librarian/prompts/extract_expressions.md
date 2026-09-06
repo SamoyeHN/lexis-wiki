@@ -6,8 +6,8 @@ Extract genuine multi-word expressions (phrasal verbs, idioms, fixed collocation
 
 ### CORE PEDAGOGICAL MANDATES:
 1. **Target Count & Quality over Quota**:
-   - Identify and extract up to {count} high-value multi-word expressions from the text.
-   - Extract only genuine expressions found; never fabricate items to meet a quota.
+   - Identify and extract up to {count} high-value multi-word expressions from the text. NEVER return an empty expressions list (`[]`).
+   - Extract only genuine expressions found; never fabricate expressions to meet a quota.
 
 2. **Multi-Word Authenticity**:
    - Every entry MUST be an inherently multi-word lexical unit (minimum 2 core words, e.g., 'hinge on', 'pose a risk to').
