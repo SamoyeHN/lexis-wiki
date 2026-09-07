@@ -384,6 +384,10 @@ class LLMClient:
                                             g_item["pattern_formula"] = cand_formula
                                             break
 
+                # Auto-align quoted_sentence for vocabulary & expressions if target word exists in source passage
+                # Solves off-by-one sentence mismatches (e.g. model quoting an adjacent sentence) without masking hallucinations
+                self._align_quoted_sentences(data, user_prompt)
+
                 # 6.3. MAPPING
                 # Auto-unwrap agentic wrappers (e.g. {"self": {...}}, {"response": {...}}, {"data": {...}})
                 if isinstance(data, dict):
@@ -625,6 +629,150 @@ class LLMClient:
             json_str += '}' * brace_depth
 
         return json_str
+
+    def _align_quoted_sentences(self, data, user_prompt):
+        """
+        Auto-aligns quoted_sentence for vocabulary and expressions items if the model quoted
+        an adjacent sentence in the passage instead of the exact sentence containing the word.
+        STRICT GROUNDING RULE: If the target word is NOT physically in the source passage,
+        this method leaves it untouched so that QA evaluation flags it as an ungrounded hallucination.
+        """
+        if not isinstance(data, dict) or not user_prompt:
+            return
+
+        # Extract the passage content from user prompt
+        source_content = user_prompt.split("CONTENT:", 1)[1].strip() if "CONTENT:" in user_prompt else user_prompt
+        # Strip any trailing retry critique prompts from user_prompt
+        source_content = source_content.split("### 🚨 [QUALITY AUDIT REVIEW", 1)[0].strip()
+        if not source_content:
+            return
+
+        # Pre-segment source passage into sentences
+        norm_source = re.sub(r'\s+', ' ', source_content).strip()
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', norm_source) if len(s.strip()) > 10]
+        if not sentences:
+            return
+
+        for array_key in ("vocabulary", "expressions"):
+            items = data.get(array_key)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                target_word = str(item.get("word", "")).strip()
+                cur_quote = str(item.get("quoted_sentence", "")).strip()
+                audit_str = str(item.get("design_audit", "")).strip()
+
+                if not target_word:
+                    continue
+
+                # Check if target word already exists in cur_quote
+                clean_target = re.sub(r'\[.*?\]|\(.*?\)', '', target_word).strip().lower()
+                clean_quote_core = re.sub(r'[^\w\s]', ' ', cur_quote.lower())
+                quote_tokens = set(clean_quote_core.split())
+
+                target_tokens = [t for t in clean_target.split() if t]
+                already_in_quote = False
+                if target_tokens:
+                    matches = sum(1 for t in target_tokens if (t in quote_tokens or (len(t) >= 4 and any(qt.startswith(t[:4]) for qt in quote_tokens))))
+                    if matches >= max(1, len(target_tokens) // 2 + (1 if len(target_tokens) % 2 == 1 else 0)):
+                        already_in_quote = True
+
+                if already_in_quote:
+                    continue
+
+                # Extract surface word from design_audit if available (e.g. AUDIT: [forethought] -> [forethought])
+                surface_word = None
+                if "[" in audit_str and "]" in audit_str:
+                    bracket_m = re.search(r'\[(.*?)\]', audit_str)
+                    if bracket_m:
+                        surface_word = bracket_m.group(1).strip().lower()
+
+                # Build matching logic to locate the genuine sentence in the source text:
+                # 1. Multi-token expression matching (e.g. "take [something] for granted" -> "take .* for granted")
+                # 2. Single-word vocabulary matching (with stems & surface word)
+                matching_sentences = []
+
+                # Clean tokens, ignoring stop slots like something/somebody/one's/sb/sth
+                stop_slots = {"something", "somebody", "ones", "one's", "someone", "sb", "sth"}
+                core_tokens = [t for t in re.sub(r'\[.*?\]|\(.*?\)', ' ', target_word).lower().split() if t and t not in stop_slots]
+
+                if array_key == "expressions" and len(core_tokens) >= 2:
+                    # Construct wildcard regex: \btake\W+(?:\w+\W+){0,6}for\W+(?:\w+\W+){0,6}granted\b
+                    def _get_token_pattern(tok):
+                        irreg = {
+                            'take': 'take|took|taken|taking',
+                            'bring': 'bring|brought|bringing',
+                            'lay': 'lay|laid|laying',
+                            'set': 'set|setting',
+                            'put': 'put|putting',
+                            'make': 'make|made|making',
+                            'give': 'give|gave|given|giving',
+                            'come': 'come|came|coming',
+                            'go': 'go|went|gone|going',
+                            'keep': 'keep|kept|keeping',
+                            'hold': 'hold|held|holding',
+                            'find': 'find|found|finding',
+                        }
+                        if tok in irreg:
+                            return f"(?:{irreg[tok]})"
+                        parts = [re.escape(tok)]
+                        if tok.endswith('ing') and len(tok) > 5: parts.append(re.escape(tok[:-3]))
+                        elif tok.endswith('ed') and len(tok) > 4: parts.append(re.escape(tok[:-2]))
+                        elif tok.endswith('s') and len(tok) > 3: parts.append(re.escape(tok[:-1]))
+                        return f"(?:{'|'.join(parts)})"
+
+                    token_regexes = [_get_token_pattern(tok) for tok in core_tokens]
+                    phrase_regex = r'\b' + r'\W+(?:\w+\W+){0,6}'.join(token_regexes) + r'\b'
+
+                    for s in sentences:
+                        if re.search(phrase_regex, s, re.IGNORECASE):
+                            matching_sentences.append(s)
+                else:
+                    # Single word or fallback: require all core tokens if multiple, or stem match if single
+                    candidates = set(core_tokens)
+                    if surface_word:
+                        candidates.add(surface_word)
+                    for tok in list(candidates):
+                        if tok.endswith('ing') and len(tok) > 5: candidates.add(tok[:-3])
+                        if tok.endswith('ed') and len(tok) > 4: candidates.add(tok[:-2])
+                        if tok.endswith('es') and len(tok) > 4: candidates.add(tok[:-2])
+                        elif tok.endswith('s') and len(tok) > 3: candidates.add(tok[:-1])
+
+                    for s in sentences:
+                        s_tokens = set(re.sub(r'[^\w\s]', ' ', s.lower()).split())
+                        # If single word, any candidate matches; if multi-word, at least 70% of core tokens must match
+                        if len(core_tokens) <= 1:
+                            if any(cand in s_tokens or (len(cand) >= 4 and any(st.startswith(cand[:4]) for st in s_tokens)) for cand in candidates):
+                                matching_sentences.append(s)
+                        else:
+                            matched = sum(1 for tok in core_tokens if (tok in s_tokens or (len(tok) >= 4 and any(st.startswith(tok[:4]) for st in s_tokens))))
+                            if matched == len(core_tokens):
+                                matching_sentences.append(s)
+
+                # Grounding check: if not in source text at all, DO NOT TOUCH (it is a true hallucination)
+                if not matching_sentences:
+                    continue
+
+                # Select best matching sentence (closest in text or single match)
+                chosen_sentence = None
+                if len(matching_sentences) == 1:
+                    chosen_sentence = matching_sentences[0]
+                else:
+                    # If multiple sentences contain candidate, pick the one closest to cur_quote position in source
+                    cur_idx = norm_source.find(cur_quote[:30]) if cur_quote else -1
+                    if cur_idx != -1:
+                        chosen_sentence = min(matching_sentences, key=lambda s: abs(norm_source.find(s[:30]) - cur_idx))
+                    else:
+                        chosen_sentence = matching_sentences[0]
+
+                if chosen_sentence and chosen_sentence != cur_quote:
+                    import logging
+                    logging.getLogger("librarian").info(
+                        f"Auto-aligned quoted_sentence for '{target_word}' from adjacent quote to genuine source sentence: '{chosen_sentence[:60]}...'"
+                    )
+                    item["quoted_sentence"] = chosen_sentence
 
     def _chat_ollama(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/api/chat"
