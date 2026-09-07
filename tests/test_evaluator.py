@@ -78,6 +78,41 @@ He dedicated his entire life to public service."""
         self.assertIsNone(score)
         self.assertEqual(flags, [])
 
+    def test_quiz_reading_no_target_word_returns_none(self):
+        # A reading/translation style quiz has no target_word -> nothing to verify -> N/A
+        items = [{"question": "What is the main idea?", "options": ["A", "B", "C", "D"],
+                  "correct_answer_index": 0, "explanation": "x"}]
+        score, flags = _score_verbatim(items, "quiz", "Generate a reading quiz")
+        self.assertIsNone(score)
+
+    def test_quiz_target_word_in_wordlist_passes(self):
+        source = "CONTENT:\n## [[tough]]\n## [[marathon]]\n## [[annual]]\n"
+        items = [
+            {"target_word": "tough", "options": ["a", "b", "tough", "c"], "correct_answer_index": 2},
+            {"target_word": "marathon", "options": ["a", "marathon", "b", "c"], "correct_answer_index": 1},
+        ]
+        score, flags = _score_verbatim(items, "quiz", source)
+        self.assertEqual(score, W_VERBATIM)
+        self.assertEqual(flags, [])
+
+    def test_quiz_hallucinated_target_word_flagged(self):
+        source = "CONTENT:\n## [[tough]]\n## [[marathon]]\n"
+        items = [
+            {"target_word": "tough", "options": ["a", "b", "tough", "c"], "correct_answer_index": 2},
+            {"target_word": "glaive", "options": ["glaive", "a", "b", "c"], "correct_answer_index": 0},
+        ]
+        score, flags = _score_verbatim(items, "quiz", source)
+        self.assertEqual(score, round(W_VERBATIM / 2, 1))
+        self.assertTrue(any("not found in supplied word list" in f for f in flags))
+
+    def test_quiz_target_word_inflected_still_matches(self):
+        # 'tougher' should match the headword 'tough' via shared-stem matching
+        source = "CONTENT:\n## [[tough]]\n"
+        items = [{"target_word": "tougher", "options": ["tougher", "a", "b", "c"], "correct_answer_index": 0}]
+        score, flags = _score_verbatim(items, "quiz", source)
+        self.assertEqual(score, W_VERBATIM)
+        self.assertEqual(flags, [])
+
     def test_slot_expressions_and_lemmatized_word_in_quote(self):
         source = "CONTENT:\nExcessive exploitation of natural resources and greenhouse gas emissions pose a grave threat to the earth's essential ecology.\nWith the degradation of ecosystems, life will decline."
         items = [
@@ -148,6 +183,42 @@ class TestPedagogyEvaluation(unittest.TestCase):
             "explanation": "Cat fits the context.",
         }]
         score, flags = _score_pedagogy(valid_quiz, "quiz")
+        self.assertEqual(score, W_PEDAGOGY)
+        self.assertEqual(flags, [])
+
+    def test_quiz_with_duplicate_options_penalized(self):
+        dup_quiz = [{
+            "target_word": "tough",
+            "question": "The run was ____.",
+            "options": ["tough", "easy", "tough", "innovative"],
+            "correct_answer_index": 0,
+            "explanation": "Tough fits.",
+        }]
+        score, flags = _score_pedagogy(dup_quiz, "quiz")
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("duplicate options detected" in f for f in flags))
+
+    def test_quiz_target_not_matching_options_slot_penalized(self):
+        mismatch_quiz = [{
+            "target_word": "tough",
+            "question": "The run was ____.",
+            "options": ["hard", "easy", "efficient", "innovative"],
+            "correct_answer_index": 0,
+            "explanation": "Hard fits.",
+        }]
+        score, flags = _score_pedagogy(mismatch_quiz, "quiz")
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("target 'tough' not matching options[0]" in f for f in flags))
+
+    def test_quiz_target_inflected_in_correct_option_passes(self):
+        inflected_quiz = [{
+            "target_word": "assert",
+            "question": "She ____ her position.",
+            "options": ["asserted", "denied", "suggested", "questioned"],
+            "correct_answer_index": 0,
+            "explanation": "Asserted fits.",
+        }]
+        score, flags = _score_pedagogy(inflected_quiz, "quiz")
         self.assertEqual(score, W_PEDAGOGY)
         self.assertEqual(flags, [])
 

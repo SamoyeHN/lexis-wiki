@@ -169,37 +169,53 @@ def _normalize_enum(val: Any, allowed_args: tuple) -> Any:
     for allowed in allowed_args:
         if str(allowed).lower() == clean_val:
             return allowed
+
+    # 3. Handle slashed/compound tokens (e.g. 'adjective/noun', 'noun / verb', 'noun|verb')
+    slashed = [p.strip() for p in re.split(r'[/|\\]', clean_val) if p.strip()]
+    if len(slashed) > 1:
+        for s in slashed:
+            s_clean = re.sub(r'[\-_]+', ' ', s).split()[0].rstrip('s')
+            for allowed in allowed_args:
+                if str(allowed).lower() == s_clean:
+                    return allowed
+
+    # 4. Handle parenthesized annotations (e.g. 'verb (phrasal)' -> 'verb', 'adjective (compound)' -> 'adjective')
+    sub_paren = re.sub(r'\(.*?\)', '', clean_val).strip()
+    if sub_paren:
+        for allowed in allowed_args:
+            if str(allowed).lower() == sub_paren:
+                return allowed
             
-    # 3. Cleaned character/punctuation match (e.g. "phrasal_verb" -> "phrasal verb", "set-phrase" -> "set phrase")
+    # 5. Cleaned character/punctuation match (e.g. "phrasal_verb" -> "phrasal verb", "set-phrase" -> "set phrase")
     normalized_val = re.sub(r'[\-_]+', ' ', clean_val)
     for allowed in allowed_args:
         norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
         if norm_allowed == normalized_val:
             return allowed
 
-    # 4. Longest-first prefix / token / substring matching (so 'phrasal verb' matches before 'verb')
+    # 6. Longest-first prefix / token / substring matching (so 'phrasal verb' matches before 'verb')
     sorted_args = sorted(allowed_args, key=lambda x: len(str(x)), reverse=True)
     
-    # 4.1. Stem/Plural check (e.g. 'phrasal verbs' -> 'phrasal verb', 'collocations' -> 'collocation')
+    # 6.1. Stem/Plural check (e.g. 'phrasal verbs' -> 'phrasal verb', 'collocations' -> 'collocation')
     val_singular = normalized_val.rstrip('s')
     for allowed in sorted_args:
         norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower()).rstrip('s')
         if norm_allowed == val_singular:
             return allowed
 
-    # 4.2. Prefix match
+    # 6.2. Prefix match
     for allowed in sorted_args:
         norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
         if normalized_val.startswith(norm_allowed) or norm_allowed.startswith(normalized_val):
             return allowed
 
-    # 4.3. Substring match
+    # 6.3. Substring match
     for allowed in sorted_args:
         norm_allowed = re.sub(r'[\-_]+', ' ', str(allowed).lower())
         if norm_allowed in normalized_val or normalized_val in norm_allowed:
             return allowed
 
-    # 5. Safe fallback to default canonical enum
+    # 7. Safe fallback to default canonical enum
     return allowed_args[0]
 
 def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:

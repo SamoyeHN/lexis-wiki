@@ -339,17 +339,32 @@ class LLMClient:
                     import logging
                 # Auto-sync slotted form from design_audit to word for expressions if needed
                 if isinstance(data, dict) and "expressions" in data and isinstance(data["expressions"], list):
+                    # Recognizes genuine syntactic variable slots (e.g. [something], [somebody], [entity], [one's], etc.)
+                    valid_slot_pattern = r'\[(something|somebody|someone|one\'s|one|entity|domain|factor|doing something|clause|[a-z_]+)\]|\bone\'s\b'
                     for expr_item in data["expressions"]:
                         if isinstance(expr_item, dict):
                             cur_word = expr_item.get("word", "").strip()
                             cur_audit = expr_item.get("design_audit", "")
                             if ("[" not in cur_word and "one's" not in cur_word) and ("[" in cur_audit or "one's" in cur_audit):
                                 parts = [p.strip() for p in cur_audit.replace("->", "➔").split("➔")]
-                                for p in parts:
+                                # Look at intermediate/derived canonical steps (skip part 0 which is just [Surface Excerpt])
+                                candidate_steps = parts[1:] if len(parts) > 1 else parts
+                                for p in candidate_steps:
                                     if ("[" in p or "one's" in p):
                                         # Strip common prefixes like AUDIT:, DRAFT:, STEP:
                                         cand = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
                                         candidate = cand.split(" -")[0].split(" (")[0].strip()
+                                        
+                                        # If candidate is merely the whole phrase wrapped in brackets like '[report for duty]' without inner variable slots, skip it!
+                                        if candidate.startswith("[") and candidate.endswith("]"):
+                                            inner = candidate[1:-1].strip()
+                                            if not re.search(valid_slot_pattern, inner, re.IGNORECASE):
+                                                continue
+
+                                        # Ensure candidate contains a genuine variable slot or 'one's'
+                                        if not re.search(valid_slot_pattern, candidate, re.IGNORECASE):
+                                            continue
+
                                         cand_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))]
                                         word_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', cur_word)]
                                         
@@ -367,6 +382,26 @@ class LLMClient:
                                         if matched:
                                             expr_item["word"] = candidate
                                             break
+
+                    # Strip redundant outer brackets wrapping whole expression (e.g. '[do [something] tougher than [somebody]]' -> 'do [something] tougher than [somebody]')
+                    for expr_item in data["expressions"]:
+                        if isinstance(expr_item, dict):
+                            w_val = str(expr_item.get("word", "")).strip()
+                            while w_val.startswith("[") and w_val.endswith("]"):
+                                depth = 0
+                                matched_end = False
+                                for idx, char in enumerate(w_val):
+                                    if char == "[": depth += 1
+                                    elif char == "]":
+                                        depth -= 1
+                                        if depth == 0:
+                                            if idx == len(w_val) - 1: matched_end = True
+                                            break
+                                if matched_end:
+                                    w_val = w_val[1:-1].strip()
+                                else:
+                                    break
+                            expr_item["word"] = w_val
 
                 # Auto-sync slotted pattern_formula from design_audit for grammar if missing slots
                 if isinstance(data, dict) and "grammar_patterns" in data and isinstance(data["grammar_patterns"], list):
@@ -387,6 +422,41 @@ class LLMClient:
                 # Auto-align quoted_sentence for vocabulary & expressions if target word exists in source passage
                 # Solves off-by-one sentence mismatches (e.g. model quoting an adjacent sentence) without masking hallucinations
                 self._align_quoted_sentences(data, user_prompt)
+
+                # Auto-heal compound/slashed or annotated part_of_speech tags in vocabulary items (e.g. 'adjective/noun', 'verb (phrasal)')
+                if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list):
+                    from .schemas import PARTS_OF_SPEECH, _normalize_enum
+                    from typing import get_args
+                    allowed_pos = get_args(PARTS_OF_SPEECH)
+                    for v_item in data["vocabulary"]:
+                        if isinstance(v_item, dict):
+                            raw_pos = str(v_item.get("part_of_speech", "")).strip().lower()
+                            if raw_pos and raw_pos not in allowed_pos:
+                                # First attempt contextual disambiguation if compound/slashed (e.g. 'adjective/noun')
+                                slashed = [p.strip() for p in re.split(r'[/|\\]', re.sub(r'\(.*?\)', '', raw_pos)) if p.strip()]
+                                disambiguated = None
+                                if len(slashed) > 1:
+                                    candidates = [s for s in slashed if s in allowed_pos]
+                                    if candidates:
+                                        quote = str(v_item.get("quoted_sentence", "")).lower()
+                                        w = str(v_item.get("word", "")).lower()
+                                        if quote and w:
+                                            w_esc = re.escape(w)
+                                            # If preceded by article/preposition -> noun ('in the grass roots', 'a revolutionary')
+                                            if re.search(r'\b(?:a|an|the|in|into|on|at|of|for|with|by|from|our|their|his|her)\s+' + w_esc + r'\b', quote):
+                                                if "noun" in candidates: disambiguated = "noun"
+                                            # If followed by a modifying headword -> adjective ('grassroots supporters', 'revolutionary cause', 'socialist society')
+                                            if not disambiguated:
+                                                m = re.search(w_esc + r'\s+([a-z]+)', quote)
+                                                if m and m.group(1) not in {'and', 'or', 'but', 'is', 'was', 'are', 'were', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}:
+                                                    if "adjective" in candidates: disambiguated = "adjective"
+                                        if not disambiguated:
+                                            disambiguated = candidates[0]
+                                if disambiguated:
+                                    v_item["part_of_speech"] = disambiguated
+                                else:
+                                    # Fallback to enhanced fuzzy normalization
+                                    v_item["part_of_speech"] = _normalize_enum(raw_pos, allowed_pos)
 
                 # 6.3. MAPPING
                 # Auto-unwrap agentic wrappers (e.g. {"self": {...}}, {"response": {...}}, {"data": {...}})

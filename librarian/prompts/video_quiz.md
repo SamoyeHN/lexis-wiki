@@ -19,6 +19,7 @@ Create a timestamp-aware video comprehension quiz based on the provided video tr
 
 3. **Video Distractor Taxonomy (STRICT BAN on Absurd Options)**:
    - All 4 options must be plausible, grammatically parallel, and written in formal academic English.
+   - ⚓ **ABSOLUTE SINGLE-FIT VALIDITY**: High diagnostic plausibility must NEVER create ambiguity. The question stem combined with the specific timestamp context MUST provide definitive transcript evidence that makes the correct answer the ONLY defensible choice, while decisively eliminating all three distractors on factual, chronological, or scope grounds.
    - ❌ **STRICTLY PROHIBIT**: Childish, absurd, or comical answers (e.g., 'Komodo dragons', 'the dam is made of steel', 'it is too small to hold water'), trivial common-sense giveaways, and pure polar opposites.
    - Engineer distractors using authentic video assessment cognitive traps:
      * *Cross-Timestamp Context Shift*: Borrows a legitimate fact or term from a different part of the video and falsely misapplies it to the target question.
@@ -28,6 +29,7 @@ Create a timestamp-aware video comprehension quiz based on the provided video tr
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Timestamp Segment] -> [Core Focus: Mechanism / Controversy / Comparison] -> [Traps: Cross-timestamp shift, Rumor vs fact, Over-generalization] -> [Why Distractors Fail]`
    - `explanation`: State what the video explicitly clarifies at the given timestamp, and contrastively explain why each distractor trap is invalid.
+   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are dynamically shuffled, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific wording.
    - `correct_answer_index`: MUST be an integer 0, 1, 2, or 3 matching the exact position of the true answer in 'options'.
    - Do NOT wrap question or option text in quotes or labels (A, B).
 

@@ -91,6 +91,49 @@ def _extract_source_content(user_prompt: str) -> str:
     return user_prompt
 
 
+def _extract_wordlist(user_prompt: str) -> List[str]:
+    """Extract the supplied vocabulary headwords from the content block.
+
+    Prefers Obsidian heading entries of the form `## [[word]]`; falls back to any
+    `## heading` so that differently-formatted word lists still work.
+    """
+    source = _extract_source_content(user_prompt)
+    if not source:
+        return []
+    # Match ## [[...]] where the inner content might contain nested slot brackets like [[pay [somebody] attention]]
+    words = re.findall(r"^##\s*\[\[(.*?)(?:\]\]\s*$)", source, re.MULTILINE)
+    if not words:
+        words = re.findall(r"^##\s*\[\[([^\]]+)\]\]", source, re.MULTILINE)
+    if not words:
+        words = re.findall(r"^##\s+(.+?)\s*$", source, re.MULTILINE)
+    return [w.strip() for w in words if w and w.strip()]
+
+
+def _wordlist_matches(clean_target: str, wordlist: set) -> bool:
+    """True if the (already cleaned) target word matches any headword in the list.
+
+    Handles multi-word units and inflections via whole-token / shared-4-char-stem
+    matching, while avoiding naive substring false positives (e.g. 'win' vs 'window').
+    """
+    if clean_target in wordlist:
+        return True
+    target_tokens = [t for t in clean_target.split() if t]
+    if not target_tokens:
+        return False
+    for wl in wordlist:
+        wl_tokens = [t for t in wl.split() if t]
+        if all(
+            any(
+                t == w
+                or (len(t) >= 4 and len(w) >= 4 and t[:4] == w[:4])
+                for w in wl_tokens
+            )
+            for t in target_tokens
+        ):
+            return True
+    return False
+
+
 def _detect_task_type(task: str, parsed: Any) -> str:
     """Detect the logical task type from JSON structure first, task name as fallback."""
     if isinstance(parsed, dict):
@@ -191,12 +234,42 @@ def _score_schema(parsed: Any, raw_response: str = "") -> Tuple[Optional[float],
 
 
 def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: str) -> Tuple[Optional[float], List[str]]:
-    """Dimension 2 (0–30). Applies to extraction tasks only; returns (None, []) for non-extraction tasks."""
-    if task_type not in ("vocabulary", "expressions", "grammar"):
+    """Dimension 2 (0–30). Applies to extraction and quiz tasks; returns (None, []) otherwise.
+
+    For extraction tasks this verifies quoted sentences are faithful to the source.
+    For quiz tasks this verifies every target_word comes from the supplied word list
+    (anti-hallucination: the assessment may not test fabricated vocabulary).
+    """
+    if task_type not in ("vocabulary", "expressions", "grammar", "quiz"):
         return None, []  # N/A -> normalized out of composite score
     if not items:
         return 0.0, ["❌ No items to evaluate for source faithfulness"]
-    
+
+    # --- Quiz: every target_word must be present in the supplied word list ---
+    if task_type == "quiz":
+        flags: List[str] = []
+        wordlist = {_clean_core(w) for w in _extract_wordlist(user_prompt)}
+        wordlist = {w for w in wordlist if w}
+        checks = matches = 0
+        for item in items:
+            target = str(item.get("target_word") or "").strip()
+            if not target:
+                continue
+            clean_target = _clean_core(target)
+            if not clean_target:
+                continue
+            checks += 1
+            if wordlist and _wordlist_matches(clean_target, wordlist):
+                matches += 1
+            elif not wordlist:
+                flags.append(f"⚠️ No word list found in content; cannot verify target '{target}'")
+            else:
+                flags.append(f"❌ Target word '{target}' not found in supplied word list (possible hallucination)")
+        if checks == 0:
+            # No target_word items (e.g. reading/translation quizzes) -> nothing to verify -> N/A
+            return None, flags
+        return max(0.0, round((matches / checks) * W_VERBATIM, 1)), flags
+
     flags: List[str] = []
     source = _extract_source_content(user_prompt)
     core_src = _clean_core(source)
@@ -224,8 +297,59 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             word_tokens = [w for w in clean_word.split() if w and w not in stop_slots]
             
             if word_tokens:
-                # Match token or stem/inflection (e.g. degrade -> degradation, took -> take, pose -> poses)
-                matched_count = sum(1 for w in word_tokens if (w in clean_quote or (len(w) >= 4 and w[:4] in clean_quote)))
+                # Match token, stem/inflection (e.g. degrade -> degradation, took -> take, pose -> poses), or irregular forms
+                COMMON_IRREGULARS = {
+                    'lead': ('led',), 'led': ('lead',),
+                    'take': ('took', 'taken'), 'took': ('take',), 'taken': ('take',),
+                    'bring': ('brought',), 'brought': ('bring',),
+                    'lay': ('laid',), 'laid': ('lay',),
+                    'make': ('made',), 'made': ('make',),
+                    'give': ('gave', 'given'), 'gave': ('give',), 'given': ('give',),
+                    'come': ('came',), 'came': ('come',),
+                    'go': ('went', 'gone'), 'went': ('go',), 'gone': ('go',),
+                    'keep': ('kept',), 'kept': ('keep',),
+                    'hold': ('held',), 'held': ('hold',),
+                    'find': ('found',), 'found': ('find',),
+                    'break': ('broke', 'broken'), 'broke': ('break',), 'broken': ('break',),
+                    'choose': ('chose', 'chosen'), 'chose': ('choose',), 'chosen': ('choose',),
+                    'run': ('ran',), 'ran': ('run',),
+                    'see': ('saw', 'seen'), 'saw': ('see',), 'seen': ('see',),
+                    'speak': ('spoke', 'spoken'), 'spoke': ('speak',), 'spoken': ('speak',),
+                    'write': ('wrote', 'written'), 'wrote': ('write',), 'written': ('write',),
+                    'build': ('built',), 'built': ('build',),
+                    'lose': ('lost',), 'lost': ('lose',),
+                    'pay': ('paid',), 'paid': ('pay',),
+                    'say': ('said',), 'said': ('say',),
+                    'send': ('sent',), 'sent': ('send',),
+                    'spend': ('spent',), 'spent': ('spend',),
+                    'stand': ('stood',), 'stood': ('stand',),
+                    'tell': ('told',), 'told': ('tell',),
+                    'think': ('thought',), 'thought': ('think',),
+                    'understand': ('understood',), 'understood': ('understand',),
+                    'win': ('won',), 'won': ('win',),
+                    'catch': ('caught',), 'caught': ('catch',),
+                    'draw': ('drew', 'drawn'), 'drew': ('draw',), 'drawn': ('draw',),
+                    'grow': ('grew', 'grown'), 'grew': ('grow',), 'grown': ('grow',),
+                    'hear': ('heard',), 'heard': ('hear',),
+                    'hide': ('hid', 'hidden'), 'hid': ('hide',), 'hidden': ('hide',),
+                    'know': ('knew', 'known'), 'knew': ('know',), 'known': ('know',),
+                    'leave': ('left',), 'left': ('leave',),
+                    'meet': ('met',), 'met': ('meet',),
+                    'read': ('read',),
+                    'rise': ('rose', 'risen'), 'rose': ('rise',), 'risen': ('rise',),
+                    'wear': ('wore', 'worn'), 'wore': ('wear',), 'worn': ('wear',),
+                    'drive': ('drove', 'driven'), 'drove': ('drive',), 'driven': ('drive',),
+                    'fall': ('fell', 'fallen'), 'fell': ('fall',), 'fallen': ('fall',),
+                    'feel': ('felt',), 'felt': ('feel',),
+                }
+                def _tok_in_quote(tok: str) -> bool:
+                    if tok in clean_quote or (len(tok) >= 4 and tok[:4] in clean_quote):
+                        return True
+                    if tok in COMMON_IRREGULARS and any(ir in clean_quote for ir in COMMON_IRREGULARS[tok]):
+                        return True
+                    return False
+
+                matched_count = sum(1 for w in word_tokens if _tok_in_quote(w))
                 min_needed = max(1, len(word_tokens) // 2 + (1 if len(word_tokens) % 2 == 1 else 0))
                 word_in_quote = (matched_count >= min_needed)
             else:
@@ -303,15 +427,36 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Option
             idx = item.get("correct_answer_index")
             explanation = str(item.get("explanation", "")).strip()
             question = str(item.get("question", item.get("translated_sentence", ""))).strip()
+            target = str(item.get("target_word", "")).strip()
             checks += 1
-            valid_options = isinstance(options, list) and len(options) == 4 and len(set(options)) == 4
+            
+            # 1. Option count and distinctness (case/space-insensitive uniqueness check)
+            is_list_4 = isinstance(options, list) and len(options) == 4
+            has_no_duplicates = is_list_4 and len(set(str(o).strip().lower() for o in options)) == 4
+            
+            # 2. Correct answer index validity
             valid_idx = isinstance(idx, int) and 0 <= idx <= 3
-            if valid_options and valid_idx and explanation and question:
+            
+            # 3. Target word must be present in options and match the correct answer slot options[idx]
+            target_in_options = True
+            if target and is_list_4 and valid_idx:
+                clean_target = _clean_core(target)
+                selected_opt = _clean_core(str(options[idx]))
+                # Match exact or valid inflections (e.g. assert -> asserted, marathon -> marathons)
+                target_in_options = (clean_target == selected_opt) or (
+                    len(clean_target) >= 4 and len(selected_opt) >= 4 and (
+                        selected_opt.startswith(clean_target[:4]) or clean_target.startswith(selected_opt[:4])
+                    )
+                )
+
+            if is_list_4 and has_no_duplicates and valid_idx and target_in_options and explanation and question:
                 passes += 1
             else:
                 reasons = []
-                if not valid_options: reasons.append("options not 4 distinct items")
+                if not is_list_4: reasons.append("options count != 4")
+                elif not has_no_duplicates: reasons.append("duplicate options detected")
                 if not valid_idx: reasons.append("invalid answer index")
+                if not target_in_options: reasons.append(f"target '{target}' not matching options[{idx}]")
                 if not explanation: reasons.append("missing explanation")
                 if not question: reasons.append("missing question text")
                 flags.append(f"⚠️ Quiz question failed pedagogy check: {', '.join(reasons)}")
@@ -355,7 +500,7 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str) -> Tuple[Opti
         "vocabulary": ("word",),
         "expressions": ("word",),
         "grammar": ("pattern_formula", "quote"),
-        "quiz": ("question", "translated_sentence", "target_word", "correct_english_answer"),
+        "quiz": ("target_word", "question", "translated_sentence", "correct_english_answer"),
         "summary": ("concept_name",),
         "mindmap": ("branch_name",),
     }

@@ -19,6 +19,7 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
 
 3. **Listening Distractor Taxonomy (NO Cartoonish Choices)**:
    - All 4 options must be plausible, concise, grammatically parallel, and closely tied to the discussion.
+   - ⚓ **ABSOLUTE SINGLE-FIT VALIDITY**: High diagnostic plausibility must NEVER create ambiguity. The question stem combined with the specific dialogue turn MUST provide definitive conversational evidence (clear speaker attribution, explicit conditions, or established consensus) that makes the correct answer the ONLY defensible choice, while decisively eliminating all three distractors without relying on subjective conjecture.
    - ❌ **STRICTLY PROHIBIT**: Childish or absurd choices (e.g., 'machines are too heavy to move', 'destroy all electronics'), trivial common-sense giveaways, and pure polar opposites.
    - Engineer distractors using authentic listening test cognitive traps:
      * *Speaker Attribution Trap*: Attributes an opinion, concern, or proposal to Speaker 1 when it was actually expressed or qualified by Speaker 2 (or vice versa).
@@ -28,6 +29,7 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Skill (Detail/Inference/Main Idea)] -> [Speaker Anchor (e.g. Mark, Turn 4)] -> [Traps: Speaker Confusion / Verbatim Catch / Overstatement] -> [Why Distractors Fail]`
    - `explanation`: State the exact dialogue turn supporting the correct answer, and contrastively explain why each distractor trap is invalid.
+   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are dynamically shuffled, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific wording.
    - `correct_answer_index`: MUST be an integer 0, 1, 2, or 3 matching the exact position of the true answer in 'options'. Do NOT use alternative key names.
    - Do NOT wrap question or option text in quotes or labels (A, B).
 

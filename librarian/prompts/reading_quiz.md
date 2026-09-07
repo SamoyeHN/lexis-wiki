@@ -15,6 +15,7 @@ Create a reading comprehension assessment based on the provided passage.
 
 3. **Diagnostic Distractors (Structured Taxonomy)**:
    - All 4 options must be plausible, grammatically parallel, and closely tied to the passage topic. No option labels (A, B) or quotes around options.
+   - ⚓ **ABSOLUTE SINGLE-FIT VALIDITY**: High diagnostic plausibility must NEVER create ambiguity. The question stem combined with the passage MUST provide definitive, objective textual evidence that makes the correct answer the ONLY defensible choice, while decisively eliminating all three distractors on factual, logical, or scope grounds without relying on subjective interpretation.
    - ❌ **STRICTLY PROHIBIT**: Absurd/cartoonish extremes (e.g., "ignore all warnings", "destroy the planet"), trivial common-sense giveaways, and lazy binary opposites.
    - Draw distractors from authentic reading traps:
      * *Literal Matching Trap*: borrows verbatim words or phrasing from the passage, but twists the logical relationship, cause-and-effect, or subject/object.
@@ -24,6 +25,7 @@ Create a reading comprehension assessment based on the provided passage.
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Skill] -> [Text Anchor (e.g. Para 3)] -> [Distractor Traps: Literal Match / Scope Shift / Distortion] -> [Why Distractors Fail]`
    - `explanation`: State the exact text evidence for the correct answer, and contrastively explain why each distractor fails.
+   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are randomized and dynamically shuffled during test presentation, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific text content (e.g., write *"The statement claiming 'professional runners' is incorrect because..."* instead of *"Option B is incorrect"*).
 
 PASSAGE:
 {passage_content}

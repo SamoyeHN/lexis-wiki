@@ -34,8 +34,14 @@ class WikiProcessor:
             
             # Sanitize string fields (options, target_word, word, correct_english_answer)
             quote_strip_pattern = r'^[«»"\'\u201c\u201d\u2018\u2019\s]+|[«»"\'\u201c\u201d\u2018\u2019\s]+$'
+            label_strip_pattern = r'^(?:[A-Da-d\d][\.\)\:\-]\s*)'
             raw_options = q_dict["options"]
-            options = [re.sub(quote_strip_pattern, '', str(opt or '')) for opt in raw_options]
+            options = []
+            for opt in raw_options:
+                cleaned = re.sub(quote_strip_pattern, '', str(opt or ''))
+                cleaned = re.sub(label_strip_pattern, '', cleaned).strip()
+                cleaned = re.sub(quote_strip_pattern, '', cleaned)
+                options.append(cleaned)
             
             for str_field in ["target_word", "word", "correct_english_answer"]:
                 if str_field in q_dict and q_dict[str_field]:
@@ -258,12 +264,20 @@ class WikiProcessor:
                     def _resolve_slotted_word(expr_obj):
                         w = expr_obj.get("word", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "word", "")
                         aud = expr_obj.get("design_audit", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "design_audit", "")
+                        valid_slot_pattern = r'\[(something|somebody|someone|one\'s|one|entity|domain|factor|doing something|clause|[a-z_]+)\]|\bone\'s\b'
                         if ("[" not in w and "one's" not in w) and ("[" in aud or "one's" in aud):
                             parts = [p.strip() for p in aud.replace("->", "➔").split("➔")]
-                            for p in parts:
+                            candidate_steps = parts[1:] if len(parts) > 1 else parts
+                            for p in candidate_steps:
                                 if ("[" in p or "one's" in p):
-                                    cand = p[5:].strip().lstrip(':').strip() if p.upper().startswith("DRAFT") else p
+                                    cand = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
                                     candidate = cand.split(" -")[0].split(" (")[0].strip()
+                                    if candidate.startswith("[") and candidate.endswith("]"):
+                                        inner = candidate[1:-1].strip()
+                                        if not re.search(valid_slot_pattern, inner, re.IGNORECASE):
+                                            continue
+                                    if not re.search(valid_slot_pattern, candidate, re.IGNORECASE):
+                                        continue
                                     cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
                                     w_tokens = re.findall(r'[a-zA-Z]+', w)
                                     if cand_tokens and w_tokens and cand_tokens[0].lower() == w_tokens[0].lower():
@@ -273,6 +287,20 @@ class WikiProcessor:
                     expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                     for expr in expr_list:
                         resolved_word = _resolve_slotted_word(expr)
+                        while resolved_word.startswith("[") and resolved_word.endswith("]"):
+                            depth = 0
+                            matched_end = False
+                            for idx, char in enumerate(resolved_word):
+                                if char == "[": depth += 1
+                                elif char == "]":
+                                    depth -= 1
+                                    if depth == 0:
+                                        if idx == len(resolved_word) - 1: matched_end = True
+                                        break
+                            if matched_end:
+                                resolved_word = resolved_word[1:-1].strip()
+                            else:
+                                break
                         if isinstance(expr, dict):
                             mapped_item = {
                                 "design_audit": expr.get("design_audit", ""),
