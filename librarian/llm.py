@@ -15,15 +15,34 @@ class LLMError(Exception):
 # Declarative architectural model capability profiles
 MODEL_CAPABILITY_PROFILES = [
     {
-        # Reasoning models: Native strict schema, disable reasoning tokens during structured JSON extraction
-        "match": ["granite", "deepseek-r1", "qwq", "ornith"],
+        # Granite family (e.g. granite4.2:30b): Prompt-guided JSON mode with thinking disabled
+        # Avoids GBNF grammar token-masking repetition loops and reasoning stalls while maintaining diverse, schema-compliant output
+        "match": ["granite"],
+        "enforce_gbnf": False,
+        "think": False,
+    },
+    {
+        # Dedicated reasoning models: Native strict schema, disable reasoning tokens during structured JSON extraction
+        "match": ["deepseek-r1", "qwq", "ornith"],
         "enforce_gbnf": True,
         "think": False,
     },
     {
-        # Gemma family (including Gemma 4 reasoning models): disable CoT thinking during structured JSON extraction
+        # Specialized translation checkpoints (e.g. translategemma):
+        # Setting API format: "json" causes translategemma to immediately emit empty '{}'
+        # because its weights were trained specifically for direct translation pairs.
+        # It follows prompt-injected JSON schema natively without the Ollama format constraint.
+        "match": ["translategemma"],
+        "enforce_gbnf": False,
+        "enforce_json_format": False,
+        "think": False,
+    },
+    {
+        # Standard Gemma family (e.g. gemma2, gemma4):
+        # Fully compatible with prompt-guided JSON mode (format: "json")
         "match": ["gemma"],
         "enforce_gbnf": False,
+        "enforce_json_format": True,
         "think": False,
     },
     {
@@ -71,10 +90,12 @@ def get_model_profile(model_name: str) -> dict:
     # Tier 1: Base architectural profile matching
     base_gbnf = False
     base_think = None
+    base_json_format = True
     for profile_rule in MODEL_CAPABILITY_PROFILES:
         if any(keyword in m_lower for keyword in profile_rule["match"]):
             base_gbnf = profile_rule["enforce_gbnf"]
             base_think = profile_rule["think"]
+            base_json_format = profile_rule.get("enforce_json_format", True)
             # Dynamic reasoning check for Native GBNF models:
             # If running a thinking/reasoning fine-tune (e.g. Llama-3-Thinking), allow thinking unconstrained
             # before the GBNF grammar clamp locks onto the final JSON output.
@@ -90,9 +111,11 @@ def get_model_profile(model_name: str) -> dict:
     model_opts = config.get("model_options", {}).get(model_name, {})
     resolved_gbnf = model_opts.get("enforce_gbnf", base_gbnf)
     resolved_think = model_opts.get("think", base_think)
+    resolved_json_format = model_opts.get("enforce_json_format", base_json_format)
 
     profile = dict(model_opts)
     profile["enforce_gbnf"] = resolved_gbnf
+    profile["enforce_json_format"] = resolved_json_format
     if resolved_think is not None:
         profile["think"] = resolved_think
 
@@ -411,20 +434,21 @@ class LLMClient:
                                 
                                 # Format clear, surgical feedback for the model
                                 issue_bullets = "\n".join([f"- {f}" for f in flags[:5]])
-                                feedback_note = (
-                                    f"\n\n### 🚨 [QUALITY AUDIT RETRY #{retry_count + 1}/{max_qa_retries} - Score: {composite}/100]\n"
+                                critique_prompt = (
+                                    f"### 🚨 [QUALITY AUDIT REVIEW #{retry_count + 1}/{max_qa_retries} - Score: {composite:.1f}/100]\n"
                                     f"Lowest dimension: {lowest_dim}.\n"
-                                    f"Please address and resolve these critical pedagogical issues:\n"
+                                    f"Your previous response had the following critical pedagogical issues:\n"
                                     f"{issue_bullets}\n\n"
                                     f"MANDATORY FIX RULES:\n"
                                     f"1. ZERO HALLUCINATION: All words and quoted sentences MUST physically exist verbatim in the source text.\n"
                                     f"2. Every quoted sentence MUST literally contain the target word/expression.\n"
                                     f"3. Eliminate duplicate items and ensure each definition is distinct and context-specific.\n"
-                                    f"4. Quality > Quota: Do not pad with nonexistent words."
+                                    f"4. Quality > Quota: Do not pad with nonexistent words.\n\n"
+                                    f"Please output the corrected, complete JSON object resolving these issues."
                                 )
                                 import logging
                                 logging.getLogger("librarian").info(
-                                    f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) with surgical feedback..."
+                                    f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) via multi-turn self-correction..."
                                 )
                                 # Log failed attempt with QA_LOW_SCORE
                                 from .logger import log_task
@@ -438,18 +462,24 @@ class LLMClient:
                                     failure_category="QA_LOW_SCORE",
                                     mode=mode_str,
                                     api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                                    duration=call_duration,
+                                    start_time=start_time,
+                                    end_time=end_time,
                                 )
 
-                                retry_messages = [dict(m) for m in messages]
-                                sys_msg = next((m for m in retry_messages if m["role"] == "system"), None)
-                                if sys_msg:
-                                    sys_msg["content"] += feedback_note
-                                else:
-                                    user_target = next((m for m in retry_messages if m["role"] == "user"), None)
-                                    if user_target:
-                                        user_target["content"] += feedback_note
-                                    else:
-                                        retry_messages.insert(0, {"role": "system", "content": feedback_note})
+                                # Multi-turn self-correction:
+                                # Retain base prompt, append model's prior output as assistant turn, and append reviewer critique
+                                # If this is a subsequent retry (retry_count > 0), prune prior critique turns to keep context tidy:
+                                # [Original Prompt] -> [Latest Assistant Output] -> [Latest Reviewer Critique]
+                                base_messages = []
+                                for m in messages:
+                                    if m["role"] == "assistant" or (m["role"] == "user" and "### 🚨 [QUALITY AUDIT REVIEW" in m.get("content", "")):
+                                        break
+                                    base_messages.append(dict(m))
+
+                                retry_messages = list(base_messages)
+                                retry_messages.append({"role": "assistant", "content": final_json})
+                                retry_messages.append({"role": "user", "content": critique_prompt})
                                 
                                 return self.chat(
                                     retry_messages,
@@ -625,9 +655,10 @@ class LLMClient:
             payload["think"] = profile["think"]
         
         use_gbnf = profile.get("enforce_gbnf", False)
+        enforce_json = profile.get("enforce_json_format", True)
         if schema and use_gbnf:
             payload["format"] = get_json_schema(schema, include_descriptions=False)
-        elif json_format or schema:
+        elif (json_format or schema) and enforce_json:
             payload["format"] = "json"
             
         timeout_val = (5, self.timeout) if not stream else (5, None)
