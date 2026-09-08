@@ -289,12 +289,23 @@ def _map_value(t: Any, val: Any) -> Any:
         return _normalize_enum(val, args)
 
     # 2. Nested Dataclass Mapping
-    if dataclasses.is_dataclass(t) and isinstance(val, dict):
-        return validate_and_map(t, val)
+    if dataclasses.is_dataclass(t):
+        if isinstance(val, dict):
+            return validate_and_map(t, val)
+        return None
     
     # 3. List Mapping
     if (origin is list or origin is List) and isinstance(val, list):
-        return [_map_value(args[0], item) for item in val]
+        item_type = args[0]
+        mapped_list = []
+        for item in val:
+            # If items in the list are dataclasses, only map valid dict items
+            if dataclasses.is_dataclass(item_type) and not isinstance(item, dict):
+                continue
+            res = _map_value(item_type, item)
+            if res is not None:
+                mapped_list.append(res)
+        return mapped_list
     
     # 4. Optional / Union Mapping
     if origin is Union:

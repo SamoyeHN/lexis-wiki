@@ -1513,7 +1513,7 @@
                                 <span class="label-md-system text-muted" style="font-size: 0.65rem;">Count</span>
                                 <span id="quiz-count-badge" class="badge bg-secondary-subtle text-secondary font-monospace border border-secondary-subtle px-2 py-0.5 rounded-pill" style="font-size: 0.7rem;">10</span>
                             </div>
-                            <input type="range" class="custom-slider w-100" id="quiz-count-slider" min="5" max="50" value="10" oninput="updateQuizCount(this.value)">
+                            <input type="range" class="custom-slider w-100" id="quiz-count-slider" min="5" max="20" value="10" oninput="updateQuizCount(this.value)">
                             <input type="hidden" id="quiz-count-input" value="10">
                             <select class="form-select d-none" id="quiz-source-select"></select>
                             <select class="form-select d-none" id="quiz-template-select">
@@ -1770,17 +1770,17 @@
                     <div>
                         <div class="d-flex justify-content-between">
                             <span>Vocabulary</span>
-                            <span class="text-info fw-bold" id="config-quiz-vocabulary-val">20</span>
+                            <span class="text-info fw-bold" id="config-quiz-vocabulary-val">10</span>
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-vocabulary" min="0" max="30" value="20" oninput="document.getElementById('config-quiz-vocabulary-val').innerText = this.value">
+                        <input type="range" class="custom-slider w-100" id="config-quiz-vocabulary" min="0" max="30" value="10" oninput="document.getElementById('config-quiz-vocabulary-val').innerText = this.value">
                     </div>
                     <!-- Reading -->
                     <div>
                         <div class="d-flex justify-content-between">
                             <span>Reading</span>
-                            <span class="text-success fw-bold" id="config-quiz-reading-val">10</span>
+                            <span class="text-success fw-bold" id="config-quiz-reading-val">5</span>
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-reading" min="0" max="30" value="10" oninput="document.getElementById('config-quiz-reading-val').innerText = this.value">
+                        <input type="range" class="custom-slider w-100" id="config-quiz-reading" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-reading-val').innerText = this.value">
                     </div>
                     <!-- Translation -->
                     <div>
@@ -2983,8 +2983,8 @@
                 document.getElementById('config-max-p-val').innerText = mParallel;
 
                 const qDefaults = appConfig.quiz_defaults || {};
-                const qVocab = qDefaults.vocabulary || 20;
-                const qReading = qDefaults.reading || 10;
+                const qVocab = qDefaults.vocabulary || 10;
+                const qReading = qDefaults.reading || 5;
                 const qTranslation = qDefaults.translation || 5;
                 const qListening = qDefaults.listening || 5;
                 const qVideo = qDefaults.video ?? 5;

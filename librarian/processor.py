@@ -89,14 +89,24 @@ class WikiProcessor:
             return quiz_obj
         
         # Access questions (handle both dict and dataclass)
-        questions = quiz_obj["questions"] if isinstance(quiz_obj, dict) else quiz_obj.questions
-        if not questions:
+        questions = quiz_obj["questions"] if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
             return quiz_obj
+
+        # Filter out malformed items (e.g. naked strings or partial json truncations)
+        valid_questions = [q for q in questions if isinstance(q, dict) or dataclasses.is_dataclass(q)]
+        if not valid_questions:
+            return quiz_obj
+        if isinstance(quiz_obj, dict):
+            quiz_obj["questions"] = valid_questions
+        else:
+            quiz_obj.questions = valid_questions
+        questions = valid_questions
 
         # 1. Check answer index distribution across the entire quiz
         raw_indices = []
         for q in questions:
-            q_dict = q if isinstance(q, dict) else dataclasses.asdict(q)
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
             idx = q_dict.get("correct_answer_index")
             try:
                 raw_indices.append(int(idx))
@@ -118,7 +128,7 @@ class WikiProcessor:
 
         for q in questions:
             # Handle both dict and dataclass
-            q_dict = q if isinstance(q, dict) else dataclasses.asdict(q)
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
             
             # Sanitize string fields (options, target_word, word, correct_english_answer)
             quote_strip_pattern = r'^[«»"\'\u201c\u201d\u2018\u2019\s]+|[«»"\'\u201c\u201d\u2018\u2019\s]+$'

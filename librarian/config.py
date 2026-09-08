@@ -9,9 +9,9 @@ DEFAULT_CONFIG = {
     "model": "gemma4:e4b",
     "wiki_dir": "wiki",
     "quiz_defaults": {
-        "reading": 10,
+        "vocabulary": 10,
+        "reading": 5,
         "translation": 5,
-        "vocabulary": 20,
         "listening": 5,
         "video": 5
     },

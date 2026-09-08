@@ -8,6 +8,7 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
 
 1. **Count & Coverage**:
    - Generate EXACTLY {count} questions testing {count} unique items exclusively from the supplied list. No duplicates, derivatives, or fabricated targets.
+   - ⚠️ **ACTIVE TARGET USAGE MANDATE**: `target_word` MUST match `options[correct_answer_index]` character-for-character. The word placed into the blank `____` must perfectly agree with the declared target's part of speech and required inflectional form.
 
 2. **Question (Contextual & Structural Anchoring)**:
    - Write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (e.g., concession, condition, cause, or contrast).
@@ -24,12 +25,13 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
      * NEVER supply interchangeable synonyms. Distractors cannot merely differ by subtle tone or degree of formality.
    - 🎯 **MANDATORY 3-VECTOR DISTRACTOR TAXONOMY**:
      Each question's 3 distractors MUST consist of:
-     1. *Antonym / Logical Polarity Clash*: directly contradicts the cause/contrast/concession logic established in the sentence clues.
-     2. *Collocation / Syntax Clash*: plausible meaning in the general topic, but violates the blank's dependent preposition, verb valency, or conventional lexical pairing.
-     3. *Domain / Semantic Category Mismatch*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.
+     1. *Trap 1 (Antonym / Logical Polarity Clash)*: directly contradicts the cause/contrast/concession logic established in the sentence clues.
+     2. *Trap 2 (Collocation / Syntax Clash)*: plausible meaning in the general topic, but violates the blank's dependent preposition, verb valency, or conventional lexical pairing.
+     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.
 
 4. **Design Audit & Explanation**:
-   - `design_audit`: `AUDIT: [Target & Form] -> [Anchor: Clues & Preposition] -> [1.Antonym] [2.Syntax/Collocation Clash] [3.Domain Mismatch] -> [Objective Disqualifications]`
+   - `design_audit`: Follow this rigorous 4-part structure:
+     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Polarity): ...] [Trap 2 (Collocation/Syntax Clash): ...] [Trap 3 (Domain Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
    - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
    - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `definition`: Concise dictionary meaning of the target in this context.
