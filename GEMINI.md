@@ -88,11 +88,58 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 ### Pending
 **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
 **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
-**QA & Assessment**: Expert Mode (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation)
+**QA & Assessment**: 🔄 Level 2 Expert Model Quality Audit (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation)
 
 ---
 
-## 6. Automatic Interlinking (Wikilinks)
+## 6. Two-Level QA Quality Audit Architecture
+
+The system enforces quality through a strict two-tier verification pipeline:
+
+```
+[ Generation Phase (Small / Fast Model) ]
+                    │
+                    ▼
+┌────────────────────────────────────────────────────────┐
+│ Level 1: Deterministic Code Gate (Structural Audit)    │
+│  - Zero token cost, instantaneous (<5ms) python logic  │
+└────────────────────────────────────────────────────────┘
+                    │
+                    ├─► [❌ FAILED: Schema violation, missing keys, target desync, duplicate options]
+                    │       └─► Triggers immediate self-healing or targeted retry loop
+                    ▼ [✅ PASSED]
+┌────────────────────────────────────────────────────────┐
+│ Level 2: Expert Model Quality Audit (Semantic Audit)   │
+│  - High-intelligence evaluator (LLM-as-a-Judge)        │
+└────────────────────────────────────────────────────────┘
+                    │
+                    ├─► [❌ FAILED: Hallucination, ambiguous stem, invalid distractors, double keys]
+                    │       └─► Generates diagnostic audit report & pedagogical feedback
+                    ▼ [✅ PASSED]
+          [ Final Content Delivery / HTML Handout ]
+```
+
+### Level 1: Deterministic Code Gate (Structure & Physical Truth)
+Pure Python validation ensuring structural completeness and absolute invariants:
+- **Schema & Array Bounds**: Strict enforcement of required keys, field types, and exact item counts (e.g., exactly 4 options per quiz question).
+- **Physical Ground Truth Anchors**:
+  - `target_word` strictly matches `options[correct_answer_index]`.
+  - Quoted text/sentences exist verbatim in source material.
+  - Option uniqueness (no duplicate options).
+- **Answer Distribution & Option Integrity**:
+  - Answer keys distributed across 0, 1, 2, 3 (bias-detection triggers automatic shuffle).
+  - Explanation option labels (`Option A/B/C/D`) are atomically remapped upon option shuffling or index repair.
+
+### Level 2: Expert Model Quality Audit (Content & Pedagogical Correctness)
+High-reasoning semantic evaluation focusing on linguistic rigor:
+- **Blind Solver Test**: The expert model independently solves the item without access to declared answers. Divergence indicates ambiguous stems or insufficient textual evidence.
+- **Absolute Single-Fit Validity**: Verifies that the correct answer is the ONLY defensible choice while all 3 distractors are objectively and conclusively eliminated.
+- **Cognitive Distractor Trap Quality**: Validates that distractors represent authentic educational traps (e.g., Chinglish L1 negative transfer, Scope Shift, Speaker Attribution) rather than trivial or absurd giveaways.
+- **Factuality & Faithfulness**: Verifies that conclusions are fully warranted by the provided context or timestamped transcript evidence.
+
+---
+
+## 7. Automatic Interlinking (Wikilinks)
 
 The system generates an Obsidian-style wiki. The following interlinking rules apply:
 
@@ -101,7 +148,7 @@ The system generates an Obsidian-style wiki. The following interlinking rules ap
 
 ---
 
-## 7. Frontmatter Traceability
+## 8. Frontmatter Traceability
 
 All generated Markdown files must include properly structured YAML frontmatter:
 
@@ -111,13 +158,13 @@ All generated Markdown files must include properly structured YAML frontmatter:
 
 ---
 
-## 8. Validation Over Cleaning
+## 9. Validation Over Cleaning
 
 Enforce structure through the schema API rather than post-processing. If the returned JSON is malformed, investigate the schema or prompt alignment before adding cleanup logic.
 
 ---
 
-## 9. MCP Tool Integration and Design Guidelines
+## 10. MCP Tool Integration and Design Guidelines
 
 To maintain visual excellence, security, and accuracy:
 - **Bootstrap Reference**: Always use the `context7` MCP server to query and fetch the latest official specifications and best practices for Bootstrap 5 elements (e.g., spinners, classes, grid layout).
