@@ -5,7 +5,7 @@ import re
 import dataclasses
 import base64
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from .config import config
 from .llm import llm
@@ -22,12 +22,100 @@ class WikiProcessor:
 
     def _shuffle_quiz_options(self, quiz_obj):
         """Randomizes the order of options for each question and updates the correct index."""
+        return self.shuffle_quiz_options(quiz_obj)
+
+    @staticmethod
+    def _remap_explanation_labels(explanation: str, old_to_new: Dict[int, int]) -> str:
+        """
+        Safely remaps 'Option A/B/C/D', 'Choice 1/2/3/4', '(A)', '[B]' etc. in explanations
+        when options are shuffled, avoiding swap collisions via atomic single-pass regex substitution.
+        """
+        if not explanation or not old_to_new:
+            return explanation
+
+        num_to_let = {0: 'A', 1: 'B', 2: 'C', 3: 'D'}
+        word_to_num = {'one': 0, 'two': 1, 'three': 2, 'four': 3, 'first': 0, 'second': 1, 'third': 2, 'fourth': 3}
+        let_to_num = {'a': 0, 'b': 1, 'c': 2, 'd': 3}
+
+        # 1. Matches: Option A, Choice B, Option 1, Option One, etc.
+        def replace_prefixed(m):
+            prefix = m.group(1)
+            raw_target = m.group(2).lower()
+            old_idx = None
+            if raw_target.isdigit():
+                val = int(raw_target)
+                if 1 <= val <= 4: old_idx = val - 1
+                elif 0 <= val <= 3: old_idx = val
+            elif raw_target in word_to_num:
+                old_idx = word_to_num[raw_target]
+            elif raw_target in let_to_num:
+                old_idx = let_to_num[raw_target]
+
+            if old_idx is not None and old_idx in old_to_new:
+                return f"{prefix} {num_to_let[old_to_new[old_idx]]}"
+            return m.group(0)
+
+        # 2. Matches bracketed or parenthesized letters: (A), (B), [A], [B]
+        def replace_bracketed(m):
+            open_b = m.group(1)
+            let = m.group(2).lower()
+            close_b = m.group(3)
+            if let in let_to_num and let_to_num[let] in old_to_new:
+                return f"{open_b}{num_to_let[old_to_new[let_to_num[let]]]}{close_b}"
+            return m.group(0)
+
+        res = re.sub(
+            r'\b(Option|Choice)\s+([A-Da-d\d]|One|Two|Three|Four|First|Second|Third|Fourth)\b',
+            replace_prefixed,
+            explanation,
+            flags=re.IGNORECASE
+        )
+        res = re.sub(r'(\(|\b\[)([A-Da-d])(\]|\))', replace_bracketed, res)
+        return res
+
+    @classmethod
+    def shuffle_quiz_options(cls, quiz_obj: Any) -> Any:
+        """
+        Sanitizes options and ensures robust answer key distribution.
+        If the LLM already naturally randomized the correct_answer_index across options (balanced spread),
+        the natural options order and explanations are preserved intact.
+        If answers are heavily biased (e.g. all 0s or >50% on a single index), options are shuffled
+        and any references like 'Option A/B/C/D' in explanations are atomically remapped to the new indices.
+        """
+        import dataclasses
+        from collections import Counter
+        
         if not hasattr(quiz_obj, "questions") and not isinstance(quiz_obj, dict):
             return quiz_obj
         
         # Access questions (handle both dict and dataclass)
         questions = quiz_obj["questions"] if isinstance(quiz_obj, dict) else quiz_obj.questions
-        
+        if not questions:
+            return quiz_obj
+
+        # 1. Check answer index distribution across the entire quiz
+        raw_indices = []
+        for q in questions:
+            q_dict = q if isinstance(q, dict) else dataclasses.asdict(q)
+            idx = q_dict.get("correct_answer_index")
+            try:
+                raw_indices.append(int(idx))
+            except (TypeError, ValueError):
+                raw_indices.append(0)
+
+        # Determine if answer distribution is biased:
+        # Biased if total questions >= 3 and either:
+        # (a) any single answer index accounts for > 50% of questions, OR
+        # (b) across 4 choices, 2 or more choices are never used at all.
+        is_biased = False
+        n_q = len(raw_indices)
+        if n_q >= 3:
+            counts = Counter(raw_indices)
+            most_common_freq = counts.most_common(1)[0][1]
+            unique_indices = set(raw_indices)
+            if (most_common_freq / n_q) > 0.50 or len(unique_indices) <= 2:
+                is_biased = True
+
         for q in questions:
             # Handle both dict and dataclass
             q_dict = q if isinstance(q, dict) else dataclasses.asdict(q)
@@ -35,7 +123,7 @@ class WikiProcessor:
             # Sanitize string fields (options, target_word, word, correct_english_answer)
             quote_strip_pattern = r'^[«»"\'\u201c\u201d\u2018\u2019\s]+|[«»"\'\u201c\u201d\u2018\u2019\s]+$'
             label_strip_pattern = r'^(?:[A-Da-d\d][\.\)\:\-]\s*)'
-            raw_options = q_dict["options"]
+            raw_options = q_dict.get("options", [])
             options = []
             for opt in raw_options:
                 cleaned = re.sub(quote_strip_pattern, '', str(opt or ''))
@@ -69,31 +157,63 @@ class WikiProcessor:
 
             # Enforce answer synchronization. LLMs occasionally desync the index from the
             # option it should point at; repair it here so a graded quiz is never wrong.
+            index_was_repaired = False
             if expected_answer is not None and options:
                 if expected_answer in options:
                     correct_idx = options.index(expected_answer)
+                    if correct_idx != declared_idx:
+                        index_was_repaired = True
                 else:
-                    # Correct answer is missing from the bank entirely; slot it in at the
-                    # declared position so the item stays 4-options and gradeable.
                     options[declared_idx] = expected_answer
                     correct_idx = declared_idx
             else:
                 correct_idx = declared_idx
-            
-            # Shuffle
-            combined = list(zip(options, range(len(options))))
-            random.shuffle(combined)
-            
-            new_options = [opt for opt, old_idx in combined]
-            new_correct_idx = next(i for i, (opt, old_idx) in enumerate(combined) if old_idx == correct_idx)
-            
-            # Update
-            if isinstance(q, dict):
-                q["options"] = new_options
-                q["correct_answer_index"] = new_correct_idx
+
+            if is_biased:
+                # Shuffle options and record old_idx -> new_idx mapping
+                combined = list(zip(options, range(len(options))))
+                random.shuffle(combined)
+                
+                new_options = [opt for opt, old_idx in combined]
+                new_correct_idx = next(i for i, (opt, old_idx) in enumerate(combined) if old_idx == correct_idx)
+                old_to_new = {old_idx: new_idx for new_idx, (opt, old_idx) in enumerate(combined)}
+
+                # Update explanation if present
+                cur_exp = q_dict.get("explanation", "")
+                if cur_exp:
+                    remapped_exp = cls._remap_explanation_labels(cur_exp, old_to_new)
+                    if isinstance(q, dict):
+                        q["explanation"] = remapped_exp
+                    else:
+                        q.explanation = remapped_exp
+
+                # Update options and correct_answer_index
+                if isinstance(q, dict):
+                    q["options"] = new_options
+                    q["correct_answer_index"] = new_correct_idx
+                else:
+                    q.options = new_options
+                    q.correct_answer_index = new_correct_idx
             else:
-                q.options = new_options
-                q.correct_answer_index = new_correct_idx
+                # If options are not shuffled, but the index was repaired because LLM pointed to wrong slot,
+                # remap the explanation to align with the repaired index
+                if index_was_repaired:
+                    cur_exp = q_dict.get("explanation", "")
+                    if cur_exp:
+                        # Map old declared_idx to actual correct_idx
+                        repair_map = {declared_idx: correct_idx}
+                        remapped_exp = cls._remap_explanation_labels(cur_exp, repair_map)
+                        if isinstance(q, dict):
+                            q["explanation"] = remapped_exp
+                        else:
+                            q.explanation = remapped_exp
+
+                if isinstance(q, dict):
+                    q["options"] = options
+                    q["correct_answer_index"] = correct_idx
+                else:
+                    q.options = options
+                    q.correct_answer_index = correct_idx
                 
         return quiz_obj
 

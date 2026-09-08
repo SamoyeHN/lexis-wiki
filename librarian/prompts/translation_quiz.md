@@ -30,8 +30,8 @@ Create a Chinese-to-English translation assessment that seamlessly integrates th
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Target Vocab + Grammar Formula] -> [Academic Scenario] -> [Trap 1 (Literal Chinglish), Trap 2 (Collocation Shift), Trap 3 (Formula Flaw)] -> [Why Distractors Fail]`
    - `hint`: Concise pedagogical hint highlighting the key grammatical structure or functional phrase.
-   - `explanation`: Contrastively explain why the correct English translation is superior and explicitly identify the specific grammatical or stylistic flaw in each distractor.
-   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are dynamically shuffled, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or describing their specific words.
+   - `explanation`: Contrastively explain why the correct English translation is superior and explicitly identify the specific grammatical or stylistic flaw in each distractor. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
+   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
 
 VOCABULARY:
 {vocabulary_content}

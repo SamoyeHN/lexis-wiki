@@ -24,8 +24,8 @@ Create a reading comprehension assessment based on the provided passage.
 
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Skill] -> [Text Anchor (e.g. Para 3)] -> [Distractor Traps: Literal Match / Scope Shift / Distortion] -> [Why Distractors Fail]`
-   - `explanation`: State the exact text evidence for the correct answer, and contrastively explain why each distractor fails.
-   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are randomized and dynamically shuffled during test presentation, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific text content (e.g., write *"The statement claiming 'professional runners' is incorrect because..."* instead of *"Option B is incorrect"*).
+   - `explanation`: State the exact text evidence for the correct answer, and contrastively explain why each distractor fails. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
+   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
 
 PASSAGE:
 {passage_content}

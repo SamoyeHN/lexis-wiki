@@ -28,8 +28,8 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
 
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Skill (Detail/Inference/Main Idea)] -> [Speaker Anchor (e.g. Mark, Turn 4)] -> [Traps: Speaker Confusion / Verbatim Catch / Overstatement] -> [Why Distractors Fail]`
-   - `explanation`: State the exact dialogue turn supporting the correct answer, and contrastively explain why each distractor trap is invalid.
-   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are dynamically shuffled, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific wording.
+   - `explanation`: State the exact dialogue turn supporting the correct answer, and contrastively explain why each distractor trap is invalid. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
+   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `correct_answer_index`: MUST be an integer 0, 1, 2, or 3 matching the exact position of the true answer in 'options'. Do NOT use alternative key names.
    - Do NOT wrap question or option text in quotes or labels (A, B).
 

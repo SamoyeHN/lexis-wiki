@@ -30,8 +30,8 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
 
 4. **Design Audit & Explanation**:
    - `design_audit`: `AUDIT: [Target & Form] -> [Anchor: Clues & Preposition] -> [1.Antonym] [2.Syntax/Collocation Clash] [3.Domain Mismatch] -> [Objective Disqualifications]`
-   - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction).
-   - 🚫 **STRICT BAN ON OPTION LABELS IN EXPLANATION**: Because options are randomized and dynamically shuffled during test presentation, NEVER refer to options as 'Option A/B/C/D' or 'Option 1/2/3/4'. Always refer to choices by quoting or summarizing their specific word or phrase (e.g., write *"'accident' implies a lack of intention, while 'delay' denotes a temporal issue unsuited to this context"* instead of *"Option A is wrong"*).
+   - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
+   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `definition`: Concise dictionary meaning of the target in this context.
 
 CONTENT:
