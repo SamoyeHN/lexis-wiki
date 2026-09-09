@@ -84,13 +84,19 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 - [x] Video Quiz Extension (Bilibili/MP4 via Whisper)
 - [x] pyproject.toml dependency management
 - [x] QA: Evaluation schema (faithfulness/completeness/pedagogical/schema adherence) + retry loop at <80% threshold
+- [x] Level 2 Expert Model Quality Audit (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation, multi-turn self-correction loop)
 
 ### Pending
-**UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
-**Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
-**QA & Assessment**: 🔄 Level 2 Expert Model Quality Audit (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation)
+- **Architecture / Generation Pipeline**: Multi-turn Prose-to-JSON quiz generation pipeline (Turn 1: Unconstrained prose/drafting with reasoning enabled for linguistic depth & authentic traps; Turn 2: Deterministic schema packaging with reasoning disabled to optimize throughput & format stability).
+  - *Sampling / Hyperparameters Mandate*: 草稿生成（Prose Drafting）与专家审计（Expert Audit）阶段均使用模型自身缺省参数（Default Parameters，如默认 temperature / top_p / thinking 等，不强制覆盖注入 0.2 或人工干预参数），保持模型原生推导能力。*先测试基准评测，验证后再实施。*
+- **Vocabulary Extraction Expert Audit & Item Filtering**:
+  - *Context*: 在 JSON 模式下，模型偏向于根据材料中的所有词汇尽量穷尽出题（如从 10 题扩张到 20+ 题），提升了题库覆盖度。
+  - *Design*: 结合 Expert Mode，在 `vocabulary extraction` 阶段引入 Expert Audit，由高智能专家模型从源材料或提取列表中挑选出最具代表性、教学权重最高的核心重点词汇（Curated Lexical Subset），从源头上按需精准供给 Quiz Generator，兼顾生成速度与教学覆盖。
+- **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
+- **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
 
 ---
+
 
 ## 6. Two-Level QA Quality Audit Architecture
 

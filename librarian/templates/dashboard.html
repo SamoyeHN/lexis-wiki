@@ -208,6 +208,130 @@
             box-shadow: 0 4px 16px rgba(251, 191, 36, 0.3), 0 0 0 1px rgba(251, 191, 36, 0.25);
         }
 
+        /* ===== LLM Hero Board (Leaderboard & QA Audit) ===== */
+        .hb-top-stat {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1.5rem;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--card-border);
+            background:
+                radial-gradient(120% 200% at 100% 0%, rgba(251, 191, 36, 0.14), transparent 60%),
+                var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            position: relative;
+            overflow: hidden;
+        }
+        .hb-top-stat::after {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+            background: linear-gradient(180deg, #fde68a, #f59e0b);
+        }
+        .hb-top-medal {
+            flex: none;
+            width: 52px; height: 52px;
+            border-radius: var(--radius-full);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem;
+            color: #3a2a05;
+            background: linear-gradient(135deg, #fde68a, #f59e0b);
+            box-shadow: 0 6px 20px rgba(245, 158, 11, 0.35);
+        }
+        .hb-top-score {
+            font-family: var(--font-headline);
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1;
+            background: linear-gradient(90deg, #fde68a, #f59e0b);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            color: #f59e0b;
+        }
+        .hb-top-meta {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        .hb-rank {
+            width: 30px; height: 30px;
+            border-radius: var(--radius-full);
+            display: inline-flex; align-items: center; justify-content: center;
+            font-family: var(--font-headline);
+            font-weight: 700; font-size: 0.85rem;
+        }
+        .hb-rank-1 { background: linear-gradient(135deg, #fde68a, #f59e0b); color: #3a2a05; box-shadow: 0 3px 10px rgba(245, 158, 11, 0.4); }
+        .hb-rank-2 { background: linear-gradient(135deg, #e2e8f0, #94a3b8); color: #1e293b; box-shadow: 0 3px 10px rgba(148, 163, 184, 0.35); }
+        .hb-rank-3 { background: linear-gradient(135deg, #e0a86b, #b5793f); color: #2a1a08; box-shadow: 0 3px 10px rgba(181, 121, 63, 0.35); }
+        .hb-rank-n { background: var(--surface-bright); color: var(--on-surface-variant); border: 1px solid var(--card-border); }
+        .hb-champion { background: linear-gradient(90deg, rgba(251, 191, 36, 0.10), transparent 55%); }
+        .hb-champion td:first-child { position: relative; }
+        .hb-champion td:first-child::before {
+            content: '';
+            position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+            border-radius: 3px;
+            background: linear-gradient(180deg, #fde68a, #f59e0b);
+        }
+        .hb-bar-wrap { display: flex; align-items: center; gap: 0.5rem; min-width: 150px; }
+        .hb-bar { flex: 1; height: 6px; border-radius: var(--radius-full); background: var(--surface-bright); overflow: hidden; }
+        .hb-bar.dim { height: 4px; }
+        .hb-bar-fill { height: 100%; border-radius: var(--radius-full); transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+        .hb-bar-fill.good { background: linear-gradient(90deg, #34d399, #10b981); }
+        .hb-bar-fill.warn { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+        .hb-bar-fill.bad { background: linear-gradient(90deg, #f87171, #ef4444); }
+        .hb-bar-value { font-family: var(--font-mono); font-size: 0.82rem; min-width: 40px; text-align: right; color: var(--on-surface); }
+        .hb-runs { font-family: var(--font-mono); font-size: 0.78rem; color: var(--on-surface-variant); white-space: nowrap; }
+        .hb-flag { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; line-height: 1.35; }
+        .hb-flag i { margin-top: 1px; font-size: 0.9rem; flex: none; }
+        .hb-flag-error { color: var(--accent-error); }
+        .hb-flag-warn { color: var(--accent-warning); }
+        .hb-flag-info { color: var(--on-surface-variant); }
+        .hb-pass-chip {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.35rem 0.7rem; border-radius: var(--radius-full);
+            font-size: 0.78rem; font-weight: 600;
+            color: var(--accent-success);
+            background: rgba(52, 211, 153, 0.12);
+            border: 1px solid rgba(52, 211, 153, 0.28);
+        }
+        .hb-skeleton { height: 14px; border-radius: var(--radius-full); position: relative; overflow: hidden; background: var(--surface-bright); }
+        .hb-skeleton::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+            animation: hb-shimmer 1.2s infinite;
+        }
+        @keyframes hb-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        .hb-empty { text-align: center; padding: 2rem 1rem; color: var(--on-surface-variant); }
+        .hb-empty i { font-size: 2.2rem; opacity: 0.5; display: block; margin-bottom: 0.6rem; }
+        /* P1: sortable headers */
+        .hb-th-sort { cursor: pointer; user-select: none; }
+        .hb-th-sort:hover { color: var(--on-surface) !important; }
+        .hb-sort-ind { opacity: 0.35; margin-left: 0.25rem; transition: transform 0.2s ease, opacity 0.2s ease; }
+        .hb-sort-ind.active { opacity: 1; color: var(--primary); }
+        /* P1: gap-to-leader */
+        .hb-gap { font-family: var(--font-mono); font-size: 0.68rem; color: var(--on-surface-variant); margin-top: 0.2rem; }
+        .hb-leader-chip { display: inline-flex; align-items: center; gap: 0.3rem; font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.05em; color: var(--accent-warning); margin-top: 0.2rem; }
+        /* P1: runs / success rate */
+        .hb-succ { color: var(--accent-success); }
+        .hb-failed { color: var(--accent-error); font-size: 1rem; line-height: 1; }
+        /* P1: dimension mini-bars */
+        .hb-dim { flex: 1 1 130px; min-width: 120px; }
+        .hb-dim-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
+        .hb-dim-label { font-family: var(--font-mono); font-size: 0.7rem; color: var(--on-surface-variant); letter-spacing: 0.03em; }
+        .hb-dim-val { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; color: var(--on-surface); }
+        /* P2: composite-score badge — driven by the app's accent tokens (not Bootstrap *-subtle)
+           so it stays legible & on-theme in both light and dark. The rgba() declarations are a
+           fallback for browsers without color-mix(); the color-mix() ones win where supported. */
+        .hb-score-good { color: var(--accent-success); background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.34); background: color-mix(in srgb, var(--accent-success) 12%, transparent); border-color: color-mix(in srgb, var(--accent-success) 34%, transparent); }
+        .hb-score-warn { color: var(--accent-warning); background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.34); background: color-mix(in srgb, var(--accent-warning) 14%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 36%, transparent); }
+        .hb-score-bad  { color: var(--accent-error);  background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.34); background: color-mix(in srgb, var(--accent-error) 12%, transparent); border-color: color-mix(in srgb, var(--accent-error) 34%, transparent); }
+
         h1, h2, h3, h4, h5, h6, .brand-text {
             font-family: var(--font-headline);
             color: var(--on-surface);
@@ -1075,6 +1199,10 @@
             <button class="header-action-btn btn-hero" onclick="openHeroBoardModal()" title="LLM Hero Board & QA Audit">
                 <i class="bi bi-trophy-fill text-warning"></i>
             </button>
+            <!-- Level-2 Expert Re-Audit (Batch) Button -->
+            <button class="header-action-btn" id="re-audit-header-btn" onclick="openReAuditModal()" title="Re-audit all quiz handouts (Level-2 expert audit)">
+                <i class="bi bi-clipboard2-check-fill text-success"></i>
+            </button>
             <!-- Settings Modal Button -->
             <button class="header-action-btn" onclick="openSettingsModal()" title="Settings">
                 <i class="bi bi-gear-fill"></i>
@@ -1528,14 +1656,6 @@
                         <button class="btn btn-creative w-100 d-flex align-items-center justify-content-center gap-1.5 font-monospace fw-bold" onclick="generateQuiz()" style="font-size: 0.78rem; padding: 0.45rem 1rem;">
                             <i class="bi bi-lightning-charge-fill"></i> GENERATE QUIZ
                         </button>
-
-                        <!-- Hidden Compatibility Layer for Quiz Progress JS refs -->
-                        <div style="display: none !important;">
-                            <div id="quiz-progress-section">
-                                <div id="quiz-progress-bar"></div>
-                                <div id="quiz-status-text"></div>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Unit Handouts Library -->
@@ -1574,8 +1694,9 @@
                     <h5 class="modal-title fw-bold text-on-surface mb-0" id="heroBoardModalLabel">LLM Hero Board & QA Quality Audit</h5>
                 </div>
                 <div class="d-flex align-items-center gap-2">
-                    <button class="btn btn-sm btn-outline-warning font-monospace" onclick="loadHeroBoardData()">
-                        <i class="bi bi-arrow-clockwise me-1"></i> RE-EVALUATE LOGS
+                    <button class="btn btn-sm btn-outline-warning font-monospace" id="hero-board-reload-btn" onclick="loadHeroBoardData()">
+                        <span class="spinner-border spinner-border-sm me-1 d-none" id="hero-board-reload-spinner" role="status" aria-hidden="true"></span>
+                        <i class="bi bi-arrow-clockwise me-1" id="hero-board-reload-icon"></i> <span id="hero-board-reload-label">RE-EVALUATE LOGS</span>
                     </button>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
@@ -1587,21 +1708,22 @@
                     <h6 class="text-uppercase font-monospace text-warning fw-bold mb-3" style="font-size: 0.8rem; letter-spacing: 1px;">
                         <i class="bi bi-bar-chart-line me-1"></i> Model Performance Rankings
                     </h6>
+                    <div id="hero-board-top-stat" class="d-none"></div>
                     <div class="table-responsive rounded-3 border" style="border-color: var(--card-border) !important;">
                         <table class="table table-hover mb-0 align-middle" style="background: transparent;">
                             <thead>
                                 <tr class="font-monospace text-muted" style="font-size: 0.75rem; border-color: var(--card-border);">
                                     <th class="bg-body-tertiary text-on-surface-variant">RANK</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">MODEL NAME</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">COMPOSITE SCORE</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">SCHEMA PASS</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">VERBATIM FAITHFULNESS</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">SLOT-FILLING / PEDAGOGY</th>
-                                    <th class="bg-body-tertiary text-on-surface-variant">TOTAL RUNS</th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('model')" title="Sort by model name">MODEL NAME <i class="bi bi-arrow-down-up hb-sort-ind" data-key="model"></i></th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('composite_score')" title="Sort by composite score">COMPOSITE SCORE <i class="bi bi-arrow-down-up hb-sort-ind" data-key="composite_score"></i></th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('schema_adherence_avg')" title="Sort by schema adherence">SCHEMA PASS <i class="bi bi-arrow-down-up hb-sort-ind" data-key="schema_adherence_avg"></i></th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('verbatim_faithfulness_avg')" title="Sort by verbatim faithfulness">VERBATIM FAITHFULNESS <i class="bi bi-arrow-down-up hb-sort-ind" data-key="verbatim_faithfulness_avg"></i></th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('pedagogical_quality_avg')" title="Sort by pedagogy">SLOT-FILLING / PEDAGOGY <i class="bi bi-arrow-down-up hb-sort-ind" data-key="pedagogical_quality_avg"></i></th>
+                                    <th class="bg-body-tertiary hb-th-sort" onclick="sortHeroBoard('runs')" title="Sort by total runs">TOTAL RUNS <i class="bi bi-arrow-down-up hb-sort-ind" data-key="runs"></i></th>
                                 </tr>
                             </thead>
                             <tbody id="hero-board-leaderboard-body" class="text-on-surface">
-                                <tr><td colspan="7" class="text-center text-muted py-3">Loading evaluation statistics...</td></tr>
+                                <tr><td data-hb-colspan colspan="7" class="text-center text-muted py-3">Loading evaluation statistics...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1617,6 +1739,49 @@
                     </div>
                 </div>
 
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LEVEL-2 EXPERT RE-AUDIT (BATCH) MODAL OVERLAY -->
+<div class="modal fade" id="re-audit-modal" tabindex="-1" aria-labelledby="reAuditModalLabel" aria-hidden="true" style="z-index: 1055;">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content border-0 shadow-lg" style="background: var(--surface); border: 1px solid var(--card-border) !important; border-radius: var(--radius-lg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
+            <div class="modal-header border-bottom px-4 py-3 d-flex align-items-center justify-content-between" style="border-color: var(--card-border) !important;">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-clipboard2-check-fill text-success fs-4"></i>
+                    <h5 class="modal-title fw-bold text-on-surface mb-0" id="reAuditModalLabel">Level-2 Expert Re-Audit (Batch)</h5>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-success font-monospace" id="re-audit-run-btn" onclick="startReAuditAll()">
+                        <span class="spinner-border spinner-border-sm me-1 d-none" id="re-audit-run-spinner" role="status" aria-hidden="true"></span>
+                        <i class="bi bi-arrow-repeat me-1" id="re-audit-run-icon"></i> <span id="re-audit-run-label">RE-AUDIT ALL</span>
+                    </button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+            </div>
+            <div class="modal-body p-4" style="max-height: 75vh; overflow-y: auto;">
+                <p class="text-muted small mb-3">Re-runs the de-biased <strong>Level-2 expert judge</strong> over every existing quiz handout (read-only — the generator is not re-run). Each row compares the <em>previously embedded</em> verdict against the <em>fresh</em> one.</p>
+                <div class="row g-2 mb-4" id="re-audit-stats"><!-- summary stat capsules inserted here --></div>
+                <div class="table-responsive rounded-3 border" style="border-color: var(--card-border) !important;">
+                    <table class="table table-hover mb-0 align-middle" style="background: transparent;">
+                        <thead>
+                            <tr class="font-monospace text-muted" style="font-size: 0.75rem; border-color: var(--card-border);">
+                                <th class="bg-body-tertiary text-on-surface-variant">UNIT</th>
+                                <th class="bg-body-tertiary text-on-surface-variant text-center">ITEMS</th>
+                                <th class="bg-body-tertiary text-on-surface-variant text-center">BLIND-SOLVE</th>
+                                <th class="bg-body-tertiary text-on-surface-variant text-center">SCORE</th>
+                                <th class="bg-body-tertiary text-on-surface-variant text-center">PREVIOUS</th>
+                                <th class="bg-body-tertiary text-on-surface-variant text-center">NOW</th>
+                                <th class="bg-body-tertiary text-on-surface-variant">CHANGE / NOTES</th>
+                            </tr>
+                        </thead>
+                        <tbody id="re-audit-body" class="text-on-surface">
+                            <tr><td colspan="7" class="text-center text-muted py-4">No re-audit run yet. Click <strong>RE-AUDIT ALL</strong> to run the Level-2 expert judge over every quiz handout.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -1820,7 +1985,31 @@
                 </div>
             </div>
 
+            <div class="settings-section-card">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="fw-bold text-warning mb-0"><i class="bi bi-award-fill me-1"></i>Level 2 Expert Model Quality Audit (LLM-as-a-Judge)</h6>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="config-enable-expert-audit" style="cursor: pointer;">
+                    </div>
+                </div>
+                <p class="text-muted small mb-2" style="font-size: 0.78rem;">
+                    Enforces blind solver test & distractor cognitive trap audit before delivering handouts. Automatically triggers surgical self-correction when ambiguities or double keys are detected.
+                </p>
+                <div class="row g-2">
+                    <div class="col-md-7 col-sm-12">
+                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Dedicated Judge Model (Separation of Powers)</label>
+                        <select id="config-judge-model" class="form-select form-select-sm" style="font-size: 0.8rem;">
+                            <option value="">(Same as Active Generation Model)</option>
+                        </select>
+                        <div class="form-text text-muted" style="font-size: 0.68rem; margin-top: 4px;">
+                            <i class="bi bi-shield-check text-success me-1"></i><strong>Safe Model Hot-Swap</strong>: Automatically unloads generation models from GPU before audit, preventing VRAM overflow on single-GPU machines.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
+
 
         <div class="d-flex gap-2 justify-content-end mt-3 border-top pt-2" style="border-color: var(--card-border) !important;">
             <button class="btn btn-outline-secondary px-3 py-1 font-monospace" onclick="fetchConfig()" style="font-size: 11px;">REVERT</button>
@@ -2809,6 +2998,100 @@
         });
     }
 
+    // ------------------ LEVEL-2 EXPERT RE-AUDIT (BATCH) ------------------
+    let lastReAuditResult = null;
+
+    function openReAuditModal() {
+        const modal = document.getElementById('re-audit-modal');
+        const inst = bootstrap.Modal.getOrCreateInstance(modal);
+        if (lastReAuditResult) showReAuditSummary(lastReAuditResult);
+        inst.show();
+    }
+
+    function setReAuditRunning(running) {
+        const btn = document.getElementById('re-audit-run-btn');
+        const spinner = document.getElementById('re-audit-run-spinner');
+        const icon = document.getElementById('re-audit-run-icon');
+        const label = document.getElementById('re-audit-run-label');
+        if (btn) btn.disabled = running;
+        if (spinner) spinner.classList.toggle('d-none', !running);
+        if (icon) icon.classList.toggle('d-none', running);
+        if (label) label.textContent = running ? 'RE-AUDITING…' : 'RE-AUDIT ALL';
+    }
+
+    function startReAuditAll() {
+        if (!confirm('Re-audit ALL quiz handouts with the Level-2 expert judge?\n\nThis is read-only and only calls the judge model (the generator is not re-run).')) return;
+        setReAuditRunning(true);
+        showReAuditSummary(null, true);
+        fetch('/api/re-audit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workers: 2 })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                pollJobStatus(data.job_id, 're-audit');
+                fetchRecentJobs();
+            } else {
+                setReAuditRunning(false);
+                showInfoModal('Re-audit Failed', data.error || 'Failed to start the re-audit job.');
+            }
+        })
+        .catch(err => {
+            setReAuditRunning(false);
+            showInfoModal('Re-audit Error', err.message || String(err));
+        });
+    }
+
+    function showReAuditSummary(summary, running) {
+        const stats = document.getElementById('re-audit-stats');
+        const body = document.getElementById('re-audit-body');
+        if (!summary) {
+            stats.innerHTML = '';
+            body.innerHTML = running
+                ? '<tr><td colspan="7" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2"></span>Re-auditing in the background… (watch the Recent Jobs panel).</td></tr>'
+                : '<tr><td colspan="7" class="text-center text-muted py-4">No re-audit run yet. Click <strong>RE-AUDIT ALL</strong> to run the Level-2 expert judge over every quiz handout.</td></tr>';
+            return;
+        }
+        lastReAuditResult = summary;
+
+        const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const acc = (summary.avg_blind_solve_accuracy != null) ? Math.round(summary.avg_blind_solve_accuracy * 100) + '%' : '—';
+        const statCell = (val, color, label) =>
+            `<div class="col d-flex flex-column align-items-center border rounded-3 py-2" style="border-color: var(--card-border) !important;">
+                <span class="fs-5 fw-bold">${val}</span><span class="small ${color}">${label}</span>
+             </div>`;
+        stats.innerHTML =
+            statCell(summary.passed, 'text-success', 'PASSED') +
+            statCell(summary.failed, 'text-danger', 'FAILED') +
+            statCell(summary.errors, 'text-warning', 'ERRORS') +
+            statCell(acc, 'text-info', 'AVG BLIND-SOLVE');
+
+        const rows = (summary.results || []).map(r => {
+            const accR = (r.blind_solve_accuracy != null) ? Math.round(r.blind_solve_accuracy * 100) + '%' : '—';
+            const prev = (r.prev_passed == null) ? '<span class="text-muted">n/a</span>'
+                : (r.prev_passed ? '<span class="badge bg-success-subtle text-success">PASS</span>' : '<span class="badge bg-danger-subtle text-danger">FAIL</span>');
+            const now = r.error ? '<span class="badge bg-warning-subtle text-warning">ERROR</span>'
+                : (r.passed ? '<span class="badge bg-success-subtle text-success">PASS</span>' : '<span class="badge bg-danger-subtle text-danger">FAIL</span>');
+            let change;
+            if (r.prev_passed == null) change = '<span class="text-muted">first audit</span>';
+            else if (r.prev_passed && !r.passed) change = 'PASS → FAIL';
+            else if (!r.prev_passed && r.passed) change = 'FAIL → PASS';
+            else change = '<span class="text-muted">unchanged</span>';
+            return `<tr>
+                <td class="font-monospace small">${esc(r.unit)} <span class="badge bg-secondary-subtle text-secondary">${esc(r.template)}</span></td>
+                <td class="text-center">${r.item_count == null ? '—' : r.item_count}</td>
+                <td class="text-center fw-semibold">${accR}</td>
+                <td class="text-center">${r.overall_quality_score == null ? '—' : r.overall_quality_score}</td>
+                <td class="text-center">${prev}</td>
+                <td class="text-center">${now}</td>
+                <td class="small">${change}${r.error ? `<div class="text-warning mt-1">${esc(r.error)}</div>` : ''}</td>
+            </tr>`;
+        }).join('');
+        body.innerHTML = rows || '<tr><td colspan="7" class="text-center text-muted py-3">No results.</td></tr>';
+    }
+
     // ------------------ LLM HERO BOARD & QA AUDIT MODAL ------------------
     function openHeroBoardModal() {
         const modal = document.getElementById('hero-board-modal');
@@ -2817,7 +3100,38 @@
         loadHeroBoardData();
     }
 
+    function setHeroBoardLoading(loading) {
+        const btn = document.getElementById('hero-board-reload-btn');
+        const spinner = document.getElementById('hero-board-reload-spinner');
+        const icon = document.getElementById('hero-board-reload-icon');
+        const label = document.getElementById('hero-board-reload-label');
+        const topStat = document.getElementById('hero-board-top-stat');
+        const tbody = document.getElementById('hero-board-leaderboard-body');
+        const list = document.getElementById('hero-board-audits-list');
+
+        if (btn) btn.disabled = loading;
+        if (spinner) spinner.classList.toggle('d-none', !loading);
+        if (icon) icon.classList.toggle('d-none', loading);
+        if (label) label.textContent = loading ? 'EVALUATING…' : 'RE-EVALUATE LOGS';
+        if (topStat) { topStat.classList.add('d-none'); topStat.innerHTML = ''; }
+
+        if (loading) {
+            const skelCell = (w) => `<td style="border-color: var(--card-border);"><div class="hb-skeleton" style="width:${w};"></div></td>`;
+            if (tbody) {
+                tbody.innerHTML = `<tr>${skelCell('34px')}${skelCell('55%')}${skelCell('80%')}${skelCell('70%')}${skelCell('70%')}${skelCell('70%')}${skelCell('45%')}</tr>`;
+            }
+            if (list) {
+                list.innerHTML = `<div class="card border p-3" style="background: var(--surface-dim); border-color: var(--card-border) !important; border-radius: var(--radius-md);">
+                    <div class="hb-skeleton mb-2" style="width:40%;"></div>
+                    <div class="hb-skeleton mb-2" style="width:70%;"></div>
+                    <div class="hb-skeleton" style="width:90%;"></div>
+                </div>`;
+            }
+        }
+    }
+
     function loadHeroBoardData() {
+        setHeroBoardLoading(true);
         fetch('/api/hero-board')
             .then(r => r.json())
             .then(data => {
@@ -2826,35 +3140,150 @@
             })
             .catch(err => {
                 console.error('Failed to load hero board data:', err);
-            });
+                renderHeroBoard([]);
+                renderAuditsList([]);
+            })
+            .finally(() => setHeroBoardLoading(false));
+    }
+
+    const HB_COLUMNS = 7; // single source of truth for the leaderboard's column count
+    // Keep the static "Loading…" placeholder's colspan in sync so adding/removing a column
+    // only ever requires bumping HB_COLUMNS above (no scattered 'colspan="7"' to hunt down).
+    (function () {
+        if (typeof document !== 'undefined') {
+            document.querySelectorAll('[data-hb-colspan]').forEach(function (td) { td.setAttribute('colspan', String(HB_COLUMNS)); });
+        }
+    })();
+
+    function hbBarHTML(value, dim) {
+        if (value === null || value === undefined) {
+            return '<span class="hb-bar-value text-muted">—</span>';
+        }
+        const v = Math.max(0, Math.min(100, Number(value) || 0));
+        const tone = v >= 90 ? 'good' : (v >= 75 ? 'warn' : 'bad');
+        return `<div class="hb-bar-wrap"><div class="hb-bar ${dim ? 'dim' : ''}"><div class="hb-bar-fill ${tone}" style="width:${v}%"></div></div><span class="hb-bar-value">${v}%</span></div>`;
+    }
+
+    function hbRunsHTML(item) {
+        const runs = Number(item.runs) || 0;
+        const succ = Number(item.success_runs) || 0;
+        const failed = Number(item.failed_runs) || 0;
+        const rate = runs > 0 ? Math.round((succ / runs) * 100) : 0;
+        const failedDot = failed > 0 ? ` <span class="hb-failed" title="${failed} failed run(s)">&#8226;</span>` : '';
+        return `<span class="hb-runs">${runs} runs <span class="hb-succ">${rate}% ok</span>${failedDot}</span>`;
+    }
+
+    function hbDimHTML(label, val, max, title) {
+        const esc = String(title || '').replace(/"/g, '&quot;');
+        if (val === null || val === undefined) {
+            return `<div class="hb-dim" title="${esc}"><div class="hb-dim-top"><span class="hb-dim-label">${label}</span><span class="hb-dim-val text-muted">N/A</span></div><div class="hb-bar dim"><div class="hb-bar-fill bad" style="width:0%"></div></div></div>`;
+        }
+        const pct = Math.max(0, Math.min(100, Math.round((Number(val) / max) * 100)));
+        const tone = pct >= 80 ? 'good' : (pct >= 60 ? 'warn' : 'bad');
+        return `<div class="hb-dim" title="${esc}"><div class="hb-dim-top"><span class="hb-dim-label">${label}</span><span class="hb-dim-val">${pct}%</span></div><div class="hb-bar dim"><div class="hb-bar-fill ${tone}" style="width:${pct}%"></div></div></div>`;
+    }
+
+    function hbFlagHTML(flag) {
+        const text = String(flag).trim();
+        let tone = 'hb-flag-info';
+        let icon = 'bi-info-circle';
+        if (text.startsWith('❌') || text.startsWith('🔴')) {
+            tone = 'hb-flag-error';
+            icon = 'bi-exclamation-octagon-fill';
+        } else if (text.startsWith('⚠️') || text.startsWith('⚠')) {
+            tone = 'hb-flag-warn';
+            icon = 'bi-exclamation-triangle-fill';
+        }
+        const clean = text.replace(/^[❌🔴⚠\uFE0F]+\s*/, '').trim() || text;
+        return `<div class="hb-flag ${tone}"><i class="bi ${icon}"></i><span>${clean}</span></div>`;
+    }
+
+    function renderTopStat(top) {
+        const el = document.getElementById('hero-board-top-stat');
+        if (!el || !top) return;
+        el.innerHTML = `
+            <div class="hb-top-medal"><i class="bi bi-trophy-fill"></i></div>
+            <div class="flex-grow-1">
+                <div class="hb-top-meta text-on-surface-variant">Top Performer</div>
+                <div class="d-flex align-items-baseline gap-2 flex-wrap">
+                    <span class="hb-top-score">${top.composite_score}%</span>
+                    <span class="fw-bold text-on-surface" style="font-size:1.05rem;">${top.model}</span>
+                </div>
+                <div class="hb-top-meta text-on-surface-variant mt-1">${top.runs} runs · Schema ${top.schema_adherence_avg}% · Verbatim ${top.verbatim_faithfulness_avg}% · Pedagogy ${top.pedagogical_quality_avg}%</div>
+            </div>`;
+        el.classList.remove('d-none');
+    }
+
+    let _hbBoard = [];
+    let _hbSort = { key: 'composite_score', dir: 'desc' };
+
+    function sortHeroBoard(key) {
+        if (_hbSort.key === key) {
+            _hbSort.dir = _hbSort.dir === 'desc' ? 'asc' : 'desc';
+        } else {
+            _hbSort.key = key;
+            _hbSort.dir = (key === 'model') ? 'asc' : 'desc';
+        }
+        renderHeroBoard(_hbBoard);
     }
 
     function renderHeroBoard(board) {
         const tbody = document.getElementById('hero-board-leaderboard-body');
         if (!tbody) return;
+        const topStat = document.getElementById('hero-board-top-stat');
         if (!board || board.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No log files found to evaluate.</td></tr>';
+            _hbBoard = [];
+            if (topStat) { topStat.classList.add('d-none'); topStat.innerHTML = ''; }
+            tbody.innerHTML = `<tr><td colspan="${HB_COLUMNS}"><div class="hb-empty"><i class="bi bi-inbox"></i><div>No log files found to evaluate yet.</div><div class="small mt-1">Run <code class="font-monospace">lexis compile</code> or generate quizzes to produce evaluation logs.</div></div></td></tr>`;
+            document.querySelectorAll('.hb-sort-ind').forEach(ind => { ind.classList.remove('active'); ind.style.transform = ''; });
             return;
         }
-        
-        tbody.innerHTML = board.map((item, idx) => {
-            const rankBadges = ['🥇', '🥈', '🥉'];
-            const rank = rankBadges[idx] || `#${idx + 1}`;
-            const scoreBadgeClass = item.composite_score >= 90 
-                ? 'bg-success-subtle text-success border-success-subtle' 
-                : (item.composite_score >= 75 ? 'bg-warning-subtle text-warning-emphasis border-warning-subtle' : 'bg-danger-subtle text-danger border-danger-subtle');
-            
-            return `
-                <tr style="border-color: var(--card-border);">
-                    <td class="fw-bold fs-5 text-on-surface">${rank}</td>
-                    <td class="font-monospace fw-bold text-primary">${item.model}</td>
-                    <td><span class="badge border font-monospace fs-6 ${scoreBadgeClass}">${item.composite_score}%</span></td>
-                    <td class="text-on-surface font-monospace">${item.schema_adherence_avg}%</td>
-                    <td class="text-on-surface font-monospace">${item.verbatim_faithfulness_avg}%</td>
-                    <td class="text-on-surface font-monospace">${item.pedagogical_quality_avg}%</td>
-                    <td><span class="badge bg-body-secondary text-on-surface border font-monospace" style="border-color: var(--card-border) !important;">${item.runs} runs</span></td>
-                </tr>
-            `;
+        _hbBoard = board.slice();
+
+        const leader = _hbBoard.reduce((a, b) => (Number(b.composite_score) > Number(a.composite_score) ? b : a));
+        const leaderModel = leader.model;
+        const leaderScore = Number(leader.composite_score);
+
+        const sorted = _hbBoard.slice().sort((a, b) => {
+            let av = a[_hbSort.key], bv = b[_hbSort.key];
+            if (typeof av === 'string' || typeof bv === 'string') {
+                av = String(av == null ? '' : av).toLowerCase();
+                bv = String(bv == null ? '' : bv).toLowerCase();
+            } else {
+                av = Number(av) || 0;
+                bv = Number(bv) || 0;
+            }
+            if (av < bv) return _hbSort.dir === 'asc' ? -1 : 1;
+            if (av > bv) return _hbSort.dir === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        renderTopStat(leader);
+        document.querySelectorAll('.hb-sort-ind').forEach(ind => {
+            const active = ind.getAttribute('data-key') === _hbSort.key;
+            ind.classList.toggle('active', active);
+            ind.style.transform = (active && _hbSort.dir === 'asc') ? 'rotate(180deg)' : '';
+        });
+
+        tbody.innerHTML = sorted.map((item, idx) => {
+            const rankHTML = idx < 3
+                ? `<span class="hb-rank hb-rank-${idx + 1}">${idx + 1}</span>`
+                : `<span class="hb-rank hb-rank-n">${idx + 1}</span>`;
+            const isLeader = item.model === leaderModel;
+            const championCls = isLeader ? ' class="hb-champion"' : '';
+            const gap = Math.round((leaderScore - Number(item.composite_score)) * 10) / 10;
+            const gapHtml = isLeader
+                ? '<div class="hb-leader-chip"><i class="bi bi-stars"></i> LEADER</div>'
+                : (gap > 0 ? `<div class="hb-gap">−${gap} vs leader</div>` : '');
+            return `<tr${championCls} style="border-color: var(--card-border);">
+                <td class="pl-3">${rankHTML}</td>
+                <td class="fw-semibold text-on-surface">${item.model}</td>
+                <td>${hbBarHTML(item.composite_score)}${gapHtml}</td>
+                <td>${hbBarHTML(item.schema_adherence_avg, true)}</td>
+                <td>${hbBarHTML(item.verbatim_faithfulness_avg, true)}</td>
+                <td>${hbBarHTML(item.pedagogical_quality_avg, true)}</td>
+                <td>${hbRunsHTML(item)}</td>
+            </tr>`;
         }).join('');
     }
 
@@ -2869,11 +3298,22 @@
         container.innerHTML = audits.map(audit => {
             const score = audit.composite_score;
             const badgeClass = score >= 90 
-                ? 'bg-success-subtle text-success border-success-subtle' 
-                : (score >= 75 ? 'bg-warning-subtle text-warning-emphasis border-warning-subtle' : 'bg-danger-subtle text-danger border-danger-subtle');
-            const flagsHtml = audit.flags && audit.flags.length > 0 
-                ? audit.flags.map(f => `<div class="font-monospace text-warning-emphasis" style="font-size: 0.78rem;">${f}</div>`).join('')
-                : '<div class="text-success font-monospace" style="font-size: 0.78rem;">✓ 100% Passed all quality checks</div>';
+                ? 'hb-score-good' 
+                : (score >= 75 ? 'hb-score-warn' : 'hb-score-bad');
+            const flagsHtml = audit.flags && audit.flags.length > 0
+                ? audit.flags.map(hbFlagHTML).join('')
+                : '<div class="hb-pass-chip"><i class="bi bi-check-circle-fill"></i> 100% Passed all quality checks</div>';
+                
+            // Dimension scores breakdown (value + mini bar)
+            const sc = audit.scores || {};
+            const dimBadgesHtml = `
+                <div class="d-flex flex-wrap gap-3 mb-2" style="max-width: 720px;">
+                    ${hbDimHTML('Schema', sc.schema_adherence, 25, 'Schema & Structural Adherence (Weight: 25%)')}
+                    ${hbDimHTML('Verbatim', sc.verbatim_faithfulness, 30, 'Source Faithfulness & Verbatim Overlap (Weight: 30%)')}
+                    ${hbDimHTML('Pedagogy', sc.pedagogical_quality, 25, 'Pedagogy & Diagnostic Integrity (Weight: 25%)')}
+                    ${hbDimHTML('Uniqueness', sc.uniqueness, 20, 'Uniqueness & Deduplication (Weight: 20%)')}
+                </div>
+            `;
                 
             return `
                 <div class="card border p-3" style="background: var(--surface-dim); border-color: var(--card-border) !important; border-radius: var(--radius-md);">
@@ -2884,6 +3324,7 @@
                         </div>
                         <span class="badge bg-body-secondary text-primary border font-monospace" style="border-color: var(--card-border) !important;">${audit.model}</span>
                     </div>
+                    ${dimBadgesHtml}
                     <div class="p-2.5 rounded border" style="background: var(--surface); border-color: var(--card-border) !important;">
                         ${flagsHtml}
                     </div>
@@ -2931,6 +3372,8 @@
         const tts_voice_b = document.getElementById('config-tts-voice-b').value;
         const tts_model = document.getElementById('config-tts-model').value;
         const target_language = document.getElementById('config-target-language').value;
+        const enable_expert_audit = document.getElementById('config-enable-expert-audit').checked;
+        const judge_model = document.getElementById('config-judge-model').value.trim();
 
         fetch('/api/config/update', {
             method: 'POST',
@@ -2938,7 +3381,8 @@
             body: JSON.stringify({
                 api_type, model, api_url, api_key,
                 compile_defaults, quiz_defaults,
-                tts_engine, tts_url, tts_voice_a, tts_voice_b, tts_model, target_language
+                tts_engine, tts_url, tts_voice_a, tts_voice_b, tts_model, target_language,
+                enable_expert_audit, judge_model
             })
         })
         .then(res => res.json())
@@ -3005,8 +3449,13 @@
                 document.getElementById('config-tts-model').value = appConfig.tts_model || 'tts-1';
                 document.getElementById('config-target-language').value = appConfig.target_language || 'Chinese';
 
+                // Level 2 Expert Audit options
+                document.getElementById('config-enable-expert-audit').checked = !!appConfig.enable_expert_audit;
+                document.getElementById('config-judge-model').value = appConfig.judge_model || '';
+
+
                 // Load API type first (sets up model field visibility)
-                onApiTypeChange();
+                onApiTypeChange(false);
 
                 // Populate voice dropdowns based on engine, do NOT auto-fill URL — we already loaded saved config above
                 onTTSEngineChange(appConfig.tts_voice_a, appConfig.tts_voice_b, false);
@@ -3090,6 +3539,11 @@
                 // If saved active model exists on this endpoint, preserve it.
                 // Otherwise default to the first available model from this endpoint.
                 const targetSelected = (activeModel && modelsList.includes(activeModel)) ? activeModel : modelsList[0];
+                const judgeSelect = document.getElementById('config-judge-model');
+                const savedJudgeModel = (appConfig && appConfig.judge_model) || '';
+                if (judgeSelect) {
+                    judgeSelect.innerHTML = '<option value="">(Same as Active Generation Model)</option>';
+                }
 
                 modelsList.forEach(m => {
                     const opt = document.createElement('option');
@@ -3099,6 +3553,16 @@
                         opt.selected = true;
                     }
                     modelSelect.appendChild(opt);
+
+                    if (judgeSelect) {
+                        const jOpt = document.createElement('option');
+                        jOpt.value = m;
+                        jOpt.innerText = m;
+                        if (m === savedJudgeModel) {
+                            jOpt.selected = true;
+                        }
+                        judgeSelect.appendChild(jOpt);
+                    }
                 });
 
                 document.getElementById('headbar-model-name').innerText = targetSelected || 'Ready';
@@ -3591,6 +4055,11 @@
                                 : `<i class="bi bi-film text-info me-2 flex-shrink-0" style="font-size: 0.9rem;"></i>`;
                             typeLabel = 'Video Import';
                             // Action buttons removed as requested to delegate navigation entirely to the file tree
+                        } else if (job.type === 'audit-batch') {
+                            iconHtml = job.status === 'running'
+                                ? `<span class="spinner-border spinner-border-sm text-success me-2 flex-shrink-0" role="status"></span>`
+                                : `<i class="bi bi-clipboard2-check-fill text-success me-2 flex-shrink-0" style="font-size: 0.9rem;"></i>`;
+                            typeLabel = 'Expert Re-audit';
                         } else {
                             iconHtml = `<i class="bi bi-gear me-2 flex-shrink-0"></i>`;
                             typeLabel = 'System Task';
@@ -3633,8 +4102,17 @@
                             </div>
                             ${job.status === 'running' ? `
                             <div class="progress mt-1" style="height: 3px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated ${job.type === 'compile' ? 'bg-warning' : job.type === 'quiz' ? 'bg-danger' : 'bg-info'}" role="progressbar" style="width: ${job.progress}%"></div>
+                                <div class="progress-bar progress-bar-striped progress-bar-animated ${job.type === 'compile' ? 'bg-warning' : job.type === 'quiz' ? 'bg-primary' : 'bg-info'}" role="progressbar" style="width: ${job.progress}%"></div>
                             </div>
+                            ${job.type === 'quiz' && (job.stage === 'auditing' || job.stage === 'correcting' || (job.audit_progress && job.audit_progress > 0)) ? `
+                            <div class="d-flex align-items-center justify-content-between mt-1 px-1">
+                                <span class="font-monospace" style="font-size: 0.58rem; color: #b388ff;"><i class="bi bi-shield-check me-1"></i>Expert Audit</span>
+                                <span class="font-monospace" style="font-size: 0.58rem; color: #b388ff;">${job.audit_progress || 0}%</span>
+                            </div>
+                            <div class="progress" style="height: 3px; background: rgba(255, 255, 255, 0.08);">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: ${job.audit_progress || 0}%; background: linear-gradient(90deg, #7c4dff, #00e5ff);"></div>
+                            </div>
+                            ` : ''}
                             ` : ''}
                             ${latestLog ? `
                             <div class="text-muted text-truncate font-monospace" style="font-size: 0.6rem; opacity: 0.75; padding-left: 1.25rem;">
@@ -3700,9 +4178,7 @@
                 if (service === 'compiler') {
                     fetchRecentJobs();
                 } else if (service === 'quiz') {
-                    document.getElementById('quiz-progress-section').style.display = 'block';
-                    document.getElementById('quiz-progress-bar').style.width = `${job.progress}%`;
-                    document.getElementById('quiz-status-text').innerText = `Status: ${job.status}...`;
+                    fetchRecentJobs();
                 }
 
                 if (job.status === 'completed' || job.status === 'failed') {
@@ -3759,6 +4235,15 @@
                         isCompiling = false;
                         updateCompileButtonUI();
                     }
+
+                    if (job.type === 'audit-batch') {
+                        setReAuditRunning(false);
+                        if (job.status === 'completed' && job.result) {
+                            showReAuditSummary(job.result);
+                            const raModal = document.getElementById('re-audit-modal');
+                            bootstrap.Modal.getOrCreateInstance(raModal).show();
+                        }
+                    }
                     
                     if (job.status === 'failed') {
                         const lastLog = (job.logs && job.logs.length > 0) ? job.logs[job.logs.length - 1] : "Job encountered an unexpected error.";
@@ -3810,10 +4295,6 @@
     }
 
     function proceedWithQuizGeneration(filename, count, template) {
-        document.getElementById('quiz-progress-section').style.display = 'block';
-        document.getElementById('quiz-progress-bar').style.width = '15%';
-        document.getElementById('quiz-status-text').innerText = 'Generating quiz handout...';
-
         fetch('/api/generate-quiz', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3823,18 +4304,19 @@
         .then(data => {
             if (data.success) {
                 pollJobStatus(data.job_id, 'quiz');
+                fetchRecentJobs();
             } else {
                 showInfoModal("Quiz Generation Failed", "Failed to start quiz generation: " + (data.error || "Unknown error"));
-                document.getElementById('quiz-progress-section').style.display = 'none';
             }
         });
     }
 
     // ------------------ DYNAMIC FORMS & PARAMETERS HELPERS ------------------
-    function onApiTypeChange() {
+    function onApiTypeChange(triggerFetch = true) {
         const val = document.getElementById('config-api-type').value;
-        // API key secure fields logic removed as per browser autofill rules
-        fetchModels();
+        if (triggerFetch) {
+            fetchModels();
+        }
     }
 
     const KOKORO_VOICES = [

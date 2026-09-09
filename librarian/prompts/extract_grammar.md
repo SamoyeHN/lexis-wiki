@@ -66,7 +66,7 @@ Extract unique advanced grammar patterns from the text.
    - `common_mistakes` must diagnose concrete ESL errors (e.g., misordered inversion, dangling participles, missing concessive subordinators, comma splices without coordinators, incorrect aspect in non-finite forms).
 
 7. **Syntactic Design Audit & Strict Identity (`design_audit`)**:
-   - In `design_audit`, execute the 5-step syntactic derivation in a CONCISE single line (under 120 characters, DO NOT output internal chain-of-thought or reasoning paragraphs):
+   - In `design_audit`, record the syntactic derivation as a SINGLE compact pipeline string matching the exact syntax below (do not include conversational filler like "I think" or discursive explanations):
      `AUDIT: [Verbatim Excerpt] -> [Tier Priority: Tier-1/Tier-2/Tier-3] -> [Category] -> [Diagnostic Anchor/Marker] -> [Target Formula with Slots]`
    - ⚠️ **STRICT IDENTITY & DIRECT COPY-PASTE MANDATE**:
      * `pattern_formula` MUST be a direct, literal copy-paste of the exact formula derived in Step 5 of `design_audit`.

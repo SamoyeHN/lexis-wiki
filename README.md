@@ -107,6 +107,28 @@ lexis audit
 lexis audit --json
 ```
 
+### Re-audit Existing Handouts
+
+Re-run the de-biased **Level-2 expert judge** over quizzes you have already generated. This is **read-only** — it never regenerates content; it only re-scores each handout (and re-computes the blind-solve accuracy). Handouts that already carry an embedded audit are reported side-by-side with their previous verdict, so you can spot PASS → FAIL / FAIL → PASS flips.
+
+```bash
+# Re-audit every quiz handout in the project
+lexis re-audit
+
+# Re-audit a single unit
+lexis re-audit Book_4_Unit_1
+
+# Only re-audit reading quizzes, with 4 parallel judge workers
+lexis re-audit --template reading --workers 4
+
+# Machine-readable summary
+lexis re-audit --json
+```
+
+Output: passed / failed / error counts, per-unit blind-solve accuracy and overall score, plus the before/after verdict change for each handout.
+
+**Dashboard:** the same feature is in the web UI — click the clipboard-check icon in the header to open the *Level-2 Expert Re-Audit* modal, then press **RE-AUDIT ALL**. It runs as a background job (visible in *Recent Jobs* as an "Expert Re-audit" job) and opens the before/after comparison when it finishes, saving a timestamped report to `logs/re_audit_report_*.json`.
+
 ### Dashboard & Configuration
 
 ```bash

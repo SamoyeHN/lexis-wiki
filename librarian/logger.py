@@ -1,10 +1,11 @@
 import os
 import datetime
 import json
+import re
 from pathlib import Path
 from .config import config
 
-def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None):
+def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None, model=None):
     """
     Logs an LLM task to the logs directory with structured status, true API constraints, timing metrics, and failure categorization.
     """
@@ -14,12 +15,16 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
 
     finish_dt = end_time if isinstance(end_time, datetime.datetime) else datetime.datetime.now()
     timestamp = finish_dt.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    filename = f"{timestamp}_{task_name}.log"
+    # Sanitize task_name for filesystem compatibility (eliminate Windows NTFS stream colons ':', slashes, etc.)
+    safe_task_name = re.sub(r'[\\/:*?"<>|\r\n]+', '_', str(task_name)).strip('_')
+    filename = f"{timestamp}_{safe_task_name}.log"
     log_path = logs_dir / filename
+
+    actual_model = model or config.get('model') or 'unknown'
 
     content = []
     content.append(f"=== TASK: {task_name} ===")
-    content.append(f"=== MODEL: {config.get('model')} ===")
+    content.append(f"=== MODEL: {actual_model} ===")
     content.append(f"=== TIMESTAMP: {finish_dt.ctime()} ===")
     if duration is not None:
         start_str = start_time.strftime("%H:%M:%S") if isinstance(start_time, datetime.datetime) else "N/A"
@@ -30,6 +35,33 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
         content.append(f"=== MODE: {mode} ===")
     if failure_category:
         content.append(f"=== FAILURE_CATEGORY: {failure_category} ===")
+
+    # Add Level 1 deterministic code gate evaluation score breakdown
+    try:
+        from .evaluator import LogEvaluator, _extract_json
+        parsed = _extract_json(response_text)
+        if parsed:
+            simulated = {
+                "log_name": filename,
+                "task": task_name,
+                "model": actual_model,
+                "user_prompt": user_prompt,
+                "raw_response": response_text,
+                "parsed_json": parsed,
+                "status": status,
+                "failure_category": failure_category,
+            }
+            audit_res = LogEvaluator.evaluate_log(simulated)
+            if audit_res:
+                content.append(f"=== COMPOSITE_SCORE: {audit_res.get('composite_score')}% ===")
+                scores = audit_res.get("scores", {})
+                content.append("=== DIMENSION_SCORES: " + json.dumps(scores, ensure_ascii=False) + " ===")
+                if audit_res.get("flags"):
+                    flags_str = "\n".join(f"  {f}" for f in audit_res["flags"])
+                    content.append(f"=== QUALITY_FLAGS ===\n{flags_str}")
+    except Exception:
+        pass
+
     content.append("")
     
     # 1. Truthful representation of wire-level API constraints

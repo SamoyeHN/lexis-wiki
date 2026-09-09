@@ -28,7 +28,9 @@ DEFAULT_CONFIG = {
     "tts_model": "tts-1",
     "tts_api_key": "any_string",
     "target_language": "Simplified Chinese",
-    "enforce_gbnf": False
+    "enforce_gbnf": False,
+    "enable_expert_audit": False,
+    "judge_model": ""
 }
 
 class Config:

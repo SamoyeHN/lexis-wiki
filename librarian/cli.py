@@ -66,6 +66,13 @@ def main():
     audit_parser = subparsers.add_parser("audit", help="Run audit assessment on log files and display the LLM Hero Board")
     audit_parser.add_argument("--json", action="store_true", help="Output audit results as JSON")
 
+    # Batch re-audit command (re-runs the Level 2 expert audit over existing handouts, read-only)
+    reaudit_parser = subparsers.add_parser("re-audit", help="Re-run the Level 2 expert audit over existing quiz handouts and print a summary")
+    reaudit_parser.add_argument("units", nargs="*", help="Specific unit(s) to re-audit (default: all units with handouts)")
+    reaudit_parser.add_argument("--template", "-t", choices=["vocabulary", "reading", "translation", "listening", "video"], help="Only re-audit this quiz type")
+    reaudit_parser.add_argument("--workers", "-w", type=int, default=2, help="Concurrent audit workers (default: 2)")
+    reaudit_parser.add_argument("--json", action="store_true", help="Output the summary as JSON")
+
     # Rename command
     rename_parser = subparsers.add_parser("rename", help="Atomically rename a unit folder and its internal files")
     rename_parser.add_argument("old_name", help="Current name of the unit (e.g., Book_4_Unit_1)")
@@ -413,6 +420,31 @@ def main():
                     print(f"   * Pedagogical Quality:    {item['pedagogical_quality_avg']}%")
                     print(f"   * Uniqueness / No Dups:   {item['uniqueness_avg']}%")
                     print(f"   * Total Evaluated Runs:   {item['runs']}\n")
+
+    elif args.command == "re-audit":
+        from .audit_batch import run_batch, format_summary
+        print("Re-auditing quiz handouts (Level-2 expert audit, read-only)…")
+
+        def _progress(done, total, row):
+            mark = "⚠" if row.get("error") else ("✓" if row.get("passed") else "✗")
+            acc = row.get("blind_solve_accuracy")
+            acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+            print(f"  [{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}")
+
+        summary = run_batch(
+            unit_filter=args.units or None,
+            template_filter=args.template,
+            max_workers=args.workers,
+            progress_cb=_progress,
+        )
+        if summary["total"] == 0:
+            print("No quiz handouts found under wiki/ to re-audit.")
+            sys.exit(1)
+        if args.json:
+            import json
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
+        else:
+            print(format_summary(summary))
 
     else:
         parser.print_help()

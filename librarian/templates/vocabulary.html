@@ -499,8 +499,32 @@
 
                     this.score = 0;
 
+                    this.expertAudit = quizData._expert_audit || null;
+
                     this.render();
 
+                }
+
+                getAuditBadgeHTML() {
+                    if (!this.expertAudit) return '';
+                    const passed = this.expertAudit.pass_audit !== false;
+                    const accuracy = Math.round((this.expertAudit.blind_solve_accuracy ?? 1.0) * 100);
+                    const score = this.expertAudit.overall_quality_score ?? 100;
+                    const isSuccess = passed && accuracy >= 80;
+
+                    const bg = isSuccess ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)';
+                    const color = isSuccess ? '#059669' : '#d97706';
+                    const border = isSuccess ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
+
+                    return `
+                        <div class="l2-qa-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; background: ${bg}; color: ${color}; border: 1px solid ${border}; margin: 8px 0 16px 0;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                <polyline points="9 12 11 14 15 10"></polyline>
+                            </svg>
+                            <span>L2 Expert Audit: ${score}/100 (${accuracy}% Blind Accuracy)</span>
+                        </div>
+                    `;
                 }
 
     
@@ -641,7 +665,7 @@
 
                                     <p class="subtitle">Expand your English vocabulary with synonyms, antonyms, and definitions</p>
 
-                                    
+                                    ${this.getAuditBadgeHTML()}
 
                                     <div class="features-grid">
 
@@ -805,7 +829,14 @@
 
                                         <span class="progress-text">Question ${this.currentQuestionIndex + 1} of ${this.quizQuestions.length}</span>
 
-                                        <span class="badge">Vocabulary</span>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            ${this.expertAudit ? `
+                                                <span class="badge" style="background: rgba(16, 185, 129, 0.12); color: #059669; font-weight: 600;">
+                                                    L2 QA: ${this.expertAudit.overall_quality_score ?? 100}/100
+                                                </span>
+                                            ` : ''}
+                                            <span class="badge">Vocabulary</span>
+                                        </div>
 
                                     </div>
 
@@ -931,6 +962,8 @@
                                     <h1>${message}</h1>
 
                                     <p class="subtitle">Quiz Complete</p>
+
+                                    ${this.getAuditBadgeHTML()}
 
                                     <div class="score-display">${percentage}%</div>
 

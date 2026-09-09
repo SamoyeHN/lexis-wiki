@@ -528,3 +528,43 @@ class MindMapExtraction:
     root_name: str = dataclasses.field(default="", metadata={"minLength": 1})
     branches: List[MindMapBranch] = dataclasses.field(default_factory=list, metadata={"minItems": 3, "maxItems": 5})
 
+# ==============================================================================
+# LEVEL 2 EXPERT QUALITY AUDIT SCHEMAS (LLM-AS-A-JUDGE)
+# ==============================================================================
+
+@dataclasses.dataclass
+class DistractorAuditItem:
+    option_letter: Literal["A", "B", "C", "D"] = dataclasses.field(default="A")
+    option_text: str = dataclasses.field(default="", metadata={"minLength": 1})
+    trap_type: Literal[
+        "None (Correct Answer)",
+        "L1 Negative Transfer / False Friend",
+        "Scope Shift / Over-generalization",
+        "Speaker / Entity Misattribution",
+        "Chronological / Causal Inversion",
+        "Plausible Real-World Distractor",
+        "Flawed / Trivial Giveaway"
+    ] = dataclasses.field(default="Plausible Real-World Distractor")
+    plausibility_rating: Literal["High", "Medium", "Low (Flawed)"] = dataclasses.field(default="High")
+    elimination_rationale: str = dataclasses.field(default="", metadata={"minLength": 1})
+
+@dataclasses.dataclass
+class QuestionAuditItem:
+    item_index: int = dataclasses.field(default=0)
+    blind_solved_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
+    confidence: Literal["Definite", "Hesitant", "Ambiguous"] = dataclasses.field(default="Definite")
+    single_fit_valid: bool = dataclasses.field(default=True)
+    distractors: List[DistractorAuditItem] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4})
+    pedagogical_score: int = dataclasses.field(default=100, metadata={"minimum": 0, "maximum": 100})
+    diagnostic_feedback: str = dataclasses.field(default="", metadata={"minLength": 1})
+
+@dataclasses.dataclass
+class QuizQualityAuditReport:
+    quiz_title: str = dataclasses.field(default="", metadata={"minLength": 1})
+    overall_quality_score: int = dataclasses.field(default=100, metadata={"minimum": 0, "maximum": 100})
+    pass_audit: bool = dataclasses.field(default=True)
+    blind_solve_accuracy: float = dataclasses.field(default=1.0)
+    questions: List[QuestionAuditItem] = dataclasses.field(default_factory=list)
+    summary_verdict: str = dataclasses.field(default="", metadata={"minLength": 1})
+
+

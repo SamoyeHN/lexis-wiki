@@ -4,12 +4,16 @@ import json
 import re
 import dataclasses
 import base64
+import logging
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from .config import config
 from .llm import llm
 from .prompts import Prompts
+
+logger = logging.getLogger("librarian.processor")
+
 from .schemas import (
     VocabularyExtraction, GrammarExtraction, SummaryExtraction,
     VocabularyQuiz, ReadingQuiz, TranslationQuiz, ListeningQuiz,
@@ -93,8 +97,34 @@ class WikiProcessor:
         if not questions or not isinstance(questions, list):
             return quiz_obj
 
-        # Filter out malformed items (e.g. naked strings or partial json truncations)
-        valid_questions = [q for q in questions if isinstance(q, dict) or dataclasses.is_dataclass(q)]
+        # Auto-flatten nested questions (e.g. if small models put a "questions": [...] array inside an item)
+        flattened_questions = []
+        for q_item in questions:
+            if isinstance(q_item, dict):
+                if "questions" in q_item and isinstance(q_item["questions"], list):
+                    nested = q_item.pop("questions")
+                    flattened_questions.append(q_item)
+                    for nq in nested:
+                        if isinstance(nq, dict):
+                            flattened_questions.append(nq)
+                else:
+                    flattened_questions.append(q_item)
+            elif dataclasses.is_dataclass(q_item):
+                flattened_questions.append(q_item)
+        questions = flattened_questions
+
+        # Filter out malformed items (e.g. naked strings, items missing options or with empty options)
+        valid_questions = []
+        for q in questions:
+            if isinstance(q, dict):
+                opts = q.get("options")
+                if isinstance(opts, list) and len(opts) > 0 and q.get("question"):
+                    valid_questions.append(q)
+            elif dataclasses.is_dataclass(q):
+                opts = getattr(q, "options", None)
+                if isinstance(opts, list) and len(opts) > 0 and getattr(q, "question", None):
+                    valid_questions.append(q)
+
         if not valid_questions:
             return quiz_obj
         if isinstance(quiz_obj, dict):
@@ -157,6 +187,29 @@ class WikiProcessor:
                     expected_answer = q_dict[truth_field]
                     break
 
+            # Anti-leak / Auto-masking: Ensure fill-in-the-blank questions actually contain a blank (____)
+            # If the LLM forgot to create a blank and directly wrote the full sentence containing the target word,
+            # auto-mask the target word into '____'.
+            q_stem = q_dict.get("question") or q_dict.get("translated_sentence") or ""
+            if q_stem and expected_answer:
+                has_blank = bool(re.search(r"_{2,}", q_stem))
+                if not has_blank:
+                    # Pattern matching target word as whole word, case-insensitive
+                    esc_target = re.escape(expected_answer)
+                    pattern = rf"\b{esc_target}\b"
+                    if re.search(pattern, q_stem, re.IGNORECASE):
+                        new_stem = re.sub(pattern, "____", q_stem, count=1, flags=re.IGNORECASE)
+                        if "question" in q_dict:
+                            if isinstance(q, dict):
+                                q["question"] = new_stem
+                            else:
+                                setattr(q, "question", new_stem)
+                        elif "translated_sentence" in q_dict:
+                            if isinstance(q, dict):
+                                q["translated_sentence"] = new_stem
+                            else:
+                                setattr(q, "translated_sentence", new_stem)
+
             declared_idx = q_dict.get("correct_answer_index")
             try:
                 declared_idx = int(declared_idx)
@@ -179,13 +232,16 @@ class WikiProcessor:
             else:
                 correct_idx = declared_idx
 
+            if not options:
+                continue
+
             if is_biased:
                 # Shuffle options and record old_idx -> new_idx mapping
                 combined = list(zip(options, range(len(options))))
                 random.shuffle(combined)
                 
                 new_options = [opt for opt, old_idx in combined]
-                new_correct_idx = next(i for i, (opt, old_idx) in enumerate(combined) if old_idx == correct_idx)
+                new_correct_idx = next((i for i, (opt, old_idx) in enumerate(combined) if old_idx == correct_idx), 0)
                 old_to_new = {old_idx: new_idx for new_idx, (opt, old_idx) in enumerate(combined)}
 
                 # Update explanation if present
@@ -363,11 +419,16 @@ class WikiProcessor:
                     executor.submit(llm.chat, [{"role": "user", "content": prompt}], schema=schema, task_name=f"extract_{name}_{file_stem}"): name 
                     for name, prompt, schema in tasks
                 }
+                failed_tasks = []
                 for future in futures:
                     name = futures[future]
-                    data = future.result()
-                    if data:
-                        results.append((name, data))
+                    try:
+                        data = future.result()
+                        if data:
+                            results.append((name, data))
+                    except Exception as task_err:
+                        failed_tasks.append((name, str(task_err)))
+                        logger.error(f"Extraction task '{name}' failed for {file_stem}: {task_err}", exc_info=True)
 
             # 3. Process, Merge, and Save Results
             vocab_data = None
@@ -486,14 +547,22 @@ class WikiProcessor:
             for category, data in other_results:
                 all_saved.extend(self._save_extraction_results(data, source_path.name, category_override=category))
 
+            if failed_tasks:
+                failed_names = ", ".join(name for name, _ in failed_tasks)
+                if all_saved:
+                    return f"Pipeline completed with warnings for {source_filename}. Generated {len(all_saved)} files (failed tasks: {failed_names}).", all_saved
+                else:
+                    return f"Pipeline failed for {source_filename}. Failed tasks: {failed_names}.", all_saved
+
             return f"Pipeline completed for {source_filename}. Generated {len(all_saved)} files.", all_saved
 
         except Exception as e:
             return f"Pipeline Error: {e}", all_saved
 
-    def generate_quiz(self, unit_name, count=10, template_name="vocabulary"):
+    def generate_quiz(self, unit_name, count=10, template_name="vocabulary", audit_callback=None):
         """
         Generates a quiz handout based on extracted wiki data.
+        Optional audit_callback(stage, progress, message, extra=None) for live dashboard progress.
         """
         # 1. Normalize unit_name to extract core unit folder name robustly
         parts = Path(unit_name).parts
@@ -613,6 +682,162 @@ class WikiProcessor:
                     quiz_obj.video_url = data["video_url"]
                     quiz_obj.video_type = data["video_type"]
                     quiz_obj.transcript = data["transcript"]
+
+            # 4.6. Level 2 Expert Model Quality Audit & Self-Correction Loop (LLM-as-a-Judge)
+            if self.config.get("enable_expert_audit", False):
+                try:
+                    from .expert_auditor import ExpertAuditor
+                    source_context = ""
+                    if template_name == "reading":
+                        source_context = data.get("passage", "")
+                    elif template_name == "video":
+                        source_context = data.get("transcript", "")
+                    elif template_name in ("vocabulary", "translation", "listening"):
+                        source_context = str(data.get("content") or data.get("vocab_list") or "")
+
+                    max_l2_retries = 2
+                    l2_retry = 0
+                    current_schema = self._interpolate_schema(schema_cls, kwargs)
+
+                    last_audit_report = None
+                    while l2_retry < max_l2_retries:
+                        quiz_dict_eval = dataclasses.asdict(quiz_obj) if dataclasses.is_dataclass(quiz_obj) else quiz_obj
+                        if not source_context or not quiz_dict_eval:
+                            break
+
+                        if audit_callback:
+                            try:
+                                audit_callback(
+                                    stage="auditing",
+                                    audit_progress=30 if l2_retry == 0 else 80,
+                                    message=f"🔍 Level 2 Expert Audit [Attempt {l2_retry + 1}/{max_l2_retries}]: Running psychometric blind evaluation...",
+                                    extra={"attempt": l2_retry + 1, "max_retries": max_l2_retries}
+                                )
+                            except Exception:
+                                pass
+
+                        judge_model_to_use = ExpertAuditor.get_judge_model()
+                        active_gen_model = llm.model
+
+                        # If generator model and judge model are distinct, unload generator from Ollama to protect VRAM
+                        if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
+                            llm.unload_model(active_gen_model)
+
+                        audit_report = ExpertAuditor.audit_quiz(source_context, quiz_dict_eval, judge_model=judge_model_to_use)
+
+                        # If distinct models, unload judge model to free memory for generator / retry
+                        if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
+                            llm.unload_model(judge_model_to_use)
+
+                        if not audit_report:
+                            break
+
+                        last_audit_report = audit_report
+                        passed = audit_report.get("pass_audit", True)
+                        accuracy = audit_report.get("blind_solve_accuracy", 1.0)
+                        score = audit_report.get("overall_quality_score", 100)
+
+                        logger.info(
+                            f"Level 2 Expert Quality Audit [Attempt {l2_retry + 1}] for {core_name} ({template_name}): "
+                            f"Score: {score}/100, Pass: {passed}, Blind Accuracy: {accuracy * 100:.1f}%"
+                        )
+
+                        # `pass_audit` is the authoritative verdict: it already folds in
+                        # overall_quality_score, single_fit_valid, and the
+                        # confidence-aware blind-solve cross-check computed in
+                        # ExpertAuditor.audit_quiz. `accuracy` is retained as an
+                        # informational metric (log/UI), not a hard gate, so a
+                        # low-confidence judge guess no longer vetoes a good item.
+                        if passed:
+                            if audit_callback:
+                                try:
+                                    audit_callback(
+                                        stage="passed",
+                                        audit_progress=100,
+                                        message=f"✅ Level 2 Quality Audit PASSED (Score: {score}/100, Blind Acc: {accuracy*100:.0f}%)",
+                                        extra={"score": score, "accuracy": accuracy, "passed": True}
+                                    )
+                                except Exception:
+                                    pass
+                            break
+
+                        # Audit failed -> Synthesize targeted surgical feedback and trigger self-correction
+                        l2_retry += 1
+                        if l2_retry >= max_l2_retries:
+                            logger.warning(
+                                f"Level 2 Expert Audit max retries reached ({max_l2_retries}) for {core_name}. Proceeding with best attempt."
+                            )
+                            if audit_callback:
+                                try:
+                                    audit_callback(
+                                        stage="completed_with_warnings",
+                                        audit_progress=100,
+                                        message=f"⚠️ Audit finished with warnings (Score: {score}/100). Proceeding with best attempt.",
+                                        extra={"score": score, "accuracy": accuracy, "passed": False}
+                                    )
+                                except Exception:
+                                    pass
+                            break
+
+                        critique = ExpertAuditor.generate_critique_feedback(audit_report)
+                        logger.info(
+                            f"Level 2 Audit rejected item quality. Triggering surgical self-correction retry ({l2_retry}/{max_l2_retries})..."
+                        )
+
+                        if audit_callback:
+                            try:
+                                audit_callback(
+                                    stage="correcting",
+                                    audit_progress=55,
+                                    message=f"🛠️ Level 2 Audit: Flaws detected. Self-correcting quiz items (Retry {l2_retry}/{max_l2_retries})...",
+                                    extra={"score": score, "accuracy": accuracy, "passed": False, "attempt": l2_retry}
+                                )
+                            except Exception:
+                                pass
+
+                        prior_raw_json = json.dumps(quiz_dict_eval, ensure_ascii=False)
+                        retry_messages = [
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": prior_raw_json},
+                            {"role": "user", "content": critique}
+                        ]
+
+                        corrected_obj = llm.chat(
+                            retry_messages,
+                            schema=current_schema,
+                            task_name=f"quiz_{template_name}_{core_name}_l2retry{l2_retry}"
+                        )
+                        if corrected_obj:
+                            quiz_obj = self._shuffle_quiz_options(corrected_obj)
+                            if template_name == "reading":
+                                if isinstance(quiz_obj, dict): quiz_obj["passage"] = data["passage"]
+                                else: quiz_obj.passage = data["passage"]
+                            elif template_name == "video":
+                                if isinstance(quiz_obj, dict):
+                                    quiz_obj["video_url"] = data["video_url"]
+                                    quiz_obj["video_type"] = data["video_type"]
+                                    quiz_obj["transcript"] = data["transcript"]
+                                else:
+                                    quiz_obj.video_url = data["video_url"]
+                                    quiz_obj.video_type = data["video_type"]
+                                    quiz_obj.transcript = data["transcript"]
+                        else:
+                            break
+
+                    # Attach latest Level 2 audit report to quiz_obj (dict or dataclass)
+                    if last_audit_report:
+                        if isinstance(quiz_obj, dict):
+                            quiz_obj["_expert_audit"] = last_audit_report
+                        else:
+                            try:
+                                setattr(quiz_obj, "_expert_audit", last_audit_report)
+                            except Exception:
+                                pass
+
+                except Exception as audit_err:
+                    logger.warning(f"Level 2 Expert Quality Audit encountered non-fatal error: {audit_err}", exc_info=True)
+
+
 
             # 5. TTS for Listening Quiz (Base64 Embedding)
             audio_url = None
@@ -1329,6 +1554,8 @@ class WikiProcessor:
         # 1. Convert to dict if it's a dataclass
         if dataclasses.is_dataclass(quiz_obj):
             data_dict = dataclasses.asdict(quiz_obj)
+            if hasattr(quiz_obj, "_expert_audit") and getattr(quiz_obj, "_expert_audit"):
+                data_dict["_expert_audit"] = getattr(quiz_obj, "_expert_audit")
         else:
             data_dict = quiz_obj # It's already a dict from a JSON-file schema
             

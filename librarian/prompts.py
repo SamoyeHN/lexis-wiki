@@ -17,6 +17,7 @@ from .schemas import (
     ListeningQuiz,
     VideoQuiz,
     MindMapExtraction,
+    QuizQualityAuditReport,
 )
 
 class Prompts:
@@ -32,6 +33,7 @@ class Prompts:
         "translation_quiz": TranslationQuiz,
         "listening_quiz": ListeningQuiz,
         "video_quiz": VideoQuiz,
+        "expert_audit": QuizQualityAuditReport,
     }
 
     @classmethod
@@ -238,7 +240,7 @@ class Prompts:
                 "6. **ESL Learner Insight**:\n"
                 "   - `common_mistakes` must diagnose concrete ESL errors (e.g., misordered inversion, dangling participles, missing concessive subordinators, comma splices without coordinators, incorrect aspect in non-finite forms).\n\n"
                 "7. **Syntactic Design Audit & Strict Identity (`design_audit`)**:\n"
-                "   - In `design_audit`, execute the 5-step syntactic derivation in a CONCISE single line (under 120 characters, DO NOT output internal chain-of-thought or reasoning paragraphs):\n"
+                "   - In `design_audit`, record the syntactic derivation as a SINGLE compact pipeline string matching the exact syntax below (do not include conversational filler like \"I think\" or discursive explanations):\n"
                 "     `AUDIT: [Verbatim Excerpt] -> [Tier Priority: Tier-1/Tier-2/Tier-3] -> [Category] -> [Diagnostic Anchor/Marker] -> [Target Formula with Slots]`\n"
                 "   - ⚠️ **STRICT IDENTITY & DIRECT COPY-PASTE MANDATE**:\n"
                 "     * `pattern_formula` MUST be a direct, literal copy-paste of the exact formula derived in Step 5 of `design_audit`.\n"
@@ -432,6 +434,33 @@ class Prompts:
                 "2. Extract exactly 3 to 5 distinct primary branches representing the major sub-themes or narrative stages. Assign each a unique, harmonious color theme from the allowed values.\n"
                 "3. Consistent Hierarchical Structure: Every branch MUST contain one or more sub-branch objects. Each sub-branch has a clear `sub_branch_name` and a `leaves` array. If a branch covers only a single general topic, simply name its sub-branch 'Overview' or 'Key Points'.\n"
                 "4. Concise, High-Impact Leaves: Leaf nodes should be concise bullet-point details, phrases, or short examples (aim for 3-10 words per leaf). DO NOT copy long, multi-line paragraphs as leaf nodes.\n\n"
+                "CONTENT:\n{content}\n"
+            ),
+            "expert_audit": (
+                "### SYSTEM ###\n"
+                "You are an elite Psychometrician, Senior Applied Linguist, and Lead Assessment Auditor specializing in CEFR/TOEFL standardized language testing.\n\n"
+                "### USER ###\n"
+                "Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit on the supplied educational quiz items.\n\n"
+                "### MANDATES FOR EXPERT AUDIT:\n\n"
+                "0. **SYNTACTIC WELL-FORMEDNESS & GRAMMATICAL LEGITIMACY (MANDATORY GATE)**:\n"
+                "   - Before evaluating meaning, verify that inserting the candidate answer produces an **impeccably grammatical and complete English sentence**.\n"
+                "   - **ZERO-TOLERANCE DEFECTS**:\n"
+                "     - **Missing Predicate Verb**: If the stem lacks a main finite verb and the target option is a noun/adjective (e.g. 'perseverance [triumph] as a testament'), the item is **FATALLY FLAWED**. You MUST set `single_fit_valid: false`, assign `pedagogical_score <= 40`, and explicitly flag 'Missing predicate verb / ungrammatical sentence' in `diagnostic_feedback`.\n"
+                "     - **Severe Lexical/Collocation Tautology**: Phrasings that are unnatural or grammatically redundant (e.g. 'pledge a commitment' instead of 'make a commitment' or 'pledge to do') must be penalized severely.\n"
+                "   - If ANY option causes a sentence fragment or grammatical breakdown, it CANNOT be considered a valid answer key.\n\n"
+                "1. **BLIND TEST-SOLVER SIMULATION (`blind_solved_index` & `confidence`)**:\n"
+                "   - Independently read the source text and each question stem with its 4 options (Option A = 0, B = 1, C = 2, D = 3).\n"
+                "   - Determine the objectively correct answer based SOLELY on direct textual evidence from the passage.\n"
+                "   - Set `confidence`: 'Definite', 'Hesitant', or 'Ambiguous'.\n\n"
+                "2. **ABSOLUTE SINGLE-FIT VALIDITY (`single_fit_valid`)**:\n"
+                "   - Verify that there is EXACTLY ONE uniquely correct, grammatically sound, and textually defensible answer.\n"
+                "   - If two options can both be justified by the text (Double Key / Key Leak) OR if the declared key creates an ungrammatical sentence, flag `single_fit_valid: false`.\n\n"
+                "3. **COGNITIVE DISTRACTOR TRAP ANALYSIS (`distractors`)**:\n"
+                "   - Evaluate all 4 options, identifying authentic educational trap types and plausibility ratings.\n"
+                "   - Provide concise elimination rationales explaining why test-takers must definitively reject distractors. Trivial giveaway filler (e.g. childish words 'study', 'experiment') must be flagged as 'Flawed / Trivial Giveaway'.\n\n"
+                "4. **SCORING AND VERDICT (`overall_quality_score` & `pass_audit`)**:\n"
+                "   - Assign `pedagogical_score` (0–100) per question: flawless = 90-100; minor weakness = 75-89; critical defects/missing verb/trivial distractors < 75.\n"
+                "   - **PASS REQUIREMENT**: Set `pass_audit: true` ONLY IF `overall_quality_score >= 80` AND every question has `single_fit_valid == true` AND no question has grammatical/syntactic collapse. If even ONE question has a missing verb or invalid single fit, `pass_audit` MUST be `false`.\n\n"
                 "CONTENT:\n{content}\n"
             ),
         }

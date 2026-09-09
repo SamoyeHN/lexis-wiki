@@ -33,13 +33,17 @@ class DashboardState:
                 "target": target,
                 "status": "running",
                 "progress": 10,
+                "stage": "starting",
+                "audit_progress": 0,
+                "audit_info": None,
                 "logs": initial_logs,
-                "saved_files": []
+                "saved_files": [],
+                "result": None
             }
             return job_id
 
     @classmethod
-    def update_job(cls, job_id, progress=None, status=None, log=None, saved_files=None):
+    def update_job(cls, job_id, progress=None, status=None, log=None, saved_files=None, result=None, stage=None, audit_progress=None, audit_info=None):
         with cls.lock:
             if job_id in cls.jobs:
                 if progress is not None:
@@ -50,6 +54,14 @@ class DashboardState:
                     cls.jobs[job_id]["logs"].append(log)
                 if saved_files is not None:
                     cls.jobs[job_id]["saved_files"] = saved_files
+                if result is not None:
+                    cls.jobs[job_id]["result"] = result
+                if stage is not None:
+                    cls.jobs[job_id]["stage"] = stage
+                if audit_progress is not None:
+                    cls.jobs[job_id]["audit_progress"] = audit_progress
+                if audit_info is not None:
+                    cls.jobs[job_id]["audit_info"] = audit_info
 
     @classmethod
     def get_job(cls, job_id):
@@ -85,25 +97,45 @@ def background_compile_worker(job_id, filename, categories=None):
 
 def background_quiz_worker(job_id, filename, count, template):
     try:
-        DashboardState.update_job(job_id, progress=30, log=f"[QUIZ] Triggering generation from unit '{filename}'...")
-        DashboardState.update_job(job_id, progress=50, log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count})...")
+        DashboardState.update_job(job_id, progress=30, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'...")
+        DashboardState.update_job(job_id, progress=60, stage="generating", log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count})...")
         
         processor = WikiProcessor()
-        result = processor.generate_quiz(filename, count=count, template_name=template)
+
+        def on_audit_update(stage, audit_progress, message, extra=None):
+            # Keep overall quiz progress at 100% since draft is ready, while audit_progress tracks the L2 audit cycle
+            DashboardState.update_job(
+                job_id,
+                progress=100,
+                stage=stage,
+                audit_progress=audit_progress,
+                audit_info=message,
+                log=f"[AUDIT] {message}"
+            )
+
+        result = processor.generate_quiz(filename, count=count, template_name=template, audit_callback=on_audit_update)
         
         if "Error" in result:
-            DashboardState.update_job(job_id, progress=100, status="failed", log=f"[ERROR] Quiz generation failed: {result}")
+            DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Quiz generation failed: {result}")
         else:
             try:
                 rel_path = Path(result).relative_to(Path(config.project_root))
                 web_path = str(rel_path).replace("\\", "/")
             except Exception:
                 web_path = result
-            DashboardState.update_job(job_id, progress=100, status="completed", log="[QUIZ] Quiz generation completed successfully!", saved_files=[web_path])
+            DashboardState.update_job(
+                job_id,
+                progress=100,
+                status="completed",
+                stage="completed",
+                audit_progress=100,
+                log="[QUIZ] Quiz generation completed successfully!",
+                saved_files=[web_path]
+            )
             DashboardState.update_job(job_id, log=f"[QUIZ] Handout saved to: {os.path.basename(result)}")
     except Exception as e:
         err_msg = traceback.format_exc()
-        DashboardState.update_job(job_id, progress=100, status="failed", log=f"[ERROR] Exception occurred: {err_msg}")
+        DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Exception occurred: {err_msg}")
 
 def background_video_import_worker(job_id, url_or_path, cookies_from_browser=None, cookies=None, subtitle=None, current_unit=None):
     try:
@@ -135,6 +167,59 @@ def background_video_import_worker(job_id, url_or_path, cookies_from_browser=Non
     except Exception as e:
         err_msg = traceback.format_exc()
         DashboardState.update_job(job_id, progress=100, status="failed", log=f"[ERROR] Import failed: {err_msg}")
+
+def background_audit_batch_worker(job_id, units=None, template=None, workers=2):
+    """Re-run the Level-2 expert audit over existing handouts, streaming progress to the job."""
+    try:
+        from .audit_batch import run_batch
+        scope = f"{len(units)} unit(s)" if units else "ALL units"
+        DashboardState.update_job(job_id, log=f"🔎 Starting Level-2 re-audit over {scope}…")
+
+        def _progress(done, total, row):
+            mark = "⚠" if row.get("error") else ("✅" if row.get("passed") else "❌")
+            acc = row.get("blind_solve_accuracy")
+            acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+            DashboardState.update_job(
+                job_id,
+                progress=min(99, int(done / total * 100)) if total else 50,
+                log=f"[{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}",
+            )
+
+        summary = run_batch(
+            unit_filter=units,
+            template_filter=template,
+            max_workers=workers,
+            progress_cb=_progress,
+        )
+
+        if summary["total"] == 0:
+            DashboardState.update_job(job_id, progress=100, status="failed",
+                                      log="❌ No quiz handouts found to re-audit.")
+            return
+
+        # Persist a timestamped report for traceability.
+        report_name = None
+        try:
+            import datetime
+            logs_dir = Path(config.project_root) / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_name = f"re_audit_report_{stamp}.json"
+            with open(logs_dir / report_name, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+        except Exception:
+            report_name = None
+
+        if summary["failed"] == 0 and summary["errors"] == 0:
+            done_log = f"✅ Re-audit complete: {summary['passed']}/{summary['total']} passed, {summary['audited']} audited."
+        else:
+            done_log = f"🏁 Re-audit complete: {summary['passed']} passed / {summary['failed']} failed / {summary['errors']} error(s)."
+        DashboardState.update_job(job_id, progress=100, status="completed", log=done_log, result=summary)
+        if report_name:
+            DashboardState.update_job(job_id, log=f"📄 Report saved to logs/{report_name}")
+    except Exception as e:
+        err_msg = traceback.format_exc()
+        DashboardState.update_job(job_id, progress=100, status="failed", log=f"❌ Re-audit exception: {err_msg}")
 
 class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -717,6 +802,21 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     t.daemon = True
                     t.start()
                     response_data = {"success": True, "job_id": job_id, "message": "Compilation task spawned successfully."}
+
+            elif path == "/api/re-audit":
+                data = json.loads(body) if body else {}
+                units = data.get("units") or None
+                template = data.get("template") or None
+                try:
+                    workers = int(data.get("workers") or 2)
+                except (TypeError, ValueError):
+                    workers = 2
+                job_name = f"Re-audit {len(units)} unit(s)" if units else "Re-audit ALL units"
+                job_id = DashboardState.create_job("audit-batch", job_name)
+                t = threading.Thread(target=background_audit_batch_worker, args=(job_id, units, template, workers))
+                t.daemon = True
+                t.start()
+                response_data = {"success": True, "job_id": job_id, "message": "Re-audit task spawned successfully."}
 
             elif path == "/api/export-exe":
                 data = json.loads(body)

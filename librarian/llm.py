@@ -122,10 +122,14 @@ def get_model_profile(model_name: str) -> dict:
     return profile
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, model: Optional[str] = None):
+        self._model_override = model
         self._refresh_config()
+        if model:
+            self.model = model
         self.last_raw_response = None
         self.last_done_reason = None
+
 
     def _refresh_config(self):
         """Refreshes configuration from the config object."""
@@ -186,15 +190,37 @@ class LLMClient:
                 return []
         return []
 
-    def chat(self, messages, stream=False, json_format=True, schema=None, task_name=None, **kwargs):
+    def unload_model(self, model_name: Optional[str] = None):
+        """Unloads a model from GPU memory on Ollama to prevent VRAM exhaustion."""
+        target = model_name or self.model
+        if not target:
+            return
+        self._refresh_config()
+        if self.api_type == "ollama":
+            url = f"{self.api_url}/api/generate"
+            try:
+                # keep_alive: 0 immediately evicts the model from VRAM
+                requests.post(url, json={"model": target, "keep_alive": 0}, timeout=5)
+                import logging
+                logging.getLogger("librarian.llm").info(f"Unloaded model '{target}' from Ollama memory (keep_alive: 0).")
+            except Exception as e:
+                import logging
+                logging.getLogger("librarian.llm").warning(f"Failed to unload model '{target}' from Ollama: {e}")
+
+    def chat(self, messages, stream=False, json_format=True, schema=None, task_name=None, model=None, **kwargs):
         """
         Main chat interface. 
         Supports both streaming and non-streaming responses.
         If schema is provided, returns an instance of the schema dataclass.
         """
         self._refresh_config()
+        if model:
+            self.model = model
+        elif self._model_override:
+            self.model = self._model_override
         self.last_raw_response = None
         self.last_done_reason = None
+
 
         # 1. OPTIMIZATION: Move Personas to System Role
         if messages and messages[0]["role"] == "user":
@@ -301,22 +327,28 @@ class LLMClient:
                     failure_cat = "EMPTY_RESPONSE"
                     raise LLMError(f"LLM returned empty/trivial response for task '{task_name or 'chat'}'.")
                 
-                # Remove ```json ... ``` blocks
+                # Remove ```json ... ``` blocks (support both objects and bare arrays)
                 if "```" in json_str:
-                    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', json_str, re.DOTALL)
+                    match = re.search(r'```(?:json)?\s*([\{\[].*?[\}\]])\s*```', json_str, re.DOTALL)
                     if match:
                         json_str = match.group(1)
                     else:
                         # Fallback: remove backticks
                         json_str = re.sub(r'```[a-z]*\n?', '', json_str).replace('```', '')
 
-                # Find outermost { and }
-                start = json_str.find('{')
-                end = json_str.rfind('}')
+                # Find outermost { ... } or [ ... ] (Array-Aware Slicing)
+                trimmed = json_str.lstrip()
+                if trimmed.startswith('['):
+                    start = json_str.find('[')
+                    end = json_str.rfind(']')
+                else:
+                    start = json_str.find('{')
+                    end = json_str.rfind('}')
+
                 if start != -1 and end != -1:
                     json_str = json_str[start:end+1]
                 elif start != -1 and end == -1:
-                    # Cut off before closing brace -> Truncated
+                    # Cut off before closing brace/bracket -> Truncated
                     failure_cat = "TRUNCATED"
                 
                 # 6.2. HEALING
@@ -466,6 +498,20 @@ class LLMClient:
                             data = data[wrapper_key]
                             break
 
+                if isinstance(data, dict) and "questions" in data and isinstance(data["questions"], list):
+                    flattened_questions = []
+                    for q_item in data["questions"]:
+                        if isinstance(q_item, dict):
+                            if "questions" in q_item and isinstance(q_item["questions"], list):
+                                nested_list = q_item.pop("questions")
+                                flattened_questions.append(q_item)
+                                for nq in nested_list:
+                                    if isinstance(nq, dict):
+                                        flattened_questions.append(nq)
+                            else:
+                                flattened_questions.append(q_item)
+                    data["questions"] = flattened_questions
+
                 if isinstance(schema, dict):
                     if isinstance(data, list):
                         props = schema.get("properties", {})
@@ -509,7 +555,7 @@ class LLMClient:
                                 # Format clear, surgical feedback for the model
                                 issue_bullets = "\n".join([f"- {f}" for f in flags[:5]])
                                 critique_prompt = (
-                                    f"### 🚨 [QUALITY AUDIT REVIEW #{retry_count + 1}/{max_qa_retries} - Score: {composite:.1f}/100]\n"
+                                    f"\n\n### 🚨 [QUALITY AUDIT REVIEW #{retry_count + 1}/{max_qa_retries} - Score: {composite:.1f}/100]\n"
                                     f"Lowest dimension: {lowest_dim}.\n"
                                     f"Your previous response had the following critical pedagogical issues:\n"
                                     f"{issue_bullets}\n\n"
@@ -539,6 +585,7 @@ class LLMClient:
                                     duration=call_duration,
                                     start_time=start_time,
                                     end_time=end_time,
+                                    model=self.model,
                                 )
 
                                 # Multi-turn self-correction:
@@ -582,6 +629,7 @@ class LLMClient:
                     duration=call_duration,
                     start_time=start_time,
                     end_time=end_time,
+                    model=self.model,
                 )
 
                 return result_obj
@@ -613,6 +661,7 @@ class LLMClient:
                     duration=call_duration,
                     start_time=start_time,
                     end_time=end_time,
+                    model=self.model,
                 )
                 raise LLMError(f"Failed to generate structured data matching schema: {e}")
         else:
@@ -630,6 +679,7 @@ class LLMClient:
                     duration=call_duration,
                     start_time=start_time,
                     end_time=end_time,
+                    model=self.model,
                 )
             return content
 
@@ -657,6 +707,16 @@ class LLMClient:
         # e.g., [..., "{\n] or [..., "abc\n] or [..., {\n] where generation was cut off
         json_str = re.sub(r',\s*["\']\{?["\']\s*([\]\}])', r'\1', json_str)
         json_str = re.sub(r',\s*\{?\s*([\]\}])', r'\1', json_str)
+
+        # 2.3. Fix small-model attention drift: accidental dictionary keys inside array of objects
+        # e.g., in a questions array, after "explanation": "..."\n  "target_word_key": { ... }
+        # Instead of closing the prior item with '}' and starting '{', the model wrote ',\n "key": {'
+        json_str = re.sub(r',\s*\n(\s*)"[^"]+":\s*\{', r'\n\1},\n\1{', json_str)
+
+        # 2.4. Fix array wrongly closed with object braces
+        # e.g., starts with "questions": [ but ends with }\n  }\n} instead of }\n  ]\n}
+        if re.search(r'"(?:questions|vocabulary|expressions|grammar_patterns)":\s*\[', json_str):
+            json_str = re.sub(r'\}\s*\}\s*\}\s*$', '}\n  ]\n}', json_str.strip())
 
         # 3. Fix unescaped newlines within values
         # This is a bit risky but common: "value": "line1\nline2"

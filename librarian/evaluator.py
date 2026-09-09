@@ -136,7 +136,12 @@ def _wordlist_matches(clean_target: str, wordlist: set) -> bool:
 
 def _detect_task_type(task: str, parsed: Any) -> str:
     """Detect the logical task type from JSON structure first, task name as fallback."""
+    t = (task or "").lower()
+    if "expert_audit" in t or "quality_audit" in t:
+        return "expert_audit"
     if isinstance(parsed, dict):
+        if "pass_audit" in parsed and "blind_solve_accuracy" in parsed:
+            return "expert_audit"
         if isinstance(parsed.get("questions"), list):
             return "quiz"
         if isinstance(parsed.get("grammar_patterns"), list):
@@ -149,7 +154,6 @@ def _detect_task_type(task: str, parsed: Any) -> str:
             return "summary"
         if isinstance(parsed.get("branches"), list):
             return "mindmap"
-    t = (task or "").lower()
     if "extract_grammar" in t:
         return "grammar"
     if "extract_expressions" in t:
@@ -363,7 +367,18 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
         # Check 3: Cleaned quote in source or high n-gram coverage
         core_quote = _clean_core(quote)
-        if core_quote and (core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.85):
+        is_verbatim = False
+        if core_quote:
+            if core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.85:
+                is_verbatim = True
+            elif "..." in quote or "…" in quote:
+                # If model used ellipsis to omit middle parts of a long sentence, check each segment
+                segments = [s.strip() for s in re.split(r'\.{3,}|…', quote) if s.strip()]
+                meaningful_segs = [s for s in segments if len(_clean_core(s).split()) >= 2]
+                if meaningful_segs and all(_clean_core(seg) in core_src or _ngram_coverage(_clean_core(seg), core_src, n=3) >= 0.85 for seg in meaningful_segs):
+                    is_verbatim = True
+
+        if is_verbatim:
             matches += 1
         else:
             flags.append(f"⚠️ Non-verbatim quote detected: '{quote[:40]}...'")
@@ -375,7 +390,7 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
 def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Optional[float], List[str]]:
     """Dimension 3 (0–25). Evaluates pedagogical quality across extraction and assessment types."""
-    if task_type not in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap"):
+    if task_type not in ("vocabulary", "expressions", "grammar", "quiz", "summary", "mindmap", "expert_audit"):
         return None, []
     if not items:
         return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
@@ -449,7 +464,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Option
                     )
                 )
 
-            if is_list_4 and has_no_duplicates and valid_idx and target_in_options and explanation and question:
+            # 4. Blank verification for fill-in-the-blank questions
+            has_blank_when_expected = True
+            if target and question:
+                # If target is specified, it's a lexical/fill-in-the-blank item.
+                # Must contain at least two consecutive underscores (____)
+                has_blank_when_expected = bool(re.search(r"_{2,}", question))
+
+            if is_list_4 and has_no_duplicates and valid_idx and target_in_options and explanation and question and has_blank_when_expected:
                 passes += 1
             else:
                 reasons = []
@@ -459,6 +481,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Option
                 if not target_in_options: reasons.append(f"target '{target}' not matching options[{idx}]")
                 if not explanation: reasons.append("missing explanation")
                 if not question: reasons.append("missing question text")
+                if not has_blank_when_expected: reasons.append("missing fill-in-the-blank slot (____)")
                 flags.append(f"⚠️ Quiz question failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "summary":
             name = str(item.get("concept_name", "")).strip()
@@ -476,6 +499,26 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str) -> Tuple[Option
                 passes += 1
             else:
                 flags.append("⚠️ MindMap branch missing branch name")
+        elif task_type == "expert_audit":
+            checks += 1
+            distractors = item.get("distractors", [])
+            bs_idx = item.get("blind_solved_index")
+            feedback = str(item.get("diagnostic_feedback", "")).strip()
+            score = item.get("pedagogical_score", 100)
+            single_valid = item.get("single_fit_valid", True)
+            is_valid_dist = isinstance(distractors, list) and len(distractors) == 4
+            is_valid_idx = isinstance(bs_idx, int) and 0 <= bs_idx <= 3
+            # Feedback is required only if the item has defects (score < 90 or invalid single fit);
+            # for flawless items (score >= 90), empty feedback is valid and expected.
+            feedback_ok = bool(feedback) if (score < 90 or not single_valid) else True
+            if is_valid_dist and is_valid_idx and feedback_ok:
+                passes += 1
+            else:
+                reasons = []
+                if not is_valid_dist: reasons.append("distractor count != 4")
+                if not is_valid_idx: reasons.append("invalid blind solve index")
+                if not feedback_ok: reasons.append("missing diagnostic feedback for defective item")
+                flags.append(f"⚠️ Audit item failed validation: {', '.join(reasons)}")
                 
     if checks == 0:
         return 0.0, [f"⚠️ Output list for '{task_type}' is empty."]
@@ -503,6 +546,7 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str) -> Tuple[Opti
         "quiz": ("target_word", "question", "translated_sentence", "correct_english_answer"),
         "summary": ("concept_name",),
         "mindmap": ("branch_name",),
+        "expert_audit": ("item_index",),
     }
     keys = key_by_type.get(task_type, ("word", "quote", "question"))
     headwords = []
