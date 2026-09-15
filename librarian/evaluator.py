@@ -246,6 +246,7 @@ def _extract_items(parsed: Any, task_type: str) -> List[Dict[str, Any]]:
         return []
     key_by_type = {
         "quiz": "questions",
+        "expert_audit": "questions",
         "grammar": "grammar_patterns",
         "expressions": "expressions",
         "vocabulary": "vocabulary",
@@ -627,12 +628,17 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 flags.append("⚠️ MindMap branch missing branch name")
         elif task_type == "expert_audit":
             checks += 1
-            distractors = item.get("distractors", [])
+            raw_distractors = item.get("distractors", [])
+            # Filter out empty or non-dict objects (e.g. trailing {} produced during JSON truncation)
+            distractors = [
+                d for d in raw_distractors 
+                if isinstance(d, dict) and any(d.get(k) for k in ("option_text", "trap_type", "elimination_rationale"))
+            ] if isinstance(raw_distractors, list) else []
             bs_idx = item.get("blind_solved_index")
             feedback = _safe_str(item.get("diagnostic_feedback"))
             score = item.get("pedagogical_score", 100)
             single_valid = item.get("single_fit_valid", True)
-            is_valid_dist = isinstance(distractors, list) and len(distractors) in (1, 2, 3, 4)
+            is_valid_dist = len(distractors) in (1, 2, 3, 4)
             is_valid_idx = isinstance(bs_idx, int) and 0 <= bs_idx <= 3
             # Feedback is required only if the item has defects (score < 90 or invalid single fit);
             # for flawless items (score >= 90), empty feedback is valid and expected.

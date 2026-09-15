@@ -127,9 +127,6 @@ Use `snake_case` for all JSON keys and variable names.
 - [x] Clean Prompt & Schema Separation: Stripped code variable names and JSON formatting instructions from prompt templates, guaranteeing 100% compatibility across Prose-to-JSON and One-Shot modes.
 
 ### Pending
-- **Vocabulary Extraction Expert Audit & Item Filtering**:
-  - *Context*: 在 JSON 模式下，模型偏向于根据材料中的所有词汇尽量穷尽提取（如从 10 题扩张到 20+ 题），覆盖面广但教学焦点容易发散。
-  - *Design*: 结合 Expert Mode，在 `vocabulary extraction` 阶段引入 Expert Audit，由高智能专家模型从提取列表中筛选出最具代表性、教学权重最高的核心重点词汇（Curated Lexical Subset），从源头上精准供给 Quiz Generator，兼顾出题速度与核心教学覆盖。
 - **Quality Tier Routing & Human Review UI**:
   - 90–100: 自动交付（Passed - High Quality）。
   - 75–89: 自动交付但标注审查候选（Review Candidate）。
@@ -227,11 +224,7 @@ To eliminate cognitive divergence, early truncations, and contradictory judging 
      - Fatal defect: unsolvable double-keys, ungrounded keys, grammatical breakdown, or core translation fidelity mismatch.
      - Entire item is discarded and rewritten from the target curriculum pool in `cured_question`.
 
-3. **Field Disambiguation & Single Source of Truth**:
-   - In Comparative Translation Appraisal, `translated_sentence` is strictly defined as the Non-English source prompt to be translated (e.g. Chinese stem), preventing LLMs from confusing it with English translations.
-   - All options in Translation Appraisal are strictly plain English strings (`options: ["...", "..."]`).
-
-4. **Budget & Parameter Safeguards**:
+3. **Budget & Parameter Safeguards**:
    - High-token budget (`num_predict: 16384`) allocated for local and remote judge models to ensure complete multi-item cognitive distractor justifications without token exhaustion.
 
 ---

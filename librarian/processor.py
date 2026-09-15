@@ -1810,6 +1810,29 @@ class WikiProcessor:
             sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
             kwargs["vocabulary_content"] = sanitized_v
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
+
+            # Extract only Core Concepts 1, 2, 3 from Summary
+            summary_txt = data.get("summary_content", "")
+            core_unit = data.get("unit_core_name", core_name)
+            
+            thematic_concepts = []
+            if summary_txt:
+                concept_matches = re.findall(r'###\s*\[\[(.*?)\]\]', summary_txt)
+                if not concept_matches:
+                    concept_matches = re.findall(r'###\s*([^\n]+)', summary_txt)
+                if concept_matches:
+                    clean_concepts = [
+                        c.strip() for c in concept_matches 
+                        if c.strip() and not c.strip().lower().startswith("narrative")
+                    ]
+                    for idx, c in enumerate(clean_concepts[:3], 1):
+                        thematic_concepts.append(f"{idx}. {c}")
+
+            if not thematic_concepts:
+                thematic_concepts.append(f"1. {core_unit.replace('_', ' ')}")
+
+            thematic_topic_str = "\n".join(thematic_concepts)
+            kwargs["thematic_topic"] = thematic_topic_str
             
             # Retrieve tts configurations to get genders & accents for Schema-First Live Injection
             from .tts import tts_service
@@ -3113,7 +3136,36 @@ class WikiProcessor:
 
         elif quiz_type == "listening":
             if not vocab_path.exists(): return None
-            return {"vocab_list": vocab_content, "cefr_level": cefr}
+            # Retrieve unit summary to anchor dialogue topic to Core Concepts
+            summary_content = ""
+            summary_path = unit_dir / "extractions" / f"{core_name}_summary.md"
+            if not summary_path.exists():
+                summary_candidates = list(self.config.wiki_content_path.rglob(f"{core_name}_summary.md"))
+                if summary_candidates:
+                    summary_path = summary_candidates[0]
+            if summary_path and summary_path.exists():
+                try:
+                    summary_content = summary_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+            # Fallback to source article if summary does not exist
+            source_content = ""
+            if not summary_content:
+                source_path = unit_dir / "sources" / f"{core_name}.md"
+                if not source_path.exists():
+                    source_path = unit_dir / "sources" / f"{core_name}.txt"
+                if source_path.exists():
+                    try:
+                        source_content = source_path.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+            return {
+                "vocab_list": vocab_content,
+                "summary_content": summary_content,
+                "source_content": source_content,
+                "unit_core_name": core_name,
+                "cefr_level": cefr
+            }
 
         elif quiz_type in ["video", "listening"]:
             # For listening quiz, we check if there's an active media file first

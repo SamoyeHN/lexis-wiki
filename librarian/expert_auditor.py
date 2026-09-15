@@ -33,7 +33,7 @@ class ExpertAuditor:
         return config.get("model", "gemma4:12b")
 
     @classmethod
-    def format_quiz_for_blind_audit(cls, source_text: str, questions: List[Dict[str, Any]], is_translation: bool = False) -> str:
+    def format_quiz_for_blind_audit(cls, source_text: str, questions: List[Dict[str, Any]], is_translation: bool = False, include_source: bool = True) -> str:
         """Formats quiz items for expert audit.
         
         For standard reading/vocab/listening quizzes, correct answers are stripped out
@@ -42,7 +42,7 @@ class ExpertAuditor:
         translation directly; thus, the declared answer is explicitly presented.
         """
         lines = []
-        if source_text and source_text.strip():
+        if include_source and source_text and source_text.strip():
             lines.extend([
                 "### SOURCE MATERIAL:",
                 source_text.strip(),
@@ -138,9 +138,6 @@ class ExpertAuditor:
         is_vocab = (quiz_type == "vocabulary") or (not is_translation and not is_video and not is_listening and any("target_word" in q for q in questions if isinstance(q, dict)))
         is_reading = (quiz_type == "reading")
 
-        eval_model = judge_model or cls.get_judge_model()
-        formatted_content = cls.format_quiz_for_blind_audit(source_text, questions, is_translation=is_translation)
-
         # Select specialized prompt template by modality
         if is_video:
             template_name = "expert_audit_video"
@@ -154,6 +151,17 @@ class ExpertAuditor:
             template_name = "expert_audit_reading"
         else:
             template_name = "expert_audit"
+
+        eval_model = judge_model or cls.get_judge_model()
+        # For listening and video templates, {source_text} already has its own dedicated section
+        # so we do not duplicate it inside {quiz_content}.
+        has_separate_source_section = template_name in ("expert_audit_listening", "expert_audit_video")
+        formatted_content = cls.format_quiz_for_blind_audit(
+            source_text,
+            questions,
+            is_translation=is_translation,
+            include_source=not has_separate_source_section
+        )
 
         raw_prompt, schema_cls = Prompts.get(template_name)
         lang = target_language or "Simplified Chinese"
@@ -176,6 +184,8 @@ class ExpertAuditor:
         format_kwargs = {
             "target_language": lang,
             "content": formatted_content,
+            "quiz_content": formatted_content,
+            "source_text": source_text.strip() if source_text else "(No explicit source transcript/dialogue provided.)",
             "total_items": len(questions),
             "unit_vocabulary_list": unit_vocab_str,
             "vocabulary_list": unit_vocab_str,

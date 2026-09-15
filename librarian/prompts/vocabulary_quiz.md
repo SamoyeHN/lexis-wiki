@@ -27,18 +27,18 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
    - 🚫 **Strict Distractor Pool Isolation**:
      * The supplied vocabulary list is EXCLUSIVELY the pool for correct targets. 
      * You are STRICTLY PROHIBITED from using ANY words from the supplied unit list as distractors. Distractors must be authentic academic English words (CEFR B2-C1) drawn entirely from outside the list.
-     * NEVER present near-synonyms or interchangeable words that could defensibly fit the blank.
+     * STRICTLY PROHIBIT interchangeable near-synonyms or ambiguous alternatives that could defensibly fit the blank.
    - 🎯 **Mandatory 3-Vector Distractor Taxonomy**:
      Each question's 3 distractors must purposefully embody:
-     1. *Trap 1 (Antonym / Polarity Clash)*: directly contradicts the sentence's contextual or concession logic.
-     2. *Trap 2 (Collocation / Syntax Clash)*: plausible general meaning, but violates the blank's dependent preposition, verb valency, or lexical pairing.
-     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the academic register, but denotes a completely distinct functional category or entity unsuited to the role.
+     1. *Trap 1 (Antonym / Logical Polarity Clash)*: directly contradicts the sentence's contextual or concession logic.
+     2. *Trap 2 (Collocation / Preposition Clash)*: plausible general meaning, but violates the blank's dependent preposition, verb valency, or lexical pairing.
+     3. *Trap 3 (Domain / Category Mismatch)*: shares the academic register, but denotes a completely distinct functional category or entity unsuited to the role.
 
 4. **Pedagogical Rationale & Design Audit**:
    - `definition`: Concise, dictionary-grade contextual meaning of the target word.
    - `design_audit`: Follow this rigorous 4-part structure:
-     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Polarity): ...] [Trap 2 (Collocation/Syntax): ...] [Trap 3 (Domain Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
+     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Logical Polarity): ...] [Trap 2 (Collocation/Preposition): ...] [Trap 3 (Domain/Category Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
    - `explanation`: Thorough, contrastive explanation detailing why the target fits and explicitly citing why each distractor is objectively eliminated (preposition mismatch, logical contradiction, or syntactic clash).
 
-CONTENT:
+UNIT VOCABULARY LIST:
 {vocabulary_content}
