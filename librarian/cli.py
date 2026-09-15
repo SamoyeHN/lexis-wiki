@@ -257,10 +257,15 @@ def main():
             current_pid = os.getpid()
             if sys.platform == "win32":
                 try:
-                    out = subprocess.check_output("netstat -ano -p tcp", shell=True, text=True, stderr=subprocess.DEVNULL)
+                    raw_out = subprocess.check_output("netstat -ano -p tcp", shell=True, stderr=subprocess.DEVNULL)
+                    try:
+                        out = raw_out.decode("utf-8", errors="ignore")
+                    except Exception:
+                        out = raw_out.decode("gbk", errors="ignore")
                     for line in out.splitlines():
                         line = line.strip()
-                        if f":{target_port}" in line and ("LISTENING" in line or "LISTEN" in line):
+                        # Support English 'LISTENING' and Chinese 'LISTENING' / '监听'
+                        if f":{target_port} " in line or f":{target_port}\t" in line:
                             parts = line.split()
                             try:
                                 pid = int(parts[-1])

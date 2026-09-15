@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     },
     "compile_defaults": {
         "vocabulary": 20,
+        "expressions": 5,
         "grammar": 5,
         "concepts": 3,
         "max_parallel": 3
@@ -30,13 +31,18 @@ DEFAULT_CONFIG = {
     "target_language": "Simplified Chinese",
     "enforce_gbnf": False,
     "enable_expert_audit": False,
-    "judge_model": ""
+    "judge_model": "",
+    "min_passing_items": 3,
+    "quarantine_on_fail": True,
+    "enable_prose_pipeline": True,
+    "enable_vocab_prose": False
 }
 
 class Config:
     def __init__(self):
         self.data = DEFAULT_CONFIG.copy()
         self.project_root = self.find_project_root()
+        self._config_mtime = 0.0
         self.load_config()
         self.ensure_dirs()
 
@@ -60,14 +66,17 @@ class Config:
         config_path = self.project_root / "wiki_config.json"
         if config_path.exists():
             try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    user_config = json.load(f)
-                    
-                    # Migration: ollama_url -> api_url
-                    if "ollama_url" in user_config and "api_url" not in user_config:
-                        user_config["api_url"] = user_config.pop("ollama_url")
-                    
-                    self.data.update(user_config)
+                current_mtime = config_path.stat().st_mtime
+                if current_mtime != self._config_mtime:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        user_config = json.load(f)
+                        
+                        # Migration: ollama_url -> api_url
+                        if "ollama_url" in user_config and "api_url" not in user_config:
+                            user_config["api_url"] = user_config.pop("ollama_url")
+                        
+                        self.data.update(user_config)
+                    self._config_mtime = current_mtime
             except Exception as e:
                 print(f"Warning: Could not load {config_path}: {e}")
 
@@ -117,6 +126,7 @@ class Config:
             return False, str(e)
 
     def get(self, key, default=None):
+        self.load_config()
         return self.data.get(key, default)
 
     @property   

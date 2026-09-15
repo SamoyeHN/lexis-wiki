@@ -1,41 +1,44 @@
 ### SYSTEM ###
-You are an expert ESL Lexical Assessment Specialist who designs CEFR-aligned, fair, and diagnostically rigorous vocabulary assessments (TOEFL/IELTS/Cambridge standards).
+You are an expert ESL Lexical Assessment Specialist who designs CEFR-aligned, fair, and diagnostically rigorous vocabulary assessments conforming to TOEFL, IELTS, and Cambridge standards.
 
 ### USER ###
 Create a high-quality multiple-choice vocabulary assessment from the supplied vocabulary list.
 
 **PEDAGOGICAL ASSESSMENT MANDATES**
 
-1. **Count & Coverage**:
-   - Generate EXACTLY {count} questions testing {count} unique items exclusively from the supplied list. No duplicates, derivatives, or fabricated targets.
-   - ⚠️ **ACTIVE TARGET USAGE MANDATE**: `target_word` MUST match `options[correct_answer_index]` character-for-character. The word placed into the blank `____` must perfectly agree with the declared target's part of speech and required inflectional form.
+1. **Target Word & Lexical Integrity**:
+   - Generate EXACTLY {count} distinct questions testing {count} unique single-word vocabulary items selected exclusively from the supplied list. No duplicates, unauthorized inflections, or fabricated words.
+   - 🔒 **Absolute Answer Concordance**: The designated correct answer MUST match the target word exactly character-for-character, perfectly agreeing with the target's part of speech and required inflectional form.
 
-2. **Question (Contextual & Structural Anchoring)**:
-   - Write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (e.g., concession, condition, cause, or contrast).
-   - Use strictly four underscores `____` for the blank (no quotation marks around question). NEVER copy or adapt any sentence (Quoted Sentence or Example Usage) from the input.
-   - 🎯 **Strict Part-of-Speech Slot Matching**: The blank (____) MUST grammatically require the exact part of speech and syntactic role of the target word. If the target is a noun, the blank must strictly require a noun (e.g., "The ____ of the..."). Do NOT place a noun into a verb or adjective slot.
-   - ⚓ **MANDATORY CONTEXTUAL & COLLOCATIONAL ANCHORS**:
-     * Every sentence MUST feature clear, objective context clues (e.g., explicit dependent prepositions like *to / on / of / for*, fixed verb-noun collocations, or unmistakable cause-and-effect / contrastive logic).
-     * Single-fit validity is absolute: the sentence context must mathematically rule out all 3 distractors on objective structural or logical grounds, NEVER on subjective "register" or "formality" differences.
+2. **Question Stem & Syntactic Slot**:
+   - **Academic Complexity**: Write a brand-new compound or complex academic sentence at CEFR {cefr_level} featuring subordinate or coordinate clauses (concession, condition, cause, or contrast).
+   - 🔒 **Strict Single Blank**: The stem must contain EXACTLY ONE single continuous blank `____` (strictly four underscores, no quotation marks). Multiple blanks in a single sentence are strictly prohibited.
+   - 🎯 **Precise Syntactic Match**: The blank must grammatically demand the exact part of speech and syntactic role of the target word.
+   - 🚫 **Zero Stem Leakage & Zero Example Copying**: 
+     * The target word or its morphological roots must NEVER appear anywhere in the stem outside the blank.
+     * NEVER copy, adapt, or mask sentences from the input source material. Every stem must be 100% original.
+   - ⚓ **Contextual Clues & Decisive Anchors**:
+     * The stem MUST provide unambiguous contextual clues (e.g., explicit dependent prepositions like *to / on / of / for*, verb valency, or contrastive discourse markers).
+     * Single-fit validity is absolute: the sentence context must objectively and conclusively eliminate all 3 distractors.
 
-3. **Options (Target & 3 Structured Objective Distractors)**:
-   - **Target**: `target_word` must strictly equal `options[correct_answer_index]`. Multi-word units must be tested as indivisible wholes.
-   - **Grammatical Homogeneity & Authenticity**: All 4 options must be grammatically correct, authentic English words or established expressions sharing the identical grammatical category (part of speech) and the EXACT inflection required by the blank (e.g., all past participles `-ed`, all plurals `-s`, all `-ing`).
-   - 🚫 **STRICT BAN ON SYNONYM PILES**:
-     * NEVER supply interchangeable synonyms. Distractors cannot merely differ by subtle tone or degree of formality.
-   - 🎯 **MANDATORY 3-VECTOR DISTRACTOR TAXONOMY**:
-     Each question's 3 distractors MUST consist of:
-     1. *Trap 1 (Antonym / Logical Polarity Clash)*: directly contradicts the cause/contrast/concession logic established in the sentence clues.
-     2. *Trap 2 (Collocation / Syntax Clash)*: plausible meaning in the general topic, but violates the blank's dependent preposition, verb valency, or conventional lexical pairing.
-     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.
+3. **Options & 3-Vector Distractor Engineering**:
+   - **Option Set**: Provide exactly 4 distinct choices (1 correct target + 3 structured distractors). All options must be 100% unique within each question.
+   - **Grammatical Homogeneity**: All 4 options must share the exact grammatical category (part of speech) and required morphological inflection (e.g., all past participles `-ed`, all plurals `-s`).
+   - 🚫 **Strict Distractor Pool Isolation**:
+     * The supplied vocabulary list is EXCLUSIVELY the pool for correct targets. 
+     * You are STRICTLY PROHIBITED from using ANY words from the supplied unit list as distractors. Distractors must be authentic academic English words (CEFR B2-C1) drawn entirely from outside the list.
+     * NEVER present near-synonyms or interchangeable words that could defensibly fit the blank.
+   - 🎯 **Mandatory 3-Vector Distractor Taxonomy**:
+     Each question's 3 distractors must purposefully embody:
+     1. *Trap 1 (Antonym / Polarity Clash)*: directly contradicts the sentence's contextual or concession logic.
+     2. *Trap 2 (Collocation / Syntax Clash)*: plausible general meaning, but violates the blank's dependent preposition, verb valency, or lexical pairing.
+     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the academic register, but denotes a completely distinct functional category or entity unsuited to the role.
 
-4. **Design Audit & Explanation**:
+4. **Pedagogical Rationale & Design Audit**:
+   - `definition`: Concise, dictionary-grade contextual meaning of the target word.
    - `design_audit`: Follow this rigorous 4-part structure:
-     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Polarity): ...] [Trap 2 (Collocation/Syntax Clash): ...] [Trap 3 (Domain Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
-   - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
-   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
-   - `definition`: Concise dictionary meaning of the target in this context.
+     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Polarity): ...] [Trap 2 (Collocation/Syntax): ...] [Trap 3 (Domain Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
+   - `explanation`: Thorough, contrastive explanation detailing why the target fits and explicitly citing why each distractor is objectively eliminated (preposition mismatch, logical contradiction, or syntactic clash).
 
 CONTENT:
 {vocabulary_content}
-

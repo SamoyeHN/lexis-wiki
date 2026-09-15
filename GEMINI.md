@@ -14,6 +14,8 @@ Prompts drive pedagogical quality and assessment design; JSON schemas enforce ou
   - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: When calling local engines (Ollama), `format: "json"` is active (`"enforce_gbnf": false` in `wiki_config.json`). The system automatically injects the JSON Schema derived programmatically from `schemas.py` into the system role. This eliminates GBNF grammar parser stalls, tokenizer conflicts (e.g. 131k/248k tokenizers in Nemotron/Gemma/Qwen), and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
   - **Strict GBNF / Native Schema Mode**: Supported via `"enforce_gbnf": true` in `wiki_config.json` for engines with hardware-accelerated grammar transducers (e.g., OpenAI `json_schema` strict mode).
   - **Automatic Empty-Output Fallback**: If strict GBNF mode fails or returns empty tokens, `llm.py` automatically catches the failure, logs a warning, and retries seamlessly in `format: "json"`.
+  - **Generation model and Expert/Judge model**: Generation model works in Json-mode/GBNF-mode to extract content. When generating quizzes, it runs in two turns: Text-mode/prose drafting to create and json-mode/GBNF-mode to pack text into json structure. Expert model is responsible for auditing, surgical repairing and rewriting. Blind solver is the key to catch double-key divergence — keeping them distinct is a quality invariant.
+
 - **Human-Readable Logging**:
   - `librarian/logger.py` automatically indents and formats `--- RAW RESPONSE ---` with 2-space pretty-printed JSON in all task logs under `logs/`.
 
@@ -45,6 +47,20 @@ wiki/<UnitName>/sources/<UnitName>.md | media/
 - **Instant Workspace Transition on Completion**: The poller instantly opens the workspace and auto-switches to the **Raw Source** tab the moment background transcription completes.
 - **Commands**: `lexis rename <old> <new>` renames unit + all internals.
 
+### 2.3 Display Layer Decoupling (Display Title vs. Physical Slug)
+
+- **Principle**: Decouple user-facing display titles (`f.title`) from the underlying physical filesystem identifiers (`unit_name` / `slug`).
+- **Stable Physical Primary Keys**:
+  - The folder name (e.g., `Book_4_Unit_1`) and primary filename (e.g., `Book_4_Unit_1.md`) serve as immutable physical anchors/slugs.
+  - All internal linkages, API endpoints (`/api/compile`, `/api/generate-quiz`), frontend state routing (`currentUnit`), and derived artifacts (`extractions/`, `handouts/`) strictly use the physical slug. This eliminates broken wikilinks, browser 404s, stale cache issues, and media path desynchronization.
+- **Dynamic Display Title Extraction**:
+  - The primary source file (`sources/<UnitName>.md`) defines the display title via its YAML frontmatter `title: "..."` (e.g., `title: "Unit 1: The Road to Success"`).
+  - The backend (`/api/raw-files`) automatically parses this frontmatter title and delivers it as `title`.
+  - The Dashboard UI (card titles, list view, sidebar tree, breadcrumb nav, workspace header, name sorting) prioritizes `f.title`, gracefully falling back to the formatted folder name (`stem.replace(/_/g, ' ')`) when no YAML title is present.
+- **Zero Renaming Side-Effects & Media Protection**:
+  - Users can freely edit lesson titles, add subtitles, or adjust course names in Markdown without triggering risky cascading filesystem renames.
+  - Media files (video and audio in `sources/media/`) remain permanently intact with their original filenames.
+
 ---
 
 ## 3. Naming Conventions
@@ -58,6 +74,7 @@ Use `snake_case` for all JSON keys and variable names.
 - **`target_language`** (not `language`) -- translation target lang
 
 ---
+
 ## 4. Dashboard Input Configuration
 
 ### Autofill Prevention
@@ -73,6 +90,13 @@ Prevent browsers from misclassifying text inputs as password/URL fields:
 Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`am_michael`), Edge-TTS (`en-US-AriaNeural`/`en-GB-RyanNeural`). Configure via Dashboard dropdowns.
 
 ---
+### Audit & Enforcement Config (wiki_config.json / config.py)
+- enable_expert_audit  : master switch (default false)
+- judge_model          : L2 judge; SHOULD differ from generation `model`
+- min_passing_items    : per-quiz floor after discards (default 3)
+- quarantine_on_fail   : route failed artifacts to _quarantine/ (default true)
+- enable_prose_pipeline: multi-turn prose→JSON generation (default true)
+
 
 ## 5. To-Do List
 
@@ -85,13 +109,24 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 - [x] pyproject.toml dependency management
 - [x] QA: Evaluation schema (faithfulness/completeness/pedagogical/schema adherence) + retry loop at <80% threshold
 - [x] Level 2 Expert Model Quality Audit (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation, multi-turn self-correction loop)
+- [x] Multi-turn Prose-to-JSON quiz generation pipeline (Turn 1 unconstrained prose drafting with native reasoning/thinking parameters; Turn 2 deterministic packaging without token stalls)
+- [x] Selective Item Regeneration & Surgical Splicing (Psychometric targeted healing: only flagged defective items are regenerated and spliced into untouched locked items)
+- [x] Display Layer Decoupling (Human-facing display titles decoupled from immutable filesystem slugs while preserving zero-side-effect media protection)
+- [x] Two-Level Auditing Across Quiz Types: Completed Level 1 (Deterministic Code Gate) and Level 2 (LLM-as-a-Judge Expert Semantic Audit) verification pipeline across Vocabulary, Translation, and Reading quizzes.
+- [x] Migrating from Generating Model -> Expert Model auditing -> Generating Model Retry 1, 2, Letgo  to Generating Model -> Expert Model auditing & repair & rewrite saving time and significantly increasing accuracy. 
 
 ### Pending
-- **Architecture / Generation Pipeline**: Multi-turn Prose-to-JSON quiz generation pipeline (Turn 1: Unconstrained prose/drafting with reasoning enabled for linguistic depth & authentic traps; Turn 2: Deterministic schema packaging with reasoning disabled to optimize throughput & format stability).
-  - *Sampling / Hyperparameters Mandate*: 草稿生成（Prose Drafting）与专家审计（Expert Audit）阶段均使用模型自身缺省参数（Default Parameters，如默认 temperature / top_p / thinking 等，不强制覆盖注入 0.2 或人工干预参数），保持模型原生推导能力。*先测试基准评测，验证后再实施。*
 - **Vocabulary Extraction Expert Audit & Item Filtering**:
   - *Context*: 在 JSON 模式下，模型偏向于根据材料中的所有词汇尽量穷尽出题（如从 10 题扩张到 20+ 题），提升了题库覆盖度。
   - *Design*: 结合 Expert Mode，在 `vocabulary extraction` 阶段引入 Expert Audit，由高智能专家模型从源材料或提取列表中挑选出最具代表性、教学权重最高的核心重点词汇（Curated Lexical Subset），从源头上按需精准供给 Quiz Generator，兼顾生成速度与教学覆盖。
+- **Quality Tier Routing & Human Review UI**:
+  - 90–100: 自动交付（Passed - High Quality）。
+  - 75–89: 自动交付但标注审查候选（Review Candidate）。
+  - 60–74: 进入待人工抽检队列（Needs Human Review）。
+  - < 60: 触发精准回炉重试；重试超限后打上未解决标记。
+- **Multilingual User Interface (i18n)**:
+  - *Context*: 仪表板与各编辑模态框（如 Source & Syllabus Editor、工作区与配置面板）需支持国际化与本地化多语言切换。
+  - *Design*: 建立轻量级客户端 i18n 资源字典与切换机制，将界面文字解耦键值化。默认界面全面采用简洁、地道的专业学术英语（Concise English UI），杜绝双语生硬混杂，并支持一键无感切换简体中文及其他语种。
 - **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
 - **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
 
@@ -112,7 +147,7 @@ The system enforces quality through a strict two-tier verification pipeline:
 └────────────────────────────────────────────────────────┘
                     │
                     ├─► [❌ FAILED: Schema violation, missing keys, target desync, duplicate options]
-                    │       └─► Triggers immediate self-healing or targeted retry loop
+                    │       └─► Triggers immediate self-healing 
                     ▼ [✅ PASSED]
 ┌────────────────────────────────────────────────────────┐
 │ Level 2: Expert Model Quality Audit (Semantic Audit)   │
@@ -142,6 +177,51 @@ High-reasoning semantic evaluation focusing on linguistic rigor:
 - **Absolute Single-Fit Validity**: Verifies that the correct answer is the ONLY defensible choice while all 3 distractors are objectively and conclusively eliminated.
 - **Cognitive Distractor Trap Quality**: Validates that distractors represent authentic educational traps (e.g., Chinglish L1 negative transfer, Scope Shift, Speaker Attribution) rather than trivial or absurd giveaways.
 - **Factuality & Faithfulness**: Verifies that conclusions are fully warranted by the provided context or timestamped transcript evidence.
+
+### 6.1 Modality-Specific Two-Level Audit Coverage
+
+- **Vocabulary Quiz**:
+  - **Level 1**: Strict Single Blank Gate (`re.findall(r'_{2,}', stem) <= 1`), target word exact synchronization with `options[correct_answer_index]`, verbatim quotation integrity, single-word exclusivity.
+  - **Level 2**: Blind solver resolution, collocational precision, POS distractor trap legitimacy, elimination of valid alternative near-synonyms.
+- **Translation Quiz (Comparative Translation Appraisal)**:
+  - **Level 1**: Target sentence presence, target keyword synchronization inside idiomatic translation, dual distinct candidate versions (Idiomatic vs Flawed), flaw type labeling, and correct option index bounds.
+  - **Level 2**: Blind solver resolution, pragmatic and idiomatic academic naturalness, contrastive defect legitimacy (L1 Chinglish transfer, collocation/preposition clash, formula breakdown), and single defensible translation target.
+- **Reading Comprehension Quiz**:
+  - **Level 1**: Text snippet verbatim anchoring, option count invariants, complete explanation coverage across all 4 options.
+  - **Level 2**: Blind solver inference validation, strict rejection of scope shifts / extreme modifiers / false attribution distractors, proof that the declared key is uniquely and incontrovertibly supported by passage evidence.
+- **Video Comprehension Quiz**:
+  - **Level 1**: Option bounds (strictly 4 options, non-empty, unique), correct index check [0-3], timestamp format validation (`[MM:SS]` or `[HH:MM:SS]`), and transcript chronological anchor verification.
+  - **Level 2**: Blind solver validation with timestamped transcript, verification of genuine video evidence at target timestamp (rejection of timestamp hallucination and trivial number recall), single-fit proof, and video distractor trap analysis (cross-timestamp shift, rumor vs fact, over-generalization).
+- **Listening Comprehension Quiz**:
+  - **Level 1**: Dialogue script turn bounds (>= 4 speaker turns), option count invariants (strictly 4 options, non-empty, unique), correct index check [0-3], and category validation (`Detail`, `Main Idea`, `Inference`).
+  - **Level 2**: Blind solver validation against dialogue script, strict speaker attribution verification (rejection of speaker role swaps between Speaker 1 and Speaker 2), verbatim catch trap analysis, and single-fit proof without subjective conjecture.
+
+### 6.2 Universal Expert Audit Criteria & System Boundaries
+
+To eliminate cognitive divergence, early truncations, and contradictory judging across models, all Level 2 Expert Auditing modules (Vocabulary, Reading Comprehension, Translation, Video, Listening) strictly adhere to four universal system boundaries:
+
+1. **Exhaustive 100% Cardinality Mandate (`total_items` Closure)**:
+   - The judge model receives exactly $N$ items and MUST output an evaluation array of length exactly $N$ (`questions[0...N-1]`). Early truncation or skipping to `summary_verdict` is strictly prohibited.
+   - Deterministic Code Gate checks: `len(audit_questions) == len(questions)` and issues a warning if a cardinality deficit is detected.
+
+2. **Unified 3-Tier Score-Action Mapping**:
+   The judge must strictly align pedagogical scores with surgical triage actions:
+   - **Tier 3 (`PASS`, Score 80–100, `single_fit_valid: true`)**:
+     - Item is psychometrically robust with unambiguous evidence and authentic distractors.
+     - `cured_question` MUST be `null`.
+   - **Tier 2 (`REPAIR`, Score 60–79, `single_fit_valid: true`)**:
+     - Question stem context and target anchors are fundamentally sound, but localized distractor defects exist (e.g. distractor recycling, weak plausibility, minor typo, misaligned index).
+     - **Minimal Invasive Surgical Invariant**: The judge MUST keep the original stem, target keyword/anchor, and valid context completely intact. Only flawed distractors or surface options are refreshed in `cured_question`.
+   - **Tier 1 (`REWRITE`, Score 20–59, `single_fit_valid: false`)**:
+     - Fatal defect: unsolvable double-keys, ungrounded keys, grammatical breakdown, or core translation fidelity mismatch.
+     - Entire item is discarded and rewritten from the target curriculum pool in `cured_question`.
+
+3. **Field Disambiguation & Single Source of Truth**:
+   - In Comparative Translation Appraisal, `translated_sentence` is strictly defined as the Non-English source prompt to be translated (e.g. Chinese stem), preventing LLMs from confusing it with English translations.
+   - All options in Translation Appraisal are strictly plain English strings (`options: ["...", "..."]`).
+
+4. **Budget & Parameter Safeguards**:
+   - High-token budget (`num_predict: 16384`) allocated for local and remote judge models to ensure complete multi-item cognitive distractor justifications without token exhaustion.
 
 ---
 

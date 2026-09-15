@@ -19,17 +19,33 @@
             "type": "string",
             "minLength": 1
           },
-          "correct_english_answer": {
+          "target_keyword": {
             "type": "string",
             "minLength": 1
           },
-          "hint": {
+          "target_grammar": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idiomatic_translation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "flawed_translation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "flaw_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "diagnostic_critique": {
             "type": "string",
             "minLength": 1
           },
           "options": {
             "type": "array",
-            "minItems": 4,
+            "minItems": 2,
             "maxItems": 4,
             "items": {
               "type": "string",
@@ -46,15 +62,18 @@
             ]
           },
           "explanation": {
-            "type": "string",
-            "minLength": 1
+            "type": "string"
           }
         },
         "required": [
           "design_audit",
           "translated_sentence",
-          "correct_english_answer",
-          "hint",
+          "target_keyword",
+          "target_grammar",
+          "idiomatic_translation",
+          "flawed_translation",
+          "flaw_type",
+          "diagnostic_critique",
           "options",
           "correct_answer_index",
           "explanation"

@@ -292,7 +292,8 @@ def format_summary(summary: Dict[str, Any]) -> str:
         arrow = ""
         if r.get("prev_passed") is not None and r["passed"] is not None and r["prev_passed"] != r["passed"]:
             arrow = f"   (was {'PASS' if r['prev_passed'] else 'FAIL'} -> now {'PASS' if r['passed'] else 'FAIL'})"
-        lines.append(f"  [{mark}] {r['unit']} [{r['template']}]  {score}/100  blind {acc_s}{arrow}")
+        score_str = f"{score}%" if isinstance(score, (int, float)) else str(score)
+        lines.append(f"  [{mark}] {r['unit']} [{r['template']}]  {score_str}  blind {acc_s}{arrow}")
 
     lines.append("=" * 64)
     return "\n".join(lines)

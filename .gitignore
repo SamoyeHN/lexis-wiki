@@ -21,6 +21,7 @@ logs/
 
 # Exclude all user wiki content (users generate their own units via 'lexis init' / 'lexis compile')
 wiki/
+docs/
 
 # Exclude config json
 wiki_config.json

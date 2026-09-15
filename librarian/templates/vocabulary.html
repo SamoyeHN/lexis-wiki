@@ -471,6 +471,50 @@
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
 
+
+        /* ===== L2 QA Badge Custom Tooltip (unified with translation.html) ===== */
+        .l2-qa-badge {
+            position: relative;
+            cursor: help;
+        }
+        .l2-qa-tooltip {
+            position: absolute;
+            top: calc(100% + 12px);
+            left: 50%;
+            transform: translateX(-50%) translateY(-4px);
+            width: max-content;
+            max-width: 320px;
+            background: #1e293b;
+            color: #f1f5f9;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 12.5px;
+            font-weight: 500;
+            line-height: 1.55;
+            text-align: left;
+            white-space: normal;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+            z-index: 60;
+            pointer-events: none;
+        }
+        .l2-qa-tooltip::after {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-bottom-color: #1e293b;
+        }
+        .l2-qa-badge:hover .l2-qa-tooltip,
+        .l2-qa-badge:focus-within .l2-qa-tooltip {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(0);
+        }
 </style>
 </head>
 <body><div id="root"></div>
@@ -501,8 +545,27 @@
 
                     this.expertAudit = quizData._expert_audit || null;
 
-                    this.render();
+                    // Clean any markdown formatting artifacts in questions
+                    if (Array.isArray(this.quizQuestions)) {
+                        this.quizQuestions.forEach(q => {
+                            if (q.explanation) q.explanation = this.cleanMarkdownText(q.explanation);
+                            if (q.definition) q.definition = this.cleanMarkdownText(q.definition);
+                            if (q.question) q.question = this.cleanMarkdownText(q.question);
+                        });
+                    }
 
+                    this.render();
+                }
+
+                cleanMarkdownText(text) {
+                    if (!text || typeof text !== 'string') return '';
+                    // 1. Remove markdown bold/italic asterisks and backticks e.g. **Option B ("...")** -> Option B ("...")
+                    let res = text.replace(/[*`]/g, '');
+                    // 2. Clean escaped quote residues e.g. \"word\" -> "word"
+                    res = res.replace(/\\"/g, '"');
+                    // 3. Normalize multiple whitespace
+                    res = res.replace(/[ \t]+/g, ' ').trim();
+                    return res;
                 }
 
                 getAuditBadgeHTML() {
@@ -510,19 +573,42 @@
                     const passed = this.expertAudit.pass_audit !== false;
                     const accuracy = Math.round((this.expertAudit.blind_solve_accuracy ?? 1.0) * 100);
                     const score = this.expertAudit.overall_quality_score ?? 100;
+                    const divergences = this.expertAudit.blind_solve_confident_divergences || 0;
                     const isSuccess = passed && accuracy >= 80;
 
                     const bg = isSuccess ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)';
                     const color = isSuccess ? '#059669' : '#d97706';
                     const border = isSuccess ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
 
-                    return `
-                        <div class="l2-qa-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; background: ${bg}; color: ${color}; border: 1px solid ${border}; margin: 8px 0 16px 0;">
+                    const cStats = this.expertAudit.cure_stats || null;
+                    let label = `L2 Expert Audit: ${score}% (${accuracy}% Blind Accuracy)`;
+                    if (cStats && (cStats.repair > 0 || cStats.rewrite > 0)) {
+                        label = `L2 Expert Audit: ${score}% (Surgically Cured: +${cStats.repair + cStats.rewrite})`;
+                    }
+                    let iconSvg = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                            <polyline points="9 12 11 14 15 10"></polyline>
+                        </svg>
+                    `;
+                    let titleTooltip = this.expertAudit.summary_verdict || '';
+
+                    if (!isSuccess) {
+                        iconSvg = `
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                                <polyline points="9 12 11 14 15 10"></polyline>
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
                             </svg>
-                            <span>L2 Expert Audit: ${score}/100 (${accuracy}% Blind Accuracy)</span>
+                        `;
+                        label = `⚠️ L2 Review Needed: ${score}% (${accuracy}% Blind Accuracy)`;
+                    }
+
+                    return `
+                        <div class="l2-qa-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; background: ${bg}; color: ${color}; border: 1px solid ${border}; margin: 8px 0 16px 0; cursor: help; position: relative;">
+                            ${iconSvg}
+                            <span>${label}</span>
+                            <span class="l2-qa-tooltip">${titleTooltip.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
                         </div>
                     `;
                 }
@@ -832,7 +918,7 @@
                                         <div style="display: flex; align-items: center; gap: 8px;">
                                             ${this.expertAudit ? `
                                                 <span class="badge" style="background: rgba(16, 185, 129, 0.12); color: #059669; font-weight: 600;">
-                                                    L2 QA: ${this.expertAudit.overall_quality_score ?? 100}/100
+                                                    L2 QA: ${this.expertAudit.overall_quality_score ?? 100}%
                                                 </span>
                                             ` : ''}
                                             <span class="badge">Vocabulary</span>

@@ -9,7 +9,7 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
    - Create a natural, engaging academic discussion between Speaker 1 and Speaker 2 consisting of 6 to 8 conversational turns.
    - Natural spoken register: realistic conversational flow with authentic discourse markers (e.g., 'Well, look at it this way...', 'That's a valid point, but...', 'Wait, are you saying...?'), gentle counter-arguments, and mutual clarification.
    - Seamlessly embed at least 5 target academic vocabulary items into natural spoken contexts without sounding like textbook recitations.
-   - ⚠️ **SPEAKER ATTRIBUTION RIGOR MANDATE**: Clearly distinguish the roles, stances, and insights of Speaker 1 vs Speaker 2. When a question asks about a specific speaker's viewpoint, concern, or proposal (e.g., "What does Speaker 1 suggest...?"), the correct answer MUST be based exclusively on that speaker's dialogue turns, NOT the conversational partner's statements.
+   - ⚠️ **SPEAKER ATTRIBUTION RIGOR MANDATE**: Clearly distinguish the roles, stances, and insights of Speaker 1 vs Speaker 2. When a question asks about a specific speaker's viewpoint, concern, or proposal (e.g., 'What does Speaker 1 suggest...?'), the correct answer MUST be based exclusively on that speaker's dialogue turns, NOT the conversational partner's statements.
 
 2. **Question & Skill Diversity**:
    - Generate EXACTLY {count} comprehension questions in the 'questions' array.

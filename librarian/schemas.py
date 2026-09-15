@@ -1,7 +1,7 @@
 import json
 import dataclasses
 import re
-from typing import List, Dict, Any, Type, get_origin, get_args, Union, Literal
+from typing import List, Dict, Any, Type, get_origin, get_args, Union, Literal, Optional
 
 def get_json_schema(cls: Type, include_descriptions: bool = False) -> Dict[str, Any]:
     """
@@ -22,7 +22,12 @@ def get_json_schema(cls: Type, include_descriptions: bool = False) -> Dict[str, 
             continue
         schema_part = _type_to_schema(field.type, field_name=field.name, metadata=field.metadata, include_descriptions=include_descriptions)
         properties[field.name] = schema_part
-        required.append(field.name)
+        # Only require non-optional fields (unless explicitly marked optional/nullable)
+        origin = get_origin(field.type)
+        args = get_args(field.type)
+        is_optional = (origin is Union and type(None) in args) or (field.default is None and field.default_factory is dataclasses.MISSING)
+        if not is_optional:
+            required.append(field.name)
 
     return {
         "type": "object",
@@ -277,7 +282,42 @@ def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
                 if field.name == "options" and len(mapped_val) > 4:
                     mapped_val = mapped_val[:4]
             kwargs[field.name] = mapped_val
-    
+
+    # Post-mapping self-healing for quiz items: robust correct_answer_index resolution
+    if "correct_answer_index" in kwargs and "options" in kwargs and isinstance(kwargs.get("options"), list):
+        opts = kwargs["options"]
+        raw_idx = kwargs["correct_answer_index"]
+        
+        # If model returned a letter string like "A", "[B]", "C)", or option text
+        if isinstance(raw_idx, str):
+            clean_s = raw_idx.strip().upper().strip("[]().: ")
+            if clean_s in ("A", "0"): kwargs["correct_answer_index"] = 0
+            elif clean_s in ("B", "1"): kwargs["correct_answer_index"] = 1
+            elif clean_s in ("C", "2"): kwargs["correct_answer_index"] = 2
+            elif clean_s in ("D", "3"): kwargs["correct_answer_index"] = 3
+            else:
+                # Try finding literal match in options
+                for o_idx, opt in enumerate(opts):
+                    if str(opt).strip().lower() == raw_idx.strip().lower():
+                        kwargs["correct_answer_index"] = o_idx
+                        break
+                else:
+                    kwargs["correct_answer_index"] = 0
+        elif not isinstance(raw_idx, int) or raw_idx < 0 or raw_idx >= len(opts):
+            kwargs["correct_answer_index"] = 0
+
+        # Target-word alignment: if target_word is specified, anchor correct_answer_index to target_word
+        target = kwargs.get("target_word", "")
+        if target and isinstance(target, str) and target.strip():
+            clean_target = target.strip().lower()
+            # If current index does not match target, locate target in options
+            curr_idx = kwargs["correct_answer_index"]
+            if curr_idx >= len(opts) or str(opts[curr_idx]).strip().lower() != clean_target:
+                for o_idx, opt in enumerate(opts):
+                    if str(opt).strip().lower() == clean_target:
+                        kwargs["correct_answer_index"] = o_idx
+                        break
+
     return cls(**kwargs)
 
 def _map_value(t: Any, val: Any) -> Any:
@@ -449,11 +489,19 @@ class ReadingQuiz:
 class TranslationQuestion:
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     translated_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
-    correct_english_answer: str = dataclasses.field(default="", metadata={"minLength": 1})
-    hint: str = dataclasses.field(default="", metadata={"minLength": 1})
-    options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
+    target_keyword: str = dataclasses.field(default="", metadata={"minLength": 1})
+    target_grammar: str = dataclasses.field(default="", metadata={"minLength": 1})
+    idiomatic_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
+    flawed_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
+    flaw_type: str = dataclasses.field(default="", metadata={"minLength": 1})
+    diagnostic_critique: str = dataclasses.field(default="", metadata={"minLength": 1})
+    # Presentation fields (options: [Version A, Version B], correct_answer_index: 0 or 1)
+    options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 2, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
-    explanation: str = dataclasses.field(default="", metadata={"minLength": 1})
+    hint: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
+    explanation: str = dataclasses.field(default="")
+    correct_english_answer: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
+    english_skeleton: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
 
 @dataclasses.dataclass
 class TranslationQuiz:
@@ -538,6 +586,9 @@ class DistractorAuditItem:
     option_text: str = dataclasses.field(default="", metadata={"minLength": 1})
     trap_type: Literal[
         "None (Correct Answer)",
+        "Antonym / Logical Polarity Clash",
+        "Collocation / Preposition Clash",
+        "Domain / Category Mismatch",
         "L1 Negative Transfer / False Friend",
         "Scope Shift / Over-generalization",
         "Speaker / Entity Misattribution",
@@ -554,9 +605,11 @@ class QuestionAuditItem:
     blind_solved_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
     confidence: Literal["Definite", "Hesitant", "Ambiguous"] = dataclasses.field(default="Definite")
     single_fit_valid: bool = dataclasses.field(default=True)
-    distractors: List[DistractorAuditItem] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4})
+    distractors: List[DistractorAuditItem] = dataclasses.field(default_factory=list, metadata={"minItems": 1, "maxItems": 4})
     pedagogical_score: int = dataclasses.field(default=100, metadata={"minimum": 0, "maximum": 100})
     diagnostic_feedback: str = dataclasses.field(default="", metadata={"minLength": 1})
+    triage_action: Literal["PASS", "REPAIR", "REWRITE"] = dataclasses.field(default="PASS")
+    cured_question: Optional[Dict[str, Any]] = dataclasses.field(default=None)
 
 @dataclasses.dataclass
 class QuizQualityAuditReport:

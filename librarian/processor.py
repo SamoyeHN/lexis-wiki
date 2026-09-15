@@ -17,7 +17,8 @@ logger = logging.getLogger("librarian.processor")
 from .schemas import (
     VocabularyExtraction, GrammarExtraction, SummaryExtraction,
     VocabularyQuiz, ReadingQuiz, TranslationQuiz, ListeningQuiz,
-    RoutingResult, MindMapExtraction
+    RoutingResult, MindMapExtraction,
+    validate_and_map
 )
 
 class WikiProcessor:
@@ -77,6 +78,285 @@ class WikiProcessor:
         res = re.sub(r'(\(|\b\[)([A-Da-d])(\]|\))', replace_bracketed, res)
         return res
 
+    @staticmethod
+    def parse_raw_headwords(raw_input: Any) -> List[str]:
+        """
+        Smart parser for messy textbook vocabulary lists.
+        Handles dirty pastes with numbers, IPA, PoS abbreviations, Chinese translations,
+        bullet points, colons, commas, semicolons, and newlines.
+        """
+        if not raw_input:
+            return []
+
+        if isinstance(raw_input, list):
+            lines = [str(x) for x in raw_input]
+        else:
+            lines = str(raw_input).strip().split('\n')
+
+        headwords = []
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            # Remove leading Markdown bullets, numbers, colons
+            line_clean = re.sub(r'^(?:[\d\.\-\*\•\–\—\)\s]+)', '', line_str).strip()
+            if not line_clean:
+                continue
+
+            # If separated by commas or semicolons
+            chunks = re.split(r'[,;]+', line_clean)
+            for chunk in chunks:
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+
+                # Remove IPA pronunciations like /'bɜːɡləri/ or [ˈfæsɪneɪtɪŋ]
+                chunk = re.sub(r'\/[^\/]+\/|\[[^\]]+\]', ' ', chunk)
+
+                # Split out Chinese translations or English definitions following colons, dashes, tabs, or spaces
+                chunk = re.split(r'[\u4e00-\u9fa5]|(?<!\w)[—–\-:]+(?!\w)|\t', chunk)[0].strip()
+
+                # Clean common PoS abbreviations
+                chunk = re.sub(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom)\.?\b', ' ', chunk, flags=re.IGNORECASE)
+
+                # Normalize whitespace
+                chunk = re.sub(r'\s+', ' ', chunk).strip()
+
+                # Filter out numbers and punctuation
+                if chunk and re.search(r'[A-Za-z]', chunk):
+                    cleaned_hw = re.sub(r'[^\w\s\-\'\[\]\(\)\/]', '', chunk).strip()
+                    if cleaned_hw and len(cleaned_hw) >= 2:
+                        headwords.append(cleaned_hw)
+
+        # Deduplicate while preserving order
+        seen = set()
+        final_list = []
+        for w in headwords:
+            w_lower = w.lower()
+            if w_lower not in seen:
+                seen.add(w_lower)
+                final_list.append(w)
+
+        return final_list
+
+    @classmethod
+    def parse_syllabus_sections(cls, content: str) -> Tuple[str, List[str], List[str], List[str]]:
+        """
+        Parses source Markdown for syllabus sections (Plan 1: single-source architecture).
+        Extracts:
+        - clean_body: Text excluding syllabus sections (avoids polluting standard extraction)
+        - syllabus_vocab: Extracted mandatory vocabulary/phrases list
+        - syllabus_grammar: Extracted mandatory grammar patterns list
+        - syllabus_expressions: Extracted mandatory expressions/phrases (explicit or multi-word items)
+        """
+        if not content:
+            return "", [], [], []
+
+        # Find any ## Syllabus Vocabulary, ## Syllabus Grammar, or ## Syllabus Expressions sections
+        vocab_matches = re.search(
+            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Target\s+Words|Word\s*List|词汇表|生词表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            content,
+            re.IGNORECASE
+        )
+        grammar_matches = re.search(
+            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|语法点|语法表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            content,
+            re.IGNORECASE
+        )
+        expr_matches = re.search(
+            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|短语表|词组表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            content,
+            re.IGNORECASE
+        )
+
+        raw_vocab = []
+        if vocab_matches:
+            raw_vocab_text = vocab_matches.group(1).strip()
+            raw_vocab = cls.parse_raw_headwords(raw_vocab_text)
+
+        syllabus_grammar = []
+        if grammar_matches:
+            raw_grammar_text = grammar_matches.group(1).strip()
+            # Split grammar items by line / bullets / numbers
+            for line in raw_grammar_text.split('\n'):
+                line = re.sub(r'^(?:[\d\.\-\*\•\–\—\)\s]+)', '', line).strip()
+                if line and len(line) >= 2:
+                    syllabus_grammar.append(line)
+
+        # Multi-word indicator test: spaces, slashes, placeholders (sb/sth/one's), parentheses
+        def is_multiword(item: str) -> bool:
+            clean_item = item.strip()
+            return (
+                " " in clean_item
+                or "/" in clean_item
+                or "sb." in clean_item.lower()
+                or "sb " in clean_item.lower()
+                or "sth." in clean_item.lower()
+                or "sth " in clean_item.lower()
+                or "one's" in clean_item.lower()
+                or "(" in clean_item
+            )
+
+        # Partition raw_vocab into pure single words vs detected expressions
+        pure_words = []
+        detected_exprs = []
+        for item in raw_vocab:
+            if is_multiword(item):
+                detected_exprs.append(item)
+            else:
+                pure_words.append(item)
+
+        # 1. Parse explicit expressions if section present
+        syllabus_expressions = []
+        if expr_matches:
+            raw_expr_text = expr_matches.group(1).strip()
+            syllabus_expressions = cls.parse_raw_headwords(raw_expr_text)
+            # Merge any extra detected expressions from raw_vocab without duplicates
+            seen_exprs = {e.lower() for e in syllabus_expressions}
+            for e in detected_exprs:
+                if e.lower() not in seen_exprs:
+                    syllabus_expressions.append(e)
+                    seen_exprs.add(e.lower())
+        else:
+            syllabus_expressions = detected_exprs
+
+        # 2. Pure single words strictly for vocabulary extraction (no multi-word overlap)
+        syllabus_vocab = pure_words
+
+        # Strip syllabus sections from body text to avoid confusing general prompt
+        clean_body = re.sub(
+            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Target\s+Words|Word\s*List|词汇表|生词表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            '',
+            content,
+            flags=re.IGNORECASE
+        )
+        clean_body = re.sub(
+            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|语法点|语法表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            '',
+            clean_body,
+            flags=re.IGNORECASE
+        )
+        clean_body = re.sub(
+            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|短语表|词组表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            '',
+            clean_body,
+            flags=re.IGNORECASE
+        ).strip()
+
+        return clean_body, syllabus_vocab, syllabus_grammar, syllabus_expressions
+
+    @staticmethod
+    def _sanitize_vocab_for_quiz(vocab_content: str) -> Tuple[str, List[str], List[str]]:
+        """
+        Physically isolates the quiz generator from example sentences:
+        1. Strips all '- **Quoted Sentence**:' and '- **Example Usage**:' lines.
+        2. Returns:
+           - sanitized_content: Clean markdown with only headword, part of speech, definition, and CEFR level.
+           - headwords: List of lowercase headword strings in this unit.
+           - banned_sentences: List of the raw quoted and example sentences to audit stems against.
+        """
+        if not vocab_content:
+            return "", [], []
+
+        headwords = []
+        for hw in re.findall(r'##\s*\[\[(.*?)\]\]', vocab_content):
+            hw_clean = hw.strip().lower()
+            if hw_clean:
+                headwords.append(hw_clean)
+
+        banned_sentences = []
+        clean_lines = []
+        for line in vocab_content.splitlines():
+            m = re.match(r'^\s*-\s*\*\*(?:Quoted Sentence|Example Usage)\*\*:\s*(.*)', line, re.IGNORECASE)
+            if m:
+                sent = m.group(1).strip()
+                if sent:
+                    banned_sentences.append(sent)
+            else:
+                clean_lines.append(line)
+
+        sanitized_content = "\n".join(clean_lines).strip()
+        return sanitized_content, headwords, banned_sentences
+
+    @staticmethod
+    def _sanitize_grammar_for_quiz(grammar_content: str) -> Tuple[str, List[str]]:
+        """
+        Physically isolates the quiz generator from grammar example sentences:
+        Strips '- **Quote**:' and '- **Imitation Example**:' lines,
+        preserving Pattern Formula, Pedagogical Function, Common Mistakes, and CEFR level.
+        Also extracts a concise, high-density summary list of grammar patterns & common mistakes.
+        """
+        if not grammar_content:
+            return "", []
+
+        clean_lines = []
+        pattern_summaries = []
+        curr_name = ""
+        curr_formula = ""
+        curr_mistakes = ""
+
+        def flush_pattern():
+            nonlocal curr_name, curr_formula, curr_mistakes
+            if curr_name:
+                summary = f"* {curr_name}"
+                if curr_formula:
+                    summary += f": {curr_formula}"
+                if curr_mistakes:
+                    summary += f" (Common Mistake: {curr_mistakes})"
+                pattern_summaries.append(summary)
+            curr_name = ""
+            curr_formula = ""
+            curr_mistakes = ""
+
+        for line in grammar_content.splitlines():
+            m = re.match(r'^\s*-\s*\*\*(?:Quote|Imitation Example)\*\*:\s*(.*)', line, re.IGNORECASE)
+            if not m:
+                clean_lines.append(line)
+
+            # Parse pattern header: ## [[Pattern Name]]
+            m_header = re.match(r'^\s*##\s*\[\[([^\]]+)\]\]', line)
+            if m_header:
+                flush_pattern()
+                curr_name = m_header.group(1).strip()
+                continue
+
+            # Parse Pattern Formula
+            m_formula = re.match(r'^\s*-\s*\*\*Pattern Formula\*\*:\s*(.*)', line, re.IGNORECASE)
+            if m_formula:
+                curr_formula = m_formula.group(1).strip()
+                continue
+
+            # Parse Common Mistakes
+            m_mistakes = re.match(r'^\s*-\s*\*\*Common Mistakes\*\*:\s*(.*)', line, re.IGNORECASE)
+            if m_mistakes:
+                curr_mistakes = m_mistakes.group(1).strip()
+                continue
+
+        flush_pattern()
+
+        return "\n".join(clean_lines).strip(), pattern_summaries
+
+    @staticmethod
+    def _max_consecutive_word_overlap(s1: str, s2: str) -> int:
+        """Calculates the maximum number of consecutive words shared between two strings."""
+        if not s1 or not s2:
+            return 0
+        w1 = [w.lower() for w in re.findall(r'\b\w+\b', s1)]
+        w2 = [w.lower() for w in re.findall(r'\b\w+\b', s2)]
+        if not w1 or not w2:
+            return 0
+        w2_str = " " + " ".join(w2) + " "
+        max_k = 0
+        for i in range(len(w1)):
+            for j in range(i + 1, min(len(w1) + 1, i + 30)):
+                gram = " " + " ".join(w1[i:j]) + " "
+                if gram in w2_str:
+                    max_k = max(max_k, j - i)
+                else:
+                    break
+        return max_k
+
     @classmethod
     def shuffle_quiz_options(cls, quiz_obj: Any) -> Any:
         """
@@ -118,11 +398,13 @@ class WikiProcessor:
         for q in questions:
             if isinstance(q, dict):
                 opts = q.get("options")
-                if isinstance(opts, list) and len(opts) > 0 and q.get("question"):
+                has_stem = q.get("question") or q.get("translated_sentence")
+                if isinstance(opts, list) and len(opts) > 0 and has_stem:
                     valid_questions.append(q)
             elif dataclasses.is_dataclass(q):
                 opts = getattr(q, "options", None)
-                if isinstance(opts, list) and len(opts) > 0 and getattr(q, "question", None):
+                has_stem = getattr(q, "question", None) or getattr(q, "translated_sentence", None)
+                if isinstance(opts, list) and len(opts) > 0 and has_stem:
                     valid_questions.append(q)
 
         if not valid_questions:
@@ -144,17 +426,21 @@ class WikiProcessor:
                 raw_indices.append(0)
 
         # Determine if answer distribution is biased:
-        # Biased if total questions >= 3 and either:
-        # (a) any single answer index accounts for > 50% of questions, OR
-        # (b) across 4 choices, 2 or more choices are never used at all.
+        # For 4-option quizzes: biased if any answer accounts for > 50% or >= 2 choices unused.
+        # For 2-option quizzes: biased if any single answer accounts for > 80% (extreme lopsidedness).
         is_biased = False
         n_q = len(raw_indices)
         if n_q >= 3:
             counts = Counter(raw_indices)
             most_common_freq = counts.most_common(1)[0][1]
             unique_indices = set(raw_indices)
-            if (most_common_freq / n_q) > 0.50 or len(unique_indices) <= 2:
-                is_biased = True
+            max_choices = max([len(getattr(q, "options", []) or (q.get("options", []) if isinstance(q, dict) else [])) for q in questions] or [4])
+            if max_choices <= 2:
+                if (most_common_freq / n_q) > 0.80:
+                    is_biased = True
+            else:
+                if (most_common_freq / n_q) > 0.50 or len(unique_indices) <= 2:
+                    is_biased = True
 
         for q in questions:
             # Handle both dict and dataclass
@@ -169,28 +455,83 @@ class WikiProcessor:
                 cleaned = re.sub(quote_strip_pattern, '', str(opt or ''))
                 cleaned = re.sub(label_strip_pattern, '', cleaned).strip()
                 cleaned = re.sub(quote_strip_pattern, '', cleaned)
+                # Strip markdown bold/italic formatting e.g. **option** or *option*
+                cleaned = re.sub(r'^\*+|\*+$', '', cleaned).strip()
                 options.append(cleaned)
             
             for str_field in ["target_word", "word", "correct_english_answer"]:
                 if str_field in q_dict and q_dict[str_field]:
                     clean_val = re.sub(quote_strip_pattern, '', str(q_dict[str_field]))
+                    clean_val = re.sub(r'^\*+|\*+$', '', clean_val).strip()
+                    # Strip accidental parenthesized or bracketed POS tags e.g. "tend (verb)" -> "tend"
+                    if str_field in ("target_word", "word"):
+                        clean_val = re.sub(r'[\(\[\{].*?[\)\]\}]', '', clean_val).strip()
                     if isinstance(q, dict):
                         q[str_field] = clean_val
                     else:
                         setattr(q, str_field, clean_val)
 
+            # Sanitize explanation, definition, pedagogical_rationale fields: strip markdown bold/backtick artifacts like **Option B ("...")**
+            for text_field in ["explanation", "definition", "pedagogical_rationale"]:
+                if text_field in q_dict and q_dict[text_field]:
+                    t_val = str(q_dict[text_field])
+                    # Remove markdown asterisks and backticks from inline labels like **Option A ("...")**
+                    clean_text = re.sub(r'[*`]', '', t_val)
+                    # Strip LLM internal thinking leakage, author notes, or parenthetical remarks from definitions/explanations
+                    # e.g., 'To fail to notice or consider. (Note: Using "overbook"...)' -> 'To fail to notice or consider.'
+                    if text_field == "definition":
+                        clean_text = re.sub(
+                            r'\s*[\(\[\{]?(?:note|thinking|thought|author\'?s?\s*note|target\s*note)\s*:.*',
+                            '',
+                            clean_text,
+                            flags=re.IGNORECASE
+                        ).strip()
+                        clean_text = clean_text.rstrip(')]};,. ')
+                        if clean_text and clean_text[-1] not in ('.', '!', '?'):
+                            clean_text += '.'
+                    # Normalize double/triple spaces introduced by stripping
+                    clean_text = re.sub(r'[ \t]+', ' ', clean_text).strip()
+                    if isinstance(q, dict):
+                        q[text_field] = clean_text
+                    else:
+                        setattr(q, text_field, clean_text)
+
+            # Sanitize design_audit: strip accidental leading Note:/Thinking: prefixes
+            if "design_audit" in q_dict and q_dict["design_audit"]:
+                da_val = str(q_dict["design_audit"])
+                da_clean = re.sub(
+                    r'^(?:note|thinking|thought|audit\s*note)\s*:\s*',
+                    '',
+                    da_val,
+                    flags=re.IGNORECASE
+                ).strip()
+                if isinstance(q, dict):
+                    q["design_audit"] = da_clean
+                else:
+                    setattr(q, "design_audit", da_clean)
+
             # Resolve the ground-truth answer text when the schema exposes one, so we can
             # guarantee the declared correct index actually points at the right option.
             expected_answer = None
-            for truth_field in ("correct_english_answer", "target_word", "word"):
+            for truth_field in ("idiomatic_translation", "correct_english_answer", "target_word", "word"):
                 if truth_field in q_dict and q_dict[truth_field]:
                     expected_answer = q_dict[truth_field]
                     break
 
-            # Anti-leak / Auto-masking: Ensure fill-in-the-blank questions actually contain a blank (____)
-            # If the LLM forgot to create a blank and directly wrote the full sentence containing the target word,
-            # auto-mask the target word into '____'.
+            # Anti-leak / Auto-masking: Ensure fill-in-the-blank questions actually contain a clean blank (____)
+            # 1. Clean up models that output bolded blanks like **____** or *____*
             q_stem = q_dict.get("question") or q_dict.get("translated_sentence") or ""
+            if q_stem:
+                q_stem = re.sub(r'\*+(_{2,})\*+', r'\1', q_stem)
+                if "question" in q_dict:
+                    if isinstance(q, dict): q["question"] = q_stem
+                    else: setattr(q, "question", q_stem)
+                elif "translated_sentence" in q_dict:
+                    if isinstance(q, dict): q["translated_sentence"] = q_stem
+                    else: setattr(q, "translated_sentence", q_stem)
+
+            # 2. If the LLM forgot to create a blank and directly wrote the full sentence containing the target word,
+            # auto-mask the target word into '____'.
             if q_stem and expected_answer:
                 has_blank = bool(re.search(r"_{2,}", q_stem))
                 if not has_blank:
@@ -221,15 +562,95 @@ class WikiProcessor:
             # Enforce answer synchronization. LLMs occasionally desync the index from the
             # option it should point at; repair it here so a graded quiz is never wrong.
             index_was_repaired = False
+            explanation_was_already_aligned = False
+            matching_idx = None
+
             if expected_answer is not None and options:
-                if expected_answer in options:
-                    correct_idx = options.index(expected_answer)
+                clean_exp = expected_answer.strip().lower()
+                # 1. Direct option equality (vocabulary or full sentence options)
+                for o_i, opt in enumerate(options):
+                    if opt.strip().lower() == clean_exp:
+                        matching_idx = o_i
+                        break
+
+                # 2. Anchored Skeleton Slot Completion matching:
+                # If options are slot fragments and expected_answer is the full English sentence
+                if matching_idx is None and "english_skeleton" in q_dict and q_dict["english_skeleton"]:
+                    skel = str(q_dict["english_skeleton"]).strip()
+                    norm_target = re.sub(r'[^\w]', '', clean_exp)
+                    for o_i, opt in enumerate(options):
+                        filled = re.sub(r'\[\s*_{2,}\s*\]|_{3,}', opt.strip(), skel)
+                        if re.sub(r'[^\w]', '', filled.lower()) == norm_target:
+                            matching_idx = o_i
+                            break
+
+                if matching_idx is not None:
+                    correct_idx = matching_idx
                     if correct_idx != declared_idx:
                         index_was_repaired = True
+                        logger.info(
+                            f"Auto-healed index desync via expected answer/skeleton: repaired correct_answer_index "
+                            f"from {declared_idx} to {matching_idx} ('{options[matching_idx]}')."
+                        )
+
+            # 3. Fallback heuristic: If expected answer did not resolve matching_idx,
+            # detect if the explanation/audit unambiguously declares a specific option letter as the correct one.
+            if matching_idx is None and options:
+                cur_exp = q_dict.get("explanation", "")
+                cur_audit = q_dict.get("design_audit", "")
+                full_text = f"{cur_audit}\n{cur_exp}"
+                
+                inferred_letter = None
+                # Check patterns like "Option D is the only form..." or "Option A correctly supplies..."
+                m_lead_opt = re.search(
+                    r'\bOption\s+([A-D])\b[^\.\n]*?\b(?:is\s+the\s+only|correctly\s+(?:supplies|matches|forms|completes|renders)|is\s+(?:the\s+)?correct\b)',
+                    cur_exp,
+                    re.IGNORECASE
+                )
+                if m_lead_opt:
+                    inferred_letter = m_lead_opt.group(1).upper()
                 else:
-                    options[declared_idx] = expected_answer
+                    m_opt = re.search(
+                        r'(?:(?:correct\s+answer\s+is|supporting|matches|aligned\s+with|only)\s+Option\s+([A-D])\b)',
+                        full_text,
+                        re.IGNORECASE
+                    )
+                    if m_opt:
+                        inferred_letter = m_opt.group(1).upper()
+                    else:
+                        m_quote = re.search(r'correct\s+answer\s+is\s*[‘"\'“](.+?)[’”\'"]', cur_exp, re.IGNORECASE)
+                        if m_quote:
+                            quoted_txt = m_quote.group(1).strip().lower()
+                            for o_i, opt in enumerate(options):
+                                if opt.strip().lower() == quoted_txt or (len(opt) > 10 and opt.strip().lower() in quoted_txt):
+                                    inferred_letter = chr(65 + o_i)
+                                    break
+                
+                if inferred_letter:
+                    inferred_idx = ord(inferred_letter) - 65
+                    if 0 <= inferred_idx < len(options) and inferred_idx != declared_idx:
+                        dec_letter = chr(65 + declared_idx)
+                        disqualifies_declared = bool(re.search(
+                            rf'Option\s+{dec_letter}\b.*?(?:contradict|absent|never|not\s+mentioned|fails|claim|incorrect|introduces|misuse|lacks|incompatible|noun\s+form)',
+                            cur_exp,
+                            re.IGNORECASE
+                        ))
+                        if disqualifies_declared or m_lead_opt:
+                            correct_idx = inferred_idx
+                            index_was_repaired = True
+                            explanation_was_already_aligned = True
+                            logger.info(
+                                f"Auto-healed index desync in quiz item: repaired correct_answer_index "
+                                f"from {declared_idx} ({dec_letter}) to {inferred_idx} ({inferred_letter}) "
+                                f"based on explanation truth."
+                            )
+                        else:
+                            correct_idx = declared_idx
+                    else:
+                        correct_idx = declared_idx
+                else:
                     correct_idx = declared_idx
-            else:
+            elif matching_idx is None:
                 correct_idx = declared_idx
 
             if not options:
@@ -262,8 +683,8 @@ class WikiProcessor:
                     q.correct_answer_index = new_correct_idx
             else:
                 # If options are not shuffled, but the index was repaired because LLM pointed to wrong slot,
-                # remap the explanation to align with the repaired index
-                if index_was_repaired:
+                # remap the explanation to align with the repaired index (unless explanation was already aligned with correct_idx)
+                if index_was_repaired and not explanation_was_already_aligned:
                     cur_exp = q_dict.get("explanation", "")
                     if cur_exp:
                         # Map old declared_idx to actual correct_idx
@@ -282,6 +703,704 @@ class WikiProcessor:
                     q.correct_answer_index = correct_idx
                 
         return quiz_obj
+
+    @classmethod
+    def audit_quiz_integrity(
+        cls,
+        quiz_obj: Any,
+        banned_sentences: List[str] = None,
+        unit_headwords: List[str] = None,
+        strict_distractor_recycling: bool = True
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Stem Copying & In-List Distractor Recycling.
+        Returns:
+            (flagged_indices, defect_messages)
+        - Stem Copying Gate: Flags items where the question stem copies >= 7 consecutive words
+          from any quoted sentence or example usage.
+        - In-List Recycling Gate: Flags items where distractors are recycled from other headwords
+          in the unit wordlist.
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], []
+
+        banned = banned_sentences or []
+        headword_set = {h.strip().lower() for h in (unit_headwords or []) if h.strip()}
+
+        flagged_indices = set()
+        defect_messages = []
+        seen_targets = {}
+
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            stem = q_dict.get("question") or q_dict.get("translated_sentence") or ""
+            target = (q_dict.get("target_word") or q_dict.get("target_keyword") or q_dict.get("word") or "").strip().lower()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index", 0)
+
+            # -1. Target Word Uniqueness & Unit Glossary Membership Gate
+            if target and ("target_word" in q_dict or "word" in q_dict):
+                if target in seen_targets:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Duplicate target word detected! Already tested in Item #{seen_targets[target] + 1}."
+                    )
+                else:
+                    seen_targets[target] = idx
+
+                if headword_set and target not in headword_set:
+                    # Check inflectional stem
+                    t_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target)
+                    in_set = any((hw == target or (len(t_stem) >= 4 and hw.startswith(t_stem))) for hw in headword_set)
+                    if not in_set:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Target word is not in the authorized unit vocabulary list."
+                        )
+
+            # 0. Strict Single Blank Gate & Target Word Leakage Prevention
+            if stem and ("target_word" in q_dict or "word" in q_dict):
+                # Auto-heal accidental parenthetical leakage: "____ (target)" -> "____"
+                if target:
+                    esc_target = re.escape(target)
+                    cleaned_stem = re.sub(rf"_{{2,}}\s*[\(\[\{{]\s*{esc_target}\s*[\)\]\}}]", "____", stem, flags=re.IGNORECASE)
+                    cleaned_stem = re.sub(rf"[\(\[\{{]\s*{esc_target}\s*[\)\]\}}]\s*_{{2,}}", "____", cleaned_stem, flags=re.IGNORECASE)
+                    cleaned_stem = re.sub(rf"_{{2,}}\s+{esc_target}\b", "____", cleaned_stem, flags=re.IGNORECASE)
+                    cleaned_stem = re.sub(rf"\b{esc_target}\s+_{{2,}}", "____", cleaned_stem, flags=re.IGNORECASE)
+                    if cleaned_stem != stem:
+                        stem = cleaned_stem
+                        if isinstance(q, dict):
+                            if "question" in q: q["question"] = stem
+                            elif "translated_sentence" in q: q["translated_sentence"] = stem
+                        elif dataclasses.is_dataclass(q):
+                            if hasattr(q, "question"): setattr(q, "question", stem)
+                            elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
+
+                blank_matches = re.findall(r'_{2,}', stem)
+                if len(blank_matches) > 1:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Multiple blanks ({len(blank_matches)}) detected in stem. Only exactly ONE blank '____' is permitted."
+                    )
+                elif len(blank_matches) == 0:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Missing blank '____' in stem."
+                    )
+
+                # Flag any remaining verbatim target leak in the stem outside the blank
+                if target:
+                    esc_target = re.escape(target)
+                    stem_no_blank = re.sub(r'_{2,}', '', stem)
+                    if re.search(rf"\b{esc_target}\b", stem_no_blank, flags=re.IGNORECASE):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Target word leaks verbatim into stem text outside blank."
+                        )
+
+            # 1. Stem Copying Gate (Zero-Tolerance)
+            if stem and banned:
+                clean_stem = re.sub(r'_{2,}', ' ', stem)
+                for b_sent in banned:
+                    overlap_len = cls._max_consecutive_word_overlap(clean_stem, b_sent)
+                    if overlap_len >= 7:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Stem copies {overlap_len} consecutive words "
+                            f"from input example/source: \"{b_sent[:60]}...\""
+                        )
+                        break
+
+            # 2. In-List Distractor Recycling Gate
+            if options and headword_set and strict_distractor_recycling:
+                recycled_distractors = []
+                for o_idx, opt in enumerate(options):
+                    if o_idx == correct_idx:
+                        continue
+                    opt_clean = str(opt).strip().lower()
+                    # If distractor is derived from this item's own target keyword, exempt it
+                    if target and (
+                        opt_clean == target or
+                        target in opt_clean or
+                        (len(target) >= 4 and opt_clean.startswith(target[:4]))
+                    ):
+                        continue
+
+                    # If distractor is in the unit's headword list (exact or inflectional derivative) and differs from target
+                    is_recycled = False
+                    if opt_clean in headword_set:
+                        is_recycled = True
+                    else:
+                        # Check inflectional variants (e.g., overwhelm -> overwhelmed, pledge -> pledging)
+                        opt_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', opt_clean)
+                        for hw in headword_set:
+                            if hw == target:
+                                continue
+                            hw_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', hw)
+                            if (len(hw_stem) >= 4 and len(opt_stem) >= 4 and hw_stem == opt_stem) or \
+                               (len(hw) >= 5 and opt_clean.startswith(hw[:5])) or \
+                               (len(opt_clean) >= 5 and hw.startswith(opt_clean[:5])):
+                                is_recycled = True
+                                break
+                    if is_recycled:
+                        recycled_distractors.append(opt_clean)
+                if recycled_distractors:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Distractors recycle headwords from current unit: {recycled_distractors}"
+                    )
+
+        return sorted(list(flagged_indices)), defect_messages
+
+    @classmethod
+    def audit_reading_integrity(
+        cls,
+        quiz_obj: Any,
+        passage_text: str = ""
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Reading Comprehension Quiz.
+        Enforces 5 physical ground-truth invariants:
+        1. Skill Diversity: Balanced mix of Main Idea, Detail/Recall, Inference, Author's Tone/Purpose.
+        2. Structural Option Bounds: Exactly 4 distinct, parallel, non-empty options.
+        3. Answer Index Integrity: Bound [0, 3] check.
+        4. Verbatim Text Anchoring & Anti-Hallucination: context_sentence must physically exist in passage.
+        5. Trivia / Option Echo Filter: Prevent trivially verbatim options or stem-option duplication.
+        Returns:
+            (flagged_indices, defect_messages)
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], ["Missing or invalid 'questions' array in Reading Quiz."]
+
+        flagged_indices = set()
+        defect_messages = []
+        passage_norm = re.sub(r'\s+', ' ', passage_text.lower()) if passage_text else ""
+
+        # 1. Inspect questions
+        categories_seen = set()
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            stem = str(q_dict.get("question", "")).strip()
+            cat = str(q_dict.get("category", "")).strip()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index")
+
+            if cat:
+                categories_seen.add(cat.lower())
+
+            # 1.1 Check Option Count
+            if len(options) != 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Reading Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
+            else:
+                # 1.2 Check Option Uniqueness
+                cleaned_opts = [str(o).strip().lower() for o in options]
+                if len(set(cleaned_opts)) < 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Reading Item #{idx + 1}: Options contain duplicate choices: {options}")
+
+                # 1.3 Check Option Echo (option identical to stem)
+                stem_lower = stem.lower()
+                for opt in cleaned_opts:
+                    if len(opt) > 15 and opt in stem_lower:
+                        flagged_indices.add(idx)
+                        defect_messages.append(f"Reading Item #{idx + 1}: Option is an echo of the question stem: \"{opt[:40]}\"")
+                        break
+
+            # 1.4 Check Key Index Bounds
+            if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
+                flagged_indices.add(idx)
+                defect_messages.append(f"Reading Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+
+            # 1.5 Check Stem Quality
+            if len(stem.split()) < 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Reading Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+
+        # 2. Skill Diversity Gate
+        if len(questions) >= 4 and len(categories_seen) < 2:
+            defect_messages.append(
+                f"Reading Skill Gate: Insufficient skill diversity (found only {list(categories_seen)}). "
+                "Must distribute across Main Idea, Detail/Recall, Inference, and Author's Tone/Purpose."
+            )
+            for i in range(1, min(3, len(questions))):
+                flagged_indices.add(len(questions) - i)
+
+        # 3. Vocabulary Physical Grounding Gate
+        vocab_items = quiz_obj.get("vocabulary") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "vocabulary", None)
+        if passage_norm and vocab_items and isinstance(vocab_items, list):
+            for v_idx, v in enumerate(vocab_items):
+                v_dict = v if isinstance(v, dict) else (dataclasses.asdict(v) if dataclasses.is_dataclass(v) else {})
+                word = str(v_dict.get("word", "")).strip().lower()
+                c_sent = str(v_dict.get("context_sentence", "")).strip()
+
+                if not word:
+                    defect_messages.append(f"Reading Vocabulary Item #{v_idx + 1}: Missing target word")
+                    continue
+
+                if c_sent:
+                    # Clean punctuation and normalize whitespace
+                    clean_c_sent = re.sub(r'[^\w\s]', '', c_sent.lower())
+                    clean_c_sent = re.sub(r'\s+', ' ', clean_c_sent).strip()
+                    clean_passage = re.sub(r'[^\w\s]', '', passage_norm)
+                    clean_passage = re.sub(r'\s+', ' ', clean_passage).strip()
+
+                    c_words = clean_c_sent.split()
+                    matched = False
+                    if len(c_words) >= 4:
+                        # Check windows of 4 words
+                        for i in range(len(c_words) - 3):
+                            test_chunk = " ".join(c_words[i:i+4])
+                            if test_chunk in clean_passage:
+                                matched = True
+                                break
+                    elif clean_c_sent in clean_passage:
+                        matched = True
+
+                    if not matched:
+                        defect_messages.append(
+                            f"Reading Vocabulary Item #{v_idx + 1} ('{word}'): context sentence "
+                            f"does not match verbatim text in passage: \"{c_sent[:50]}...\""
+                        )
+                else:
+                    defect_messages.append(f"Reading Vocabulary Item #{v_idx + 1} ('{word}'): Empty context_sentence")
+
+        return sorted(list(flagged_indices)), defect_messages
+
+    @classmethod
+    def audit_video_integrity(
+        cls,
+        quiz_obj: Any,
+        transcript_text: str = ""
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Video Comprehension Quiz.
+        Enforces 4 physical ground-truth invariants:
+        1. Structural Option Bounds: Exactly 4 distinct, non-empty options.
+        2. Answer Index Integrity: Bound [0, 3] check.
+        3. Timestamp Format & Grounding: Valid [MM:SS] or [HH:MM:SS] and physically anchored in transcript.
+        4. Trivia / Option Echo Filter: Prevent trivially verbatim options or stem-option duplication.
+        Returns:
+            (flagged_indices, defect_messages)
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], ["Missing or invalid 'questions' array in Video Quiz."]
+
+        flagged_indices = set()
+        defect_messages = []
+        transcript_norm = transcript_text.lower() if transcript_text else ""
+
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            stem = str(q_dict.get("question", "")).strip()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index")
+            ts = str(q_dict.get("timestamp", "")).strip()
+
+            # 1. Option Bounds
+            if len(options) != 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Video Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
+            else:
+                cleaned_opts = [str(o).strip().lower() for o in options]
+                if len(set(cleaned_opts)) < 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Video Item #{idx + 1}: Options contain duplicate choices: {options}")
+
+            # 2. Key Index Bounds
+            if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
+                flagged_indices.add(idx)
+                defect_messages.append(f"Video Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+
+            # 3. Stem Quality
+            if len(stem.split()) < 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Video Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+
+            # 4. Timestamp Validation
+            if not ts:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Video Item #{idx + 1}: Missing timestamp anchor.")
+            else:
+                # Check timestamp format like [01:23] or 01:23
+                ts_clean = re.sub(r'[\[\]]', '', ts).strip()
+                if not re.match(r'^\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?$', ts_clean):
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Video Item #{idx + 1}: Malformed timestamp format \"{ts}\". Expected [MM:SS] or [HH:MM:SS].")
+                elif transcript_norm:
+                    # Check if timestamp prefix exists in transcript
+                    # e.g., if ts_clean is "01:23", match "01:23" or "[01:23"
+                    ts_min_sec = ts_clean.split(".")[0]
+                    if ts_min_sec not in transcript_norm:
+                        # Soft warning/check: timestamp not found in transcript
+                        defect_messages.append(f"Video Item #{idx + 1}: Timestamp [{ts_clean}] not found in video transcript.")
+
+        return sorted(list(flagged_indices)), defect_messages
+
+    @classmethod
+    def audit_listening_integrity(
+        cls,
+        quiz_obj: Any,
+        script_text: str = ""
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Listening Comprehension Quiz.
+        Enforces 4 physical ground-truth invariants:
+        1. Dialogue Script Integrity: At least 4 speaker turns in script.
+        2. Structural Option Bounds: Exactly 4 distinct, non-empty options.
+        3. Answer Index Integrity: Bound [0, 3] check.
+        4. Category Integrity: Detail, Main Idea, or Inference.
+        Returns:
+            (flagged_indices, defect_messages)
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], ["Missing or invalid 'questions' array in Listening Quiz."]
+
+        flagged_indices = set()
+        defect_messages = []
+
+        # 1. Script checks
+        script_items = quiz_obj.get("script") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "script", None)
+        if script_items is not None and isinstance(script_items, list):
+            if len(script_items) < 4:
+                defect_messages.append(f"Listening Script Gate: Dialogue script contains fewer than 4 turns ({len(script_items)} turns).")
+
+        # 2. Inspect questions
+        valid_cats = {"detail", "main idea", "inference"}
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            stem = str(q_dict.get("question", "")).strip()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index")
+            cat = str(q_dict.get("category", "")).strip().lower()
+
+            # 2.1 Option Bounds
+            if len(options) != 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Listening Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
+            else:
+                cleaned_opts = [str(o).strip().lower() for o in options]
+                if len(set(cleaned_opts)) < 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Listening Item #{idx + 1}: Options contain duplicate choices: {options}")
+
+            # 2.2 Key Index Bounds
+            if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
+                flagged_indices.add(idx)
+                defect_messages.append(f"Listening Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+
+            # 2.3 Stem Quality
+            if len(stem.split()) < 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Listening Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+
+            # 2.4 Category check
+            if cat and cat not in valid_cats:
+                defect_messages.append(f"Listening Item #{idx + 1}: Category '{cat}' is not one of 'Detail', 'Main Idea', 'Inference'.")
+
+        return sorted(list(flagged_indices)), defect_messages
+
+    @classmethod
+    def audit_translation_integrity(
+        cls,
+        quiz_obj: Any,
+        unit_headwords: List[str] = None,
+        unit_grammar_patterns: List[str] = None,
+        target_language: str = "Chinese"
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Target-to-English Translation Quiz.
+        Enforces 5 physical ground-truth invariants:
+        1. Language Purity Gate:
+           - {target_language} prompt sentence must contain valid {target_language} characters.
+           - Options must be 100% English sentences, strictly free of {target_language} characters.
+        2. Target Vocabulary Presence Gate:
+           - The declared target_word (from design_audit or unit wordlist) must physically appear
+             verbatim or with inflection in correct_english_answer.
+        3. Grammar Formula Anchor Gate:
+           - Checks that the grammatical formula/keywords declared in design_audit exist in correct_english_answer.
+        4. Structural Parallelism Gate:
+           - Exactly 4 options, non-empty, distinct (no duplicates).
+           - Key index within bounds [0, 3].
+           - Option lengths balanced (longest option not > 2.5x shortest option).
+        5. Option Echo / Giveaway Filter:
+           - No option is a trivial copy of the {target_language} prompt or design audit leak.
+        Returns:
+            (flagged_indices, defect_messages)
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], ["Missing or invalid 'questions' array in Translation Quiz."]
+
+        flagged_indices = set()
+        defect_messages = []
+
+        # Determine target language regex pattern
+        lang_str = (target_language or "Chinese").lower()
+        if any(w in lang_str for w in ["chinese", "mandarin", "cjk", "中文", "汉语", "漢語"]):
+            target_char_pattern = r'[\u4e00-\u9fff]'
+        elif any(w in lang_str for w in ["japanese", "日"]):
+            target_char_pattern = r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]'
+        elif any(w in lang_str for w in ["korean", "韩", "韓"]):
+            target_char_pattern = r'[\uac00-\ud7af\u1100-\u11ff]'
+        elif any(w in lang_str for w in ["russian", "cyrillic", "俄"]):
+            target_char_pattern = r'[\u0400-\u04ff]'
+        elif any(w in lang_str for w in ["arabic", "阿"]):
+            target_char_pattern = r'[\u0600-\u06ff]'
+        elif any(w in lang_str for w in ["thai", "泰"]):
+            target_char_pattern = r'[\u0e00-\u0e7f]'
+        elif any(w in lang_str for w in ["spanish", "french", "german", "italian", "portuguese"]):
+            # European target languages (Latin with accented / non-ASCII Latin characters)
+            target_char_pattern = r'[A-Za-z\u00C0-\u024F]'
+        else:
+            # Default fallback: check for CJK or non-ASCII characters
+            target_char_pattern = r'[\u4e00-\u9fff]|[^\x00-\x7F]'
+
+        # Inflectional / Stemming helper for target word matching
+        def _word_in_text(word: str, text: str) -> bool:
+            w = word.strip().lower()
+            t = text.lower()
+            if not w or not t:
+                return False
+            # Clean placeholders like "sth", "sb", "something", "someone" (e.g. "impose sth on sb" -> "impose on")
+            w_clean = re.sub(r'\b(sth|sb|something|someone|somebody|oneself)\b', '', w)
+            w_clean = ' '.join(w_clean.split())
+            if w_clean != w:
+                w = w_clean
+            # Multi-word phrase check
+            if " " in w:
+                # If exact phrase is present
+                if w in t:
+                    return True
+                # Check with flexible gap between words (e.g. "impose ... on")
+                parts = [re.escape(p) for p in w.split() if len(p) > 1]
+                if len(parts) >= 2:
+                    pattern = r'\b' + r'\b.*?\b'.join(parts) + r'\b'
+                    if re.search(pattern, t):
+                        return True
+            # Exact word boundary
+            if re.search(rf"\b{re.escape(w)}\b", t):
+                return True
+            # Irregular past tense / inflection pairs
+            irregulars = {
+                "go": ["went", "gone", "goes", "going"],
+                "went": ["go", "gone"],
+                "impose": ["imposed", "imposing", "imposes"],
+                "be": ["is", "am", "are", "was", "were", "been", "being"]
+            }
+            for root, forms in irregulars.items():
+                if w == root or root in w.split():
+                    for f in forms:
+                        if re.search(rf"\b{re.escape(f)}\b", t):
+                            return True
+            # Inflectional variants check (e.g. s, es, ed, ing, d, ly)
+            w_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment|ness|ity|ive|able|al)$', '', w)
+            if len(w_stem) >= 4:
+                if re.search(rf"\b{re.escape(w_stem)}\w*\b", t):
+                    return True
+            return False
+
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            stem = str(q_dict.get("translated_sentence", "")).strip()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index")
+            correct_eng = str(q_dict.get("correct_english_answer", "")).strip()
+            audit_str = str(q_dict.get("design_audit", "")).strip()
+
+            # 1. Language Purity Gate
+            # 1.1 Stem must contain target language characters
+            if not re.search(target_char_pattern, stem):
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Translation Item #{idx + 1}: 'translated_sentence' must contain {target_language} characters."
+                )
+
+            # 1.2 Options must be purely in English (no target language characters)
+            for o_i, opt in enumerate(options):
+                opt_str = str(opt)
+                if re.search(target_char_pattern, opt_str):
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Translation Item #{idx + 1}: Option [{chr(65 + o_i)}] contains {target_language} characters: \"{opt_str[:40]}...\""
+                    )
+
+            idiomatic_trans = str(q_dict.get("idiomatic_translation", "")).strip()
+            flawed_trans = str(q_dict.get("flawed_translation", "")).strip()
+            is_comparative = bool(idiomatic_trans and flawed_trans)
+
+            # Auto-synthesize 2 options (Version A vs Version B) if model output Scheme B fields but options not yet built
+            if is_comparative and len(options) != 2:
+                # Default canonical layout before shuffling: [idiomatic, flawed]
+                options = [idiomatic_trans, flawed_trans]
+                correct_idx = 0
+                if isinstance(q, dict):
+                    q["options"] = options
+                    q["correct_answer_index"] = correct_idx
+                elif hasattr(q, "options"):
+                    q.options = options
+                    q.correct_answer_index = correct_idx
+
+            expected_opt_count = 2 if is_comparative else 4
+
+            # 1. Language Purity Gate
+            # 1.1 Stem must contain target language characters
+            if not re.search(target_char_pattern, stem):
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Translation Item #{idx + 1}: 'translated_sentence' must contain {target_language} characters."
+                )
+
+            # 1.2 Options must be purely in English (no target language characters)
+            for o_i, opt in enumerate(options):
+                opt_str = str(opt)
+                if re.search(target_char_pattern, opt_str):
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Translation Item #{idx + 1}: Option [{chr(65 + o_i)}] contains {target_language} characters: \"{opt_str[:40]}...\""
+                    )
+
+            # 2. Structural & Parallelism Gate
+            if len(options) != expected_opt_count:
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Translation Item #{idx + 1}: Must contain exactly {expected_opt_count} options (found {len(options)})"
+                )
+            else:
+                # 2.1 Option uniqueness
+                cleaned_opts = [str(o).strip().lower() for o in options]
+                if len(set(cleaned_opts)) < expected_opt_count:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Translation Item #{idx + 1}: Options contain duplicate choices."
+                    )
+
+                # 2.2 Parallelism / Length balance (only check for >= 3 options)
+                if expected_opt_count >= 3:
+                    opt_lens = [len(o.split()) for o in cleaned_opts]
+                    min_len = min(opt_lens) if opt_lens else 0
+                    max_len = max(opt_lens) if opt_lens else 0
+                    if min_len > 0 and max_len > 4 and (max_len / min_len) > 3.0:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Extreme length disparity across options (shortest={min_len} words, longest={max_len} words)."
+                        )
+
+            # 2.3 Answer index range
+            if not isinstance(correct_idx, int) or correct_idx not in range(expected_opt_count):
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Translation Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})"
+                )
+
+            skeleton = str(q_dict.get("english_skeleton", "")).strip()
+            keyword = str(q_dict.get("target_keyword", "")).strip()
+
+            # 2.4 Skeleton Slot Validation (if anchored skeleton mode)
+            if skeleton and not is_comparative:
+                if not re.search(r'\[\s*_{2,}\s*\]|_{3,}', skeleton):
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Translation Item #{idx + 1}: 'english_skeleton' must contain exactly one '[ ____ ]' slot."
+                    )
+
+            # 3. Target Vocabulary Presence Gate (Active Usage Mandate)
+            # Find declared target word from target_keyword, design_audit, or unit_headwords
+            declared_word = keyword or None
+            if not declared_word and audit_str:
+                m_word = re.search(r'(?:Target Vocab(?:ulary)?|Target Word|Target Keyword)[\:\s\-]+([A-Za-z\s\-]+?)(?:\]|\+|\-\>|\n|$)', audit_str, re.IGNORECASE)
+                if m_word:
+                    declared_word = m_word.group(1).strip()
+                else:
+                    m_bracket = re.search(r'\[.*?->\s*([A-Za-z\s\-]+?)(?:\+|\,|\])', audit_str)
+                    if m_bracket:
+                        declared_word = m_bracket.group(1).strip()
+
+            # If not in audit_str, search which unit_headword matches this item
+            if not declared_word and unit_headwords:
+                target_search_corpus = f"{correct_eng} {idiomatic_trans} {options[correct_idx]}" if (options and isinstance(correct_idx, int) and 0 <= correct_idx < len(options)) else f"{correct_eng} {idiomatic_trans}"
+                for hw in unit_headwords:
+                    if _word_in_text(hw, target_search_corpus):
+                        declared_word = hw
+                        break
+
+            # If we know the target word, verify it is physically present in the correct translation
+            if declared_word:
+                clean_target = re.sub(r'[\(\[\{].*?[\)\]\}]', '', declared_word).strip()
+                if clean_target and len(clean_target) > 2:
+                    check_text = idiomatic_trans if is_comparative else (
+                        f"{correct_eng} {options[correct_idx]}" if (options and isinstance(correct_idx, int) and 0 <= correct_idx < len(options)) else correct_eng
+                    )
+                    if not _word_in_text(clean_target, check_text):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Target vocabulary '{clean_target}' is declared "
+                            f"but missing in correct translation/option: \"{check_text}\""
+                        )
+
+            # 4. Correct Answer Synchronization Gate
+            if options and isinstance(correct_idx, int) and 0 <= correct_idx < len(options):
+                chosen_opt = str(options[correct_idx]).strip()
+                if is_comparative:
+                    # In comparative appraisal, chosen_opt MUST match idiomatic_translation
+                    if chosen_opt.lower() != idiomatic_trans.lower():
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Correct option [{chr(65 + correct_idx)}] does not match idiomatic_translation."
+                        )
+                elif skeleton:
+                    # In anchored skeleton mode:
+                    if correct_eng and (chosen_opt.lower() not in correct_eng.lower()) and (chosen_opt.lower() != correct_eng.lower()):
+                        filled_skeleton = re.sub(r'\[\s*_{2,}\s*\]|_{3,}', chosen_opt, skeleton)
+                        if filled_skeleton.replace(" ", "").lower() != correct_eng.replace(" ", "").lower():
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Translation Item #{idx + 1}: Correct option [{chr(65 + correct_idx)}] does not align with correct_english_answer."
+                            )
+
+                    # 4.1 Slot Stitching Duplication & Stutter Gate
+                    stitched = re.sub(r'\[\s*_{2,}\s*\]|_{3,}', chosen_opt, skeleton)
+                    clean_stitched = re.sub(r'[,\.\"\';:\?!]', ' ', stitched)
+                    m_repeat = re.search(r'\b([a-zA-Z]+(?:\s+[a-zA-Z]+){1,3})\s+\1\b', clean_stitched, re.IGNORECASE)
+                    if m_repeat:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Slot stitching duplication detected: repeated sequence '{m_repeat.group(0)}' in filled skeleton."
+                        )
+                else:
+                    # Legacy full-sentence mode
+                    if correct_eng and chosen_opt.lower() != correct_eng.lower():
+                        match_found = False
+                        for o_idx, opt in enumerate(options):
+                            if str(opt).strip().lower() == correct_eng.lower():
+                                match_found = True
+                                break
+                        if not match_found:
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Translation Item #{idx + 1}: Declared correct_english_answer does not match any of the 4 options."
+                            )
+
+        return sorted(list(flagged_indices)), defect_messages
 
     def run_pipeline(self, source_filename: str, categories: List[str] = None) -> Tuple[str, List[str]]:
         """
@@ -368,17 +1487,19 @@ class WikiProcessor:
         with open(source_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        self._last_source_content = content
+        # Plan 1 (Single Source): Parse optional syllabus sections directly from source markdown
+        clean_content, syllabus_vocab, syllabus_grammar, syllabus_expressions = self.parse_syllabus_sections(content)
+        self._last_source_content = clean_content or content
         file_stem = unit_folder_name
         all_saved = []
         
-        # Determine extraction counts from compile_defaults config
+        # Determine extraction counts from compile_defaults config (priority: wiki_config.json -> config.py DEFAULT_CONFIG -> fallback)
         compile_defaults = self.config.get("compile_defaults") or {}
-        v_count = compile_defaults.get("vocabulary", 15)
+        v_count = compile_defaults.get("vocabulary", 20)
         e_count = compile_defaults.get("expressions", 5)
         g_count = compile_defaults.get("grammar", 5)
-        c_count = compile_defaults.get("concepts", 5)
-        max_p = compile_defaults.get("max_parallel", 4)
+        c_count = compile_defaults.get("concepts", 3)
+        max_p = compile_defaults.get("max_parallel", 3)
 
         # 1. Prepare Extraction Tasks
         v_prompt_template, v_schema = Prompts.get("extract_vocabulary")
@@ -387,16 +1508,57 @@ class WikiProcessor:
         s_prompt_template, s_schema = Prompts.get("extract_summary")
         m_prompt_template, m_schema = Prompts.get("extract_mindmap")
 
-        v_kwargs = {"content": content, "count": v_count}
-        e_kwargs = {"content": content, "count": e_count}
-        g_kwargs = {"content": content, "count": g_count}
-        s_kwargs = {"content": content, "count": c_count}
-        m_kwargs = {"content": content}
+        v_kwargs = {"content": clean_content or content, "count": v_count}
+        e_kwargs = {"content": clean_content or content, "count": e_count}
+        g_kwargs = {"content": clean_content or content, "count": g_count}
+        s_kwargs = {"content": clean_content or content, "count": c_count}
+        m_kwargs = {"content": clean_content or content}
+
+        # Format baseline prompts
+        v_prompt_formatted = v_prompt_template.format(**v_kwargs)
+        e_prompt_formatted = e_prompt_template.format(**e_kwargs)
+        g_prompt_formatted = g_prompt_template.format(**g_kwargs)
+
+        # Dynamic Dual-Track Syllabus Injection for Vocabulary
+        if syllabus_vocab:
+            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary/phrase item(s) in source markdown.")
+            vocab_bullets = "\n".join([f"- {w}" for w in syllabus_vocab])
+            syllabus_vocab_instruction = (
+                f"\n\n### 🎯 MANDATORY CURATED SYLLABUS WORDS (PRIORITY 1):\n"
+                f"The text has {len(syllabus_vocab)} syllabus candidate items:\n"
+                f"{vocab_bullets}\n\n"
+                f"From this syllabus list, prioritize and select the most essential, pedagogically significant academic vocabulary (up to {v_count} words total) that appear in the passage below. For each selected word, find its authentic verbatim sentence in the passage."
+            )
+            v_prompt_formatted = v_prompt_formatted.replace("CONTENT:\n", f"{syllabus_vocab_instruction}\n\nCONTENT:\n")
+
+        # Dynamic Dual-Track Syllabus Injection for Expressions
+        if syllabus_expressions:
+            logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown.")
+            expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions])
+            syllabus_expr_instruction = (
+                f"\n\n### 🎯 MANDATORY CURATED SYLLABUS EXPRESSIONS (PRIORITY 1):\n"
+                f"The text has {len(syllabus_expressions)} syllabus multi-word candidate items:\n"
+                f"{expr_bullets}\n\n"
+                f"From these syllabus expressions, prioritize and extract genuine expressions (up to {e_count} expressions total) that appear in the passage below. For each selected expression, derive its canonical slotted base form in design_audit and copy it to 'word'."
+            )
+            e_prompt_formatted = e_prompt_formatted.replace("CONTENT:\n", f"{syllabus_expr_instruction}\n\nCONTENT:\n")
+
+        # Dynamic Dual-Track Syllabus Injection for Grammar
+        if syllabus_grammar:
+            logger.info(f"📋 Detected {len(syllabus_grammar)} syllabus grammar pattern(s) in source markdown.")
+            grammar_bullets = "\n".join([f"- {g}" for g in syllabus_grammar])
+            syllabus_grammar_instruction = (
+                f"\n\n### 🎯 MANDATORY CURATED GRAMMAR TOPICS (PRIORITY 1):\n"
+                f"The text has {len(syllabus_grammar)} syllabus grammar pattern candidates:\n"
+                f"{grammar_bullets}\n\n"
+                f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint."
+            )
+            g_prompt_formatted = g_prompt_formatted.replace("CONTENT:\n", f"{syllabus_grammar_instruction}\n\nCONTENT:\n")
 
         tasks = [
-            ("vocabulary", v_prompt_template.format(**v_kwargs), self._interpolate_schema(v_schema, v_kwargs)),
-            ("expressions", e_prompt_template.format(**e_kwargs), self._interpolate_schema(e_schema, e_kwargs)),
-            ("grammar", g_prompt_template.format(**g_kwargs), self._interpolate_schema(g_schema, g_kwargs)),
+            ("vocabulary", v_prompt_formatted, self._interpolate_schema(v_schema, v_kwargs)),
+            ("expressions", e_prompt_formatted, self._interpolate_schema(e_schema, e_kwargs)),
+            ("grammar", g_prompt_formatted, self._interpolate_schema(g_schema, g_kwargs)),
             ("summary", s_prompt_template.format(**s_kwargs), self._interpolate_schema(s_schema, s_kwargs)),
             ("mindmap", m_prompt_template.format(**m_kwargs), self._interpolate_schema(m_schema, m_kwargs))
         ]
@@ -410,6 +1572,16 @@ class WikiProcessor:
                 else:
                     task_names_to_run.append(cat)
             tasks = [t for t in tasks if t[0] in task_names_to_run]
+
+        # Route vocabulary extraction through the Prose-to-JSON pipeline (mirrors quiz).
+        # Turn 1 = free natural-language selection (preserves native reasoning);
+        # Turn 2 = deterministic JSON packing. Other extractions stay one-shot JSON.
+        # Vocabulary has its OWN switch (default OFF -> one-shot JSON). The shared
+        # `enable_prose_pipeline` flag is reserved for the quiz prose pipeline below.
+        use_prose_vocab = self.config.get("enable_vocab_prose", False)
+        vocab_requested = any(name == "vocabulary" for name, _, _ in tasks)
+        if use_prose_vocab and vocab_requested:
+            tasks = [t for t in tasks if t[0] != "vocabulary"]
 
         # 2. Run extractions in parallel
         results = []
@@ -429,6 +1601,24 @@ class WikiProcessor:
                     except Exception as task_err:
                         failed_tasks.append((name, str(task_err)))
                         logger.error(f"Extraction task '{name}' failed for {file_stem}: {task_err}", exc_info=True)
+
+                # Vocabulary runs its own 2-turn Prose-to-JSON pipeline (kept out of the
+                # one-shot JSON pool above). Inject it into `results` as "vocabulary" so the
+                # downstream merge/save logic stays completely unchanged.
+                if use_prose_vocab and vocab_requested:
+                    try:
+                        logger.info(f"🚀 Vocabulary extraction via Prose-to-JSON pipeline ({file_stem})...")
+                        vocab_data = self._run_vocab_prose_pipeline(
+                            v_prompt_template.format(**v_kwargs),
+                            v_kwargs,
+                            self._interpolate_schema(v_schema, v_kwargs),
+                            file_stem,
+                        )
+                        if vocab_data:
+                            results.append(("vocabulary", vocab_data))
+                    except Exception as vocab_err:
+                        failed_tasks.append(("vocabulary", str(vocab_err)))
+                        logger.error(f"Vocabulary prose pipeline failed for {file_stem}: {vocab_err}", exc_info=True)
 
             # 3. Process, Merge, and Save Results
             vocab_data = None
@@ -594,19 +1784,31 @@ class WikiProcessor:
         prompt_template, schema_cls = Prompts.get(f"{template_name}_quiz")
         
         kwargs = {"count": count}
+        unit_headwords: List[str] = []
+        unit_grammar_patterns: List[str] = []
+        banned_quiz_sentences: List[str] = []
+
         if template_name == "vocabulary":
-            kwargs["vocabulary_content"] = data["content"]
+            raw_vocab = data.get("content", "")
+            sanitized_vocab, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_vocab)
+            kwargs["vocabulary_content"] = sanitized_vocab
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
             kwargs["passage_content"] = data["passage"]
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "translation":
-            kwargs["vocabulary_content"] = data["vocab_list"]
-            kwargs["grammar_content"] = data["grammar_list"]
+            raw_v = data.get("vocab_list", "")
+            sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
+            raw_g = data.get("grammar_list", "")
+            sanitized_g, unit_grammar_patterns = self._sanitize_grammar_for_quiz(raw_g)
+            kwargs["vocabulary_content"] = sanitized_v
+            kwargs["grammar_content"] = sanitized_g
             kwargs["target_language"] = self.config.get("target_language") or "Chinese"
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "listening":
-            kwargs["vocabulary_content"] = data["vocab_list"]
+            raw_v = data.get("vocab_list", "")
+            sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
+            kwargs["vocabulary_content"] = sanitized_v
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
             
             # Retrieve tts configurations to get genders & accents for Schema-First Live Injection
@@ -653,13 +1855,184 @@ class WikiProcessor:
 
         prompt = prompt_template.format(**kwargs)
 
-        # 4. Call LLM
+        # 4. Call LLM (Turn 1 Prose Drafting -> Turn 2 Schema Packaging or direct JSON)
         try:
-            quiz_obj = llm.chat(
-                [{"role": "user", "content": prompt}],
-                schema=self._interpolate_schema(schema_cls, kwargs),
-                task_name=f"quiz_{template_name}_{core_name}"
-            )
+            enable_prose = self.config.get("enable_prose_pipeline", True)
+            interpolated_schema = self._interpolate_schema(schema_cls, kwargs)
+
+            if enable_prose and template_name in ("vocabulary", "reading", "translation"):
+                logger.info(f"🚀 Executing Prose-to-JSON Pipeline for {template_name} ({core_name})...")
+                expected_count = kwargs.get("count", 5)
+                # Turn 1: Standard natural language assessment generation
+                if template_name == "reading":
+                    prose_instructions = (
+                        f"{prompt}\n\n"
+                        "### GENERATION FORMAT MANDATE:\n"
+                        "Write out the reading assessment strictly using this clean, structured text format:\n\n"
+                        "VOCABULARY LIST (5 to 8 challenging academic words directly from the passage):\n"
+                        "- Word: [target headword]\n"
+                        "- Context Sentence: \"[exact verbatim sentence from the passage]\"\n"
+                        "- Part of Speech: [noun/verb/adjective/adverb/preposition/conjunction/interjection]\n"
+                        "- Definition: [concise contextual meaning]\n"
+                        "- Example Usage: [original academic illustrative example]\n\n"
+                        "COMPREHENSION QUESTIONS:\n"
+                        "Item 1:\n"
+                        "- Category: [Main Idea | Detail/Recall | Inference | Author's Tone/Purpose]\n"
+                        "- Question: [clear, intellectually mature reading question stem]\n"
+                        "- Options:\n"
+                        "  A. option text\n"
+                        "  B. option text\n"
+                        "  C. option text\n"
+                        "  D. option text\n"
+                        "- Correct Answer: [A, B, C, or D - distribute keys evenly across items]\n"
+                        "- Text Anchor: [exact paragraph and quoted statement supporting the answer]\n"
+                        "- Explanation: [objective reason why the key is correct and why each distractor fails]\n"
+                        "- Design Audit: AUDIT: [Category] -> [Textual Anchor] -> [Trap 1 (Literal Match): ...] [Trap 2 (Scope Shift): ...] [Trap 3 (Distortion): ...] -> [Why Distractors Fail]\n\n"
+                        "Item 2:\n"
+                        "...\n\n"
+                        "Ensure all questions follow this exact item layout consecutively."
+                    )
+                elif template_name == "translation":
+                    tgt_lang = kwargs.get("target_language") or "Chinese"
+                    prose_instructions = (
+                        f"{prompt}\n\n"
+                        f"### GENERATION FORMAT MANDATE ({tgt_lang}-to-English COMPARATIVE TRANSLATION APPRAISAL DRAFT):\n"
+                        f"Output all {expected_count} items directly and consecutively using this clean, structured format.\n"
+                        "🚫 DO NOT include pre-analysis, stream-of-consciousness deliberations, self-correction dialogues, or repetitive drafts. Begin immediately with 'Item 1:' and write out the items cleanly:\n\n"
+                        "Item 1:\n"
+                        "- Target Keyword: [exact vocabulary headword directly from the VOCABULARY list]\n"
+                        "- Target Grammar Pattern: [grammar pattern formula from list]\n"
+                        f"- {tgt_lang} Sentence: [formal, natural, polished source sentence]\n"
+                        "- Idiomatic Translation: [complete, flawless, publishable academic English translation featuring the target keyword]\n"
+                        "- Flawed Translation: [typical plausible learner/machine translation containing a specific Chinglish or structural error]\n"
+                        "- Flaw Type: [concise defect label, e.g., Chinglish literal syntax, wrong dependent preposition, formula breakdown]\n"
+                        "- Diagnostic Critique: [contrastive pedagogical explanation comparing why the idiomatic version works and identifying the exact rule violated by the flawed translation]\n"
+                        f"- Design Audit: AUDIT: [{tgt_lang} Anchor -> Target Keyword: [word] + Grammar Formula] -> [Idiomatic Core: ...] -> [Flaw Type: ...] -> [Pedagogical Takeaway]\n\n"
+                        "Item 2:\n"
+                        "...\n\n"
+                        f"Ensure all {expected_count} questions follow this exact item layout consecutively."
+                    )
+                else:
+                    prose_instructions = (
+                        f"{prompt}\n\n"
+                        "### GENERATION FORMAT MANDATE:\n"
+                        "Write out the assessment items strictly using this clean, structured format (do NOT use markdown tables or repetitive outlines):\n\n"
+                        "Item 1:\n"
+                        "- Target: [exact word or phrase from the list, without part of speech in parentheses]\n"
+                        "- Question: [academic sentence with strictly four underscores '____' for the blank]\n"
+                        "- Options:\n"
+                        "  A. option text\n"
+                        "  B. option text\n"
+                        "  C. option text\n"
+                        "  D. option text\n"
+                        "- Correct Answer: [A, B, C, or D - distribute keys evenly across items]\n"
+                        "- Definition: [concise definition in this context - do NOT append any notes or remarks]\n"
+                        "- Explanation: [objective reason why the key fits and why each distractor fails]\n"
+                        "- Design Audit: AUDIT: [Target] -> [Sentence Clues & Syntactic Slot] -> [Trap 1: ...] [Trap 2: ...] [Trap 3: ...] -> [Why Distractors Fail]\n\n"
+                        "Item 2:\n"
+                        "...\n\n"
+                        "Ensure all questions follow this exact item layout consecutively."
+                    )
+
+                prose_draft = llm.chat(
+                    [{"role": "user", "content": prose_instructions}],
+                    json_format=False,
+                    task_name=f"quiz_{template_name}_{core_name}_turn1_prose"
+                )
+
+                if prose_draft:
+                    logger.info(f"📦 Packaging Turn 1 prose draft into structured JSON Schema...")
+                    expected_count = kwargs.get("count", 5)
+                    if template_name == "reading":
+                        packaging_prompt = (
+                            "You are a deterministic assessment data converter.\n"
+                            "Faithfully convert the following reading assessment draft into the required ReadingQuiz JSON schema format.\n"
+                            "MANDATES:\n"
+                            f"- ⚠️ CRITICAL FULL COMPLETION MANDATE: You MUST convert ALL {expected_count} questions (Item 1 through Item {expected_count}) provided below consecutively into the 'questions' list. NEVER omit items or stop early!\n"
+                            "- Convert 'Correct Answer: A/B/C/D' into the 0-based integer 'correct_answer_index' (0 for A, 1 for B, 2 for C, 3 for D).\n"
+                            "- Ensure 'options' contains the 4 choices as plain text strings without 'A.', 'B.', 'C.', 'D.' prefixes or quotes.\n"
+                            "- Ensure 'category' is strictly one of: 'Main Idea', 'Detail/Recall', 'Inference', \"Author's Tone/Purpose\".\n"
+                            "- Populate the 'vocabulary' array with 5 to 8 ReadingVocabItem objects extracted in the draft. Each 'context_sentence' MUST contain only the pure verbatim sentence quoted from the passage, without any leading prefixes like 'ASSESSMENT ITEMS:' or headings.\n"
+                            "- Clean any accidental author notes, bracketed remarks like '(Note: ...)', or thinking process from definitions and explanations.\n"
+                            "- Preserve all questions, stems, explanations, and design audits exactly as written.\n\n"
+                            f"ASSESSMENT ITEMS:\n{prose_draft}"
+                        )
+                    elif template_name == "translation":
+                        tgt_lang = kwargs.get("target_language") or "Chinese"
+                        packaging_prompt = (
+                            f"You are a deterministic {tgt_lang}-to-English comparative translation assessment data converter.\n"
+                            "Faithfully convert the following translation assessment draft into the required TranslationQuiz JSON schema format.\n"
+                            "MANDATES:\n"
+                            f"- ⚠️ CRITICAL FULL COMPLETION MANDATE: You MUST convert ALL {expected_count} translation items (Item 1 through Item {expected_count}) provided below consecutively into the 'questions' list. NEVER omit items or stop early after Item 1!\n"
+                            "- Map 'Target Keyword' to 'target_keyword' (the exact English vocabulary word tested).\n"
+                            "- Map 'Target Grammar Pattern' to 'target_grammar' (the grammar pattern tested).\n"
+                            f"- Map '{tgt_lang} Sentence' to 'translated_sentence' (the pure source sentence without field prefix).\n"
+                            "- Map 'Idiomatic Translation' to 'idiomatic_translation' (the complete, pristine English translation).\n"
+                            "- Map 'Flawed Translation' to 'flawed_translation' (the contrastive translation containing the defect).\n"
+                            "- Map 'Flaw Type' to 'flaw_type'.\n"
+                            "- Map 'Diagnostic Critique' to 'diagnostic_critique'.\n"
+                            "- Map 'Diagnostic Critique' ALSO to 'explanation' for compatibility.\n"
+                            "- Map 'Idiomatic Translation' ALSO to 'correct_english_answer' for compatibility.\n"
+                            "- Set 'options' to an array of 2 strings: [\"<Idiomatic Translation>\", \"<Flawed Translation>\"].\n"
+                            "- Set 'correct_answer_index' to 0.\n"
+                            "- Map 'Design Audit' to 'design_audit'.\n"
+                            "- Clean any accidental author notes, bracketed remarks like '(Note: ...)', or thinking process from diagnostic critiques.\n\n"
+                            f"ASSESSMENT ITEMS:\n{prose_draft}"
+                        )
+                    else:
+                        packaging_prompt = (
+                            "You are a deterministic data converter.\n"
+                            "Faithfully convert the following assessment items into the required JSON schema format.\n"
+                            "MANDATES:\n"
+                            f"- ⚠️ CRITICAL FULL COMPLETION MANDATE: You MUST convert ALL {expected_count} assessment items (Item 1 through Item {expected_count}) provided below consecutively into the 'questions' list. NEVER omit items or stop early!\n"
+                            "- Convert 'Correct Answer: A/B/C/D' into the 0-based integer 'correct_answer_index' (0 for A, 1 for B, 2 for C, 3 for D).\n"
+                            "- Ensure 'options' contains the 4 choices as plain text strings without 'A.', 'B.', 'C.', 'D.' prefixes or markdown bolding.\n"
+                            "- Ensure 'target_word' contains only the pure target word or phrase, without part-of-speech annotations in parentheses.\n"
+                            "- Clean any accidental author notes, bracketed remarks like '(Note: ...)', or thinking process from 'definition' and 'explanation'.\n"
+                            "- Preserve all questions, stems, definitions, explanations, and design audits exactly as written.\n\n"
+                            f"ASSESSMENT ITEMS:\n{prose_draft}"
+                        )
+                    quiz_obj = llm.chat(
+                        [{"role": "user", "content": packaging_prompt}],
+                        schema=interpolated_schema,
+                        temperature=0.0,
+                        task_name=f"quiz_{template_name}_{core_name}_turn2_package",
+                        _disable_qa_retry=True
+                    )
+
+                    # Packaging completeness guard: verify all draft items were packaged
+                    if quiz_obj:
+                        q_items = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
+                        if len(q_items) < expected_count:
+                            logger.warning(
+                                f"⚠️ Packaging incomplete: expected {expected_count} questions, but converter only packaged {len(q_items)}. "
+                                f"Triggering strict full-completion packaging retry..."
+                            )
+                            strict_retry_prompt = (
+                                f"{packaging_prompt}\n\n"
+                                f"🚨 ERROR RECOVERY MANDATE:\n"
+                                f"In your previous attempt you ONLY packaged {len(q_items)} question(s). This is an absolute failure.\n"
+                                f"You MUST convert and output ALL {expected_count} questions (Item 1 to Item {expected_count}) into the 'questions' array!"
+                            )
+                            retry_obj = llm.chat(
+                                [{"role": "user", "content": strict_retry_prompt}],
+                                schema=interpolated_schema,
+                                temperature=0.0,
+                                task_name=f"quiz_{template_name}_{core_name}_turn2_package_retry",
+                                _disable_qa_retry=True
+                            )
+                            if retry_obj:
+                                retry_items = retry_obj.get("questions", []) if isinstance(retry_obj, dict) else getattr(retry_obj, "questions", [])
+                                if len(retry_items) > len(q_items):
+                                    quiz_obj = retry_obj
+                else:
+                    quiz_obj = None
+            else:
+                quiz_obj = llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    schema=interpolated_schema,
+                    task_name=f"quiz_{template_name}_{core_name}"
+                )
 
             if not quiz_obj:
                 return "Error: LLM returned empty quiz data."
@@ -683,7 +2056,7 @@ class WikiProcessor:
                     quiz_obj.video_type = data["video_type"]
                     quiz_obj.transcript = data["transcript"]
 
-            # 4.6. Level 2 Expert Model Quality Audit & Self-Correction Loop (LLM-as-a-Judge)
+            # 4.6. Two-Level Auditing: Pre-Audit L1 Code Gate & L2 Expert In-Place Surgical Cure
             if self.config.get("enable_expert_audit", False):
                 try:
                     from .expert_auditor import ExpertAuditor
@@ -692,145 +2065,404 @@ class WikiProcessor:
                         source_context = data.get("passage", "")
                     elif template_name == "video":
                         source_context = data.get("transcript", "")
-                    elif template_name in ("vocabulary", "translation", "listening"):
-                        source_context = str(data.get("content") or data.get("vocab_list") or "")
+                    elif template_name == "translation":
+                        # For translation, syllabus pools (vocabulary list & grammar patterns with common mistakes)
+                        # are passed directly into the Expert Auditor's structured gates.
+                        # We do NOT dump redundant raw dictionary definitions into source_context.
+                        source_context = ""
+                    elif template_name == "listening":
+                        script_turns = []
+                        raw_script = quiz_obj.get("script") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "script", [])
+                        if isinstance(raw_script, list):
+                            for turn in raw_script:
+                                if isinstance(turn, dict):
+                                    spk = turn.get("speaker", "Speaker")
+                                    txt = turn.get("text", "")
+                                    script_turns.append(f"{spk}: {txt}")
+                                elif hasattr(turn, "speaker") and hasattr(turn, "text"):
+                                    script_turns.append(f"{turn.speaker}: {turn.text}")
+                        source_context = "\n".join(script_turns)
+                    elif template_name == "vocabulary":
+                        # For vocabulary quizzes, each item must be a standalone sentence test.
+                        # We intentionally DO NOT supply the vocabulary dictionary definitions/quoted sentences
+                        # to the blind solver, ensuring the judge evaluates pure sentence-level single-fit validity without key-leaks.
+                        source_context = ""
 
-                    max_l2_retries = 2
-                    l2_retry = 0
-                    current_schema = self._interpolate_schema(schema_cls, kwargs)
+                    quiz_dict_eval = dataclasses.asdict(quiz_obj) if dataclasses.is_dataclass(quiz_obj) else quiz_obj
 
-                    last_audit_report = None
-                    while l2_retry < max_l2_retries:
-                        quiz_dict_eval = dataclasses.asdict(quiz_obj) if dataclasses.is_dataclass(quiz_obj) else quiz_obj
-                        if not source_context or not quiz_dict_eval:
-                            break
+                    # ---------------------------------------------------------
+                    # Step 1: Pre-Audit Level 1 Code Gate (Sanitize & Surface Flaws)
+                    # ---------------------------------------------------------
+                    curr_tgt_lang = kwargs.get("target_language") or self.config.get("target_language") or "Chinese"
+                    if template_name == "reading":
+                        l1_defective, l1_defects = self.audit_reading_integrity(
+                            quiz_dict_eval,
+                            passage_text=source_context
+                        )
+                    elif template_name == "video":
+                        l1_defective, l1_defects = self.audit_video_integrity(
+                            quiz_dict_eval,
+                            transcript_text=source_context
+                        )
+                    elif template_name == "listening":
+                        l1_defective, l1_defects = self.audit_listening_integrity(
+                            quiz_dict_eval,
+                            script_text=source_context
+                        )
+                    elif template_name == "translation":
+                        l1_defective, l1_defects = self.audit_translation_integrity(
+                            quiz_dict_eval,
+                            unit_headwords=unit_headwords,
+                            target_language=curr_tgt_lang
+                        )
+                    else:
+                        l1_defective, l1_defects = self.audit_quiz_integrity(
+                            quiz_dict_eval,
+                            banned_sentences=banned_quiz_sentences,
+                            unit_headwords=unit_headwords
+                        )
 
-                        if audit_callback:
-                            try:
-                                audit_callback(
-                                    stage="auditing",
-                                    audit_progress=30 if l2_retry == 0 else 80,
-                                    message=f"🔍 Level 2 Expert Audit [Attempt {l2_retry + 1}/{max_l2_retries}]: Running psychometric blind evaluation...",
-                                    extra={"attempt": l2_retry + 1, "max_retries": max_l2_retries}
+                    if l1_defects:
+                        logger.warning(
+                            f"Pre-Audit Level 1 Code Gate flagged {len(l1_defects)} issue(s) before Level 2: {l1_defects}"
+                        )
+
+                    # ---------------------------------------------------------
+                    # Step 2: Level 2 Expert Model Quality Audit & Triage
+                    # ---------------------------------------------------------
+                    if audit_callback:
+                        try:
+                            audit_callback(
+                                stage="auditing",
+                                audit_progress=30,
+                                message="🔍 Level 2 Expert Audit: Running psychometric blind evaluation & surgical triage...",
+                                extra={"attempt": 1, "max_retries": 1}
+                            )
+                        except Exception:
+                            pass
+
+                    judge_model_to_use = ExpertAuditor.get_judge_model()
+                    active_gen_model = llm.model
+
+                    # If generator model and judge model are distinct, unload generator from Ollama to protect VRAM
+                    if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
+                        llm.unload_model(active_gen_model)
+
+                    audit_report = ExpertAuditor.audit_quiz(
+                        source_context,
+                        quiz_dict_eval,
+                        judge_model=judge_model_to_use,
+                        quiz_type=template_name,
+                        target_language=curr_tgt_lang,
+                        unit_headwords=unit_headwords,
+                        unit_grammar_patterns=unit_grammar_patterns
+                    )
+
+                    # If distinct models, unload judge model to free memory
+                    if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
+                        llm.unload_model(judge_model_to_use)
+
+                    if audit_report:
+                        # Record raw generation score before cure
+                        raw_gen_score = audit_report.get("overall_quality_score", 100)
+                        audit_report["raw_generation_score"] = raw_gen_score
+
+                        orig_questions = quiz_dict_eval.get("questions", [])
+                        audit_items = audit_report.get("questions", [])
+                        cured_questions = list(orig_questions)
+
+                        cure_stats = {"pass": 0, "repair": 0, "rewrite": 0, "discard": 0}
+
+                        # ---------------------------------------------------------
+                        # Step 3: In-Place Surgical Cure & Post-Cure L1 Verification
+                        # ---------------------------------------------------------
+                        for a_idx, qa in enumerate(audit_items):
+                            item_slot = qa.get("item_index", a_idx + 1) - 1
+                            if not (0 <= item_slot < len(cured_questions)):
+                                item_slot = a_idx
+                            if not (0 <= item_slot < len(cured_questions)):
+                                continue
+
+                            triage = str(qa.get("triage_action", "PASS")).upper()
+                            candidate_cure = qa.get("cured_question")
+
+                            if triage in ("REPAIR", "REWRITE") and isinstance(candidate_cure, dict) and candidate_cure:
+                                # Modality-specific and defensive pre-normalization for candidate cure
+                                if "stem" in candidate_cure and "question" not in candidate_cure:
+                                    candidate_cure["question"] = candidate_cure.pop("stem")
+
+                                # Normalize options if LLM outputted list of dicts e.g. [{"letter": "A", "text": "..."}]
+                                raw_cand_opts = candidate_cure.get("options")
+                                if isinstance(raw_cand_opts, list):
+                                    normalized_opts = []
+                                    cand_corr_idx = candidate_cure.get("correct_answer_index")
+                                    for o_i, o_val in enumerate(raw_cand_opts):
+                                        if isinstance(o_val, dict):
+                                            txt = o_val.get("text") or o_val.get("option_text") or o_val.get("sentence") or ""
+                                            if o_val.get("is_correct") is True and cand_corr_idx is None:
+                                                cand_corr_idx = o_i
+                                            normalized_opts.append(txt)
+                                        else:
+                                            normalized_opts.append(str(o_val))
+                                    candidate_cure["options"] = normalized_opts
+                                    if cand_corr_idx is not None:
+                                        try:
+                                            candidate_cure["correct_answer_index"] = int(cand_corr_idx)
+                                        except (ValueError, TypeError):
+                                            pass
+
+                                orig_item = orig_questions[item_slot] if 0 <= item_slot < len(orig_questions) else {}
+                                orig_dict = orig_item if isinstance(orig_item, dict) else (dataclasses.asdict(orig_item) if dataclasses.is_dataclass(orig_item) else {})
+
+                                # Vocabulary fallback: inherit target_word / definition if omitted in cure
+                                if template_name == "vocabulary":
+                                    if not candidate_cure.get("target_word") and orig_dict.get("target_word"):
+                                        candidate_cure["target_word"] = orig_dict["target_word"]
+                                    if not candidate_cure.get("definition") and orig_dict.get("definition"):
+                                        candidate_cure["definition"] = orig_dict["definition"]
+
+                                # Reading fallback: inherit category if omitted in cure
+                                if template_name == "reading":
+                                    if not candidate_cure.get("category") and orig_dict.get("category"):
+                                        candidate_cure["category"] = orig_dict["category"]
+
+                                # Video fallback: inherit timestamp if omitted in cure
+                                if template_name == "video":
+                                    if not candidate_cure.get("timestamp") and orig_dict.get("timestamp"):
+                                        candidate_cure["timestamp"] = orig_dict["timestamp"]
+
+                                # Listening fallback: inherit category if omitted in cure
+                                if template_name == "listening":
+                                    if not candidate_cure.get("category") and orig_dict.get("category"):
+                                        candidate_cure["category"] = orig_dict["category"]
+
+                                if template_name == "translation":
+                                    cand_opts = candidate_cure.get("options")
+                                    corr_idx = candidate_cure.get("correct_answer_index", 0)
+                                    extracted_opts = []
+                                    if isinstance(cand_opts, list) and len(cand_opts) == 2:
+                                        extracted_opts = [str(o) for o in cand_opts]
+                                    elif candidate_cure.get("idiomatic_translation") and candidate_cure.get("flawed_translation"):
+                                        extracted_opts = [
+                                            candidate_cure["idiomatic_translation"],
+                                            candidate_cure["flawed_translation"]
+                                        ]
+                                        corr_idx = 0
+
+                                    if len(extracted_opts) == 2:
+                                        # Clean option prefixes e.g. "A) " or "B) "
+                                        label_strip = r'^(?:[A-Da-d\d][\.\)\:\-]\s*)'
+                                        clean_cand_opts = [re.sub(label_strip, '', str(o)).strip() for o in extracted_opts]
+                                        candidate_cure["options"] = clean_cand_opts
+                                        if not isinstance(corr_idx, int) or corr_idx not in (0, 1):
+                                            corr_idx = 0
+                                        candidate_cure["correct_answer_index"] = corr_idx
+                                        # Always synchronize idiomatic_translation and flawed_translation with clean options
+                                        candidate_cure["idiomatic_translation"] = clean_cand_opts[corr_idx]
+                                        candidate_cure["flawed_translation"] = clean_cand_opts[1 - corr_idx]
+
+                                    # Preserve original target language stem if cured item accidentally provided English translation as stem
+                                    orig_stem = orig_dict.get("translated_sentence", "")
+                                    curr_stem = candidate_cure.get("translated_sentence", "")
+                                    # If target language is Chinese and curr_stem lacks Chinese chars, restore original stem
+                                    if orig_stem:
+                                        target_lang_str = str(curr_tgt_lang or "Chinese").lower()
+                                        if any(w in target_lang_str for w in ["chinese", "mandarin", "cjk", "中文", "汉语", "漢語"]):
+                                            if not re.search(r'[\u4e00-\u9fff]', curr_stem) and re.search(r'[\u4e00-\u9fff]', orig_stem):
+                                                candidate_cure["translated_sentence"] = orig_stem
+
+                                # Validate candidate cure through Level 1 Code Gate
+                                temp_wrap = {"questions": [candidate_cure]}
+                                temp_wrap = self._shuffle_quiz_options(temp_wrap)
+                                healed_item = temp_wrap["questions"][0]
+
+                                # Modality-specific Level 1 gate on candidate cure
+                                cure_l1_defects = []
+                                if template_name == "reading":
+                                    cure_l1_flagged, cure_l1_defects = self.audit_reading_integrity(
+                                        {"questions": [healed_item]},
+                                        passage_text=source_context
+                                    )
+                                elif template_name == "video":
+                                    cure_l1_flagged, cure_l1_defects = self.audit_video_integrity(
+                                        {"questions": [healed_item]},
+                                        transcript_text=source_context
+                                    )
+                                elif template_name == "listening":
+                                    cure_l1_flagged, cure_l1_defects = self.audit_listening_integrity(
+                                        {"questions": [healed_item]},
+                                        script_text=source_context
+                                    )
+                                elif template_name == "translation":
+                                    cure_l1_flagged, cure_l1_defects = self.audit_translation_integrity(
+                                        {"questions": [healed_item]},
+                                        unit_headwords=unit_headwords,
+                                        target_language=curr_tgt_lang
+                                    )
+                                else:
+                                    cure_l1_flagged, cure_l1_defects = self.audit_quiz_integrity(
+                                        {"questions": [healed_item]},
+                                        banned_sentences=banned_quiz_sentences,
+                                        unit_headwords=unit_headwords,
+                                        strict_distractor_recycling=False
+                                    )
+
+                                if not cure_l1_flagged:
+                                    # Candidate passed L1 gate: splice in-place and assign deterministic score
+                                    cured_questions[item_slot] = healed_item
+                                    qa["single_fit_valid"] = True
+                                    if triage == "REPAIR":
+                                        qa["pedagogical_score"] = 90
+                                        cure_stats["repair"] += 1
+                                        logger.info(f"Surgically REPAIRED Item #{item_slot + 1} with in-place expert cure (Score: 90).")
+                                    else:
+                                        qa["pedagogical_score"] = 95
+                                        cure_stats["rewrite"] += 1
+                                        logger.info(f"Surgically REWROTE Item #{item_slot + 1} with in-place expert cure (Score: 95).")
+                                else:
+                                    # Candidate failed L1 gate: reject cure
+                                    logger.warning(
+                                        f"Candidate expert cure for Item #{item_slot + 1} failed Level 1 gate ({cure_l1_defects}). Keeping original item penalized."
+                                    )
+                                    cure_stats["discard"] += 1
+                            else:
+                                if qa.get("single_fit_valid", True):
+                                    cure_stats["pass"] += 1
+                                else:
+                                    cure_stats["discard"] += 1
+
+                        # Prune uncured defective items to protect pedagogical output
+                        final_clean_questions = []
+                        for idx, q_candidate in enumerate(cured_questions):
+                            corresponding_audit = audit_items[idx] if idx < len(audit_items) and isinstance(audit_items[idx], dict) else {}
+                            # Keep item if it is single_fit_valid
+                            if corresponding_audit.get("single_fit_valid", True):
+                                final_clean_questions.append(q_candidate)
+                            else:
+                                logger.warning(
+                                    f"Pruned uncurable defective Item #{idx + 1} from final handout (single_fit_valid=False)."
                                 )
+
+                        # Apply cured & pruned questions to quiz_obj
+                        if isinstance(quiz_obj, dict):
+                            quiz_obj["questions"] = final_clean_questions
+                        else:
+                            try:
+                                quiz_obj.questions = final_clean_questions
+                            except Exception:
+                                pass
+                        quiz_obj = self._shuffle_quiz_options(quiz_obj)
+
+                        # Re-bind modality-specific properties
+                        if template_name == "reading":
+                            if isinstance(quiz_obj, dict): quiz_obj["passage"] = data["passage"]
+                            else: quiz_obj.passage = data["passage"]
+                        elif template_name == "video":
+                            if isinstance(quiz_obj, dict):
+                                quiz_obj["video_url"] = data["video_url"]
+                                quiz_obj["video_type"] = data["video_type"]
+                                quiz_obj["transcript"] = data["transcript"]
+                            else:
+                                quiz_obj.video_url = data["video_url"]
+                                quiz_obj.video_type = data["video_type"]
+                                quiz_obj.transcript = data["transcript"]
+
+                        # ---------------------------------------------------------
+                        # Step 4: Deterministic Post-Cure Scoring
+                        # ---------------------------------------------------------
+                        item_scores = [qa.get("pedagogical_score", 90) for qa in audit_items if isinstance(qa, dict)]
+                        final_avg = round(sum(item_scores) / len(item_scores)) if item_scores else 100
+                        audit_report["base_quality_score"] = final_avg
+
+                        # Preserve judge's cap and fail verdict if uncured defects remain
+                        has_fatal_residual = any(
+                            qa.get("single_fit_valid") is False 
+                            for qa in audit_items if isinstance(qa, dict)
+                        ) or (cure_stats["discard"] > 0)
+
+                        if has_fatal_residual:
+                            audit_report["pass_audit"] = False
+                            audit_report["overall_quality_score"] = min(final_avg, 70)
+                        else:
+                            audit_report["pass_audit"] = (final_avg >= 80)
+                            audit_report["overall_quality_score"] = final_avg
+
+                        audit_report["cure_stats"] = cure_stats
+
+                        # Post-cure accuracy updates: successfully cured items now have a unique, verified key
+                        total_items_count = len(orig_questions) or 1
+                        valid_items_count = cure_stats["pass"] + cure_stats["repair"] + cure_stats["rewrite"]
+                        audit_report["post_cure_accuracy"] = round(valid_items_count / total_items_count, 2)
+                        audit_report["blind_solve_accuracy"] = audit_report["post_cure_accuracy"]
+
+                        # Update summary verdict to disclose in-place surgical cure
+                        cure_summary = (
+                            f"[SURGICAL CURE APPLIED: Pre-Cure {raw_gen_score}% -> Post-Cure {audit_report['overall_quality_score']}%. "
+                            f"Pass: {cure_stats['pass']}, Repaired: {cure_stats['repair']}, "
+                            f"Rewritten: {cure_stats['rewrite']}, Discard/Flawed: {cure_stats['discard']}]."
+                        )
+                        orig_verdict = str(audit_report.get("summary_verdict", ""))
+                        audit_report["summary_verdict"] = f"{cure_summary} {orig_verdict}".strip()
+
+                        # Synchronize Pre-Cure vs Post-Cure scores to the expert audit log file
+                        try:
+                            logs_dir = Path(self.config.get("project_root", ".")).resolve() / "logs"
+                            task_prefix = f"expert_audit_{quiz_dict_eval.get('title', 'quiz')[:20]}"
+                            safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', task_prefix).strip('_')
+                            matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+                            if matching_logs:
+                                latest_log = matching_logs[0]
+                                log_txt = latest_log.read_text(encoding="utf-8")
+                                score_block = (
+                                    f"=== COMPOSITE_SCORE: {final_avg}.0% (CURED) ===\n"
+                                    f"=== PRE_CURE_SCORE: {raw_gen_score}.0% ===\n"
+                                    f"=== POST_CURE_SCORE: {final_avg}.0% ===\n"
+                                    f"=== SURGICAL_CURE: Repaired={cure_stats['repair']}, Rewritten={cure_stats['rewrite']}, Passed={cure_stats['pass']}, Flawed={cure_stats['discard']} ==="
+                                )
+                                if "=== COMPOSITE_SCORE:" in log_txt:
+                                    log_txt = re.sub(
+                                        r"=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===(?:\n=== L2_PENALTY:[^\n]+===)?",
+                                        score_block,
+                                        log_txt
+                                    )
+                                    latest_log.write_text(log_txt, encoding="utf-8")
+                        except Exception as log_err:
+                            logger.debug(f"Could not update audit log with post-cure score: {log_err}")
+
+                        # Attach final audit report to quiz_obj
+                        if isinstance(quiz_obj, dict):
+                            quiz_obj["_expert_audit"] = audit_report
+                        else:
+                            try:
+                                setattr(quiz_obj, "_expert_audit", audit_report)
                             except Exception:
                                 pass
 
-                        judge_model_to_use = ExpertAuditor.get_judge_model()
-                        active_gen_model = llm.model
-
-                        # If generator model and judge model are distinct, unload generator from Ollama to protect VRAM
-                        if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
-                            llm.unload_model(active_gen_model)
-
-                        audit_report = ExpertAuditor.audit_quiz(source_context, quiz_dict_eval, judge_model=judge_model_to_use)
-
-                        # If distinct models, unload judge model to free memory for generator / retry
-                        if judge_model_to_use and active_gen_model and judge_model_to_use != active_gen_model:
-                            llm.unload_model(judge_model_to_use)
-
-                        if not audit_report:
-                            break
-
-                        last_audit_report = audit_report
-                        passed = audit_report.get("pass_audit", True)
-                        accuracy = audit_report.get("blind_solve_accuracy", 1.0)
-                        score = audit_report.get("overall_quality_score", 100)
+                        final_accuracy = audit_report.get("blind_solve_accuracy", 1.0)
+                        final_passed = audit_report.get("pass_audit", True)
 
                         logger.info(
-                            f"Level 2 Expert Quality Audit [Attempt {l2_retry + 1}] for {core_name} ({template_name}): "
-                            f"Score: {score}/100, Pass: {passed}, Blind Accuracy: {accuracy * 100:.1f}%"
+                            f"Level 2 In-Place Surgical Cure Complete for {core_name} ({template_name}): "
+                            f"Raw Gen: {raw_gen_score}% -> Final Post-Cure: {final_avg}%, "
+                            f"Pass: {final_passed}, Blind Acc: {final_accuracy * 100:.1f}%, Stats: {cure_stats}"
                         )
 
-                        # `pass_audit` is the authoritative verdict: it already folds in
-                        # overall_quality_score, single_fit_valid, and the
-                        # confidence-aware blind-solve cross-check computed in
-                        # ExpertAuditor.audit_quiz. `accuracy` is retained as an
-                        # informational metric (log/UI), not a hard gate, so a
-                        # low-confidence judge guess no longer vetoes a good item.
-                        if passed:
-                            if audit_callback:
-                                try:
+                        if audit_callback:
+                            try:
+                                if final_passed:
                                     audit_callback(
                                         stage="passed",
                                         audit_progress=100,
-                                        message=f"✅ Level 2 Quality Audit PASSED (Score: {score}/100, Blind Acc: {accuracy*100:.0f}%)",
-                                        extra={"score": score, "accuracy": accuracy, "passed": True}
+                                        message=f"✅ Level 2 Quality Audit PASSED (Final: {final_avg}%, Blind Acc: {final_accuracy*100:.0f}%)",
+                                        extra={"score": final_avg, "accuracy": final_accuracy, "passed": True, "cure_stats": cure_stats}
                                     )
-                                except Exception:
-                                    pass
-                            break
-
-                        # Audit failed -> Synthesize targeted surgical feedback and trigger self-correction
-                        l2_retry += 1
-                        if l2_retry >= max_l2_retries:
-                            logger.warning(
-                                f"Level 2 Expert Audit max retries reached ({max_l2_retries}) for {core_name}. Proceeding with best attempt."
-                            )
-                            if audit_callback:
-                                try:
+                                else:
                                     audit_callback(
                                         stage="completed_with_warnings",
                                         audit_progress=100,
-                                        message=f"⚠️ Audit finished with warnings (Score: {score}/100). Proceeding with best attempt.",
-                                        extra={"score": score, "accuracy": accuracy, "passed": False}
+                                        message=f"⚠️ Audit finished with warnings (Score: {final_avg}%). Proceeding with best attempt.",
+                                        extra={"score": final_avg, "accuracy": final_accuracy, "passed": False, "cure_stats": cure_stats}
                                     )
-                                except Exception:
-                                    pass
-                            break
-
-                        critique = ExpertAuditor.generate_critique_feedback(audit_report)
-                        logger.info(
-                            f"Level 2 Audit rejected item quality. Triggering surgical self-correction retry ({l2_retry}/{max_l2_retries})..."
-                        )
-
-                        if audit_callback:
-                            try:
-                                audit_callback(
-                                    stage="correcting",
-                                    audit_progress=55,
-                                    message=f"🛠️ Level 2 Audit: Flaws detected. Self-correcting quiz items (Retry {l2_retry}/{max_l2_retries})...",
-                                    extra={"score": score, "accuracy": accuracy, "passed": False, "attempt": l2_retry}
-                                )
-                            except Exception:
-                                pass
-
-                        prior_raw_json = json.dumps(quiz_dict_eval, ensure_ascii=False)
-                        retry_messages = [
-                            {"role": "user", "content": prompt},
-                            {"role": "assistant", "content": prior_raw_json},
-                            {"role": "user", "content": critique}
-                        ]
-
-                        corrected_obj = llm.chat(
-                            retry_messages,
-                            schema=current_schema,
-                            task_name=f"quiz_{template_name}_{core_name}_l2retry{l2_retry}"
-                        )
-                        if corrected_obj:
-                            quiz_obj = self._shuffle_quiz_options(corrected_obj)
-                            if template_name == "reading":
-                                if isinstance(quiz_obj, dict): quiz_obj["passage"] = data["passage"]
-                                else: quiz_obj.passage = data["passage"]
-                            elif template_name == "video":
-                                if isinstance(quiz_obj, dict):
-                                    quiz_obj["video_url"] = data["video_url"]
-                                    quiz_obj["video_type"] = data["video_type"]
-                                    quiz_obj["transcript"] = data["transcript"]
-                                else:
-                                    quiz_obj.video_url = data["video_url"]
-                                    quiz_obj.video_type = data["video_type"]
-                                    quiz_obj.transcript = data["transcript"]
-                        else:
-                            break
-
-                    # Attach latest Level 2 audit report to quiz_obj (dict or dataclass)
-                    if last_audit_report:
-                        if isinstance(quiz_obj, dict):
-                            quiz_obj["_expert_audit"] = last_audit_report
-                        else:
-                            try:
-                                setattr(quiz_obj, "_expert_audit", last_audit_report)
                             except Exception:
                                 pass
 
@@ -912,7 +2544,39 @@ class WikiProcessor:
             handout_dir = self.config.wiki_content_path / core_name / "handouts"
             handout_dir.mkdir(parents=True, exist_ok=True)
             handout_path = handout_dir / handout_filename
-            
+
+            # -------------------------------------------------------------
+            # Hard Gate: Quarantine on Audit Failure or Item Depletion
+            # -------------------------------------------------------------
+            quiz_audit = quiz_obj.audit if hasattr(quiz_obj, "audit") else (quiz_obj.get("audit") if isinstance(quiz_obj, dict) else None)
+            final_questions = getattr(quiz_obj, "questions", []) or (quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else [])
+            min_passing_items = int(self.config.get("min_passing_items", 3))
+            quarantine_on_fail = bool(self.config.get("quarantine_on_fail", True))
+
+            if quiz_audit and quarantine_on_fail:
+                pass_audit = quiz_audit.get("pass_audit", True)
+                discarded_count = (quiz_audit.get("cure_stats") or {}).get("discard", 0)
+                available_count = len(final_questions)
+
+                # Block and quarantine if audit failed or if pruned items dropped below required minimum
+                if not pass_audit or available_count < min_passing_items:
+                    q_dir = handout_dir / "_quarantine"
+                    q_dir.mkdir(parents=True, exist_ok=True)
+                    q_html = q_dir / handout_filename.replace(".html", "_REJECTED.html")
+                    q_json = q_dir / handout_filename.replace(".html", "_REJECTED.json")
+                    
+                    with open(q_html, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    with open(q_json, "w", encoding="utf-8") as f:
+                        json.dump(quiz_audit or {}, f, ensure_ascii=False, indent=2)
+
+                    logger.error(
+                        f"🚫 Blocked handout from shipping to handouts/: {pass_audit=}, "
+                        f"{available_count=}/{min_passing_items=}, {discarded_count=}. "
+                        f"Quarantined to {q_html}"
+                    )
+                    return f"Audit Gate Blocked: {available_count} valid items (min required: {min_passing_items}), pass_audit={pass_audit}. Quarantined to {q_html.name}"
+
             with open(handout_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
 
@@ -1368,13 +3032,25 @@ class WikiProcessor:
         if core_name.endswith(".md"): core_name = core_name[:-3]
         elif core_name.endswith(".txt"): core_name = core_name[:-4]
 
-        # Check standard new location first: wiki/<core_name>/extractions/<core_name>_vocabulary.md
-        vocab_path = self.config.wiki_content_path / core_name / "extractions" / f"{core_name}_vocabulary.md"
+        # 1. Resolve unit directory case-insensitively using normalize_name
+        from .config import normalize_name
+        norm_core = normalize_name(core_name)
+        unit_dir = self.config.wiki_content_path / core_name
+        if not unit_dir.exists() and self.config.wiki_content_path.exists():
+            for child in self.config.wiki_content_path.iterdir():
+                if child.is_dir() and normalize_name(child.name) == norm_core:
+                    unit_dir = child
+                    core_name = child.name
+                    break
+
+        # Check standard location: wiki/<core_name>/extractions/<core_name>_vocabulary.md
+        vocab_path = unit_dir / "extractions" / f"{core_name}_vocabulary.md"
         if not vocab_path.exists():
             vocab_paths = list(self.config.wiki_content_path.rglob(f"{core_name}_vocabulary.md"))
-            vocab_path = vocab_paths[0] if vocab_paths else (self.config.wiki_content_path / core_name / f"{core_name}_vocabulary.md")
+            vocab_path = vocab_paths[0] if vocab_paths else (unit_dir / f"{core_name}_vocabulary.md")
 
         cefr = None
+        vocab_content = ""
         
         if vocab_path.exists():
             with open(vocab_path, "r", encoding="utf-8") as f:
@@ -1383,8 +3059,20 @@ class WikiProcessor:
                 m = re.search(r'overall_cefr_level:\s*["\']?([A-C][1-2])["\']?', vocab_content, re.IGNORECASE)
                 if m:
                     cefr = m.group(1).upper()
-        else:
-            vocab_content = ""
+
+        # Multi-source fallback: Check summary, grammar, or mindmap if vocabulary doesn't have it or isn't generated yet
+        if not cefr:
+            for ext_candidate in [f"{core_name}_summary.md", f"{core_name}_grammar.md", f"{core_name}_mindmap.json"]:
+                candidate_path = unit_dir / "extractions" / ext_candidate
+                if candidate_path.exists():
+                    try:
+                        cand_txt = candidate_path.read_text(encoding="utf-8")
+                        m = re.search(r'overall_cefr_level["\']?\s*[:=]\s*["\']?([A-C][1-2])["\']?', cand_txt, re.IGNORECASE)
+                        if m:
+                            cefr = m.group(1).upper()
+                            break
+                    except Exception:
+                        pass
 
         if not cefr:
             import logging
@@ -1408,7 +3096,9 @@ class WikiProcessor:
                         source_path = candidates[0]
             if not source_path or not source_path.exists(): return None
             with open(source_path, "r", encoding="utf-8") as f: passage = f.read()
-            return {"passage": passage, "cefr_level": cefr}
+            # Clean syllabus sections (e.g. ## Syllabus Vocabulary, ## Syllabus Grammar) so only pure passage text is supplied
+            clean_passage, _, _, _ = self.parse_syllabus_sections(passage)
+            return {"passage": clean_passage.strip() if clean_passage else passage, "cefr_level": cefr}
 
         elif quiz_type == "translation":
             if not vocab_path.exists(): return None
@@ -1578,9 +3268,169 @@ class WikiProcessor:
         cleaned_data = _strip_design_audit(data_dict)
         json_data = json.dumps(cleaned_data, ensure_ascii=False)
         
+
         if "const quizData =" in html:
             return re.sub(r'const quizData = .*?;', lambda _: f'const quizData = {json_data};', html, flags=re.DOTALL)
         return html.replace("</body>", f"<script>const quizData = {json_data};</script></body>")
+
+    @staticmethod
+    def _build_vocab_prose_draft_prompt(v_prompt: str, count) -> str:
+        """Turn 1 prompt for the vocabulary Prose-to-JSON pipeline.
+
+        Appends a free-reasoning "draft mode" block to the extraction prompt so the
+        model can argue its word selections in natural language (preserving its native
+        thinking) BEFORE any JSON structure is imposed.
+        """
+        count_str = str(count) if count is not None else "the target"
+        return (
+            v_prompt
+            + "\n\n### EXTRACTION DRAFT MODE (PROSE, NOT JSON) ###\n"
+            "Do NOT output JSON yet. Produce a plain, structured text draft so you can "
+            "reason freely and critically about which words are genuinely worth teaching.\n\n"
+            "### SELECTION REASONING (MANDATORY for every candidate) ###\n"
+            "For each candidate, decide in plain English WHY it earns a spot:\n"
+            "- CEFR band (B1-C2) and why it is genuine academic/analytical lexis; and\n"
+            "- that it is NOT a trivially basic general-English word a learner already knows "
+            "(reject e.g. 'public', 'bear', 'big', 'people', 'make', 'way' and similar); and\n"
+            "- that it is distributed across DIFFERENT sentences/paragraphs (avoid clustering; "
+            "aim for at most ~3 headwords per sentence); and\n"
+            "- that it is strictly a single-word lemma (strictly ONE word; multi-word expressions and collocations are prohibited).\n"
+            "If a candidate fails ANY of these tests, LEAVE IT OUT rather than force it in.\n\n"
+            f"### VOCABULARY LIST FORMAT (up to {count_str} words, each drawn from a verbatim sentence) ###\n"
+            "Emit consecutive items using EXACTLY this layout (one block per word; "
+            "no JSON, no markdown tables, no code fences, no extra commentary):\n\n"
+            "- Word: [base lemma headword]\n"
+            "- Context Sentence: \"[exact verbatim sentence from the passage]\"\n"
+            "- Part of Speech: [noun / verb / adjective / adverb / preposition / conjunction / interjection]\n"
+            "- Definition: [concise, context-specific meaning]\n"
+            "- Example Usage: [original, high-quality academic illustrative sentence]\n"
+            "- CEFR: [B1 / B2 / C1 / C2]\n"
+            "- Audit: AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [PoS] -> [CEFR] -> [VERBATIM_CONFIRMED]\n"
+        )
+
+    @staticmethod
+    def _parse_vocab_prose(text) -> list:
+        """Deterministically parse the Turn-1 prose draft into a list of vocabulary item dicts.
+
+        The draft is a sequence of blank-line-separated blocks, each with lines like:
+            - Word: X
+            - Context Sentence: "Y"
+            - Part of Speech: Z
+            - Definition: D
+            - Example Usage: E
+            - CEFR: L
+            - Audit: A
+        Parsing in code (instead of a second LLM call) eliminates the small-model
+        repetition-collapse / field-crosstalk that a prose->JSON re-serialization invites.
+        """
+        import re
+        if not text or not isinstance(text, str):
+            return []
+        text = text.replace("\r\n", "\n")
+        word_line = re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Word[ \t]*[:：][ \t]*(.*)$")
+        boundaries = [m.start() for m in word_line.finditer(text)]
+        if not boundaries:
+            return []
+
+        patterns = {
+            "word": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Word[ \t]*[:：][ \t]*(.*)$"),
+            "quoted_sentence": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Context[ \t]+Sentence[ \t]*[:：][ \t]*(.*)$"),
+            "part_of_speech": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Part[ \t]+of[ \t]+Speech[ \t]*[:：][ \t]*(.*)$"),
+            "definition": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Definition[ \t]*[:：][ \t]*(.*)$"),
+            "example_usage": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Example[ \t]+Usage[ \t]*[:：][ \t]*(.*)$"),
+            "word_cefr_level": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*CEFR[ \t]*[:：][ \t]*(.*)$"),
+            "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Audit[ \t]*[:：][ \t]*(.*)$"),
+        }
+        valid_cefr = ("B1", "B2", "C1", "C2")
+        valid_pos = ("noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection")
+
+        def grab(block, key):
+            m = patterns[key].search(block)
+            return m.group(1).strip() if m else ""
+
+        items = []
+        for i, start in enumerate(boundaries):
+            end = boundaries[i + 1] if i + 1 < len(boundaries) else len(text)
+            block = text[start:end]
+
+            word = grab(block, "word").strip().strip("[]").strip()
+            for pos in valid_pos:
+                if word.lower().endswith(" " + pos):
+                    word = word[: -(len(pos) + 1)].strip()
+                    break
+
+            quote = grab(block, "quoted_sentence")
+            if len(quote) >= 2 and quote[0] in "\"'" and quote[-1] in "\"'":
+                quote = quote[1:-1].strip()
+
+            cefr = grab(block, "word_cefr_level").upper().strip()
+            if cefr not in valid_cefr:
+                cefr = "B2"
+            pos = grab(block, "part_of_speech").lower().strip()
+            if pos not in valid_pos:
+                pos = "noun"
+
+            if not word:
+                continue
+            lowered = word.lower()
+            # Reject meta/placeholder tokens the model sometimes leaks from the prompt
+            # (e.g. "[base lemma headword]", "part of speech") — these are never real headwords.
+            if any(p in lowered for p in (
+                "headword", "lemma", "part of speech", "part-of-speech",
+                "context sentence", "example usage", "placeholder",
+                "surface word", "audit: ",
+            )):
+                continue
+            items.append({
+                "word": word,
+                "quoted_sentence": quote,
+                "part_of_speech": pos,
+                "definition": grab(block, "definition"),
+                "example_usage": grab(block, "example_usage"),
+                "word_cefr_level": cefr,
+                "design_audit": grab(block, "design_audit"),
+            })
+        return items
+
+    def _run_vocab_prose_pipeline(self, v_prompt, v_kwargs, v_schema, file_stem):
+        """Prose-to-JSON pipeline for vocabulary extraction.
+
+        Turn 1 (json_format=False) lets the model reason freely about word selection in
+        natural language, preserving its native thinking. The draft is then parsed into the
+        VocabularyExtraction schema by deterministic code (no second LLM call), which avoids
+        the small-model repetition-collapse that a prose->JSON re-serialization invites.
+        If the prose draft cannot be parsed, it falls back to the original one-shot JSON call.
+        """
+        count = v_kwargs.get("count", 20)
+        draft_prompt = self._build_vocab_prose_draft_prompt(v_prompt, count)
+        logger.info("🧠 Turn 1: prose vocabulary selection (native reasoning, json_format=False)...")
+        prose_draft = llm.chat(
+            [{"role": "user", "content": draft_prompt}],
+            json_format=False,
+            task_name=f"extract_vocabulary_{file_stem}_turn1_prose",
+        )
+
+        items = self._parse_vocab_prose(prose_draft)
+        if items:
+            cefr_counts = {}
+            for it in items:
+                cefr_counts[it["word_cefr_level"]] = cefr_counts.get(it["word_cefr_level"], 0) + 1
+            overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
+            logger.info(f"✅ Parsed {len(items)} vocabulary items from prose draft (deterministic; no 2nd LLM call).")
+            return validate_and_map(VocabularyExtraction, {
+                "title": "Vocabulary",
+                "overall_cefr_level": overall,
+                "vocabulary": items,
+            })
+
+        # Fallback: prose draft unparsable -> original one-shot JSON extraction.
+        logger.warning("⚠️ Vocabulary prose draft was unparsable; falling back to one-shot JSON extraction.")
+        data = llm.chat(
+            [{"role": "user", "content": v_prompt}],
+            schema=v_schema,
+            task_name=f"extract_vocabulary_{file_stem}_json_fallback",
+        )
+        return data
 
     def _interpolate_schema(self, schema, mapping):
         """Recursively interpolates placeholders in a JSON schema dict."""

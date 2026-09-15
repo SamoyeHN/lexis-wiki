@@ -173,7 +173,7 @@ class TestPedagogyEvaluation(unittest.TestCase):
         }]
         score, flags = _score_pedagogy(items, "vocabulary")
         self.assertEqual(score, 0.0)
-        self.assertTrue(any("non-original example usage" in f for f in flags))
+        self.assertTrue(any("unoriginal duplicate of quoted_sentence" in f for f in flags))
 
     def test_quiz_pedagogy_validation(self):
         valid_quiz = [{
@@ -221,6 +221,19 @@ class TestPedagogyEvaluation(unittest.TestCase):
         score, flags = _score_pedagogy(inflected_quiz, "quiz")
         self.assertEqual(score, W_PEDAGOGY)
         self.assertEqual(flags, [])
+
+    def test_quiz_in_list_recycling_penalized(self):
+        user_prompt = "## [[activism]]\n## [[obituary]]\n## [[specimen]]\n## [[aesthetic]]"
+        recycled_quiz = [{
+            "target_word": "activism",
+            "question": "The people joined the ____ to promote social change.",
+            "options": ["activism", "obituary", "specimen", "aesthetic"],
+            "correct_answer_index": 0,
+            "explanation": "Activism fits.",
+        }]
+        score, flags = _score_pedagogy(recycled_quiz, "quiz", user_prompt=user_prompt)
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("in-list distractor recycling" in f for f in flags))
 
 
 class TestNormalizedScoringAndLogAudit(unittest.TestCase):
@@ -294,5 +307,109 @@ Generate quiz
             self.assertEqual(model_stat["composite_score"], 100.0)
 
 
+class TestEvaluatorImprovements(unittest.TestCase):
+    def test_safe_str_handles_none_and_types(self):
+        from librarian.evaluator import _safe_str
+        self.assertEqual(_safe_str(None), "")
+        self.assertEqual(_safe_str(None, default="N/A"), "N/A")
+        self.assertEqual(_safe_str("  word  "), "word")
+        self.assertEqual(_safe_str(123), "123")
+
+    def test_extract_items_skips_empty_preferred_list(self):
+        from librarian.evaluator import _extract_items
+        # If model outputs empty vocabulary list but valid expressions list
+        parsed = {
+            "vocabulary": [],
+            "expressions": [{"word": "turn up", "part_of_speech": "phrasal verb"}]
+        }
+        items = _extract_items(parsed, "vocabulary")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["word"], "turn up")
+
+    def test_extract_source_content_avoids_instruction_fallback(self):
+        from librarian.evaluator import _extract_source_content
+        # Prompt without CONTENT: or headings should return empty string
+        prompt_without_content = "You are an assistant. Extract words."
+        self.assertEqual(_extract_source_content(prompt_without_content), "")
+
+        # Prompt with CONTENT: returns content correctly
+        prompt_with_content = "You are an assistant.\n\nCONTENT:\nReal source sentence."
+        self.assertEqual(_extract_source_content(prompt_with_content), "Real source sentence.")
+
+class TestSyllabusParsing(unittest.TestCase):
+    def test_parse_syllabus_sections_with_multiword_expressions(self):
+        from librarian.processor import WikiProcessor
+        sample_markdown = """# Text A
+Good afternoon! Welcome to the university.
+You will learn to get by on very little sleep and make the most of this unique experience.
+
+## Syllabus Vocabulary
+triumph
+pledge
+rewarding
+remind sb. of sb. / sth.
+get by (on / with)
+make the most of sth.
+in advance
+all at once
+early bird
+prosperous
+open the door to sth.
+
+## Syllabus Grammar
+- Inversion with negative adverbs
+- Subjunctive mood in that-clauses
+"""
+        clean_body, vocab, grammar, expressions = WikiProcessor.parse_syllabus_sections(sample_markdown)
+        
+        self.assertNotIn("## Syllabus Vocabulary", clean_body)
+        self.assertNotIn("## Syllabus Grammar", clean_body)
+        self.assertIn("Good afternoon! Welcome to the university.", clean_body)
+        
+        self.assertIn("triumph", vocab)
+        self.assertIn("pledge", vocab)
+        self.assertNotIn("make the most of sth", vocab)
+        
+        self.assertEqual(len(grammar), 2)
+        self.assertIn("Inversion with negative adverbs", grammar)
+        
+        self.assertIn("remind sb of sb / sth", expressions)
+        self.assertIn("get by (on / with)", expressions)
+        self.assertIn("make the most of sth", expressions)
+        self.assertIn("in advance", expressions)
+        self.assertIn("all at once", expressions)
+        self.assertIn("early bird", expressions)
+        self.assertIn("open the door to sth", expressions)
+        
+        self.assertNotIn("triumph", expressions)
+        self.assertNotIn("pledge", expressions)
+        self.assertNotIn("prosperous", expressions)
+
+    def test_strict_single_blank_gate(self):
+        from librarian.processor import WikiProcessor
+        # Quiz with multiple blanks in stem
+        quiz_multi_blank = {
+            "questions": [
+                {
+                    "target_word": "remind",
+                    "question": "He ____ me of ____ yesterday.",
+                    "options": ["reminded", "warned", "convinced", "deprived"],
+                    "correct_answer_index": 0
+                },
+                {
+                    "target_word": "triumph",
+                    "question": "The final victory was a personal ____ for the athlete.",
+                    "options": ["triumph", "hazard", "obstacle", "setback"],
+                    "correct_answer_index": 0
+                }
+            ]
+        }
+        flagged, msgs = WikiProcessor.audit_quiz_integrity(quiz_multi_blank)
+        self.assertIn(0, flagged)
+        self.assertNotIn(1, flagged)
+        self.assertTrue(any("Multiple blanks" in msg for msg in msgs))
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -153,5 +153,139 @@ class TestAuditBatch(unittest.TestCase):
         self.assertIn("was FAIL -> now PASS", text)
 
 
+
+class TestReadingIntegrityGate(unittest.TestCase):
+    def setUp(self):
+        self.passage = (
+            "Artificial intelligence has witnessed unprecedented transformation over the past decade. "
+            "Deep neural networks have facilitated breakthrough advancements in automated natural language translation. "
+            "However, empirical validation remains indispensable to prevent subtle hallucinations and factual discrepancies. "
+            "Educators must balance computational agility with rigorous pedagogical design."
+        )
+
+    def test_valid_reading_quiz_passes_cleanly(self):
+        from librarian.processor import processor
+        valid_quiz = {
+            "questions": [
+                {
+                    "question": "What is the primary focus of the passage?",
+                    "category": "Main Idea",
+                    "options": ["AI and educational balance", "Hardware history", "Quantum physics", "Social networks"],
+                    "correct_answer_index": 0
+                },
+                {
+                    "question": "What has facilitated translation breakthroughs?",
+                    "category": "Detail/Recall",
+                    "options": ["Deep neural networks", "Manual books", "Random rules", "Simple math"],
+                    "correct_answer_index": 0
+                },
+                {
+                    "question": "What can be inferred regarding factual discrepancies?",
+                    "category": "Inference",
+                    "options": ["They require empirical validation", "They are impossible", "They improve accuracy", "They are harmless"],
+                    "correct_answer_index": 0
+                },
+                {
+                    "question": "What is the author's tone toward AI integration?",
+                    "category": "Author's Tone/Purpose",
+                    "options": ["Pragmatic and cautious", "Ecstatic", "Hostile", "Indifferent"],
+                    "correct_answer_index": 0
+                }
+            ],
+            "vocabulary": [
+                {
+                    "word": "indispensable",
+                    "context_sentence": "However, empirical validation remains indispensable to prevent subtle hallucinations."
+                }
+            ]
+        }
+        flagged, defects = processor.audit_reading_integrity(valid_quiz, passage_text=self.passage)
+        self.assertEqual(flagged, [])
+        self.assertEqual(defects, [])
+
+    def test_duplicate_options_and_invalid_key_caught(self):
+        from librarian.processor import processor
+        flawed_quiz = {
+            "questions": [
+                {
+                    "question": "What is the central theme of the text?",
+                    "category": "Main Idea",
+                    "options": ["Duplicate", "Duplicate", "Choice 3", "Choice 4"],
+                    "correct_answer_index": 9  # Invalid index
+                }
+            ],
+            "vocabulary": []
+        }
+        flagged, defects = processor.audit_reading_integrity(flawed_quiz, passage_text=self.passage)
+        self.assertIn(0, flagged)
+        self.assertTrue(any("duplicate" in d.lower() for d in defects))
+        self.assertTrue(any("invalid correct_answer_index" in d.lower() for d in defects))
+
+    def test_monolithic_category_caught(self):
+        from librarian.processor import processor
+        monolithic_quiz = {
+            "questions": [
+                {"question": "Detail question 1 from passage?", "category": "Detail/Recall", "options": ["A", "B", "C", "D"], "correct_answer_index": 0},
+                {"question": "Detail question 2 from passage?", "category": "Detail/Recall", "options": ["A", "B", "C", "D"], "correct_answer_index": 1},
+                {"question": "Detail question 3 from passage?", "category": "Detail/Recall", "options": ["A", "B", "C", "D"], "correct_answer_index": 2},
+                {"question": "Detail question 4 from passage?", "category": "Detail/Recall", "options": ["A", "B", "C", "D"], "correct_answer_index": 3},
+            ],
+            "vocabulary": []
+        }
+        flagged, defects = processor.audit_reading_integrity(monolithic_quiz, passage_text=self.passage)
+        self.assertTrue(any("skill diversity" in d.lower() for d in defects))
+
+    def test_hallucinated_vocab_sentence_caught(self):
+        from librarian.processor import processor
+        hallucinated_quiz = {
+            "questions": [
+                {"question": "What is the main idea?", "category": "Main Idea", "options": ["A", "B", "C", "D"], "correct_answer_index": 0}
+            ],
+            "vocabulary": [
+                {"word": "fabricated", "context_sentence": "This completely imaginary sentence is absent from text."}
+            ]
+        }
+        flagged, defects = processor.audit_reading_integrity(hallucinated_quiz, passage_text=self.passage)
+        self.assertTrue(any("does not match verbatim text" in d.lower() for d in defects))
+
+
+    def test_blind_solve_zero_based_vs_one_based_alignment(self):
+        # Questions with declared keys: Item 0 -> Key 1 (B), Item 1 -> Key 2 (C)
+        questions = [
+            {"question": "Q1", "options": ["A", "B", "C", "D"], "correct_answer_index": 1},
+            {"question": "Q2", "options": ["A", "B", "C", "D"], "correct_answer_index": 2},
+        ]
+
+        # Case 1: Auditor returns 0-based indexing (item_index 0, 1)
+        audit_0_based = {
+            "pass_audit": True,
+            "overall_quality_score": 90,
+            "questions": [
+                {"item_index": 0, "blind_solved_index": 1, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 90},
+                {"item_index": 1, "blind_solved_index": 2, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 90},
+            ]
+        }
+        with mock.patch("librarian.expert_auditor.LLMClient.chat", return_value=audit_0_based):
+            res = ExpertAuditor.audit_quiz(quiz_data={"questions": questions}, source_text="dummy")
+            self.assertEqual(res["blind_solve_accuracy"], 1.0)
+            self.assertEqual(res["blind_solve_confident_divergences"], 0)
+            self.assertTrue(res["pass_audit"])
+
+        # Case 2: Auditor returns 1-based indexing (item_index 1, 2)
+        audit_1_based = {
+            "pass_audit": True,
+            "overall_quality_score": 90,
+            "questions": [
+                {"item_index": 1, "blind_solved_index": 1, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 90},
+                {"item_index": 2, "blind_solved_index": 2, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 90},
+            ]
+        }
+        with mock.patch("librarian.expert_auditor.LLMClient.chat", return_value=audit_1_based):
+            res = ExpertAuditor.audit_quiz(quiz_data={"questions": questions}, source_text="dummy")
+            self.assertEqual(res["blind_solve_accuracy"], 1.0)
+            self.assertEqual(res["blind_solve_confident_divergences"], 0)
+            self.assertTrue(res["pass_audit"])
+
+
 if __name__ == "__main__":
     unittest.main()

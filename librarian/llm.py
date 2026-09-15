@@ -12,11 +12,56 @@ class LLMError(Exception):
     """Base exception for LLM related errors."""
     pass
 
-# Declarative architectural model capability profiles
+
+def _prune_to_schema(schema: Any, data: Any) -> Any:
+    """Recursively prune ``data`` to the structure declared by a JSON Schema dict.
+
+    ``validate_and_map`` only accepts dataclass types, so dict-based schemas
+    (e.g. the ``reading_quiz`` / ``extract_*`` task schemas) bypass it in
+    :func:`LLM.chat`. Left unchecked, LLM-hallucinated extra fields (such as the
+    ``quoted_sentence`` leak in reading quizzes) flow straight into rendered
+    handouts. This helper enforces ``additionalProperties: false`` by dropping any
+    key not declared in ``schema["properties"]`` and recursing into nested objects
+    and arrays. Keys that ARE declared by the schema are always preserved, so
+    legitimate fields (e.g. ``quoted_sentence`` in the vocabulary/expressions
+    extraction schemas) are left intact.
+    """
+    if not isinstance(schema, dict):
+        return data
+
+    # Arrays: prune each element against the ``items`` schema.
+    if isinstance(data, list):
+        items_schema = schema.get("items")
+        if isinstance(items_schema, dict):
+            return [_prune_to_schema(items_schema, item) for item in data]
+        return data
+
+    if not isinstance(data, dict):
+        return data
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return data
+
+    additional = schema.get("additionalProperties", True)
+    pruned = {}
+    for key, value in data.items():
+        if key in properties:
+            pruned[key] = _prune_to_schema(properties[key], value)
+        elif additional is False:
+            # additionalProperties: false -> drop the undeclared field.
+            continue
+        else:
+            # Not restricted -> keep as-is.
+            pruned[key] = value
+    return pruned
+
+
+# Declarative architectural model capability profiles for structured output
 MODEL_CAPABILITY_PROFILES = [
     {
         # Granite family (e.g. granite4.2:30b): Prompt-guided JSON mode with thinking disabled
-        # Avoids GBNF grammar token-masking repetition loops and reasoning stalls while maintaining diverse, schema-compliant output
+        # Avoids GBNF grammar token-masking repetition loops and reasoning stalls while maintaining schema-compliant output
         "match": ["granite"],
         "enforce_gbnf": False,
         "think": False,
@@ -29,9 +74,8 @@ MODEL_CAPABILITY_PROFILES = [
     },
     {
         # Specialized translation checkpoints (e.g. translategemma):
-        # Setting API format: "json" causes translategemma to immediately emit empty '{}'
-        # because its weights were trained specifically for direct translation pairs.
-        # It follows prompt-injected JSON schema natively without the Ollama format constraint.
+        # Setting API format: "json" causes translategemma to emit empty '{}'
+        # Follows prompt-injected JSON schema natively without the Ollama format constraint.
         "match": ["translategemma"],
         "enforce_gbnf": False,
         "enforce_json_format": False,
@@ -70,7 +114,6 @@ MODEL_CAPABILITY_PROFILES = [
     {
         # Native GBNF / strict grammar standard families (Llama 3+, Mistral, Mixtral, Codestral):
         # Perfectly compatible with context-free grammar parsers (llama.cpp, vLLM, SGLang).
-        # Defaults to think: False for speed; dynamically sets think: True if running a reasoning/thinking variant.
         "match": ["llama", "mistral", "mixtral", "codestral"],
         "enforce_gbnf": True,
         "think": False,
@@ -80,7 +123,7 @@ MODEL_CAPABILITY_PROFILES = [
 
 def get_model_profile(model_name: str) -> dict:
     """
-    Intelligently determines optimal execution profile for a model via a 3-tier precedence hierarchy:
+    Intelligently determines optimal execution profile for structured output via a 3-tier precedence hierarchy:
     - Tier 1 (Base): Declarative architectural heuristics (Granite, Qwen, Gemma, Llama, Hermes, etc.)
     - Tier 2 (Global): Global settings in wiki_config.json (e.g. global enforce_gbnf)
     - Tier 3 (Override): Explicit per-model overrides in wiki_config.json['model_options'][model_name]
@@ -94,11 +137,8 @@ def get_model_profile(model_name: str) -> dict:
     for profile_rule in MODEL_CAPABILITY_PROFILES:
         if any(keyword in m_lower for keyword in profile_rule["match"]):
             base_gbnf = profile_rule["enforce_gbnf"]
-            base_think = profile_rule["think"]
+            base_think = profile_rule.get("think")
             base_json_format = profile_rule.get("enforce_json_format", True)
-            # Dynamic reasoning check for Native GBNF models:
-            # If running a thinking/reasoning fine-tune (e.g. Llama-3-Thinking), allow thinking unconstrained
-            # before the GBNF grammar clamp locks onto the final JSON output.
             if base_gbnf is True and ("thinking" in m_lower or "reasoning" in m_lower):
                 base_think = True
             break
@@ -267,7 +307,8 @@ class LLMClient:
         # 3. Prompt-Guided JSON Mode: Inject JSON schema if GBNF is disabled
         profile = get_model_profile(self.model)
         use_gbnf = profile.get("enforce_gbnf", False)
-        if schema and not use_gbnf:
+        schema_already_present = any("### JSON SCHEMA REQUIREMENT ###" in m.get("content", "") for m in messages)
+        if schema and not use_gbnf and not schema_already_present:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=False)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
             schema_prompt = f"### JSON SCHEMA REQUIREMENT ###\nRespond strictly with a valid JSON object matching this schema definition:\n```json\n{schema_json_str}\n```"
@@ -286,7 +327,9 @@ class LLMClient:
             user_msg = next((m for m in messages if m["role"] == "user"), None)
             if sys_msgs and user_msg:
                 combined_sys = "\n\n".join(sys_msgs)
-                user_msg["content"] = f"{combined_sys}\n\n{user_msg['content']}"
+                # Only prepend system messages if not already merged
+                if combined_sys not in user_msg["content"]:
+                    user_msg["content"] = f"{combined_sys}\n\n{user_msg['content']}"
                 messages = [m for m in messages if m["role"] != "system"]
 
         # 4. Handle Constraints
@@ -352,20 +395,26 @@ class LLMClient:
                     failure_cat = "TRUNCATED"
                 
                 # 6.2. HEALING
-                final_json = self._heal_json(json_str)
-                was_healed = (final_json != json_str)
-                
+                # First, test if the original json_str is already valid JSON.
+                # If so, do NOT apply heuristic regex healing which might corrupt valid nested objects (like cured_question).
                 try:
-                    data = json.loads(final_json)
-                except json.JSONDecodeError as jde:
-                    # Light cleaning of unescaped newlines in values
-                    final_json = re.sub(r'\n(?!\s*[, "\}\]\{\[0-9tfn\-\:])', r'\\n', final_json)
-                    was_healed = True
+                    data = json.loads(json_str)
+                    final_json = json_str
+                    was_healed = False
+                except json.JSONDecodeError:
+                    final_json = self._heal_json(json_str)
+                    was_healed = (final_json != json_str)
                     try:
                         data = json.loads(final_json)
-                    except json.JSONDecodeError:
-                        failure_cat = failure_cat or "INVALID_JSON"
-                        raise jde
+                    except json.JSONDecodeError as jde:
+                        # Light cleaning of unescaped newlines in values
+                        final_json = re.sub(r'\n(?!\s*[, "\}\]\{\[0-9tfn\-\:])', r'\\n', final_json)
+                        was_healed = True
+                        try:
+                            data = json.loads(final_json)
+                        except json.JSONDecodeError:
+                            failure_cat = failure_cat or "INVALID_JSON"
+                            raise jde
                 
                 if was_healed:
                     import logging
@@ -510,6 +559,28 @@ class LLMClient:
                                         flattened_questions.append(nq)
                             else:
                                 flattened_questions.append(q_item)
+                    # Clean accidental target leakage and auto-mask missing blank slots (Level 1 deterministic code gate)
+                    for q_item in flattened_questions:
+                        if isinstance(q_item, dict):
+                            target = str(q_item.get("target_word") or q_item.get("word") or "").strip()
+                            stem = q_item.get("question") or q_item.get("translated_sentence") or ""
+                            if target and stem:
+                                esc_target = re.escape(target)
+                                # Clean accidental target leakage adjacent to blank, e.g. "____ (burglary)" or "(burglary) ____"
+                                stem = re.sub(rf"_{{2,}}\s*[\(\[\{{]\s*{esc_target}\s*[\)\]\}}]", "____", stem, flags=re.IGNORECASE)
+                                stem = re.sub(rf"[\(\[\{{]\s*{esc_target}\s*[\)\]\}}]\s*_{{2,}}", "____", stem, flags=re.IGNORECASE)
+                                stem = re.sub(rf"_{{2,}}\s+{esc_target}\b", "____", stem, flags=re.IGNORECASE)
+                                stem = re.sub(rf"\b{esc_target}\s+_{{2,}}", "____", stem, flags=re.IGNORECASE)
+
+                                # Auto-mask missing fill-in-the-blank slots
+                                if not re.search(r"_{2,}", stem):
+                                    if re.search(rf"\b{esc_target}\b", stem, re.IGNORECASE):
+                                        stem = re.sub(rf"\b{esc_target}\b", "____", stem, count=1, flags=re.IGNORECASE)
+
+                                if "question" in q_item:
+                                    q_item["question"] = stem
+                                elif "translated_sentence" in q_item:
+                                    q_item["translated_sentence"] = stem
                     data["questions"] = flattened_questions
 
                 if isinstance(schema, dict):
@@ -518,6 +589,35 @@ class LLMClient:
                         list_field = next((k for k, v in props.items() if v.get("type") == "array"), "items")
                         data = {list_field: data}
                         if "title" in props: data["title"] = task_name or "Untitled"
+                    # Enforce additionalProperties:false for dict schemas. validate_and_map
+                    # is dataclass-only, so without this a dict schema would pass raw LLM
+                    # JSON (with leaked fields such as 'quoted_sentence') straight to the
+                    # rendered handout. Schema-declared keys are always preserved, so
+                    # legitimate fields (e.g. 'quoted_sentence' in extract_vocabulary)
+                    # survive, while undeclared ones are stripped.
+                    if isinstance(data, dict):
+                        data = _prune_to_schema(schema, data)
+
+                # Level 1 Code Gate: Deterministic Hallucination Pruning for extraction tasks
+                # If an extracted word neither exists in its quoted sentence nor anywhere in the source text,
+                # prune it directly in Python rather than fruitlessly asking the LLM to fix a hallucination.
+                try:
+                    if isinstance(data, dict):
+                        from .evaluator import prune_hallucinated_items
+                        data, pruned_notices = prune_hallucinated_items(data, user_prompt, task_name or "")
+                        if pruned_notices:
+                            import logging
+                            for notice in pruned_notices:
+                                logging.getLogger("librarian").info(notice)
+                except Exception:
+                    pass
+
+                # Update final_json with deterministic Level 1 healed content
+                # (e.g. auto-masked ____ slots, POS normalization, unnested questions, hallucination pruning)
+                try:
+                    final_json = json.dumps(data, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
                 try:
                     result_obj = validate_and_map(schema, data) if not isinstance(schema, dict) else data
                 except Exception as map_err:
@@ -536,7 +636,9 @@ class LLMClient:
                                 "log_name": f"{t_name}.log",
                                 "task": t_name,
                                 "model": self.model or "unknown",
+                                "system_prompt": system_prompt,
                                 "user_prompt": user_prompt,
+                                "context_prompt": f"{system_prompt}\n{user_prompt}".strip(),
                                 "raw_response": final_json,
                                 "parsed_json": dict_to_eval,
                             }
@@ -546,24 +648,70 @@ class LLMClient:
                                 composite = 100.0
                             
                             flags = audit.get("flags", [])
-                            has_fatal_flags = any("does not appear in quoted sentence" in f or "duplicate" in f or "copy-pasted definition" in f for f in flags)
+                            # Level 1 Code Gate: Filter out issues already healed deterministically by Python logic
+                            # (e.g. missing fill-in-the-blank slots that were auto-masked, POS tags normalized, etc.)
+                            actionable_flags = [
+                                f for f in flags
+                                if "missing fill-in-the-blank slot" not in f
+                            ]
+
+                            has_fatal_flags = any(
+                                "does not appear in quoted sentence" in f
+                                or "duplicate" in f
+                                or "copy-pasted definition" in f
+                                or "Selection clustering" in f
+                                or "Redundant headwords" in f
+                                or "Overly basic general-English" in f
+                                for f in actionable_flags
+                            )
 
                             if composite < 80.0 or has_fatal_flags:
                                 scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
                                 
-                                # Format clear, surgical feedback for the model
-                                issue_bullets = "\n".join([f"- {f}" for f in flags[:5]])
+                                # Format clear, surgical feedback for the model based on task type
+                                issue_bullets = "\n".join([f"- {f}" for f in actionable_flags[:5]])
+                                t_name_lower = str(t_name).lower()
+                                if "quiz" in t_name_lower or "vocabulary" in t_name_lower:
+                                    fix_rules = (
+                                        "MANDATORY QUIZ FIX RULES:\n"
+                                        "1. SINGLE BEST FIT: Exactly ONE option must be defensively correct; all 3 distractors must be unambiguously disqualified.\n"
+                                        "2. ZERO KEY LEAK / NO DUPLICATES: Distractors must not repeat the target word, duplicate other options, or recycle headwords from this unit.\n"
+                                        "3. SYNTACTIC PARALLELISM: All 4 options must share the exact same part of speech, inflection, and grammatical frame.\n"
+                                        "4. SINGLE BLANK: Every stem must contain strictly four underscores '____' for the blank (no multiple blanks).\n"
+                                        "5. INDEX ACCURACY: 'correct_answer_index' must accurately point to the intended option (0=A, 1=B, 2=C, 3=D)."
+                                    )
+                                elif "translation" in t_name_lower:
+                                    fix_rules = (
+                                        "MANDATORY TRANSLATION FIX RULES:\n"
+                                        "1. LANGUAGE PURITY: Source sentence must be purely in the target language; all 4 options must be 100% natural English.\n"
+                                        "2. TARGET REQUISITE: The target vocabulary and grammar formula must be strictly embodied in the correct English translation.\n"
+                                        "3. RIGOROUS DISTRACTORS: Engineer authentic L1 interference, collocation shift, or formula distortion without trivial punctuation tricks."
+                                    )
+                                elif "reading" in t_name_lower:
+                                    fix_rules = (
+                                        "MANDATORY READING COMPREHENSION FIX RULES:\n"
+                                        "1. TEXTUAL ANCHOR: Every question must be fully warranted by verbatim evidence from the passage.\n"
+                                        "2. SCOPE INTEGRITY: Distractors should employ legitimate traps (overgeneralization, misattribution) rather than factual absurdities.\n"
+                                        "3. ACCURATE EXPLANATIONS: Provide distinct justification for why the correct option is unique and all 3 distractors are eliminated."
+                                    )
+                                else:
+                                    fix_rules = (
+                                        "MANDATORY EXTRACTION FIX RULES:\n"
+                                        "1. ZERO HALLUCINATION: All words and quoted sentences MUST physically exist verbatim in the source text.\n"
+                                        "2. Every quoted sentence MUST literally contain the target word/expression.\n"
+                                        "3. Eliminate duplicate items and ensure each definition is distinct and context-specific.\n"
+                                        "4. Quality > Quota: Do not pad with nonexistent words.\n"
+                                        "5. COVERAGE: Spread the picks across the ENTIRE passage - never pull more than ~3 words from one sentence.\n"
+                                        "6. REGISTER: Drop ultra-basic general-English words (e.g. 'public', 'bear', 'big', 'thing') and keep only genuine B1+ academic/analytical lexis."
+                                    )
+
                                 critique_prompt = (
                                     f"\n\n### 🚨 [QUALITY AUDIT REVIEW #{retry_count + 1}/{max_qa_retries} - Score: {composite:.1f}/100]\n"
                                     f"Lowest dimension: {lowest_dim}.\n"
-                                    f"Your previous response had the following critical pedagogical issues:\n"
+                                    f"Your previous response had the following critical issues:\n"
                                     f"{issue_bullets}\n\n"
-                                    f"MANDATORY FIX RULES:\n"
-                                    f"1. ZERO HALLUCINATION: All words and quoted sentences MUST physically exist verbatim in the source text.\n"
-                                    f"2. Every quoted sentence MUST literally contain the target word/expression.\n"
-                                    f"3. Eliminate duplicate items and ensure each definition is distinct and context-specific.\n"
-                                    f"4. Quality > Quota: Do not pad with nonexistent words.\n\n"
+                                    f"{fix_rules}\n\n"
                                     f"Please output the corrected, complete JSON object resolving these issues."
                                 )
                                 import logging
@@ -589,14 +737,11 @@ class LLMClient:
                                 )
 
                                 # Multi-turn self-correction:
-                                # Retain base prompt, append model's prior output as assistant turn, and append reviewer critique
-                                # If this is a subsequent retry (retry_count > 0), prune prior critique turns to keep context tidy:
-                                # [Original Prompt] -> [Latest Assistant Output] -> [Latest Reviewer Critique]
-                                base_messages = []
-                                for m in messages:
-                                    if m["role"] == "assistant" or (m["role"] == "user" and "### 🚨 [QUALITY AUDIT REVIEW" in m.get("content", "")):
-                                        break
-                                    base_messages.append(dict(m))
+                                # Strip only trailing prior QA critique and previous assistant output to avoid nesting review feedback,
+                                # while preserving all preceding conversation context (e.g. system prompts, surgical instructions, etc.)
+                                base_messages = list(messages)
+                                while len(base_messages) >= 2 and base_messages[-1].get("role") == "user" and "### 🚨 [QUALITY AUDIT REVIEW" in base_messages[-1].get("content", "") and base_messages[-2].get("role") == "assistant":
+                                    base_messages = base_messages[:-2]
 
                                 retry_messages = list(base_messages)
                                 retry_messages.append({"role": "assistant", "content": final_json})
@@ -711,7 +856,8 @@ class LLMClient:
         # 2.3. Fix small-model attention drift: accidental dictionary keys inside array of objects
         # e.g., in a questions array, after "explanation": "..."\n  "target_word_key": { ... }
         # Instead of closing the prior item with '}' and starting '{', the model wrote ',\n "key": {'
-        json_str = re.sub(r',\s*\n(\s*)"[^"]+":\s*\{', r'\n\1},\n\1{', json_str)
+        # NOTE: Do NOT match valid schema keys that legitimately hold objects (e.g. "cured_question": {)
+        json_str = re.sub(r',\s*\n(\s*)(?!"(?:cured_question)"\s*:)"[^"]+":\s*\{', r'\n\1},\n\1{', json_str)
 
         # 2.4. Fix array wrongly closed with object braces
         # e.g., starts with "questions": [ but ends with }\n  }\n} instead of }\n  ]\n}
@@ -723,9 +869,8 @@ class LLMClient:
         # We only escape newlines that are NOT followed by a potential key or object close
         # json_str = re.sub(r'\n(?!\s*["\}\]])', r'\\n', json_str)
 
-        # 4. Ensure balanced braces and brackets (String-aware tracker)
-        brace_depth = 0
-        bracket_depth = 0
+        # 4. Ensure balanced braces and brackets (Stack-aware delimiter tracker)
+        stack = []
         in_string = False
         escaped = False
         for ch in json_str:
@@ -739,24 +884,23 @@ class LLMClient:
                 continue
             if ch == '"':
                 in_string = True
-            elif ch == '{':
-                brace_depth += 1
-            elif ch == '}':
-                brace_depth = max(0, brace_depth - 1)
-            elif ch == '[':
-                bracket_depth += 1
-            elif ch == ']':
-                bracket_depth = max(0, bracket_depth - 1)
+            elif ch in '{[':
+                stack.append(ch)
+            elif ch in '}]':
+                if stack:
+                    if (stack[-1] == '{' and ch == '}') or (stack[-1] == '[' and ch == ']'):
+                        stack.pop()
 
         # Close any dangling open string
         if in_string:
             json_str += '"'
 
-        # Close open brackets first, then open braces
-        if bracket_depth > 0:
-            json_str += ']' * bracket_depth
-        if brace_depth > 0:
-            json_str += '}' * brace_depth
+        # Close open delimiters in exact reverse order of nesting
+        for opener in reversed(stack):
+            if opener == '{':
+                json_str += '}'
+            elif opener == '[':
+                json_str += ']'
 
         return json_str
 
@@ -906,12 +1050,33 @@ class LLMClient:
 
     def _chat_ollama(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/api/chat"
+        profile = get_model_profile(self.model)
+
         options = {
-            "temperature": kwargs.pop("temperature", 0.2), # Deterministic temperature for schema extraction
             "num_predict": 16384,
             "num_ctx": 32768,
-            "repeat_penalty": 1.1
+            "repeat_penalty": 1.1,  # Safeguard against catastrophic token degeneration loops
         }
+        
+        # Check if sampling parameters should remain at model default:
+        # 1. Explicitly requested via use_default_params=True (e.g., expert audit)
+        # 2. Unconstrained prose generation (not json_format and no schema)
+        is_default_sampling = kwargs.pop("use_default_params", False) or (not schema and not json_format)
+        
+        if not is_default_sampling:
+            options["temperature"] = kwargs.pop("temperature", 0.2) # Deterministic temperature for schema extraction
+        elif "temperature" in kwargs:
+            options["temperature"] = kwargs.pop("temperature")
+
+        # Highest Precedence: Any user options configured in wiki_config.json['model_options']
+        # Supports both {"options": {...}} or direct top-level keys like {"temperature": 0.6, "num_ctx": 16384}
+        user_model_opts = profile.get("options", {})
+        if isinstance(user_model_opts, dict):
+            options.update(user_model_opts)
+        for opt_k in ("temperature", "num_ctx", "num_predict", "top_p", "top_k", "repeat_penalty", "seed"):
+            if opt_k in profile:
+                options[opt_k] = profile[opt_k]
+
         provided_options = kwargs.pop("options", {})
         options.update(provided_options)
         
@@ -924,9 +1089,10 @@ class LLMClient:
         }
         
         # Smart profile resolution (GBNF, think, etc.)
-        profile = get_model_profile(self.model)
         model_lower = (self.model or "").lower()
 
+        # Enforce profile["think"] (defaults to False for stability and preventing token exhaustion)
+        # Can be overridden by kwargs or wiki_config.json['model_options'][model]['think']
         if "think" in kwargs:
             payload["think"] = kwargs.pop("think")
         elif "think" in profile:
@@ -997,23 +1163,39 @@ class LLMClient:
     def _chat_openai(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        profile = get_model_profile(self.model)
+
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "temperature": kwargs.pop("temperature", 0.2), # Deterministic temperature for schema extraction
             "max_tokens": 16384,
             **kwargs
         }
-        profile = get_model_profile(self.model)
+        is_default_sampling = kwargs.pop("use_default_params", False) or (not schema and not json_format)
+        if not is_default_sampling:
+            payload["temperature"] = kwargs.pop("temperature", 0.2) # Deterministic temperature for schema extraction
+        elif "temperature" in kwargs:
+            payload["temperature"] = kwargs.pop("temperature")
+
+        # Highest Precedence: Any user options configured in wiki_config.json['model_options']
+        user_model_opts = profile.get("options", {})
+        if isinstance(user_model_opts, dict):
+            payload.update(user_model_opts)
+        for opt_k in ("temperature", "max_tokens", "top_p", "seed"):
+            if opt_k in profile:
+                payload[opt_k] = profile[opt_k]
         think_setting = kwargs.pop("think", profile.get("think"))
-        if think_setting is False:
+        if think_setting is False or think_setting == "none":
             # Standard OpenAI / llama-server / vLLM parameters to suppress CoT thinking
             payload["reasoning_effort"] = "none"
             payload["chat_template_kwargs"] = {"thinking": False}
         elif think_setting is True:
             # Enable CoT thinking for models that require reasoning traces (e.g. muse-glimmer)
             payload["reasoning_effort"] = "high"
+            payload["chat_template_kwargs"] = {"thinking": True}
+        elif isinstance(think_setting, str) and think_setting.lower() in ("low", "medium", "high", "max"):
+            payload["reasoning_effort"] = think_setting.lower()
             payload["chat_template_kwargs"] = {"thinking": True}
 
         use_gbnf = profile.get("enforce_gbnf", False)

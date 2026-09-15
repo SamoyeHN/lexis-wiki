@@ -369,6 +369,14 @@
             const meta = `Type: ${quizData.video_type.toUpperCase()} | ${quizData.questions.length} Quiz Questions`;
             document.getElementById('main-meta').innerText = meta;
 
+            // Clean markdown formatting artifacts in questions
+            if (Array.isArray(quizData.questions)) {
+                quizData.questions.forEach(q => {
+                    if (q.explanation) q.explanation = q.explanation.replace(/[*`]/g, '').replace(/\\"/g, '"').trim();
+                    if (q.question) q.question = q.question.replace(/[*`]/g, '').replace(/\\"/g, '"').trim();
+                });
+            }
+
             renderVideoPlayer();
             renderTranscript();
             renderQuiz();

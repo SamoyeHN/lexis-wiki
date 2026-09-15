@@ -1199,10 +1199,6 @@
             <button class="header-action-btn btn-hero" onclick="openHeroBoardModal()" title="LLM Hero Board & QA Audit">
                 <i class="bi bi-trophy-fill text-warning"></i>
             </button>
-            <!-- Level-2 Expert Re-Audit (Batch) Button -->
-            <button class="header-action-btn" id="re-audit-header-btn" onclick="openReAuditModal()" title="Re-audit all quiz handouts (Level-2 expert audit)">
-                <i class="bi bi-clipboard2-check-fill text-success"></i>
-            </button>
             <!-- Settings Modal Button -->
             <button class="header-action-btn" onclick="openSettingsModal()" title="Settings">
                 <i class="bi bi-gear-fill"></i>
@@ -1482,15 +1478,22 @@
                                 <button class="workspace-tab-btn" id="tab-btn-summary" onclick="switchWorkspaceSubTab('summary')">Summary</button>
                                 <button class="workspace-tab-btn" id="tab-btn-mindmap" onclick="switchWorkspaceSubTab('mindmap')">Mind Map</button>
                             </div>
-                            <div class="dropdown me-1">
-                                <button class="btn btn-sm btn-outline-secondary rounded-circle p-1 border-0" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Tab Actions" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;">
-                                    <i class="bi bi-three-dots-vertical" style="font-size: 0.85rem;"></i>
+                            <div class="d-flex align-items-center gap-1.5 me-1">
+                                <button class="btn btn-sm btn-outline-info rounded-pill px-2.5 py-0.5 font-monospace fw-semibold" id="btn-edit-source-syllabus" onclick="openSourceEditorForCurrentUnit()" title="Edit lesson text and syllabus vocabulary/grammar" style="font-size: 0.7rem; border-color: rgba(56, 189, 248, 0.35);">
+                                    <i class="bi bi-pencil-square me-1"></i>Edit Syllabus
                                 </button>
-                                <ul class="dropdown-menu dropdown-menu-end shadow-lg" style="font-size: 0.78rem;">
-                                    <li><a class="dropdown-item py-1.5" href="#" onclick="copyActiveWorkspaceTab(); return false;"><i class="bi bi-clipboard me-2 text-info"></i>Copy Content</a></li>
-                                    <li><a class="dropdown-item py-1.5" href="#" onclick="downloadActiveWorkspaceTab(); return false;"><i class="bi bi-download me-2 text-info"></i>Save .MD</a></li>
-                                    <li><a class="dropdown-item py-1.5" href="#" onclick="printActiveWorkspaceTab(); return false;"><i class="bi bi-printer me-2 text-info"></i>Print PDF</a></li>
-                                </ul>
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-outline-secondary rounded-circle p-1 border-0" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Tab Actions" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;">
+                                        <i class="bi bi-three-dots-vertical" style="font-size: 0.85rem;"></i>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow-lg" style="font-size: 0.78rem;">
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="openSourceEditorForCurrentUnit(); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Source &amp; Syllabus</a></li>
+                                        <li><hr class="dropdown-divider my-1"></li>
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="copyActiveWorkspaceTab(); return false;"><i class="bi bi-clipboard me-2 text-info"></i>Copy Content</a></li>
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="downloadActiveWorkspaceTab(); return false;"><i class="bi bi-download me-2 text-info"></i>Save File</a></li>
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="printActiveWorkspaceTab(); return false;"><i class="bi bi-printer me-2 text-info"></i>Print PDF</a></li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
 
@@ -1694,6 +1697,9 @@
                     <h5 class="modal-title fw-bold text-on-surface mb-0" id="heroBoardModalLabel">LLM Hero Board & QA Quality Audit</h5>
                 </div>
                 <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-success font-monospace" id="hero-board-reaudit-btn" onclick="openReAuditModal()" title="Batch re-evaluate all quiz handouts with Level-2 expert judge">
+                        <i class="bi bi-patch-check-fill me-1"></i> <span>LEVEL-2 RE-AUDIT</span>
+                    </button>
                     <button class="btn btn-sm btn-outline-warning font-monospace" id="hero-board-reload-btn" onclick="loadHeroBoardData()">
                         <span class="spinner-border spinner-border-sm me-1 d-none" id="hero-board-reload-spinner" role="status" aria-hidden="true"></span>
                         <i class="bi bi-arrow-clockwise me-1" id="hero-board-reload-icon"></i> <span id="hero-board-reload-label">RE-EVALUATE LOGS</span>
@@ -2073,6 +2079,101 @@
     </div>
 </div>
 
+<!-- SECTION 5: SOURCE MATERIAL & SYLLABUS EDITOR MODAL -->
+<div class="modal fade" id="source-editor-modal" tabindex="-1" aria-labelledby="sourceEditorModalLabel" aria-hidden="true" style="z-index: 1056;">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content border-0 shadow-lg" style="background: var(--surface); border: 1px solid var(--card-border) !important; border-radius: var(--radius-lg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
+            <div class="modal-header border-bottom px-4 py-3 d-flex align-items-center justify-content-between" style="border-color: var(--card-border) !important;">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="d-flex align-items-center justify-content-center rounded-circle" style="width: 34px; height: 34px; background: rgba(14, 165, 233, 0.15);">
+                        <i class="bi bi-book-half text-info fs-5"></i>
+                    </span>
+                    <div>
+                        <h5 class="modal-title fw-bold text-on-surface mb-0" id="sourceEditorModalLabel">Source Material & Syllabus Editor</h5>
+                        <span class="text-muted" style="font-size: 0.72rem;">Configure unit passage and curate syllabus vocabulary, phrases, and grammar</span>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4" style="max-height: 75vh; overflow-y: auto;">
+                <div class="row g-3">
+                    <!-- Unit Name & Options -->
+                    <div class="col-12">
+                        <label class="form-label font-monospace fw-semibold mb-1" style="font-size: 0.78rem; color: var(--on-surface);">
+                            <i class="bi bi-folder-fill text-warning me-1"></i> UNIT NAME / FILENAME
+                        </label>
+                        <div class="input-group input-group-sm">
+                            <input type="text" id="editor-unit-name" class="form-control font-monospace" placeholder="e.g. Book_1_Unit_2" style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.85rem;">
+                            <span class="input-group-text font-monospace" style="background: var(--surface-variant); border-color: var(--card-border); color: var(--on-surface-variant); font-size: 0.8rem;">.md</span>
+                        </div>
+                        <div class="form-text text-muted" style="font-size: 0.7rem;">
+                            Spaces will be automatically converted to underscores. E.g. "Book 1 Unit 2" &rarr; <code>Book_1_Unit_2.md</code>
+                        </div>
+                    </div>
+
+                    <!-- Source Passage Content -->
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="form-label font-monospace fw-semibold mb-0" style="font-size: 0.78rem; color: var(--on-surface);">
+                                <i class="bi bi-file-text-fill text-info me-1"></i> LESSON PASSAGE TEXT
+                            </label>
+                            <span class="text-muted font-monospace" id="editor-passage-count" style="font-size: 0.68rem;">0 chars</span>
+                        </div>
+                        <textarea id="editor-passage-text" class="form-control font-monospace" rows="10" placeholder="Paste reading passage, lecture transcript, or source article..." style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.82rem; line-height: 1.55; resize: vertical;" oninput="updateEditorCharCount()"></textarea>
+                    </div>
+
+                    <!-- Syllabus Section: Two Bento Cards -->
+                    <div class="col-md-6 col-12">
+                        <div class="p-3 rounded-3 h-100" style="background: rgba(14, 165, 233, 0.04); border: 1px solid rgba(14, 165, 233, 0.2);">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <div class="d-flex align-items-center gap-1.5">
+                                    <span class="badge bg-info-subtle text-info font-monospace" style="font-size: 0.65rem;">🎯 MANDATORY</span>
+                                    <h6 class="fw-bold mb-0 text-info" style="font-size: 0.82rem;">Syllabus Vocabulary &amp; Phrases</h6>
+                                </div>
+                                <span class="badge bg-secondary-subtle text-secondary font-monospace" id="editor-vocab-badge" style="font-size: 0.65rem;">0 items</span>
+                            </div>
+                            <p class="text-muted mb-2" style="font-size: 0.72rem; line-height: 1.4;">
+                                Paste unit vocabulary or phrases. Headwords are auto-parsed as mandatory targets:
+                            </p>
+                            <textarea id="editor-syllabus-vocab" class="form-control font-monospace" rows="8" placeholder="e.g.&#10;1. abandon /ə'bændən/ v.&#10;2. make the most of&#10;3. clarify vt.&#10;4. catastrophic adj." style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.8rem; line-height: 1.45; resize: vertical;" oninput="updateSyllabusVocabCount()"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-12">
+                        <div class="p-3 rounded-3 h-100" style="background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.2);">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <div class="d-flex align-items-center gap-1.5">
+                                    <span class="badge font-monospace" style="font-size: 0.65rem; background: rgba(168, 85, 247, 0.15); color: #c084fc;">📘 CURATED</span>
+                                    <h6 class="fw-bold mb-0" style="font-size: 0.82rem; color: #c084fc;">Syllabus Grammar Topics</h6>
+                                </div>
+                                <span class="badge bg-secondary-subtle text-secondary font-monospace" id="editor-grammar-badge" style="font-size: 0.65rem;">0 topics</span>
+                            </div>
+                            <p class="text-muted mb-2" style="font-size: 0.72rem; line-height: 1.4;">
+                                Paste key syllabus grammar topics or patterns as focal instructional anchors:
+                            </p>
+                            <textarea id="editor-syllabus-grammar" class="form-control font-monospace" rows="8" placeholder="e.g.&#10;- Past Participle as Adverbial&#10;- Inversion with negative adverbs&#10;- Subjunctive Mood" style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.8rem; line-height: 1.45; resize: vertical;" oninput="updateSyllabusGrammarCount()"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-top px-4 py-3 d-flex justify-content-between align-items-center" style="border-color: var(--card-border) !important;">
+                <div class="text-muted font-monospace" style="font-size: 0.72rem;">
+                    <i class="bi bi-shield-check text-success me-1"></i>Saved directly to <code>sources/&lt;UnitName&gt;.md</code>
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary px-3 py-1.5 rounded-pill font-monospace" data-bs-dismiss="modal" style="font-size: 0.78rem;">CANCEL</button>
+                    <button type="button" class="btn btn-sm btn-primary px-3.5 py-1.5 rounded-pill font-monospace fw-semibold" id="editor-save-btn" onclick="saveSourceAndSyllabus(false)" style="font-size: 0.78rem;">
+                        <i class="bi bi-save me-1"></i> SAVE SOURCE
+                    </button>
+                    <button type="button" class="btn btn-sm btn-success px-3.5 py-1.5 rounded-pill font-monospace fw-bold" id="editor-save-compile-btn" onclick="saveSourceAndSyllabus(true)" style="font-size: 0.78rem; background: linear-gradient(135deg, #10b981, #059669); border: none;">
+                        <i class="bi bi-play-circle-fill me-1"></i> SAVE &amp; COMPILE ALL
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Reusable Bootstrap 5 System Message / Info / Confirmation Modal -->
 <div class="modal fade" id="appSystemModal" tabindex="-1" aria-labelledby="appSystemModalLabel" aria-hidden="true" style="z-index: 1060;">
     <div class="modal-dialog modal-dialog-centered" style="max-width: 440px;">
@@ -2218,7 +2319,7 @@
         document.getElementById('header-brand-normal').classList.replace('d-flex', 'd-none');
         document.getElementById('header-brand-workspace').classList.replace('d-none', 'd-flex');
 
-        const displayName = file ? (file.stem || filename.replace(/\.[^/.]+$/, "")) : filename.replace(/\.[^/.]+$/, "");
+        const displayName = file ? (file.title || file.stem || filename.replace(/\.[^/.]+$/, "")) : filename.replace(/\.[^/.]+$/, "");
         document.getElementById('breadcrumb-unit-name').innerText = displayName.replace(/_/g, ' ');
         document.getElementById('workspace-unit-title').innerText = displayName.replace(/_/g, ' ');
         document.getElementById('workspace-unit-size').innerText = file ? `${(file.size / 1024).toFixed(1)} KB` : '...';
@@ -2696,7 +2797,7 @@
     function copyActiveWorkspaceTab() {
         const cat = getActiveSubTabCategory();
         if (cat === 'raw') {
-            const sourceView = document.getElementById('subtab-raw-content');
+            const sourceView = document.getElementById('workspace-raw-file-content');
             if (sourceView) {
                 navigator.clipboard.writeText(sourceView.innerText || sourceView.textContent)
                     .then(() => showToast('Copied raw source content!', 'success'))
@@ -2706,12 +2807,166 @@
             }
             return;
         }
+        if (cat === 'mindmap') {
+            copyMindmap();
+            return;
+        }
         copyActiveNode(cat);
     }
 
     function downloadActiveWorkspaceTab() {
         const cat = getActiveSubTabCategory();
+        if (cat === 'raw') {
+            downloadRawSource();
+            return;
+        }
+        if (cat === 'mindmap') {
+            downloadMindmap();
+            return;
+        }
         downloadActiveNode(cat);
+    }
+
+    function downloadRawSource() {
+        if (!currentUnit) {
+            showToast('No active unit selected.', 'error');
+            return;
+        }
+        const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+        // Preserve the real extension so .md / .txt / .html sources all save with the correct type.
+        const fileName = currentUnit;
+        // The raw/Source file lives in the unit's sources/ directory (same path the viewer uses).
+        const filePath = `/wiki/${baseName}/sources/${fileName}`;
+
+        // Pick the correct MIME type from the real extension (no more hardcoded markdown).
+        const lower = fileName.toLowerCase();
+        let mime = 'text/plain;charset=utf-8';
+        if (lower.endsWith('.md')) {
+            mime = 'text/markdown;charset=utf-8';
+        } else if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+            mime = 'text/html;charset=utf-8';
+        }
+
+        fetch(filePath)
+            .then(res => {
+                if (!res.ok) throw new Error('File not found');
+                return res.text();
+            })
+            .then(text => {
+                const blob = new Blob([text], { type: mime });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+                showToast(`Saved ${fileName}`, 'success');
+            })
+            .catch(err => showToast(`Export failed: ${err.message}`, 'error'));
+    }
+
+    function copyMindmap() {
+        if (!currentUnit) {
+            showToast('No active unit selected.', 'error');
+            return;
+        }
+        const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+
+        // Preferred: read the live data object injected into the Mind Map iframe
+        // (same-origin). This yields the full tree even when branches are collapsed,
+        // which body.innerText would miss.
+        let data = null;
+        try {
+            const frame = document.getElementById('mindmap-frame');
+            data = frame && frame.contentWindow && frame.contentWindow.mindmapData;
+        } catch (e) {
+            data = null;
+        }
+
+        const doCopy = (d) => {
+            if (!d || !d.branches) {
+                showToast('Could not read the Mind Map content.', 'error');
+                return;
+            }
+            navigator.clipboard.writeText(serializeMindmap(d)).then(() => {
+                showToast('Copied Mind Map content to clipboard!', 'success');
+            }).catch(err => {
+                showToast('Failed to copy Mind Map: ' + err, 'error');
+            });
+        };
+
+        if (data) {
+            doCopy(data);
+            return;
+        }
+
+        // Fallback: fetch the standalone HTML and pull out the injected JSON.
+        const htmlPath = `/wiki/${baseName}/extractions/${baseName}_mindmap.html`;
+        fetch(htmlPath)
+            .then(res => {
+                if (!res.ok) throw new Error('Mind Map not found');
+                return res.text();
+            })
+            .then(html => {
+                const m = html.match(/const mindmapData\s*=\s*(\{[\s\S]*?\})\s*;/);
+                if (!m) throw new Error('Mind Map data not found');
+                doCopy(JSON.parse(m[1]));
+            })
+            .catch(err => showToast('Unable to copy Mind Map: ' + err.message, 'error'));
+    }
+
+    function serializeMindmap(d) {
+        const lines = [];
+        if (d.title) lines.push(d.title);
+        if (d.overall_cefr_level) lines.push(`CEFR ${d.overall_cefr_level}`);
+        if (lines.length) lines.push('');
+        if (d.root_name) lines.push(d.root_name);
+        (d.branches || []).forEach(branch => {
+            lines.push(`• ${branch.branch_name}`);
+            (branch.sub_branches || []).forEach(sub => {
+                const name = (sub.sub_branch_name && sub.sub_branch_name.trim()) ? sub.sub_branch_name.trim() : '';
+                const leaves = sub.leaves || [];
+                if (name) {
+                    lines.push(`  - ${name}`);
+                    leaves.forEach(leaf => lines.push(`    • ${leaf}`));
+                } else {
+                    leaves.forEach(leaf => lines.push(`  • ${leaf}`));
+                }
+            });
+            (branch.leaves || []).forEach(leaf => lines.push(`  • ${leaf}`));
+        });
+        return lines.join('\n');
+    }
+
+    function downloadMindmap() {
+        if (!currentUnit) {
+            showToast('No active unit selected.', 'error');
+            return;
+        }
+        const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+        // The Mind Map is a self-contained standalone HTML: the JSON data is injected
+        // into it at compile time (see _render_mindmap), so the .html is the full artifact.
+        const filePath = `/wiki/${baseName}/extractions/${baseName}_mindmap.html`;
+        const dlName = `${baseName}_mindmap.html`;
+
+        fetch(filePath)
+            .then(res => {
+                if (!res.ok) throw new Error('Mind Map HTML not found');
+                return res.text();
+            })
+            .then(html => {
+                const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = dlName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+                showToast(`Saved ${dlName}`, 'success');
+            })
+            .catch(err => showToast(`Export failed: ${err.message}`, 'error'));
     }
 
     function printActiveWorkspaceTab() {
@@ -2719,7 +2974,7 @@
         if (cat === 'vocab') printActiveNode('subtab-vocab-viewer');
         else if (cat === 'grammar') printActiveNode('subtab-grammar-viewer');
         else if (cat === 'summary') printActiveNode('subtab-summary-viewer');
-        else if (cat === 'raw') printActiveNode('subtab-raw-content');
+        else if (cat === 'raw') printActiveNode('workspace-raw-file-content');
         else showToast('Printing is not supported for this view.', 'info');
     }
 
@@ -2741,7 +2996,10 @@
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
                 a.download = `${baseName}_${category}.md`;
+                document.body.appendChild(a);
                 a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
                 showToast(`Downloaded ${baseName}_${category}.md`, 'success');
             })
             .catch(err => showToast(`Export failed: ${err.message}`, 'error'));
@@ -3315,11 +3573,23 @@
                 </div>
             `;
                 
+            let scoreBadgeHtml = `<span class="badge border ${badgeClass} font-monospace fs-6">${score}% Score</span>`;
+            if (audit.post_cure_score != null && audit.pre_cure_score != null) {
+                const curedClass = audit.post_cure_score >= 80 ? 'hb-score-good' : 'hb-score-warn';
+                scoreBadgeHtml = `
+                    <div class="d-flex align-items-center gap-1">
+                        <span class="badge border hb-score-bad font-monospace" title="Raw generation score before surgical audit and cure">Pre: ${audit.pre_cure_score}%</span>
+                        <i class="bi bi-arrow-right text-muted small"></i>
+                        <span class="badge border ${curedClass} font-monospace fs-6" title="Final post-cure score delivered to handout">Final: ${audit.post_cure_score}% (Cured)</span>
+                    </div>
+                `;
+            }
+
             return `
                 <div class="card border p-3" style="background: var(--surface-dim); border-color: var(--card-border) !important; border-radius: var(--radius-md);">
                     <div class="d-flex align-items-center justify-content-between mb-2">
                         <div class="d-flex align-items-center gap-2">
-                            <span class="badge border ${badgeClass} font-monospace fs-6">${score}% Score</span>
+                            ${scoreBadgeHtml}
                             <span class="fw-bold text-on-surface text-truncate" style="max-width: 380px;">${audit.log_name}</span>
                         </div>
                         <span class="badge bg-body-secondary text-primary border font-monospace" style="border-color: var(--card-border) !important;">${audit.model}</span>
@@ -3624,7 +3894,7 @@
                 if (librarySortOption === 'recent') {
                     filesToRender.sort((a, b) => b.mtime - a.mtime);
                 } else if (librarySortOption === 'name') {
-                    filesToRender.sort((a, b) => a.name.localeCompare(b.name));
+                    filesToRender.sort((a, b) => (a.title || a.name).localeCompare(b.title || b.name));
                 } else if (librarySortOption === 'size') {
                     filesToRender.sort((a, b) => b.size - a.size);
                 }
@@ -3643,7 +3913,7 @@
                 // Render matching notebooks
                 filesToRender.forEach(f => {
                     const baseName = f.stem || f.name.replace(/\.[^/.]+$/, "");
-                    const displayName = baseName.replace(/_/g, " ");
+                    const displayName = f.title || baseName.replace(/_/g, " ");
                     
                     const vocabName = `${baseName}_vocabulary.md`;
                     const grammarName = `${baseName}_grammar.md`;
@@ -3683,6 +3953,7 @@
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                                 <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); return false;"><i class="bi bi-folder2-open me-2 text-info"></i>Open Workspace</a></li>
+                                                <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
                                             </ul>
@@ -3756,6 +4027,7 @@
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                             <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); return false;"><i class="bi bi-folder2-open me-2 text-info"></i>Open Workspace</a></li>
+                                            <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
                                         </ul>
@@ -3919,7 +4191,7 @@
                                     <div class="ps-1">
                                         ${unit.rawFile ? `
                                         <a class="sidebar-unit-link py-1 px-2.5 d-flex align-items-center justify-content-between text-truncate ${isCurrentUnit && activeSubTab === 'raw' ? 'active' : ''}" onclick="openUnitWorkspace('${esc(unit.rawFile.name)}'); switchWorkspaceSubTab('raw')" style="min-width: 0;">
-                                            <span class="text-truncate"><i class="bi bi-file-earmark-text-fill me-2 text-secondary"></i>${unit.rawFile.name}</span>
+                                            <span class="text-truncate" title="${esc(unit.rawFile.title || unit.rawFile.name)}"><i class="bi bi-file-earmark-text-fill me-2 text-secondary"></i>${esc(unit.rawFile.title || unit.rawFile.name)}</span>
                                             <span class="text-muted ms-2 flex-shrink-0" style="font-size: 0.6rem;">${(unit.rawFile.size / 1024).toFixed(1)} KB</span>
                                         </a>
                                         ` : '<div class="text-muted ps-3 py-1" style="font-size: 0.65rem; font-style: italic;">No source file</div>'}
@@ -4071,6 +4343,8 @@
                             statusBadgeHtml = `<span class="badge bg-success-subtle text-success border border-success-subtle py-0.5 px-1.5" style="font-size: 0.58rem;">DONE</span>`;
                         } else if (job.status === 'failed') {
                             statusBadgeHtml = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle py-0.5 px-1.5" style="font-size: 0.58rem;">FAIL</span>`;
+                        } else if (job.type === 'quiz' && (job.stage === 'auditing' || job.stage === 'correcting')) {
+                            statusBadgeHtml = `<span class="badge bg-info-subtle text-info border border-info-subtle py-0.5 px-1.5" style="font-size: 0.58rem;">AUDITING</span>`;
                         } else {
                             statusBadgeHtml = `<span class="badge bg-warning-subtle text-warning border border-warning-subtle py-0.5 px-1.5" style="font-size: 0.58rem;">${job.progress}%</span>`;
                         }
@@ -4101,21 +4375,39 @@
                                 </div>
                             </div>
                             ${job.status === 'running' ? `
-                            <div class="progress mt-1" style="height: 3px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated ${job.type === 'compile' ? 'bg-warning' : job.type === 'quiz' ? 'bg-primary' : 'bg-info'}" role="progressbar" style="width: ${job.progress}%"></div>
+                            <!-- Primary Task Progress Bar (retained at 100% when drafting finishes) -->
+                            <div class="mt-1">
+                                <div class="d-flex align-items-center justify-content-between px-0.5 mb-1" style="line-height: 1;">
+                                    <span class="font-monospace text-muted" style="font-size: 0.6rem;">
+                                        <i class="bi bi-cpu me-1 ${job.progress >= 100 ? 'text-success' : 'text-primary'}"></i>${job.type === 'quiz' ? 'Draft Generation' : 'Task Progress'}
+                                    </span>
+                                    <span class="font-monospace fw-semibold ${job.progress >= 100 ? 'text-success' : 'text-primary'}" style="font-size: 0.6rem;">
+                                        ${job.progress}%
+                                    </span>
+                                </div>
+                                <div class="progress" style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 2px;">
+                                    <div class="progress-bar ${job.progress >= 100 ? 'bg-success' : ((job.type === 'compile' ? 'bg-warning' : 'bg-primary') + ' progress-bar-striped progress-bar-animated')}" role="progressbar" style="width: ${job.progress}%; border-radius: 2px;"></div>
+                                </div>
                             </div>
+                            <!-- Level 2 Expert Audit Progress Bar (shown below when auditing/correcting) -->
                             ${job.type === 'quiz' && (job.stage === 'auditing' || job.stage === 'correcting' || (job.audit_progress && job.audit_progress > 0)) ? `
-                            <div class="d-flex align-items-center justify-content-between mt-1 px-1">
-                                <span class="font-monospace" style="font-size: 0.58rem; color: #b388ff;"><i class="bi bi-shield-check me-1"></i>Expert Audit</span>
-                                <span class="font-monospace" style="font-size: 0.58rem; color: #b388ff;">${job.audit_progress || 0}%</span>
-                            </div>
-                            <div class="progress" style="height: 3px; background: rgba(255, 255, 255, 0.08);">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: ${job.audit_progress || 0}%; background: linear-gradient(90deg, #7c4dff, #00e5ff);"></div>
+                            <div class="mt-1">
+                                <div class="d-flex align-items-center justify-content-between px-0.5 mb-1" style="line-height: 1;">
+                                    <span class="font-monospace text-info" style="font-size: 0.6rem;">
+                                        <i class="bi bi-shield-check me-1"></i>Level 2 Expert Audit
+                                    </span>
+                                    <span class="font-monospace text-info fw-semibold" style="font-size: 0.6rem;">
+                                        ${job.audit_progress || 0}%
+                                    </span>
+                                </div>
+                                <div class="progress" style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 2px;">
+                                    <div class="progress-bar bg-info progress-bar-striped progress-bar-animated" role="progressbar" style="width: ${job.audit_progress || 0}%; border-radius: 2px;"></div>
+                                </div>
                             </div>
                             ` : ''}
                             ` : ''}
                             ${latestLog ? `
-                            <div class="text-muted text-truncate font-monospace" style="font-size: 0.6rem; opacity: 0.75; padding-left: 1.25rem;">
+                            <div class="text-muted text-truncate font-monospace mt-0.5" style="font-size: 0.6rem; opacity: 0.75; padding-left: 1.25rem;">
                                 ${latestLog}
                             </div>
                             ` : ''}
@@ -4385,6 +4677,192 @@
         document.getElementById('quiz-count-slider').value = val;
         document.getElementById('quiz-count-badge').innerText = val;
         document.getElementById('quiz-count-input').value = val;
+    }
+
+    // ------------------ SOURCE MATERIAL & SYLLABUS EDITOR ------------------
+    let editorTargetFilename = null;
+
+    function openSourceEditorForNew() {
+        editorTargetFilename = null;
+        document.getElementById('sourceEditorModalLabel').innerText = "Add New Source & Syllabus";
+        document.getElementById('editor-unit-name').value = "";
+        document.getElementById('editor-unit-name').removeAttribute('readonly');
+        document.getElementById('editor-passage-text').value = "";
+        document.getElementById('editor-syllabus-vocab').value = "";
+        document.getElementById('editor-syllabus-grammar').value = "";
+        updateEditorCharCount();
+        updateSyllabusVocabCount();
+        updateSyllabusGrammarCount();
+
+        const modalEl = document.getElementById('source-editor-modal');
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    }
+
+    function openSourceEditorForCurrentUnit() {
+        if (!currentUnit) {
+            showInfoModal("No Unit Selected", "Please select or open a unit workspace first.");
+            return;
+        }
+        openSourceEditorForUnit(currentUnit);
+    }
+
+    function openSourceEditorForUnit(filename) {
+        editorTargetFilename = filename;
+        const stem = filename.replace(/\.[^/.]+$/, "");
+        document.getElementById('sourceEditorModalLabel').innerText = `Edit Source & Syllabus: ${stem.replace(/_/g, ' ')}`;
+        document.getElementById('editor-unit-name').value = stem;
+        document.getElementById('editor-unit-name').setAttribute('readonly', 'true');
+        document.getElementById('editor-passage-text').value = "Loading unit source text...";
+        document.getElementById('editor-syllabus-vocab').value = "";
+        document.getElementById('editor-syllabus-grammar').value = "";
+
+        const modalEl = document.getElementById('source-editor-modal');
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+
+        // Fetch source content from unit's sources directory
+        fetch(`/wiki/${stem}/sources/${filename}`)
+            .then(res => {
+                if (!res.ok) throw new Error("Could not load source file");
+                return res.text();
+            })
+            .then(text => {
+                const parsed = parseSourceContentForEditor(text);
+                document.getElementById('editor-passage-text').value = parsed.passage;
+                document.getElementById('editor-syllabus-vocab').value = parsed.vocab;
+                document.getElementById('editor-syllabus-grammar').value = parsed.grammar;
+                updateEditorCharCount();
+                updateSyllabusVocabCount();
+                updateSyllabusGrammarCount();
+            })
+            .catch(err => {
+                document.getElementById('editor-passage-text').value = "";
+                showInfoModal("Load Error", "Unable to load source text: " + err.message);
+            });
+    }
+
+    function parseSourceContentForEditor(fullText) {
+        let passage = fullText;
+        let vocab = '';
+        let grammar = '';
+
+        // Extract Syllabus Vocabulary section
+        const vocabRegex = /\n##\s+Syllabus\s+Vocabulary\s*([\s\S]*?)(?=\n##\s+Syllabus\s+Grammar|$)/i;
+        const vocabMatch = passage.match(vocabRegex);
+        if (vocabMatch) {
+            vocab = vocabMatch[1].trim();
+            passage = passage.replace(vocabMatch[0], '');
+        }
+
+        // Extract Syllabus Grammar section
+        const grammarRegex = /\n##\s+Syllabus\s+Grammar\s*([\s\S]*?)(?=\n##\s+Syllabus\s+Vocabulary|$)/i;
+        const grammarMatch = passage.match(grammarRegex);
+        if (grammarMatch) {
+            grammar = grammarMatch[1].trim();
+            passage = passage.replace(grammarMatch[0], '');
+        }
+
+        return {
+            passage: passage.trim(),
+            vocab: vocab,
+            grammar: grammar
+        };
+    }
+
+    function updateEditorCharCount() {
+        const text = document.getElementById('editor-passage-text').value || "";
+        document.getElementById('editor-passage-count').innerText = `${text.length} chars`;
+    }
+
+    function updateSyllabusVocabCount() {
+        const text = document.getElementById('editor-syllabus-vocab').value || "";
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#'));
+        document.getElementById('editor-vocab-badge').innerText = `${lines.length} items`;
+    }
+
+    function updateSyllabusGrammarCount() {
+        const text = document.getElementById('editor-syllabus-grammar').value || "";
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#'));
+        document.getElementById('editor-grammar-badge').innerText = `${lines.length} topics`;
+    }
+
+    function saveSourceAndSyllabus(triggerCompile = false) {
+        let rawUnitName = document.getElementById('editor-unit-name').value.trim();
+        if (!rawUnitName) {
+            showInfoModal("Unit Name Required", "Please enter a valid unit name (e.g. 'Book 1 Unit 2').");
+            return;
+        }
+
+        let unitStem = rawUnitName.replace(/[\/\\:*?"<>|]/g, '').trim().replace(/\s+/g, '_');
+        if (unitStem.endsWith('.md')) unitStem = unitStem.slice(0, -3);
+        const filename = `${unitStem}.md`;
+
+        const passage = document.getElementById('editor-passage-text').value.trim();
+        const vocab = document.getElementById('editor-syllabus-vocab').value.trim();
+        const grammar = document.getElementById('editor-syllabus-grammar').value.trim();
+
+        if (!passage && !vocab) {
+            showInfoModal("Content Required", "Please provide lesson passage text or syllabus vocabulary.");
+            return;
+        }
+
+        // Build markdown content
+        let fullMarkdown = passage;
+        if (!fullMarkdown.startsWith('---')) {
+            const cleanTitle = unitStem.replace(/_/g, ' ');
+            fullMarkdown = `---\ntitle: "${cleanTitle}"\ncategory: ["source"]\n---\n\n# ${cleanTitle}\n\n` + fullMarkdown;
+        }
+
+        if (vocab) {
+            fullMarkdown += `\n\n## Syllabus Vocabulary\n` + vocab;
+        }
+        if (grammar) {
+            fullMarkdown += `\n\n## Syllabus Grammar\n` + grammar;
+        }
+        fullMarkdown += '\n';
+
+        const saveBtn = document.getElementById('editor-save-btn');
+        const saveCompileBtn = document.getElementById('editor-save-compile-btn');
+        saveBtn.disabled = true;
+        saveCompileBtn.disabled = true;
+
+        fetch('/api/upload-file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filename: filename,
+                content: fullMarkdown
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            saveBtn.disabled = false;
+            saveCompileBtn.disabled = false;
+            if (data.success) {
+                const modalEl = document.getElementById('source-editor-modal');
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+
+                showToast(`Successfully saved ${filename}!`, 'success');
+                fetchCompiledUnits();
+                fetchRawFiles();
+                openUnitWorkspace(filename);
+
+                if (triggerCompile) {
+                    setTimeout(() => {
+                        triggerWorkspaceCompileDirect();
+                    }, 300);
+                }
+            } else {
+                showInfoModal("Save Failed", "Failed to save source file: " + (data.error || "Unknown error"));
+            }
+        })
+        .catch(err => {
+            saveBtn.disabled = false;
+            saveCompileBtn.disabled = false;
+            showInfoModal("Network Error", "Failed to save source file: " + err.message);
+        });
     }
 
     // File selection/Drop triggers

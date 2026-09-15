@@ -11,7 +11,7 @@ Extract unique advanced grammar patterns from the text.
    - No paraphrasing, no trimming that alters structure, and no invented evidence.
 
 2. **Quality Over Quantity & Syntactic Prestige Hierarchy**:
-   - Extract between 3 and {count} truly distinct, genuine advanced patterns (max 1–2 per category).
+   - Extract up to {count} truly distinct, genuine advanced patterns (max 1–2 per category).
    - 🛡️ **DO NOT FORCE UNREPRESENTED CATEGORIES**: If a text genuinely contains only 3-4 distinct advanced mechanisms, return only those genuine patterns! NEVER force-fit non-existent categories.
    - ⭐ **SYNTACTIC PRESTIGE HIERARCHY (PRIORITIZE HIGH-VALUE PATTERNS)**:
      Always actively scan and give highest extraction priority to prestigious, intellectually mature syntactic mechanisms:
@@ -23,18 +23,18 @@ Extract unique advanced grammar patterns from the text.
    - Assign a category ONLY if the quote contains a genuine instance:
      * *Concessive clauses*: must include explicit concessive subordinators or prepositions (*although, though, while, despite, even though*).
      * *Inversion*: must include true subject-auxiliary/copula inversion.
-       - ❌ **NEGATIVE GUARDRAIL (FAKE INVERSION)**: The transitional phrase `"Not only that, but [SVO]"` is a correlative coordination, NOT syntactic inversion! True inversion requires auxiliary movement (e.g., `Not only did he run...`, `Never had she seen...`). If no true inversion exists in the text, DO NOT classify anything as Inversion!
+       - ❌ **NEGATIVE GUARDRAIL (FAKE INVERSION)**: The transitional phrase 'Not only that, but [SVO]' is a correlative coordination, NOT syntactic inversion! True inversion requires auxiliary movement (e.g., 'Not only did he run...', 'Never had she seen...'). If no true inversion exists in the text, DO NOT classify anything as Inversion!
      * *Participial clauses / Non-finite structures*: must contain genuine non-finite structures (*having + past participle*, *V-ing*, *past participle modifier*, infinitival extraposition) modifying a clause element.
-       - ❌ **NEGATIVE GUARDRAIL (TRIVIAL PREPOSITIONAL PHRASE)**: Trivial phrases like `"without sleeping"` alone are NOT advanced patterns. Extract the complete host clause (e.g. `[Subject] + [Predicate] + without + [Gerund] + [Object]`).
-     * *Evaluative It-frameworks*: must contain *It + copula + evaluative adjective/noun phrase + that-clause/infinitive* (e.g., *It is essential/remarkable that...*).
-       - ❌ **NEGATIVE GUARDRAIL (FAKE EVALUATIVE IT)**: Passive reporting structures like `"It was said/believed that..."` are impersonal reporting (Hedging devices), NOT evaluative adjective frameworks!
+       - ❌ **NEGATIVE GUARDRAIL (TRIVIAL PREPOSITIONAL PHRASE)**: Trivial phrases like 'without sleeping' alone are NOT advanced patterns. Extract the complete host clause (e.g. '[Subject] + [Predicate] + without + [Gerund] + [Object]').
+     * *Evaluative It-frameworks*: must contain *It + copula + evaluative adjective/noun phrase + that-clause/infinitive* (e.g., 'It is essential/remarkable that...').
+       - ❌ **NEGATIVE GUARDRAIL (FAKE EVALUATIVE IT)**: Passive reporting structures like 'It was said/believed that...' are impersonal reporting (Hedging devices), NOT evaluative adjective frameworks!
      * *Hedging devices*: epistemic modals, probability adverbs, or impersonal reporting frames (*It seemed that...*, *It was reported that...*).
      * *Abstract frames*: abstract nouns functioning as discourse organizers (*the fact that, the idea that, the reality is that*).
-      * *Cleft sentences*: authentic cleft scaffolds (*It is/was + [Focus Element] + that/who...*, *What [Clause] is/was...*).
-      * 💡 **NESTED PRESTIGE RULE (HOST CLAUSE COLLISION)**:
-        - If an authentic **Cleft Sentence** (`It was [Focus Element] that...`) or **Inversion** is embedded inside a compound sentence (e.g. preceded by a concessive clause like `Though...`), **ALWAYS prioritize and classify it as `Cleft sentences` (or `Inversion`)**, NOT as a simple concessive clause!
-        - ❌ *Wrong*: classify as Concessive and reduce to `Though [Clause], [Main Clause]` (hides the cleft!).
-        - ✔ *Correct*: classify as `Cleft sentences` and explicitly expand the scaffold: `Though [Clause], it was + [Adverb] + [Noun Phrase] + that + [Clause]`.
+     * *Cleft sentences*: authentic cleft scaffolds (*It is/was + [Focus Element] + that/who...*, *What [Clause] is/was...*).
+     * 💡 **NESTED PRESTIGE RULE (HOST CLAUSE COLLISION)**:
+       - If an authentic **Cleft Sentence** (`It was [Focus Element] that...`) or **Inversion** is embedded inside a compound sentence (e.g. preceded by a concessive clause like `Though...`), **ALWAYS prioritize and classify it as `Cleft sentences` (or `Inversion`)**, NOT as a simple concessive clause!
+       - ❌ *Wrong*: classify as Concessive and reduce to `Though [Clause], [Main Clause]` (hides the cleft!).
+       - ✔ *Correct*: classify as `Cleft sentences` and explicitly expand the scaffold: `Though [Clause], it was + [Adverb] + [Noun Phrase] + that + [Clause]`.
 
 4. **High-Precision Pattern Formula Rules (MANDATORY)**:
    - Formulate `pattern_formula` as a structural blueprint encoding the pattern's distinctive syntactic signature:
@@ -74,4 +74,3 @@ Extract unique advanced grammar patterns from the text.
 
 CONTENT:
 {content}
-

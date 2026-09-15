@@ -430,16 +430,24 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 if compiled_files:
                                     compiled = True
                             
-                            # Check video status
+                            # Check video status & extract title
                             is_video = False
                             is_transcribing = False
+                            display_title = None
                             try:
                                 with open(primary_file, "r", encoding="utf-8") as f_read:
-                                    head = f_read.read(1000)
+                                    head = f_read.read(2000)
                                 if "category: \"video_transcript\"" in head or "video_type:" in head:
                                     is_video = True
                                 if "Transcription is currently in progress" in head:
                                     is_transcribing = True
+                                
+                                # Extract frontmatter title if present (e.g. title: "...")
+                                title_match = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if title_match:
+                                    t_val = title_match.group(1).strip()
+                                    if t_val:
+                                        display_title = t_val
                             except Exception:
                                 pass
                                 
@@ -454,6 +462,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             files_list.append({
                                 "name": primary_file.name,
                                 "stem": stem,
+                                "title": display_title,
                                 "size": primary_file.stat().st_size,
                                 "compiled": compiled,
                                 "is_video": is_video,
