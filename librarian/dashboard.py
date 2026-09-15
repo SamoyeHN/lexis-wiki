@@ -22,6 +22,29 @@ class DashboardState:
     jobs = {}
     lock = threading.Lock()
 
+    # --- Server lifecycle (auto-shutdown when the browser is closed) ---
+    last_activity_ts = None   # timestamp of the last request received
+    shutdown_requested = False  # set by /api/shutdown (browser beforeunload beacon)
+
+    @classmethod
+    def touch(cls):
+        """Record that the browser client is still alive (call on every request)."""
+        import time
+        with cls.lock:
+            cls.last_activity_ts = time.time()
+
+    @classmethod
+    def mark_shutdown(cls):
+        with cls.lock:
+            cls.shutdown_requested = True
+
+    @classmethod
+    def lifecycle(cls):
+        """Return (shutdown_requested, last_activity_ts, has_running_jobs) under one lock."""
+        with cls.lock:
+            has_running = any(j.get("status") == "running" for j in cls.jobs.values())
+            return cls.shutdown_requested, cls.last_activity_ts, has_running
+
     @classmethod
     def create_job(cls, job_type, target):
         with cls.lock:
@@ -227,6 +250,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        # Keep the server alive only while the browser client is active
+        DashboardState.touch()
+
         url = urllib.parse.urlparse(self.path)
         path = url.path
 
@@ -252,6 +278,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_error(404, "File Not Found")
 
     def do_POST(self):
+        # Keep the server alive only while the browser client is active
+        DashboardState.touch()
+
         url = urllib.parse.urlparse(self.path)
         path = url.path
 
@@ -362,7 +391,12 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         response_data = {}
 
-        if path == "/api/config":
+        if path == "/api/shutdown":
+            # Explicit shutdown signal (browser beforeunload beacon).
+            DashboardState.mark_shutdown()
+            response_data = {"success": True, "message": "Dashboard server is shutting down."}
+
+        elif path == "/api/config":
             response_data = {
                 "config": config.data,
                 "project_root": str(config.project_root)
@@ -788,7 +822,12 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         response_data = {"success": True}
 
         try:
-            if path == "/api/config/update":
+            if path == "/api/shutdown":
+                # Explicit shutdown signal (browser beforeunload beacon via sendBeacon).
+                DashboardState.mark_shutdown()
+                response_data = {"success": True, "message": "Dashboard server is shutting down."}
+
+            elif path == "/api/config/update":
                 data = json.loads(body)
                 for key, val in data.items():
                     success, msg = config.update_config(key, val)

@@ -19,6 +19,14 @@
             setTheme(getPreferredTheme());
         })();
     </script>
+    <script>
+        // Notify the local dashboard server to shut down the moment this
+        // window/tab is closed, so the background process exits and the port
+        // is released (the server also self-exits via an idle timeout fallback).
+        window.addEventListener('beforeunload', function () {
+            try { navigator.sendBeacon('/api/shutdown'); } catch (e) { /* ignore */ }
+        });
+    </script>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

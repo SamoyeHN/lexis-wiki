@@ -87,11 +87,10 @@ def main():
     if args.command == "init":
         print(f"Initializing new wiki project in {args.path}...")
         success, message = config.initialize_project(args.path)
-        if success:
-            print(f"Successfully initialized project at {message}")
-            print("Directory structure created (wiki/).")
-        else:
-            print(message)
+        print(message)
+        if not success:
+            print("Initialization failed.")
+            sys.exit(1)
 
     elif args.command == "lint":
         print("Checking links...")
@@ -248,9 +247,60 @@ def main():
         import os
         import signal
         import time
-        from .dashboard import DashboardHTTPRequestHandler
+        from .dashboard import DashboardHTTPRequestHandler, DashboardState
 
         port = args.port
+
+        # Dual-output logging: always append dashboard output to logs/dashboard.log;
+        # when run in a terminal, also mirror it to the console. Under pythonw
+        # (VBS launcher) stdout/stderr are None, so the log file is the only sink.
+        try:
+            from pathlib import Path
+            logs_dir = Path(config.project_root) / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            _log_file = open(logs_dir / "dashboard.log", "a", encoding="utf-8", buffering=1)
+
+            class _Tee:
+                """File-like stream that writes to both a console stream (if any)
+                and the log file. Each sink is independent: failure on one
+                (e.g. console closed) never breaks the other."""
+                def __init__(self, stream, log_file):
+                    self._stream = stream
+                    self._log = log_file
+
+                def write(self, data):
+                    for target in (self._stream, self._log):
+                        if target is None:
+                            continue
+                        try:
+                            target.write(data)
+                            target.flush()
+                        except Exception:
+                            pass
+                    return len(data)
+
+                def flush(self):
+                    for target in (self._stream, self._log):
+                        if target is not None:
+                            try:
+                                target.flush()
+                            except Exception:
+                                pass
+
+                def isatty(self):
+                    return bool(self._stream is not None and self._stream.isatty())
+
+            sys.stdout = _Tee(sys.stdout, _log_file)
+            sys.stderr = _Tee(sys.stderr, _log_file)
+        except Exception:
+            # Last-resort safety for headless mode: a print() must never crash
+            # the server if the log file cannot be opened.
+            import io
+            _null_stream = io.StringIO()
+            if sys.stdout is None:
+                sys.stdout = _null_stream
+            if sys.stderr is None:
+                sys.stderr = _null_stream
 
         # 1. Clean up any existing dashboard instance or process occupying the port
         def _free_port(target_port: int):
@@ -299,6 +349,10 @@ def main():
         # Use a multi-threaded server so blocking calls (like model tags fetch) do not freeze the UI
         class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             allow_reuse_address = True
+            # Handler threads must be daemons: keep-alive connections otherwise block
+            # the interpreter from exiting (threading._shutdown waits for non-daemon
+            # threads stuck in readline()), leaving a zombie process after shutdown.
+            daemon_threads = True
         
         server_created = False
         for attempt in range(3):
@@ -318,7 +372,8 @@ def main():
             httpd.timeout = 0.5  # Check for KeyboardInterrupt every 0.5s on Windows
             url = f"http://localhost:{port}"
             print(f"Dashboard server is running at: {url}")
-            print("Press Ctrl+C to terminate.")
+            print("Closing the browser window will automatically stop this server and free the port.")
+            print("(Ctrl+C also works.)")
             
             # Open browser automatically in a separate thread
             def open_browser():
@@ -329,12 +384,48 @@ def main():
             
             threading.Thread(target=open_browser, daemon=True).start()
             
+            # Auto-shutdown once the browser is gone:
+            #  - Immediate: /api/shutdown beacon fired by the page's beforeunload handler.
+            #  - Fallback:  idle timeout (the page polls every ~3s, so a live tab always keeps
+            #               the server alive).
+            #  - Safety:    never kill in-progress background jobs (compile / re-audit); the
+            #               server stays up until they finish, then exits automatically.
+            IDLE_TIMEOUT = 15          # seconds without any request => client is gone
+            NO_CLIENT_GRACE = 30       # seconds to wait for the browser to open its first request
+            server_start_ts = time.time()
+
+            def _should_exit():
+                shutdown_requested, last_ts, has_running = DashboardState.lifecycle()
+                if has_running:
+                    return False  # hold until running background jobs complete
+                if shutdown_requested:
+                    return True
+                if last_ts is None:
+                    # No client ever connected (e.g. browser failed to open): give it a grace period
+                    return (time.time() - server_start_ts) > NO_CLIENT_GRACE
+                return (time.time() - last_ts) > IDLE_TIMEOUT
+
             try:
-                while True:
+                while not _should_exit():
                     httpd.handle_request()
             except KeyboardInterrupt:
-                print("\nDashboard server stopped.")
+                print("\nDashboard server stopped (Ctrl+C).")
                 sys.exit(0)
+
+            # If background jobs are still running (browser closed mid-compile), finish them first
+            _, _, has_running = DashboardState.lifecycle()
+            if has_running:
+                print("\nBrowser closed; background job(s) still running — finishing before exit...")
+                try:
+                    while True:
+                        _, _, still_running = DashboardState.lifecycle()
+                        if not still_running:
+                            break
+                        httpd.handle_request()
+                except KeyboardInterrupt:
+                    pass
+
+            print("\nDashboard server stopped — port released.")
 
     elif args.command == "video-import":
         print(f"Importing video source: {args.url_or_filepath}...")

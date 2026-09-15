@@ -88,13 +88,18 @@ class Config:
             print(f"Warning: Could not create directories: {e}")
 
     def initialize_project(self, target_path=None):
-        """Creates a new project structure in the target path."""
+        """Creates a new project structure in the target path (idempotent)."""
         target_path = Path(target_path or os.getcwd()).resolve()
         target_path.mkdir(parents=True, exist_ok=True)
         config_path = target_path / "wiki_config.json"
         
         if config_path.exists():
-            return False, f"Error: Configuration already exists at {config_path}"
+            # Already initialized — make sure the standard folders exist
+            # and treat this as a success so setup scripts can be re-run.
+            self.project_root = target_path
+            self.load_config()
+            self.ensure_dirs()
+            return True, f"Already initialized at {target_path} (nothing to do)"
 
         try:
             # 1. Create config file using the latest DEFAULT_CONFIG
@@ -106,7 +111,7 @@ class Config:
             self.load_config()
             self.ensure_dirs()
 
-            return True, str(config_path)
+            return True, f"Successfully initialized project at {target_path} (wiki/ structure created)"
         except Exception as e:
             return False, str(e)
 

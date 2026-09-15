@@ -6,6 +6,22 @@ AI-powered Obsidian-style wiki generator for EFL educators. Transform source mat
 
 ## Quick Start: Your First Unit in 60 Seconds
 
+**Windows — one-click:** double-click `install.cmd` (or run it in a terminal). It does all of this for you:
+
+```bash
+pip install -e .            # lexis + core dependencies
+pip install pyinstaller     # EXE export      pytest  # test suite
+lexis init .                # initialize the project (safe to re-run)
+```
+
+Then it **asks** whether to install local video/audio transcription
+(`faster-whisper`, a large download) — default is **no**; answer `y` to
+install it now, or add it later with `pip install faster-whisper`.
+
+All dependencies are declared in a single place: `pyproject.toml`.
+
+**Manual steps:**
+
 ```bash
 # 1. Install (Standard)
 pip install -e .
