@@ -9,12 +9,17 @@ Prompts drive pedagogical quality and assessment design; JSON schemas enforce ou
 
 - **Clean Separation of Responsibilities**:
   - **Schema = Structure**: `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs.
-  - **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, distractor engineering, and `MANDATE:` rules—completely free of mechanical JSON formatting instructions.
+  - **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, distractor engineering, and `MANDATE:` rules—completely free of mechanical JSON formatting instructions or code variable names.
 - **Dual-Mode Structured Output Architecture**:
   - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: When calling local engines (Ollama), `format: "json"` is active (`"enforce_gbnf": false` in `wiki_config.json`). The system automatically injects the JSON Schema derived programmatically from `schemas.py` into the system role. This eliminates GBNF grammar parser stalls, tokenizer conflicts (e.g. 131k/248k tokenizers in Nemotron/Gemma/Qwen), and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
   - **Strict GBNF / Native Schema Mode**: Supported via `"enforce_gbnf": true` in `wiki_config.json` for engines with hardware-accelerated grammar transducers (e.g., OpenAI `json_schema` strict mode).
   - **Automatic Empty-Output Fallback**: If strict GBNF mode fails or returns empty tokens, `llm.py` automatically catches the failure, logs a warning, and retries seamlessly in `format: "json"`.
-  - **Generation model and Expert/Judge model**: Generation model works in Json-mode/GBNF-mode to extract content. When generating quizzes, it runs in two turns: Text-mode/prose drafting to create and json-mode/GBNF-mode to pack text into json structure. Expert model is responsible for auditing, surgical repairing and rewriting. Blind solver is the key to catch double-key divergence — keeping them distinct is a quality invariant.
+  - **Two-Turn Decoupled Generation Pipeline (Prose-to-JSON)**:
+    - *Turn 1 (Prose Drafting)*: Unconstrained text generation with full reasoning and thinking capability, focusing 100% on linguistic depth, complex CEFR sentence framing, and 3-vector distractor traps without JSON token constraints.
+    - *Turn 2 (Deterministic Packaging)*: Fast, temperature-0 packing that transforms the prose draft into strict JSON conforming to `schemas.py`.
+  - **Expert / Judge Model Architecture**:
+    - The generation model drafts content (via Prose-to-JSON or One-Shot).
+    - The expert judge model executes independent blind solving, semantic auditing, and minimal-invasive surgical repair/rewriting. Keeping the generation model and the audit judge distinct preserves assessment rigor and catches double-key divergence.
 
 - **Human-Readable Logging**:
   - `librarian/logger.py` automatically indents and formats `--- RAW RESPONSE ---` with 2-space pretty-printed JSON in all task logs under `logs/`.
@@ -63,7 +68,34 @@ wiki/<UnitName>/sources/<UnitName>.md | media/
 
 ---
 
-## 3. Naming Conventions
+## 3. Configuration & Runtime Architecture
+
+### 3.1 Live Configuration Hot-Reloading (`config.py`)
+- **Zero-Restart Disk Synchronization**: `config.py` monitors the filesystem modification timestamp (`st_mtime`) of `wiki_config.json`.
+- Any external edits (e.g. toggling `enable_prose_pipeline`, switching `model`, updating `judge_model`, or tuning `enable_expert_audit`) are instantly and silently hot-reloaded into memory across both CLI and the running Web Dashboard without requiring server restarts.
+
+### 3.2 Audit & Generation Controls (`wiki_config.json`)
+- `enable_expert_audit`  : master switch for Level 2 LLM-as-a-Judge semantic audit (default: `false`)
+- `judge_model`          : L2 judge model; SHOULD differ from generation `model` (e.g., `gemma4:12b` or `phi4:14b`)
+- `min_passing_items`    : per-quiz passing floor after triage and discards (default: `3`)
+- `quarantine_on_fail`   : route failed artifacts to `_quarantine/` (default: `true`)
+- `enable_prose_pipeline`: multi-turn prose→JSON generation toggle (default: `true`)
+- `enable_vocab_prose`   : prose pipeline toggle for vocabulary extractions (default: `false`)
+
+### 3.3 Reasoning & Thinking Parameter Protocols
+- Models featuring internal reasoning channels (e.g., `gpt-oss:20b` dual-channel `<|channel|>analysis` vs `<|channel|>final`) operate under Ollama's native routing.
+- The system avoids imposing artificial token masks (`think: false`) that trigger reasoning spillover into output text; clean channel separation is maintained natively.
+
+### 3.4 Dashboard Input Configuration & TTS Defaults
+- **Autofill Prevention**: Passwords require `autocomplete="new-password"`; URL fields require `autocomplete="url"`, `inputmode="url"`.
+- **TTS API Endpoints**:
+  - Kokoro: `http://localhost:8880/v1/audio/speech`
+  - Edge-TTS: `http://localhost:5050/v1/audio/speech`
+- **Voice Validation**: Invalid voices self-heal to defaults: Kokoro (`af_sarah`/`am_michael`), Edge-TTS (`en-US-AriaNeural`/`en-GB-RyanNeural`).
+
+---
+
+## 4. Naming Conventions
 
 Use `snake_case` for all JSON keys and variable names.
 
@@ -74,29 +106,6 @@ Use `snake_case` for all JSON keys and variable names.
 - **`target_language`** (not `language`) -- translation target lang
 
 ---
-
-## 4. Dashboard Input Configuration
-
-### Autofill Prevention
-Prevent browsers from misclassifying text inputs as password/URL fields:
-- Passwords: `autocomplete="new-password"` (mandatory)
-- URL/text fields: distinct names (`video-source-url`), `autocomplete="url"`, `autocorrect="off"`, `inputmode="url"`
-
-### TTS API Endpoints
-- **Kokoro**: `http://localhost:8880/v1/audio/speech`
-- **Edge-TTS**: `http://localhost:5050/v1/audio/speech`
-
-### TTS Voice Validation
-Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`am_michael`), Edge-TTS (`en-US-AriaNeural`/`en-GB-RyanNeural`). Configure via Dashboard dropdowns.
-
----
-### Audit & Enforcement Config (wiki_config.json / config.py)
-- enable_expert_audit  : master switch (default false)
-- judge_model          : L2 judge; SHOULD differ from generation `model`
-- min_passing_items    : per-quiz floor after discards (default 3)
-- quarantine_on_fail   : route failed artifacts to _quarantine/ (default true)
-- enable_prose_pipeline: multi-turn prose→JSON generation (default true)
-
 
 ## 5. To-Do List
 
@@ -112,13 +121,15 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 - [x] Multi-turn Prose-to-JSON quiz generation pipeline (Turn 1 unconstrained prose drafting with native reasoning/thinking parameters; Turn 2 deterministic packaging without token stalls)
 - [x] Selective Item Regeneration & Surgical Splicing (Psychometric targeted healing: only flagged defective items are regenerated and spliced into untouched locked items)
 - [x] Display Layer Decoupling (Human-facing display titles decoupled from immutable filesystem slugs while preserving zero-side-effect media protection)
-- [x] Two-Level Auditing Across Quiz Types: Completed Level 1 (Deterministic Code Gate) and Level 2 (LLM-as-a-Judge Expert Semantic Audit) verification pipeline across Vocabulary, Translation, and Reading quizzes.
-- [x] Migrating from Generating Model -> Expert Model auditing -> Generating Model Retry 1, 2, Letgo  to Generating Model -> Expert Model auditing & repair & rewrite saving time and significantly increasing accuracy. 
+- [x] Two-Level Auditing Across All Quiz Types: Completed Level 1 (Deterministic Code Gate) and Level 2 (LLM-as-a-Judge Expert Semantic Audit) verification pipeline across Vocabulary, Translation, Reading, Video, and Listening quizzes.
+- [x] Expert Model Audit-Repair-Rewrite Pipeline: Direct surgical cure and rewriting by the expert model replacing slow multi-attempt blind regeneration loops.
+- [x] Configuration Disk Hot-Reloading: Instant runtime synchronization with `wiki_config.json` via file mtime tracking without dashboard restarts.
+- [x] Clean Prompt & Schema Separation: Stripped code variable names and JSON formatting instructions from prompt templates, guaranteeing 100% compatibility across Prose-to-JSON and One-Shot modes.
 
 ### Pending
 - **Vocabulary Extraction Expert Audit & Item Filtering**:
-  - *Context*: 在 JSON 模式下，模型偏向于根据材料中的所有词汇尽量穷尽出题（如从 10 题扩张到 20+ 题），提升了题库覆盖度。
-  - *Design*: 结合 Expert Mode，在 `vocabulary extraction` 阶段引入 Expert Audit，由高智能专家模型从源材料或提取列表中挑选出最具代表性、教学权重最高的核心重点词汇（Curated Lexical Subset），从源头上按需精准供给 Quiz Generator，兼顾生成速度与教学覆盖。
+  - *Context*: 在 JSON 模式下，模型偏向于根据材料中的所有词汇尽量穷尽提取（如从 10 题扩张到 20+ 题），覆盖面广但教学焦点容易发散。
+  - *Design*: 结合 Expert Mode，在 `vocabulary extraction` 阶段引入 Expert Audit，由高智能专家模型从提取列表中筛选出最具代表性、教学权重最高的核心重点词汇（Curated Lexical Subset），从源头上精准供给 Quiz Generator，兼顾出题速度与核心教学覆盖。
 - **Quality Tier Routing & Human Review UI**:
   - 90–100: 自动交付（Passed - High Quality）。
   - 75–89: 自动交付但标注审查候选（Review Candidate）。
@@ -127,18 +138,17 @@ Invalid voices in `wiki_config.json` self-heal to defaults: Kokoro (`af_sarah`/`
 - **Multilingual User Interface (i18n)**:
   - *Context*: 仪表板与各编辑模态框（如 Source & Syllabus Editor、工作区与配置面板）需支持国际化与本地化多语言切换。
   - *Design*: 建立轻量级客户端 i18n 资源字典与切换机制，将界面文字解耦键值化。默认界面全面采用简洁、地道的专业学术英语（Concise English UI），杜绝双语生硬混杂，并支持一键无感切换简体中文及其他语种。
-- **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only
-- **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview
+- **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only.
+- **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview.
 
 ---
-
 
 ## 6. Two-Level QA Quality Audit Architecture
 
 The system enforces quality through a strict two-tier verification pipeline:
 
 ```
-[ Generation Phase (Small / Fast Model) ]
+[ Generation Phase (Fast Generation Model) ]
                     │
                     ▼
 ┌────────────────────────────────────────────────────────┐
@@ -147,15 +157,16 @@ The system enforces quality through a strict two-tier verification pipeline:
 └────────────────────────────────────────────────────────┘
                     │
                     ├─► [❌ FAILED: Schema violation, missing keys, target desync, duplicate options]
-                    │       └─► Triggers immediate self-healing 
+                    │       └─► Triggers immediate structural repair / normalization
                     ▼ [✅ PASSED]
 ┌────────────────────────────────────────────────────────┐
 │ Level 2: Expert Model Quality Audit (Semantic Audit)   │
 │  - High-intelligence evaluator (LLM-as-a-Judge)        │
+│  - Independent Blind Solver Resolution                 │
 └────────────────────────────────────────────────────────┘
                     │
                     ├─► [❌ FAILED: Hallucination, ambiguous stem, invalid distractors, double keys]
-                    │       └─► Generates diagnostic audit report & pedagogical feedback
+                    │       └─► Executes Minimal-Invasive Surgical Cure or Full Rewrite
                     ▼ [✅ PASSED]
           [ Final Content Delivery / HTML Handout ]
 ```
@@ -168,7 +179,7 @@ Pure Python validation ensuring structural completeness and absolute invariants:
   - Quoted text/sentences exist verbatim in source material.
   - Option uniqueness (no duplicate options).
 - **Answer Distribution & Option Integrity**:
-  - Answer keys distributed across 0, 1, 2, 3 (bias-detection triggers automatic shuffle).
+  - Options automatically shuffled and randomized by deterministic Python logic.
   - Explanation option labels (`Option A/B/C/D`) are atomically remapped upon option shuffling or index repair.
 
 ### Level 2: Expert Model Quality Audit (Content & Pedagogical Correctness)
