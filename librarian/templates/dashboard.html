@@ -739,6 +739,26 @@
             background: rgba(14, 165, 233, 0.05);
         }
 
+        /* Workspace canvas: stretch content to fill the pane (no grey gap under text box) */
+        #workspace-viewport-container {
+            display: flex;
+            flex-direction: column;
+        }
+        .workspace-subtab-content {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+        .workspace-subtab-content > .text-center {
+            margin: auto;
+        }
+        #subtab-raw {
+            display: flex;
+            flex-direction: column;
+        }
+        #workspace-raw-file-content {
+            flex: 1 1 auto;
+        }
+
         .progress {
             height: 6px !important;
             background-color: var(--outline-variant) !important;
@@ -1611,7 +1631,7 @@
                             </div>
 
                             <!-- Mind Map Node -->
-                            <div class="workspace-subtab-content d-none w-100" id="subtab-mindmap" style="height: calc(100vh - 240px); min-height: 500px; padding: 0; overflow: hidden;">
+                            <div class="workspace-subtab-content d-none w-100" id="subtab-mindmap" style="padding: 0; overflow: hidden;">
                                 <div class="text-center py-5 text-muted" id="subtab-mindmap-empty">
                                     <i class="bi bi-diagram-3 fs-1 opacity-50 mb-3 d-block"></i>
                                     <h5>No Mind Map Compiled</h5>
