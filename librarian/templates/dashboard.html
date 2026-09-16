@@ -20,9 +20,12 @@
         })();
     </script>
     <script>
-        // Notify the local dashboard server to shut down the moment this
-        // window/tab is closed, so the background process exits and the port
-        // is released (the server also self-exits via an idle timeout fallback).
+        // Notify the local dashboard server to shut down when this window/tab
+        // closes, so the background process exits and the port is released.
+        // Note: this also fires on F5 refresh - that is safe, because the
+        // server arms (not fires) the shutdown and any reconnect within a short
+        // grace period (the page reload) cancels it. The server also self-exits
+        // via an idle timeout fallback if this beacon never arrives.
         window.addEventListener('beforeunload', function () {
             try { navigator.sendBeacon('/api/shutdown'); } catch (e) { /* ignore */ }
         });

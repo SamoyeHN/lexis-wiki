@@ -376,7 +376,11 @@ def main():
             print("(Ctrl+C also works.)")
             
             # Open browser automatically in a separate thread
+            # (skipped when LEXIS_NO_BROWSER is set - e.g. automated tests)
             def open_browser():
+                import os as _os
+                if _os.environ.get("LEXIS_NO_BROWSER"):
+                    return
                 try:
                     webbrowser.open(url)
                 except Exception:
@@ -385,26 +389,39 @@ def main():
             threading.Thread(target=open_browser, daemon=True).start()
             
             # Auto-shutdown once the browser is gone:
-            #  - Immediate: /api/shutdown beacon fired by the page's beforeunload handler.
-            #  - Fallback:  idle timeout (the page polls every ~3s, so a live tab always keeps
-            #               the server alive).
-            #  - Safety:    never kill in-progress background jobs (compile / re-audit); the
-            #               server stays up until they finish, then exits automatically.
+            #  - Beacon:    /api/shutdown fired by the page's beforeunload handler. It is
+            #               ARMED, not immediate: an F5 refresh also fires the beacon, but
+            #               the browser reconnects within ~1s; the first new request
+            #               (touch()) cancels the pending shutdown and the page reloads
+            #               normally. If nothing comes back within SHUTDOWN_GRACE the
+            #               client truly left, and the server exits.
+            #  - Fallback:  idle timeout (the page polls every ~3s, so a live tab always
+            #               keeps the server alive).
+            #  - Safety:    never kill in-progress background jobs (compile / re-audit);
+            #               the server stays up until they finish, then exits automatically.
             IDLE_TIMEOUT = 15          # seconds without any request => client is gone
             NO_CLIENT_GRACE = 30       # seconds to wait for the browser to open its first request
+            SHUTDOWN_GRACE = 2         # seconds after the beacon to wait for a reconnect (F5)
             server_start_ts = time.time()
 
             def _should_exit():
-                shutdown_requested, last_ts, has_running = DashboardState.lifecycle()
+                shutdown_at, last_ts, has_running = DashboardState.lifecycle()
                 if has_running:
                     return False  # hold until running background jobs complete
-                if shutdown_requested:
-                    return True
+                if shutdown_at is not None:
+                    # Grace period: if the client reconnects (F5 refresh), touch() has
+                    # already cleared shutdown_at and we stay up.
+                    return (time.time() - shutdown_at) > SHUTDOWN_GRACE
                 if last_ts is None:
                     # No client ever connected (e.g. browser failed to open): give it a grace period
                     return (time.time() - server_start_ts) > NO_CLIENT_GRACE
                 return (time.time() - last_ts) > IDLE_TIMEOUT
 
+            # Poll with a socket-level timeout: handle_request() then returns
+            # after 0.2s of silence instead of blocking forever, so the exit
+            # checks above (beacon grace period, idle timeout) stay responsive
+            # and Ctrl+C is handled promptly.
+            httpd.timeout = 0.2
             try:
                 while not _should_exit():
                     httpd.handle_request()

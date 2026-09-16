@@ -23,27 +23,37 @@ class DashboardState:
     lock = threading.Lock()
 
     # --- Server lifecycle (auto-shutdown when the browser is closed) ---
-    last_activity_ts = None   # timestamp of the last request received
-    shutdown_requested = False  # set by /api/shutdown (browser beforeunload beacon)
+    last_activity_ts = None        # timestamp of the last request received
+    shutdown_requested_at = None   # set by /api/shutdown (browser beforeunload beacon);
+                                   # any later request (touch()) cancels a pending shutdown
 
     @classmethod
     def touch(cls):
-        """Record that the browser client is still alive (call on every request)."""
+        """Record that the browser client is still alive (call on every request).
+        Also cancels a pending shutdown: if a request arrives after the beacon,
+        the client is coming back (e.g. an F5 refresh) and must not be killed."""
         import time
         with cls.lock:
             cls.last_activity_ts = time.time()
+            cls.shutdown_requested_at = None
 
     @classmethod
     def mark_shutdown(cls):
+        """Arm the shutdown (browser beforeunload beacon). The supervisor exits
+        only after SHUTDOWN_GRACE elapses without any new request. The beacon
+        request itself does NOT count as activity (it is the last words of a
+        leaving page), so it resets last_activity_ts."""
+        import time
         with cls.lock:
-            cls.shutdown_requested = True
+            cls.shutdown_requested_at = time.time()
+            cls.last_activity_ts = None
 
     @classmethod
     def lifecycle(cls):
-        """Return (shutdown_requested, last_activity_ts, has_running_jobs) under one lock."""
+        """Return (shutdown_requested_at, last_activity_ts, has_running_jobs) under one lock."""
         with cls.lock:
             has_running = any(j.get("status") == "running" for j in cls.jobs.values())
-            return cls.shutdown_requested, cls.last_activity_ts, has_running
+            return cls.shutdown_requested_at, cls.last_activity_ts, has_running
 
     @classmethod
     def create_job(cls, job_type, target):
