@@ -743,6 +743,8 @@
         #workspace-viewport-container {
             display: flex;
             flex-direction: column;
+            flex-basis: 0%;
+            min-height: 0;
         }
         .workspace-subtab-content {
             flex: 1 1 auto;
@@ -1547,7 +1549,7 @@
                         </div>
 
                         <!-- Active Viewport Panels -->
-                        <div class="flex-grow-1 p-3 overflow-y-auto" style="max-height: calc(100vh - 200px); background: rgba(0,0,0,0.05);" id="workspace-viewport-container">
+                        <div class="flex-grow-1 p-3 overflow-y-auto" style="background: rgba(0,0,0,0.05);" id="workspace-viewport-container">
                             
                             <!-- Transcribing / Processing Viewport -->
                             <div class="workspace-subtab-content d-none" id="subtab-transcribing">
