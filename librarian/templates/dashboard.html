@@ -496,7 +496,8 @@
             display: flex;
             flex-direction: column;
             height: 100%;
-            min-height: min(600px, calc(100vh - 140px));
+            min-height: 0;
+            flex: 1 1 auto;
         }
 
         .preview-header {
@@ -714,6 +715,8 @@
             gap: 0.5rem;
             padding: 0.5rem 1rem 0;
             background: rgba(15, 23, 42, 0.1);
+            border-top-left-radius: inherit;
+            border-top-right-radius: inherit;
         }
         .workspace-tab-btn {
             background: transparent;
@@ -745,6 +748,8 @@
             flex-direction: column;
             flex-basis: 0%;
             min-height: 0;
+            border-bottom-left-radius: inherit;
+            border-bottom-right-radius: inherit;
         }
         .workspace-subtab-content {
             flex: 1 1 auto;
@@ -759,6 +764,13 @@
         }
         #workspace-raw-file-content {
             flex: 1 1 auto;
+        }
+        .workspace-markdown-card {
+            background: var(--surface);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            box-shadow: var(--card-shadow);
         }
 
         .progress {
@@ -1201,18 +1213,112 @@
             animation: spin 2s linear infinite;
         }
 
-        /* --- Responsive: keep middle-column actions visible (wrap instead of clip) --- */
-        .workspace-tabs > .d-flex {
-            min-width: 0;
+        /* --- App-Shell Layout: Viewport Lock & Column Scroll Isolation --- */
+        :root {
+            --header-height: 68px; /* Safe default fallback before JS measurement */
         }
-        @media (max-width: 1399.98px) {
-            .edit-syllabus-label { display: none; }
+
+        /* Default layout: main offset dynamically follows fixed-top header */
+        main {
+            margin-top: var(--header-height);
+            transition: margin-top 0.2s ease;
         }
-        @media (max-width: 1199.98px) {
-            .workspace-tab-btn {
-                padding: 0.55rem 0.7rem;
-                font-size: 0.82rem;
-            }
+
+        body.in-workspace {
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden !important;
+        }
+
+        body.in-workspace main {
+            padding-top: 0.75rem !important;
+            padding-bottom: 0.5rem !important;
+            height: calc(100vh - var(--header-height));
+            height: calc(100dvh - var(--header-height));
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #view-workspace {
+            flex: 1 1 auto;
+            height: 100%;
+            min-height: 0;
+            max-height: 100%;
+            overflow: hidden;
+        }
+
+        #view-workspace > .row {
+            height: 100%;
+            min-height: 0;
+            max-height: 100%;
+            margin-top: 0;
+            margin-bottom: 0;
+        }
+
+        .workspace-sidebar-col {
+            height: 100%;
+            max-height: 100%;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 0;
+            padding-right: 4px;
+        }
+
+        .workspace-center-col {
+            height: 100%;
+            max-height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .workspace-center-col .preview-pane {
+            height: 100%;
+            max-height: 100%;
+            min-height: 0;
+            flex: 1 1 auto;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #workspace-viewport-container {
+            flex: 1 1 0;
+            min-height: 0;
+            max-height: 100%;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* Modern subtle scrollbar */
+        .workspace-sidebar-col::-webkit-scrollbar,
+        #workspace-viewport-container::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .workspace-sidebar-col::-webkit-scrollbar-track,
+        #workspace-viewport-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .workspace-sidebar-col::-webkit-scrollbar-thumb,
+        #workspace-viewport-container::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.25);
+            border-radius: 9999px;
+        }
+
+        .workspace-sidebar-col::-webkit-scrollbar-thumb:hover,
+        #workspace-viewport-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.45);
+        }
+
+        .workspace-sidebar-col,
+        #workspace-viewport-container {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
         }
     </style>
 </head>
@@ -1262,7 +1368,7 @@
     </header>
 
     <!-- CONTENT WRAPPER -->
-    <main class="px-4 px-lg-5 pt-3 pb-4" style="position: relative; z-index: 10; margin-top: 68px;">
+    <main class="px-4 px-lg-5 pt-3 pb-4" style="position: relative; z-index: 10;">
         
         <!-- SECTION 1: LIBRARY VIEW (Default homepage) -->
         <section id="view-library" class="fade-in">
@@ -1396,9 +1502,6 @@
                     </div>
                 </div>
             </div>
-                    </div>
-                </div>
-            </div>
         </section>
 
 
@@ -1407,7 +1510,7 @@
             <div class="row g-3">
                 
                 <!-- COLUMN 1: Source Manager & Pipeline Control (Width: 25% / col-lg-3) -->
-                <div class="col-lg-3 d-flex flex-column gap-3">
+                <div class="col-lg-3 d-flex flex-column gap-3 workspace-sidebar-col">
                     
                     <!-- Active Source Overview Card -->
                     <div class="bento-card" style="overflow: visible !important; position: relative; z-index: 2 !important;">
@@ -1518,7 +1621,7 @@
                 </div>
 
                 <!-- COLUMN 2: Document Canvas (Width: 50% / col-lg-6) -->
-                <div class="col-lg-6">
+                <div class="col-lg-6 workspace-center-col">
                     <div class="preview-pane h-100 d-flex flex-column">
                         <!-- Navigation Tabs inside split window -->
                         <div class="workspace-tabs d-flex align-items-center justify-content-between px-2">
@@ -1649,7 +1752,7 @@
                 </div>
 
                 <!-- COLUMN 3: Handouts & Quiz Suite (Width: 25% / col-lg-3) -->
-                <div class="col-lg-3 d-flex flex-column gap-3">
+                <div class="col-lg-3 d-flex flex-column gap-3 workspace-sidebar-col">
                     
                     <!-- Handout Quiz Generator Card -->
                     <div class="bento-card d-flex flex-column gap-3">
@@ -1723,13 +1826,6 @@
                         </div>
                     </div>
 
-                </div>
-
-            </div>
-        </section>
-
-                        </div>
-                    </div>
                 </div>
 
             </div>
@@ -2344,25 +2440,59 @@
         fetchRecentJobs();
 
         setTimeout(() => {
+            syncHeaderHeight();
             resizeCanvas();
             refreshGraph();
         }, 120);
     });
 
-    // Handle viewport resize for Force Graph
+    // Handle viewport resize for Force Graph & Dynamic Header Height
     window.addEventListener('resize', () => {
+        syncHeaderHeight();
         resizeCanvas();
         drawGraph();
     });
 
     // ------------------ WORKSPACE STATE CONTROL ------------------
+    function syncHeaderHeight() {
+        const header = document.querySelector('header.fixed-top');
+        if (header) {
+            const h = header.offsetHeight;
+            if (h > 0) {
+                document.documentElement.style.setProperty('--header-height', `${h}px`);
+            }
+        }
+    }
+
+    // Attach ResizeObserver to automatically adapt if header size shifts
+    if (window.ResizeObserver) {
+        const headerEl = document.querySelector('header.fixed-top');
+        if (headerEl) {
+            new ResizeObserver(() => syncHeaderHeight()).observe(headerEl);
+        }
+    }
+
+    let savedLibraryScrollY = 0;
+
     function openUnitWorkspace(filename) {
         if (currentUnit !== filename) {
             activePreviewPath = null;
             selectedCompileCategory = null;
         }
+        // Save current vertical scroll position of the library view before locking viewport
+        savedLibraryScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+
         currentUnit = filename;
         const file = rawFiles.find(f => f.name === filename);
+        // Measure and sync dynamic header height
+        syncHeaderHeight();
+        document.body.classList.add('in-workspace');
+
+        // Reset document window scroll immediately so top header and workspace dock cleanly at (0, 0)
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+
         // Sync visual UI crumbs & layout
         document.getElementById('view-library').classList.add('d-none');
         document.getElementById('view-workspace').classList.remove('d-none');
@@ -2393,11 +2523,15 @@
     function closeUnitWorkspace() {
         currentUnit = null;
         activePreviewPath = null;
+        document.body.classList.remove('in-workspace');
         document.getElementById('view-workspace').classList.add('d-none');
         document.getElementById('view-library').classList.remove('d-none');
         
         document.getElementById('header-brand-workspace').classList.replace('d-flex', 'd-none');
         document.getElementById('header-brand-normal').classList.replace('d-none', 'd-flex');
+
+        // Restore previously saved library scroll position gracefully
+        window.scrollTo(0, savedLibraryScrollY);
         
         // Reset subtab views
         switchWorkspaceSubTab('raw');
@@ -2711,10 +2845,10 @@
                     .replace(/`([^`]+)`/g, '<code class="font-monospace p-0.5 rounded text-danger bg-dark border" style="font-size: 0.75rem;">$1</code>')
                     .replace(/\[\[(.*?)\]\]/g, '<span class="text-info text-decoration-underline fw-semibold" style="cursor: pointer;">$1</span>');
 
-                targetElement.innerHTML = `<div>${frontmatterHtml}${html}</div>`;
+                targetElement.innerHTML = `<div class="workspace-markdown-card">${frontmatterHtml}${html}</div>`;
             })
             .catch(err => {
-                targetElement.innerHTML = `<span class="text-danger">Failed to parse document: ${err}</span>`;
+                targetElement.innerHTML = `<div class="workspace-markdown-card"><span class="text-danger">Failed to parse document: ${err}</span></div>`;
             });
     }
 
