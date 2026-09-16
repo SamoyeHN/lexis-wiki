@@ -413,6 +413,97 @@
             color: var(--color-danger-text);
         }
 
+        /* ===== Level 2 Quality Audit Badge & Distractor Psychometrics ===== */
+        .l2-qa-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 14px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 700;
+            background: rgba(16, 185, 129, 0.12);
+            color: #059669;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            margin-bottom: 14px;
+            position: relative;
+            cursor: help;
+        }
+
+        .l2-qa-tooltip {
+            position: absolute;
+            top: calc(100% + 10px);
+            left: 50%;
+            transform: translateX(-50%) translateY(-4px);
+            width: max-content;
+            max-width: 320px;
+            background: #1e293b;
+            color: #f1f5f9;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.5;
+            text-align: left;
+            white-space: normal;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+            z-index: 60;
+            pointer-events: none;
+        }
+
+        .l2-qa-tooltip::after {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-bottom-color: #1e293b;
+        }
+
+        .l2-qa-badge:hover .l2-qa-tooltip,
+        .l2-qa-badge:focus-within .l2-qa-tooltip {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .audit-point-subcard {
+            background: rgba(248, 250, 252, 0.95);
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            border-left: 3px solid rgba(124, 58, 237, 0.4);
+            border-radius: 8px;
+            padding: 9px 12px;
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--color-text-body);
+        }
+
+        .audit-point-tag {
+            font-size: 10.5px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .audit-point-tag.rationale {
+            background: rgba(16, 185, 129, 0.12);
+            color: #059669;
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+
+        .audit-point-tag.trap {
+            background: rgba(245, 158, 11, 0.12);
+            color: #d97706;
+            border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+
         .results-pct {
             font-size: 72px; 
             font-weight: 900;
@@ -569,6 +660,50 @@
                 `;
             }
 
+            getAuditBadgeHTML() {
+                const audit = this.data._expert_audit;
+                if (!audit) return '';
+                const score = audit.overall_quality_score ?? 100;
+                const accuracy = Math.round((audit.blind_solve_accuracy ?? 1.0) * 100);
+                const passed = audit.pass_audit !== false;
+                const isHighQuality = passed && accuracy >= 80;
+
+                const cStats = audit.cure_stats || null;
+                let text = `L2 Expert Audit: ${score}% (${accuracy}% Blind Accuracy)`;
+                if (cStats && (cStats.repair > 0 || cStats.rewrite > 0)) {
+                    text = `L2 Expert Audit: ${score}% (Surgically Cured: +${cStats.repair + cStats.rewrite})`;
+                }
+                if (!isHighQuality) {
+                    text = `⚠️ L2 Review Needed: ${score}% (${accuracy}% Blind Accuracy)`;
+                }
+                const tooltip = audit.summary_verdict || '';
+
+                const bg = isHighQuality ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)';
+                const color = isHighQuality ? '#059669' : '#d97706';
+                const border = isHighQuality ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
+
+                const iconSvg = isHighQuality ? `
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        <polyline points="9 12 11 14 15 10"></polyline>
+                    </svg>
+                ` : `
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                `;
+
+                return `
+                    <div class="l2-qa-badge" style="background: ${bg}; color: ${color}; border-color: ${border};">
+                        ${iconSvg}
+                        <span>${text}</span>
+                        <span class="l2-qa-tooltip">${tooltip.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                    </div>
+                `;
+            }
+
             viewWelcome() {
                 const cefr = this.data.cefr_level || 'B2';
                 const title = this.data.title || 'Dialogue Title';
@@ -584,13 +719,16 @@
                             
                             <!-- Right Column -->
                             <div class="welcome-right">
-                                <div class="cefr-badge">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                        <line x1="18" y1="20" x2="18" y2="4"></line>
-                                        <line x1="12" y1="20" x2="12" y2="10"></line>
-                                        <line x1="6" y1="20" x2="6" y2="15"></line>
-                                    </svg>
-                                    CEFR Level ${cefr}
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                                    <div class="cefr-badge">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                            <line x1="18" y1="20" x2="18" y2="4"></line>
+                                            <line x1="12" y1="20" x2="12" y2="10"></line>
+                                            <line x1="6" y1="20" x2="6" y2="15"></line>
+                                        </svg>
+                                        CEFR Level ${cefr}
+                                    </div>
+                                    ${this.getAuditBadgeHTML()}
                                 </div>
                                 
                                 <h1 class="dialogue-title">${title}</h1>
@@ -669,6 +807,37 @@
                                 <div class="feedback-box ${this.selected === q.correct_answer_index ? 'feedback-correct' : 'feedback-incorrect'}">
                                     <strong>${this.selected === q.correct_answer_index ? '✓ Correct!' : '✗ Incorrect'}</strong>
                                     <p style="margin-top: 6px;">${q.explanation || ''}</p>
+                                    ${(() => {
+                                        const audit = this.data._expert_audit;
+                                        if (!audit || !Array.isArray(audit.questions) || !audit.questions[this.currentIdx]) return '';
+                                        const itemAudit = audit.questions[this.currentIdx];
+                                        if (!Array.isArray(itemAudit.distractors) || itemAudit.distractors.length === 0) return '';
+                                        
+                                        let dHtml = '<div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(0,0,0,0.15);">';
+                                        dHtml += '<div style="font-weight: 700; font-size: 12px; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;">Expert Distractor Analysis & Traps:</div>';
+                                        
+                                        itemAudit.distractors.forEach(d => {
+                                            if (!d) return;
+                                            const letter = d.option_letter || '?';
+                                            const isTarget = (letter.charCodeAt(0) - 65 === q.correct_answer_index);
+                                            const tagClass = isTarget ? 'audit-point-tag rationale' : 'audit-point-tag trap';
+                                            let trapLabel = d.trap_type || (isTarget ? 'Correct Answer' : 'Plausible Distractor');
+                                            if (!isTarget && trapLabel.toLowerCase().includes('correct')) trapLabel = 'Plausible Distractor';
+                                            const plausibility = d.plausibility_rating ? ` · Plausibility: ${d.plausibility_rating}` : '';
+                                            
+                                            dHtml += `
+                                                <div class="audit-point-subcard">
+                                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                                                        <strong style="color: var(--color-primary);">Option [${letter}]:</strong>
+                                                        <span class="${tagClass}">${trapLabel}${plausibility}</span>
+                                                    </div>
+                                                    ${d.elimination_rationale ? `<div style="font-size: 12px; color: var(--color-text-body);">${d.elimination_rationale}</div>` : ''}
+                                                </div>
+                                            `;
+                                        });
+                                        dHtml += '</div>';
+                                        return dHtml;
+                                    })()}
                                 </div>
                             ` : ''}
                             
@@ -690,6 +859,7 @@
                 return `
                     <div class="card text-center" style="max-width: 500px; margin: 0 auto; text-align: center;">
                         <h1 style="color: var(--color-text-main);">Quiz Complete!</h1>
+                        <div style="margin-top: 10px;">${this.getAuditBadgeHTML()}</div>
                         <div class="results-pct">${pct}%</div>
                         <p style="font-size: 16px; color: var(--color-text-body); margin-bottom: 24px;">
                             You got <strong>${this.score}</strong> out of <strong>${this.data.questions.length}</strong> questions correct.

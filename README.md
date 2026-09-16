@@ -113,78 +113,29 @@ Settings can be edited directly in the Dashboard UI or persistently saved in `wi
 
 ---
 
-## 🛠️ Command-Line Interface (CLI) Manual
+## 🛠️ Quick CLI Reference
 
-### 1. Compiling Source Material into Wiki Extractions
+Lexis provides an intuitive command-line interface for terminal users. Below are the most frequently used commands:
 
 ```bash
-# Compile directly from an external source file without manual copying
-lexis compile "D:\Courseware\Book_4_Unit_1.md"
+# 1. Launch the Web Dashboard & Workspace
+lexis dashboard
 
-# Re-compile an existing unit already placed inside wiki/
+# 2. Compile source text into vocabulary, grammar, and mind maps
 lexis compile Book_4_Unit_1
-```
 
-### 2. Generating Interactive Quizzes
-
-```bash
-# Reading Comprehension Quiz (10 questions)
+# 3. Generate interactive quizzes (e.g., Reading Comprehension)
 lexis quiz Book_4_Unit_1 --template reading --count 10
 
-# In-context Vocabulary Quiz (20 questions)
-lexis quiz Book_4_Unit_1 --template vocabulary --count 20
-
-# Comparative Translation Quiz (15 questions)
-lexis quiz Book_4_Unit_1 --template translation --count 15
-
-# Listening Dialogue Quiz with auto-synthesized audio (10 questions)
-lexis quiz Book_4_Unit_1 --template listening --count 10
-
-# Timestamped Video Comprehension Quiz (5 questions)
-lexis quiz Book_4_Unit_1 --template video --count 5
-```
-
-### 3. Importing Video & Audio Sources
-
-```bash
-# Import from YouTube or Bilibili URL (auto-fetches subtitles)
-lexis video-import "https://www.youtube.com/watch?v=..."
-
-# Import local video file (auto-transcribes via faster-whisper)
+# 4. Import video/audio media (with Whisper transcription)
 lexis video-import "lecture.mp4"
 
-# Import video with explicit external subtitle track
-lexis video-import "lecture.mp4" --subtitle "subtitles.srt"
-```
-
-### 4. Running Quality Audits & Inspection
-
-```bash
-# Run quality audit across generation execution logs and display LLM Hero Board
-lexis audit
-
-# Run batch re-audit over existing handouts using the Level-2 Expert Judge
-lexis re-audit
-
-# Re-audit reading quizzes for a specific unit with 4 parallel worker threads
-lexis re-audit Book_4_Unit_1 --template reading --workers 4
-```
-
-### 5. Maintenance & Refactoring
-
-```bash
-# Inspect wiki integrity and check for broken [[wikilinks]]
+# 5. Lint [[wikilinks]] integrity & prune orphans
 lexis lint
-
-# Normalize tags to standard kebab-case format
-lexis lint --fix-tags
-
-# Safely prune orphaned extractions/handouts where sources were removed
-lexis lint --prune
-
-# Safely rename a unit folder and cascade updates across all internal files
-lexis rename Book_4_Unit_1 Book_4_Unit_A
 ```
+
+📖 **Need full parameters, batch auditing, or unit refactoring commands?**  
+👉 See the complete **[Command-Line Interface (CLI) Manual](docs/cli.md)**.
 
 ---
 
@@ -222,6 +173,24 @@ For best results when running locally with **Ollama**:
 
 ---
 
-## 📄 License
+## 💖 Acknowledgments & Built With
 
-MIT License. Designed with excellence for EFL/ESL educators, instructional designers, and autonomous learners.
+Lexis Wiki is powered by outstanding open-source frameworks, foundational research, and design systems:
+
+- **LLM & Inference Infrastructure**: [Ollama](https://ollama.com/) & [OpenAI API Compatible Specification](https://platform.openai.com/)
+- **Core Pedagogical & Judge Models**: [Google Gemma](https://ai.google.dev/gemma), Mistral AI, and Qwen
+- **Speech & Multimodal Audio**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Kokoro TTS](https://github.com/hexgrad/kokoro), and [Edge-TTS](https://github.com/rany2/edge-tts)
+- **Design System & Typography**: [Bootstrap 5](https://getbootstrap.com/), [Google Fonts & Material Symbols](https://fonts.google.com/), and [Bootstrap Icons](https://icons.getbootstrap.com/)
+- **Special Thanks**: Developed with the assistance of **Google DeepMind's Antigravity** agentic pair programming platform.
+
+---
+
+## 📄 License & Copyright
+
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for full details.
+
+```text
+Copyright (c) 2026 Lexis Wiki Contributors
+```
+
+Designed with pedagogical excellence for language educators, instructional designers, and researchers in AI-assisted education.

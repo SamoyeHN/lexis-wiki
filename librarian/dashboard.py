@@ -279,6 +279,11 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.serve_wiki_file(path)
             return
 
+        # Serve static assets (CSS, JS, fonts)
+        if path.startswith("/static/"):
+            self.serve_static_asset(path)
+            return
+
         # Serve the Dashboard SPA (or index page)
         if path == "/" or path == "/index.html" or path == "/dashboard":
             self.serve_dashboard()
@@ -397,6 +402,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
 
         response_data = {}
@@ -827,6 +835,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
 
         response_data = {"success": True}
@@ -1410,6 +1421,9 @@ category: "video_transcript"
     def serve_dashboard(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
 
         template_path = Path(__file__).parent / "templates" / "dashboard.html"
@@ -1420,3 +1434,45 @@ category: "video_transcript"
             html_content = "<h1>Error: templates/dashboard.html not found!</h1>"
 
         self.wfile.write(html_content.encode("utf-8"))
+
+    def serve_static_asset(self, path):
+        # Resolve path relative to librarian/static/ directory
+        rel_path = urllib.parse.unquote(path).lstrip("/")
+        # Remove 'static/' prefix to locate inside librarian/static
+        if rel_path.startswith("static/"):
+            rel_path = rel_path[len("static/"):]
+
+        static_root = (Path(__file__).parent / "static").resolve()
+        file_path = (static_root / rel_path).resolve()
+
+        # Security check: ensure file stays inside librarian/static
+        if not str(file_path).startswith(str(static_root)):
+            self.send_error(403, "Access Denied")
+            return
+
+        if file_path.exists() and file_path.is_file():
+            mime_type, _ = mimetypes.guess_type(str(file_path))
+            if not mime_type:
+                if file_path.suffix == ".css":
+                    mime_type = "text/css; charset=utf-8"
+                elif file_path.suffix == ".js":
+                    mime_type = "application/javascript; charset=utf-8"
+                else:
+                    mime_type = "application/octet-stream"
+            elif mime_type == "text/css":
+                mime_type = "text/css; charset=utf-8"
+            elif mime_type in ["application/javascript", "text/javascript"]:
+                mime_type = "application/javascript; charset=utf-8"
+
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            with open(file_path, "rb") as f:
+                self.wfile.write(f.read())
+        else:
+            self.send_error(404, "Static Asset Not Found")

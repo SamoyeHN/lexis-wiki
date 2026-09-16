@@ -314,15 +314,18 @@ def main():
                         out = raw_out.decode("gbk", errors="ignore")
                     for line in out.splitlines():
                         line = line.strip()
-                        # Support English 'LISTENING' and Chinese 'LISTENING' / '监听'
-                        if f":{target_port} " in line or f":{target_port}\t" in line:
+                        upper_line = line.upper()
+                        # Strictly target sockets in LISTENING / 监听 state
+                        # Avoid misidentifying client-side outbound ports or transient TIME_WAIT states
+                        is_listening = ("LISTENING" in upper_line or "监听" in line)
+                        if is_listening and (f":{target_port} " in line or f":{target_port}\t" in line):
                             parts = line.split()
                             try:
                                 pid = int(parts[-1])
                                 if pid and pid != current_pid and pid != 0:
                                     print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
                                     subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
-                                    time.sleep(0.5)
+                                    time.sleep(1.0)
                             except (ValueError, IndexError):
                                 pass
                 except Exception:
@@ -395,13 +398,15 @@ def main():
             #               (touch()) cancels the pending shutdown and the page reloads
             #               normally. If nothing comes back within SHUTDOWN_GRACE the
             #               client truly left, and the server exits.
-            #  - Fallback:  idle timeout (the page polls every ~3s, so a live tab always
-            #               keeps the server alive).
+            #  - Fallback:  idle timeout. The page polls every ~3s, so a foreground tab
+            #               keeps the server alive — but browsers throttle timers in
+            #               background tabs, so allow a generous window (5 min) before
+            #               concluding the client is gone.
             #  - Safety:    never kill in-progress background jobs (compile / re-audit);
             #               the server stays up until they finish, then exits automatically.
-            IDLE_TIMEOUT = 15          # seconds without any request => client is gone
-            NO_CLIENT_GRACE = 30       # seconds to wait for the browser to open its first request
-            SHUTDOWN_GRACE = 2         # seconds after the beacon to wait for a reconnect (F5)
+            IDLE_TIMEOUT = 300         # seconds without any request => client is gone (5 min)
+            NO_CLIENT_GRACE = 60       # seconds to wait for the browser to open its first request
+            SHUTDOWN_GRACE = 45        # seconds after the beacon to wait for a reconnect (covers slow refresh / tab transitions)
             server_start_ts = time.time()
 
             def _should_exit():

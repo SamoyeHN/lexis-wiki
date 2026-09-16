@@ -161,6 +161,50 @@ def get_model_profile(model_name: str) -> dict:
 
     return profile
 
+def _is_real_string_closer(s: str, i: int) -> bool:
+    """Decide whether s[i] (a '"' seen inside a string) genuinely closes it.
+
+    Structural lookahead:
+      - followed by  } ] :  or end-of-input           -> real closer
+      - followed by  ,  then  { } ] [  (or EOF)        -> real closer
+      - followed by  ,  then a string that is followed by ':' (a real key)
+                                                          -> real closer
+      - followed by a bare word / anything else         -> stray inner quote
+    """
+    n = len(s)
+    j = i + 1
+    while j < n and s[j].isspace():
+        j += 1
+    if j >= n:
+        return True                       # string runs to end of input
+    c = s[j]
+    if c in '}]' or c == ':':
+        return True
+    if c == ',':
+        k = j + 1
+        while k < n and s[k].isspace():
+            k += 1
+        if k >= n:
+            return True                   # dangling trailing comma (fixed later)
+        if s[k] in '{}[]':
+            return True
+        if s[k] == '"':
+            # Next token is a string. In valid JSON, that string is either:
+            #   (a) an object key  -> followed by ':'
+            #   (b) the next element in a string array -> followed by ',' or ']'
+            m = k + 1
+            while m < n and s[m] != '"':
+                if s[m] == '\\':
+                    m += 1
+                m += 1
+            p = m + 1
+            while p < n and s[p].isspace():
+                p += 1
+            return p < n and s[p] in ':,]'
+        return False                      # comma followed by bare word -> inner quote
+    return False                          # followed by bare word -> inner quote
+
+
 class LLMClient:
     def __init__(self, model: Optional[str] = None):
         self._model_override = model
@@ -311,7 +355,15 @@ class LLMClient:
         if schema and not use_gbnf and not schema_already_present:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=False)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
-            schema_prompt = f"### JSON SCHEMA REQUIREMENT ###\nRespond strictly with a valid JSON object matching this schema definition:\n```json\n{schema_json_str}\n```"
+            schema_prompt = (
+                f"### JSON SCHEMA REQUIREMENT ###\n"
+                f"Respond strictly with a valid JSON object matching this schema definition:\n"
+                f"```json\n{schema_json_str}\n```\n"
+                f"### OUTPUT HYGIENE ###\n"
+                f"Return ONLY the final JSON — no comments, notes, annotations, or reasoning anywhere "
+                f"(e.g. never emit `(Note: ...)` or any other out-of-band text). "
+                f"Every value must be a single clean string."
+            )
             system_msg = next((m for m in messages if m["role"] == "system"), None)
             if system_msg:
                 if "### JSON SCHEMA REQUIREMENT ###" not in system_msg["content"]:
@@ -837,6 +889,92 @@ class LLMClient:
         # 0. Strip <think>...</think> reasoning blocks if present in text output
         json_str = re.sub(r"<think>.*?</think>", "", json_str, flags=re.DOTALL).strip()
 
+        # 0.5. Strip out-of-band parenthesized comments leaked OUTSIDE JSON strings
+        # (small models sometimes emit e.g. `"value", (Note: 'x' is ...),`).
+        # Safe: valid JSON never contains '(' outside of string values, so any such
+        # group is junk; quotes inside it no longer threaten the parser once removed.
+        if '(' in json_str:
+            buf = []
+            i, n, in_string, escaped = 0, len(json_str), False, False
+            while i < n:
+                ch = json_str[i]
+                if in_string:
+                    buf.append(ch)
+                    if escaped:
+                        escaped = False
+                    elif ch == '\\':
+                        escaped = True
+                    elif ch == '"':
+                        in_string = False
+                    i += 1
+                    continue
+                if ch == '"':
+                    in_string = True
+                    buf.append(ch)
+                    i += 1
+                    continue
+                if ch == '(':
+                    depth = 1
+                    j = i + 1
+                    while j < n and depth:
+                        if json_str[j] == '(':
+                            depth += 1
+                        elif json_str[j] == ')':
+                            depth -= 1
+                        j += 1
+                    if depth == 0:
+                        # Remove the group; if both sides already carry commas, drop the left one
+                        left = next((c for c in reversed(buf) if not c.isspace()), None)
+                        right = json_str[j:j + 8].lstrip()[:1]
+                        if left == ',' and right == ',':
+                            while buf and buf[-1].isspace():
+                                buf.pop()
+                            buf.pop()  # left comma
+                        i = j
+                        continue
+                buf.append(ch)
+                i += 1
+            json_str = re.sub(r",\s*,", ",", "".join(buf))
+
+        # 0.6. Escape unescaped double quotes INSIDE string values.
+        # Small models often cram several quoted source phrases into one value,
+        # e.g.  "quoted_sentence": "ships burned" and "vessels went up in flames"
+        # which is invalid JSON.  A quote inside a string is a genuine closer only
+        # if what follows (past whitespace) is a JSON structural token: one of
+        # } ] : , end-of-input, or a comma whose next token is structural (a new
+        # key string must itself be followed by ':').  Anything else is a stray
+        # content quote and gets escaped so the string keeps its true extent.
+        # (Runs AFTER comment-stripping so a comma followed by junk-parens is
+        # not misread as "stray inner quote".)
+        out = []
+        i, n = 0, len(json_str)
+        in_string = False
+        escaped = False
+        while i < n:
+            ch = json_str[i]
+            if not in_string:
+                if ch == '"':
+                    in_string = True
+                out.append(ch)
+                i += 1
+                continue
+            if escaped:
+                out.append(ch)
+                escaped = False
+            elif ch == '\\':
+                out.append(ch)
+                escaped = True
+            elif ch == '"':
+                if _is_real_string_closer(json_str, i):
+                    in_string = False
+                    out.append(ch)
+                else:
+                    out.append('\\"')
+            else:
+                out.append(ch)
+            i += 1
+        json_str = "".join(out)
+
         # 1. Normalize whitespace (tabs to spaces)
         json_str = json_str.replace('\t', ' ')
 
@@ -858,6 +996,10 @@ class LLMClient:
         # Instead of closing the prior item with '}' and starting '{', the model wrote ',\n "key": {'
         # NOTE: Do NOT match valid schema keys that legitimately hold objects (e.g. "cured_question": {)
         json_str = re.sub(r',\s*\n(\s*)(?!"(?:cured_question)"\s*:)"[^"]+":\s*\{', r'\n\1},\n\1{', json_str)
+
+        # 2.3b. Fix premature closing brace before object property keys
+        # e.g., after "lesson_hook": "..." the model wrote '},\n  "concepts": [' instead of ',\n  "concepts": ['
+        json_str = re.sub(r'\}\s*,\s*(?:\r?\n\s*)*("[A-Za-z0-9_]+"\s*:)', r',\n  \1', json_str)
 
         # 2.4. Fix array wrongly closed with object braces
         # e.g., starts with "questions": [ but ends with }\n  }\n} instead of }\n  ]\n}
