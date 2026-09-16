@@ -496,7 +496,7 @@
             display: flex;
             flex-direction: column;
             height: 100%;
-            min-height: 600px;
+            min-height: min(600px, calc(100vh - 140px));
         }
 
         .preview-header {
@@ -709,6 +709,8 @@
         .workspace-tabs {
             border-bottom: 1px solid var(--card-border);
             display: flex;
+            flex-wrap: wrap;
+            row-gap: 0.4rem;
             gap: 0.5rem;
             padding: 0.5rem 1rem 0;
             background: rgba(15, 23, 42, 0.1);
@@ -720,6 +722,8 @@
             padding: 0.6rem 1.25rem;
             font-weight: 500;
             font-size: 0.9rem;
+            white-space: nowrap;
+            flex: 0 0 auto;
             border-radius: var(--radius-default) var(--radius-default) 0 0;
             border-bottom: 2px solid transparent;
             transition: all 0.2s ease;
@@ -1174,6 +1178,20 @@
             border-right-color: #a855f7;
             animation: spin 2s linear infinite;
         }
+
+        /* --- Responsive: keep middle-column actions visible (wrap instead of clip) --- */
+        .workspace-tabs > .d-flex {
+            min-width: 0;
+        }
+        @media (max-width: 1399.98px) {
+            .edit-syllabus-label { display: none; }
+        }
+        @media (max-width: 1199.98px) {
+            .workspace-tab-btn {
+                padding: 0.55rem 0.7rem;
+                font-size: 0.82rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1477,9 +1495,9 @@
                     </div>
                 </div>
 
-                <!-- COLUMN 2: Document Canvas (Width: 50% / col-lg-5) -->
-                <div class="col-lg-5">
-                    <div class="preview-pane h-100 d-flex flex-column" style="min-height: 550px;">
+                <!-- COLUMN 2: Document Canvas (Width: 50% / col-lg-6) -->
+                <div class="col-lg-6">
+                    <div class="preview-pane h-100 d-flex flex-column">
                         <!-- Navigation Tabs inside split window -->
                         <div class="workspace-tabs d-flex align-items-center justify-content-between px-2">
                             <div class="d-flex align-items-center">
@@ -1491,7 +1509,7 @@
                             </div>
                             <div class="d-flex align-items-center gap-1.5 me-1">
                                 <button class="btn btn-sm btn-outline-info rounded-pill px-2.5 py-0.5 font-monospace fw-semibold" id="btn-edit-source-syllabus" onclick="openSourceEditorForCurrentUnit()" title="Edit lesson text and syllabus vocabulary/grammar" style="font-size: 0.7rem; border-color: rgba(56, 189, 248, 0.35);">
-                                    <i class="bi bi-pencil-square me-1"></i>Edit Syllabus
+                                    <i class="bi bi-pencil-square me-1"></i><span class="edit-syllabus-label">Edit Syllabus</span>
                                 </button>
                                 <div class="dropdown">
                                     <button class="btn btn-sm btn-outline-secondary rounded-circle p-1 border-0" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Tab Actions" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;">
@@ -1608,8 +1626,8 @@
                     </div>
                 </div>
 
-                <!-- COLUMN 3: Handouts & Quiz Suite (Width: 33.3% / col-lg-4) -->
-                <div class="col-lg-4 d-flex flex-column gap-3">
+                <!-- COLUMN 3: Handouts & Quiz Suite (Width: 25% / col-lg-3) -->
+                <div class="col-lg-3 d-flex flex-column gap-3">
                     
                     <!-- Handout Quiz Generator Card -->
                     <div class="bento-card d-flex flex-column gap-3">
