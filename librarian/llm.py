@@ -1195,8 +1195,8 @@ class LLMClient:
         profile = get_model_profile(self.model)
 
         options = {
-            "num_predict": 16384,
-            "num_ctx": 32768,
+            "num_predict": 8192,
+            "num_ctx": 16384,
             "repeat_penalty": 1.1,  # Safeguard against catastrophic token degeneration loops
         }
         
@@ -1311,7 +1311,7 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "max_tokens": 16384,
+            "max_tokens": 8192,
             **kwargs
         }
         is_default_sampling = kwargs.pop("use_default_params", False) or (not schema and not json_format)
