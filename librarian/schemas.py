@@ -364,13 +364,13 @@ EXPRESSION_TYPES = Literal["phrasal verb", "idiom", "collocation", "set phrase"]
 
 @dataclasses.dataclass
 class VocabularyItem:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     word_cefr_level: VOCAB_CEFR_LEVELS = dataclasses.field(default="B2")
     quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class VocabularyExtraction:
@@ -380,13 +380,13 @@ class VocabularyExtraction:
 
 @dataclasses.dataclass
 class ExpressionItem:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: EXPRESSION_TYPES = dataclasses.field(default="phrasal verb")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class ExpressionsExtraction:
@@ -411,14 +411,14 @@ GRAMMAR_CATEGORIES = Literal[
 
 @dataclasses.dataclass
 class GrammarItem:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     category: GRAMMAR_CATEGORIES = "Concessive clauses"
-    quote: str = dataclasses.field(default="", metadata={"minLength": 1})
     pattern_formula: str = dataclasses.field(default="", metadata={"minLength": 1})
+    quote: str = dataclasses.field(default="", metadata={"minLength": 1})
     pedagogical_function: str = dataclasses.field(default="", metadata={"minLength": 1})
     imitation_example: str = dataclasses.field(default="", metadata={"minLength": 1})
     common_mistakes: str = dataclasses.field(default="", metadata={"minLength": 1})
     cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class GrammarExtraction:

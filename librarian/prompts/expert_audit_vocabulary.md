@@ -10,18 +10,19 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - 📚 **UNIT VOCABULARY LIST (Target Word Pool)**:
 {unit_vocabulary_list}
    - **MANDATORY TARGET INVARIANTS**:
-     * **Strict Pool Membership**: The `target_word` for EVERY assessment item MUST strictly belong to the Unit Vocabulary List above. Fabricated, hallucinated, or unlisted target words fail audit.
+     * **Strict Pool Membership**: The `target_word` for EVERY assessment item MUST strictly belong to the Unit Vocabulary List above. Fabricated, hallucinated, or unlisted target words CANNOT be passed. They MUST be triaged as `REWRITE` (`single_fit_valid = false`, pedagogical_score 20-40): you must discard the unlisted word and synthesize a brand-new assessment item in `cured_question` using an unused word strictly from the Unit Vocabulary List above.
      * **Inter-Item Target Uniqueness (No Duplicate Targets)**: Every question in the quiz must test a distinct, unique vocabulary word. Testing the same target word twice in one quiz is a FATAL FLAW (`single_fit_valid = false`, pedagogical_score 30-40, triage_action: REWRITE).
-     * **Surgical Rewrite Target Selection**: When triggering `REWRITE`:
+     * **Surgical Rewrite Target Selection (Anti-Abandonment Mandate)**:
+       - ⚠️ **NEVER ABANDON OR DELETE ITEMS**: Every defective item MUST be salvaged in `cured_question`. Never output `cured_question: null` when triage is `REWRITE` or `REPAIR`!
        - If the original item's target was valid and unique within this quiz, you may retain it.
-       - If the original target was duplicate, missing from options, or not in the pool, you MUST replace it with an unused word strictly selected from the Unit Vocabulary List above!
+       - If the original target was duplicate, unlisted, or missing from options, you MUST replace it with an unused word strictly selected from the Unit Vocabulary List above!
 
 0.1 **SYNTACTIC WELL-FORMEDNESS & UNIFIED TRIAGE CLASSIFICATION**:
    - **TIER 1: FATAL STEM / DOUBLE-KEY DEFECTS (Action: REWRITE, single_fit_valid = false, pedagogical_score 20-50)**:
      * **Unsolvable Double-Key**: The stem is generic or lacks contextual contrast/preposition clues, leaving two options equally defensible.
      * **Grammatical Collapse / Missing Predicate**: The sentence lacks a finite verb or options create ungrammatical fragments.
      * **Target Word Leakage**: The target word appears verbatim in the stem outside the blank.
-     * **Unlisted/Fabricated Target**: Target word is not in the Unit Vocabulary List.
+     * **Unlisted/Fabricated Target**: Target word is not in the Unit Vocabulary List. (MUST synthesize a replacement question in `cured_question` using an unassessed word from the list).
      * *Mandatory Cure*: Discard the broken item and write a completely pristine replacement item in `cured_question` (with fields: `target_word`, `question` [using '____'], `options` [array of 4 strings], `correct_answer_index` [0-3], `definition`, `explanation`).
    - **TIER 2: LOCAL DISTRACTOR & CRAFT DEFECTS (Action: REPAIR, single_fit_valid = true, pedagogical_score 60-75)**:
      * **Recycled Distractors / In-List Bleed**: Distractors are repeatedly reused across the quiz (e.g. same word in 3+ items) or pulled from the Unit Vocabulary List.

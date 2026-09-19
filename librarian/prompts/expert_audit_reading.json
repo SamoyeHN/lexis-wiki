@@ -120,47 +120,7 @@
             ]
           },
           "cured_question": {
-            "type": ["object", "null"],
-            "properties": {
-              "question": {
-                "type": "string",
-                "minLength": 1
-              },
-              "options": {
-                "type": "array",
-                "minItems": 4,
-                "maxItems": 4,
-                "items": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "correct_answer_index": {
-                "type": "integer",
-                "enum": [0, 1, 2, 3]
-              },
-              "category": {
-                "type": "string",
-                "enum": [
-                  "Main Idea",
-                  "Detail/Recall",
-                  "Inference",
-                  "Author's Tone/Purpose"
-                ]
-              },
-              "explanation": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "question",
-              "options",
-              "correct_answer_index",
-              "category",
-              "explanation"
-            ],
-            "additionalProperties": false
+            "type": "object"
           }
         },
         "required": [

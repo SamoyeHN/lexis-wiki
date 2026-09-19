@@ -121,11 +121,11 @@ class TestExpertAuditor(unittest.TestCase):
             ]
         }
         critique = ExpertAuditor.generate_critique_feedback(failed_report)
-        self.assertIn("LEVEL 2 EXPERT QUALITY AUDIT FAILED", critique)
-        self.assertIn("Multiple defensible keys or key leakage", critique)
-        self.assertIn("DIVERGENCE", critique)
-        self.assertIn("Option [C] is a flawed/trivial giveaway", critique)
-        self.assertIn("MANDATORY CORRECTION ACTIONS", critique)
+        self.assertIn("LEVEL 2 QUALITY AUDIT DEFECT TICKET", critique)
+        self.assertIn("Multiple defensible keys", critique)
+        self.assertIn("Blind-solver picked different option", critique)
+        self.assertIn("Option [C]: Grammatically broken", critique)
+        self.assertIn("MANDATE", critique)
 
     def test_surgical_defective_item_extraction_and_critique(self):
         audit_report = {

@@ -650,28 +650,16 @@ class ExpertAuditor:
                 )
             feedback_lines.append("")
 
-        feedback_lines.append("## SECTION 2: REPAIR INSTRUCTIONS & MANDATES")
-        feedback_lines.append("⚠️ CRITICAL: All repairs MUST strictly be grounded in the REFERENCE MATERIAL (VOCABULARY & GRAMMAR) provided in the first prompt above!")
-        feedback_lines.append("1. GROUNDED FIDELITY: Every revised stem, keyword, and grammar formula MUST strictly derive from the provided material above.")
-        feedback_lines.append("2. SELECTIVE SURGERY: Regenerate ONLY the defective items listed above. DO NOT touch, rewrite, or output the passed items.")
-        feedback_lines.append("3. STRICT BOUNDARIES: Place both target keyword and grammar formula INSIDE the [ ____ ] slot. Never duplicate words outside the slot.")
-        feedback_lines.append("4. ZERO-INDEX ALIGNMENT: 'correct_answer_index' must strictly be 0 for Option A, 1 for Option B, 2 for Option C, 3 for Option D.")
-        feedback_lines.append("5. OUTPUT FORMAT: Output a valid JSON object matching the quiz schema containing ONLY the repaired items in the 'questions' list.")
+        feedback_lines.append("🛑 MANDATE: Regenerate ONLY the defective items listed above into 'questions'. Keep all passed items untouched. Return the complete corrected JSON.")
 
         return "\n".join(feedback_lines)
 
     @classmethod
     def generate_critique_feedback(cls, audit_report: Dict[str, Any]) -> str:
         """Transforms a failed Level 2 Audit Report into surgical self-correction feedback for the LLM."""
-        score = audit_report.get("overall_quality_score", 0)
-        accuracy = audit_report.get("blind_solve_accuracy", 0.0) * 100
-        verdict = audit_report.get("summary_verdict", "")
-
         feedback_lines = [
-            f"### 🚨 [LEVEL 2 EXPERT QUALITY AUDIT FAILED - Score: {score}/100, Blind Solve Agreement: {accuracy:.1f}%]",
-            f"Executive Verdict: {verdict}",
-            "",
-            "CRITICAL DEFECTS IDENTIFIED BY PSYCHOMETRIC AUDITOR:"
+            "### 🚨 LEVEL 2 QUALITY AUDIT DEFECT TICKET",
+            "Fix ONLY the following defective item(s) while keeping all valid items completely intact:\n"
         ]
 
         for q_audit in audit_report.get("questions", []):
@@ -682,29 +670,25 @@ class ExpertAuditor:
 
             flaws = []
             if not single_valid:
-                flaws.append("Multiple defensible keys or key leakage detected (lacks unique single-fit answer)")
+                flaws.append("Multiple defensible keys or missing single valid key")
             if "[DIVERGENCE:" in diag:
-                flaws.append("Blind-solver chose a different option; question stem or evidence is ambiguous")
-            
+                flaws.append("Blind-solver picked different option; stem or evidence is ambiguous")
+
             # Check for low quality distractors
             for d in q_audit.get("distractors", []):
                 if d.get("plausibility_rating") == "Low (Flawed)":
-                    flaws.append(f"Option [{d.get('option_letter')}] is a flawed/trivial giveaway: {d.get('elimination_rationale')}")
+                    flaws.append(f"Option [{d.get('option_letter')}]: {d.get('elimination_rationale')}")
 
             if flaws or q_score < 80:
-                feedback_lines.append(f"- Item #{item_num} (Score: {q_score}/100):")
-                for f in flaws:
-                    feedback_lines.append(f"    * {f}")
-                if diag:
-                    feedback_lines.append(f"    * Auditor Note: {diag}")
+                feedback_lines.append(f"- [FIELD]: `questions[{item_num - 1}]`")
+                if flaws:
+                    feedback_lines.append(f"  [ERROR]: {'; '.join(flaws)}")
+                elif diag:
+                    feedback_lines.append(f"  [ERROR]: {diag}")
+                feedback_lines.append("  [LOOKUP]: `### SOURCE TEXT ###`")
 
         feedback_lines.append("")
-        feedback_lines.append("MANDATORY CORRECTION ACTIONS:")
-        feedback_lines.append("1. Ambiguous Stems: Sharpen the question stem with unequivocal textual anchors from the source.")
-        feedback_lines.append("2. Absolute Single-Fit: Ensure ONE and ONLY ONE option is defensible; eliminate accidental secondary keys.")
-        feedback_lines.append("3. Plausible Distractors: Replace any trivial or absurd choices with authentic linguistic/reading traps.")
-        feedback_lines.append("4. ZERO-INDEX ALIGNMENT: 'correct_answer_index' must be 0 for Option A, 1 for Option B, 2 for Option C, 3 for Option D. NEVER declare a mismatched index number.")
-        feedback_lines.append("5. Please output the corrected, complete JSON object resolving all issues above.")
+        feedback_lines.append("🛑 MANDATE: Ensure strictly ONE defensible key with unambiguous evidence. Align 'correct_answer_index' (0 for A, 1 for B, 2 for C, 3 for D). Return ONLY the complete corrected JSON object.")
 
         return "\n".join(feedback_lines)
 

@@ -246,6 +246,106 @@ class WikiProcessor:
 
         return clean_body, syllabus_vocab, syllabus_grammar, syllabus_expressions
 
+    # Normalization mapping from legacy/verbose grammar slots to standard COBUILD tokens
+    GRAMMAR_SLOT_NORMALIZATION: Dict[str, str] = {
+        "clause": "[S]",
+        "main clause": "[S]",
+        "subordinate clause": "[S]",
+        "dependent clause": "[S]",
+        "subject": "[S]",
+        "predicate": "[S]",
+        "noun phrase": "[NP]",
+        "verb phrase": "[VP]",
+        "focus element": "[NP]",
+        "object": "[NP]",
+        "complement": "[NP]",
+        "copula": "[be]",
+        "auxiliary": "[aux]",
+        "modal": "[aux]",
+        "past participle": "[V3]",
+        "v-ed": "[V3]",
+        "verb-ed": "[V3]",
+        "present participle": "[V-ing]",
+        "gerund": "[V-ing]",
+        "verb-ing": "[V-ing]",
+        "base verb": "[V]",
+        "finite verb": "[V]",
+        "infinitive": "[to-V]",
+        "adjective": "[adj]",
+        "evaluative adjective": "[adj]",
+        "comparative": "[adj]",
+        "adverb": "[adv]",
+        "preposition": "[prep]",
+        "prepositional phrase": "[prep] + [NP]",
+    }
+
+    # Standard literal functional words/connectors commonly wrapped in brackets by LLMs
+    LITERAL_FUNCTIONAL_WORDS = frozenset({
+        "the", "a", "an", "that", "this", "these", "those", "such", "it", "there",
+        "if", "then", "when", "while", "as", "since", "because", "although", "though", "even though",
+        "to", "for", "of", "with", "by", "at", "in", "on", "from", "into", "onto",
+        "have", "has", "had", "have to", "has to", "had to", "do", "does", "did",
+        "not", "no", "never", "only", "also", "too", "either", "neither", "nor", "both",
+        "so", "such that", "so that", "more", "most", "less", "least", "than"
+    })
+
+    # Canonical casing for standard COBUILD slots
+    CANONICAL_SLOT_CASING = {
+        "s": "[S]", "np": "[NP]", "vp": "[VP]", "v": "[V]", "be": "[be]", "aux": "[aux]",
+        "v-ed": "[V3]", "v3": "[V3]", "v-ing": "[V-ing]", "to-v": "[to-V]",
+        "adj": "[adj]", "adv": "[adv]", "prep": "[prep]", "det": "[det]", "conj": "[conj]"
+    }
+
+    @classmethod
+    def unwrap_literal_brackets(cls, formula: str) -> str:
+        """
+        Unwraps accidental square brackets around literal words/connectors in formulas.
+        E.g.:
+        - '[If] [S] [to-V], [then] [S] [have to] [V]' -> 'If [S] [to-V], then [S] have to [V]'
+        - '[Such] [NP] [V] [that] [S]' -> 'Such [NP] [V] that [S]'
+        - '[The] [adj] [NP] of [NP] [that] [be] [adv] [S]' -> 'The [adj] [NP] of [NP] that [be] [adv] [S]'
+        - '[V-ing] [it] [adj] [to-V]' -> '[V-ing] it [adj] [to-V]'
+        """
+        if not formula or "[" not in formula:
+            return formula
+
+        from .evaluator import ALLOWED_GRAMMAR_SLOTS
+
+        def _repl(match: re.Match) -> str:
+            raw_slot = match.group(1).strip()
+            slot_lower = raw_slot.lower()
+            if slot_lower in cls.GRAMMAR_SLOT_NORMALIZATION:
+                return cls.GRAMMAR_SLOT_NORMALIZATION[slot_lower]
+            if "/" in slot_lower:
+                sub_parts = [p.strip() for p in slot_lower.split("/") if p.strip()]
+                if all(p in ALLOWED_GRAMMAR_SLOTS or p in cls.GRAMMAR_SLOT_NORMALIZATION for p in sub_parts):
+                    norm_parts = [
+                        cls.GRAMMAR_SLOT_NORMALIZATION.get(p, cls.CANONICAL_SLOT_CASING.get(p, f"[{p}]")).strip("[]")
+                        for p in sub_parts
+                    ]
+                    return f"[{'/'.join(norm_parts)}]"
+            if slot_lower in cls.CANONICAL_SLOT_CASING:
+                return cls.CANONICAL_SLOT_CASING[slot_lower]
+            if slot_lower in ALLOWED_GRAMMAR_SLOTS:
+                return f"[{raw_slot}]"
+            if slot_lower in cls.LITERAL_FUNCTIONAL_WORDS:
+                # It is a literal word or connective phrase (e.g. that, it, if, then, the, such, to, have to)
+                # Unwrap bracket so it serves as natural functional anchor
+                return raw_slot
+            # Keep original bracket for unrecognized slot so evaluator catches it
+            return f"[{raw_slot}]"
+
+        unwrapped = re.sub(r'\[(.*?)\]', _repl, formula)
+        return re.sub(r'\s+', ' ', unwrapped).strip()
+
+    @classmethod
+    def normalize_grammar_formula(cls, formula: str) -> str:
+        """
+        Normalizes legacy or verbose bracketed slots into concise, standard COBUILD tokens,
+        and unwraps literal words from square brackets.
+        """
+        return cls.unwrap_literal_brackets(formula)
+
     @staticmethod
     def _sanitize_vocab_for_quiz(vocab_content: str) -> Tuple[str, List[str], List[str]]:
         """
@@ -279,8 +379,8 @@ class WikiProcessor:
         sanitized_content = "\n".join(clean_lines).strip()
         return sanitized_content, headwords, banned_sentences
 
-    @staticmethod
-    def _sanitize_grammar_for_quiz(grammar_content: str) -> Tuple[str, List[str]]:
+    @classmethod
+    def _sanitize_grammar_for_quiz(cls, grammar_content: str) -> Tuple[str, List[str]]:
         """
         Physically isolates the quiz generator from grammar example sentences:
         Strips '- **Quote**:' and '- **Imitation Example**:' lines,
@@ -324,7 +424,8 @@ class WikiProcessor:
             # Parse Pattern Formula
             m_formula = re.match(r'^\s*-\s*\*\*Pattern Formula\*\*:\s*(.*)', line, re.IGNORECASE)
             if m_formula:
-                curr_formula = m_formula.group(1).strip()
+                raw_formula = m_formula.group(1).strip()
+                curr_formula = cls.normalize_grammar_formula(raw_formula)
                 continue
 
             # Parse Common Mistakes
@@ -1524,36 +1625,45 @@ class WikiProcessor:
             logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary/phrase item(s) in source markdown.")
             vocab_bullets = "\n".join([f"- {w}" for w in syllabus_vocab])
             syllabus_vocab_instruction = (
-                f"\n\n### 🎯 MANDATORY CURATED SYLLABUS WORDS (PRIORITY 1):\n"
+                f"\n\n### TARGET VOCABULARY LIST ###\n"
                 f"The text has {len(syllabus_vocab)} syllabus candidate items:\n"
                 f"{vocab_bullets}\n\n"
                 f"From this syllabus list, prioritize and select the most essential, pedagogically significant academic vocabulary (up to {v_count} words total) that appear in the passage below. For each selected word, find its authentic verbatim sentence in the passage."
             )
-            v_prompt_formatted = v_prompt_formatted.replace("CONTENT:\n", f"{syllabus_vocab_instruction}\n\nCONTENT:\n")
+            if "### SOURCE TEXT ###" in v_prompt_formatted:
+                v_prompt_formatted = v_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_vocab_instruction}\n\n### SOURCE TEXT ###")
+            else:
+                v_prompt_formatted = v_prompt_formatted.replace("CONTENT:\n", f"{syllabus_vocab_instruction}\n\nCONTENT:\n")
 
         # Dynamic Dual-Track Syllabus Injection for Expressions
         if syllabus_expressions:
             logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown.")
             expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions])
             syllabus_expr_instruction = (
-                f"\n\n### 🎯 MANDATORY CURATED SYLLABUS EXPRESSIONS (PRIORITY 1):\n"
+                f"\n\n### TARGET EXPRESSIONS LIST ###\n"
                 f"The text has {len(syllabus_expressions)} syllabus multi-word candidate items:\n"
                 f"{expr_bullets}\n\n"
                 f"From these syllabus expressions, prioritize and extract genuine expressions (up to {e_count} expressions total) that appear in the passage below. For each selected expression, derive its canonical slotted base form in design_audit and copy it to 'word'."
             )
-            e_prompt_formatted = e_prompt_formatted.replace("CONTENT:\n", f"{syllabus_expr_instruction}\n\nCONTENT:\n")
+            if "### SOURCE TEXT ###" in e_prompt_formatted:
+                e_prompt_formatted = e_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_expr_instruction}\n\n### SOURCE TEXT ###")
+            else:
+                e_prompt_formatted = e_prompt_formatted.replace("CONTENT:\n", f"{syllabus_expr_instruction}\n\nCONTENT:\n")
 
         # Dynamic Dual-Track Syllabus Injection for Grammar
         if syllabus_grammar:
             logger.info(f"📋 Detected {len(syllabus_grammar)} syllabus grammar pattern(s) in source markdown.")
             grammar_bullets = "\n".join([f"- {g}" for g in syllabus_grammar])
             syllabus_grammar_instruction = (
-                f"\n\n### 🎯 MANDATORY CURATED GRAMMAR TOPICS (PRIORITY 1):\n"
+                f"\n\n### TARGET GRAMMAR TOPICS ###\n"
                 f"The text has {len(syllabus_grammar)} syllabus grammar pattern candidates:\n"
                 f"{grammar_bullets}\n\n"
                 f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint."
             )
-            g_prompt_formatted = g_prompt_formatted.replace("CONTENT:\n", f"{syllabus_grammar_instruction}\n\nCONTENT:\n")
+            if "### SOURCE TEXT ###" in g_prompt_formatted:
+                g_prompt_formatted = g_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_grammar_instruction}\n\n### SOURCE TEXT ###")
+            else:
+                g_prompt_formatted = g_prompt_formatted.replace("CONTENT:\n", f"{syllabus_grammar_instruction}\n\nCONTENT:\n")
 
         tasks = [
             ("vocabulary", v_prompt_formatted, self._interpolate_schema(v_schema, v_kwargs)),
@@ -2031,14 +2141,22 @@ class WikiProcessor:
                                 f"⚠️ Packaging incomplete: expected {expected_count} questions, but converter only packaged {len(q_items)}. "
                                 f"Triggering strict full-completion packaging retry..."
                             )
-                            strict_retry_prompt = (
-                                f"{packaging_prompt}\n\n"
-                                f"🚨 ERROR RECOVERY MANDATE:\n"
-                                f"In your previous attempt you ONLY packaged {len(q_items)} question(s). This is an absolute failure.\n"
-                                f"You MUST convert and output ALL {expected_count} questions (Item 1 to Item {expected_count}) into the 'questions' array!"
-                            )
+                            # Multi-turn compact recovery prompt: refer to previous draft and ask for all items
+                            retry_messages = [
+                                {"role": "user", "content": packaging_prompt},
+                                {"role": "assistant", "content": json.dumps(quiz_obj, ensure_ascii=False) if isinstance(quiz_obj, dict) else str(quiz_obj)},
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"### 🚨 PACKAGING INCOMPLETE DEFECT\n"
+                                        f"- [ERROR]: Packaged only {len(q_items)} of {expected_count} items (omitted items {len(q_items) + 1} to {expected_count}).\n"
+                                        f"- [LOOKUP]: Refer to `ASSESSMENT ITEMS:` in Turn 1.\n\n"
+                                        f"🛑 MANDATE: Convert ALL {expected_count} items into the 'questions' array consecutively. Return ONLY the complete JSON object."
+                                    )
+                                }
+                            ]
                             retry_obj = llm.chat(
-                                [{"role": "user", "content": strict_retry_prompt}],
+                                retry_messages,
                                 schema=interpolated_schema,
                                 temperature=0.0,
                                 task_name=f"quiz_{template_name}_{core_name}_turn2_package_retry",
@@ -2239,8 +2357,17 @@ class WikiProcessor:
 
                                 # Vocabulary fallback: inherit target_word / definition if omitted in cure
                                 if template_name == "vocabulary":
-                                    if not candidate_cure.get("target_word") and orig_dict.get("target_word"):
-                                        candidate_cure["target_word"] = orig_dict["target_word"]
+                                    # For REPAIR, target word was valid, so inheritance is safe.
+                                    # For REWRITE, only inherit if target_word was omitted AND original target belongs to authorized unit headwords.
+                                    if not candidate_cure.get("target_word"):
+                                        orig_tw = orig_dict.get("target_word")
+                                        if orig_tw:
+                                            if triage == "REPAIR":
+                                                candidate_cure["target_word"] = orig_tw
+                                            elif unit_headwords:
+                                                hw_set = {h.strip().lower() for h in unit_headwords if h.strip()}
+                                                if orig_tw.strip().lower() in hw_set:
+                                                    candidate_cure["target_word"] = orig_tw
                                     if not candidate_cure.get("definition") and orig_dict.get("definition"):
                                         candidate_cure["definition"] = orig_dict["definition"]
 
@@ -2569,36 +2696,27 @@ class WikiProcessor:
             handout_path = handout_dir / handout_filename
 
             # -------------------------------------------------------------
-            # Hard Gate: Quarantine on Audit Failure or Item Depletion
+            # Transparent Delivery: Handouts always ship to handouts/
+            # Log audit recommendations if items were cured or discarded
             # -------------------------------------------------------------
-            quiz_audit = quiz_obj.audit if hasattr(quiz_obj, "audit") else (quiz_obj.get("audit") if isinstance(quiz_obj, dict) else None)
-            final_questions = getattr(quiz_obj, "questions", []) or (quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else [])
-            min_passing_items = int(self.config.get("min_passing_items", 3))
-            quarantine_on_fail = bool(self.config.get("quarantine_on_fail", True))
+            quiz_audit = None
+            if hasattr(quiz_obj, "_expert_audit") and getattr(quiz_obj, "_expert_audit"):
+                quiz_audit = getattr(quiz_obj, "_expert_audit")
+            elif hasattr(quiz_obj, "audit") and getattr(quiz_obj, "audit"):
+                quiz_audit = getattr(quiz_obj, "audit")
+            elif isinstance(quiz_obj, dict):
+                quiz_audit = quiz_obj.get("_expert_audit") or quiz_obj.get("audit")
 
-            if quiz_audit and quarantine_on_fail:
+            final_questions = getattr(quiz_obj, "questions", []) or (quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else [])
+            if quiz_audit:
                 pass_audit = quiz_audit.get("pass_audit", True)
                 discarded_count = (quiz_audit.get("cure_stats") or {}).get("discard", 0)
                 available_count = len(final_questions)
-
-                # Block and quarantine if audit failed or if pruned items dropped below required minimum
-                if not pass_audit or available_count < min_passing_items:
-                    q_dir = handout_dir / "_quarantine"
-                    q_dir.mkdir(parents=True, exist_ok=True)
-                    q_html = q_dir / handout_filename.replace(".html", "_REJECTED.html")
-                    q_json = q_dir / handout_filename.replace(".html", "_REJECTED.json")
-                    
-                    with open(q_html, "w", encoding="utf-8") as f:
-                        f.write(html_content)
-                    with open(q_json, "w", encoding="utf-8") as f:
-                        json.dump(quiz_audit or {}, f, ensure_ascii=False, indent=2)
-
-                    logger.error(
-                        f"🚫 Blocked handout from shipping to handouts/: {pass_audit=}, "
-                        f"{available_count=}/{min_passing_items=}, {discarded_count=}. "
-                        f"Quarantined to {q_html}"
+                if not pass_audit:
+                    logger.warning(
+                        f"⚠️ Handout {handout_filename} shipped with audit advisory: {pass_audit=}, "
+                        f"{available_count=} questions available, {discarded_count=} discarded."
                     )
-                    return f"Audit Gate Blocked: {available_count} valid items (min required: {min_passing_items}), pass_audit={pass_audit}. Quarantined to {q_html.name}"
 
             with open(handout_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
@@ -2769,6 +2887,25 @@ class WikiProcessor:
         extractions_dir = unit_dir / "extractions"
         extractions_dir.mkdir(parents=True, exist_ok=True)
 
+        # -------------------------------------------------------------
+        # Transparent Delivery: Extractions always ship to extractions/
+        # QA status & review flag are recorded in frontmatter for teacher visibility
+        # -------------------------------------------------------------
+        qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+        if qa_audit and isinstance(qa_audit, dict):
+            composite = qa_audit.get("composite_score")
+            flags = qa_audit.get("flags", [])
+            from .evaluator import FATAL_QA_FLAGS
+            has_fatal_flags = any(
+                any(fatal in f for fatal in FATAL_QA_FLAGS)
+                for f in flags
+            )
+            if (composite is not None and composite < 80.0) or has_fatal_flags:
+                logger.warning(
+                    f"⚠️ {category} extraction for {filename_stem} scored {composite}/100 (review recommended). "
+                    f"Delivering directly to extractions/ with qa_status: 'review_needed'."
+                )
+
         if category == "vocabulary":
             # Deduplicate vocabulary list based on 'word' field (case-insensitive & stripped)
             seen = set()
@@ -2892,8 +3029,17 @@ class WikiProcessor:
                 f"item_count: {item_count}"
             ]
 
+            # Inject QA Audit Score if available
+            qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+            if qa_audit and isinstance(qa_audit, dict):
+                qa_composite = qa_audit.get("composite_score")
+                if qa_composite is not None:
+                    lines.append(f"qa_score: {round(float(qa_composite))}")
+                    qa_status = "passed" if qa_composite >= 80.0 else "review_needed"
+                    lines.append(f"qa_status: \"{qa_status}\"")
+
             for name, val in fields:
-                if name not in ["title", "grammar_patterns", "vocabulary", "concepts", "_category"]:
+                if name not in ["title", "grammar_patterns", "vocabulary", "concepts", "_category", "_qa_audit"]:
                     if val: lines.append(f"{name}: \"{val}\"")
             
             lines.extend(["---", "", f"# {category.title()}: {display_title}", ""])
@@ -2931,8 +3077,11 @@ class WikiProcessor:
                 for fname, fval in body_entries:
                     label = fname.replace("_", " ").title()
                     if fval:
+                        if category == "grammar" and fname == "pattern_formula":
+                            fval = self.normalize_grammar_formula(str(fval))
                         lines.append(f"- **{label}**: {fval}")
                 lines.append("")
+
             
             return "\n".join(lines)
 
@@ -2971,6 +3120,18 @@ class WikiProcessor:
                 f"overall_cefr_level: \"{overall_cefr}\"",
                 f"item_count: {item_count}",
                 f"estimated_reading_time: \"{reading_time}\"",
+            ]
+
+            # Inject QA Audit Score if available
+            qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+            if qa_audit and isinstance(qa_audit, dict):
+                qa_composite = qa_audit.get("composite_score")
+                if qa_composite is not None:
+                    lines.append(f"qa_score: {round(float(qa_composite))}")
+                    qa_status = "passed" if qa_composite >= 80.0 else "review_needed"
+                    lines.append(f"qa_status: \"{qa_status}\"")
+
+            lines.extend([
                 "---",
                 "",
                 f"# Summary: {title}",
@@ -2982,7 +3143,7 @@ class WikiProcessor:
                 lesson_hook,
                 "",
                 "## Essential Questions",
-            ]
+            ])
             for q in questions:
                 lines.append(f"- {q}")
             lines.append("")

@@ -24,6 +24,39 @@ Prompts drive pedagogical quality and assessment design; JSON schemas enforce ou
 - **Human-Readable Logging**:
   - `librarian/logger.py` automatically indents and formats `--- RAW RESPONSE ---` with 2-space pretty-printed JSON in all task logs under `logs/`.
 
+### 1.1 Architectural Discovery: The Example Contamination Pitfall (Few-Shot / One-Shot Side Effects)
+
+- **The Discovery (Token Anchoring & Prompt-Driven Hallucination)**:
+  - While conventional prompt engineering advocates few-shot or in-prompt concrete examples (e.g., `(e.g., although, despite)`, `the extent to which`, `AUDIT: Identified concessive clause anchored by 'although'`), empirical logs proved that concrete lexical examples in extraction/audit prompts have severe pathological side effects:
+    1. **Attention Hijacking (Memory Anchoring)**: The LLM's self-attention heavily latches onto concrete lexical strings appearing in prompt instructions. Instead of reading the source text first, the model prioritizes matching or reproducing the prompt's examples.
+    2. **Text Falsification / Forced Fitting**: When the example word (e.g. `the extent to which`, `although`) does not exist in the source text, the model actively tampers with quotations (e.g. replacing `and` with `although`) or falsely attributes the structure to unrelated sentences (e.g. classifying `which means that...` as `abstract frames ('the extent to which')`).
+    3. **Cognitive Inversion (Prompt-driven instead of Text-driven)**: Human linguistic extraction follows: `Source Text -> Discover Authentic Structure -> Classify`. Prompt examples invert this pipeline into: `Prompt Example Word -> Search Text -> If Missing, Hallucinate or Fake Quote`.
+- **Architectural Solution (Zero Concrete Examples in Definitions)**:
+  - **Pure Syntactic & Functional Descriptions**: Grammatical categories and schema fields must be defined purely through abstract linguistic functions (e.g., *Subordinate clauses or prepositional structures expressing contrast...*, *abstract shell nouns governing complement propositions...*), completely stripped of concrete vocabulary examples.
+  - **Structural Pipeline Auditing**: Replace descriptive examples in `design_audit` with abstract placeholder derivation pipelines (e.g., `AUDIT: 'Physical Marker in Quote' -> [Category] -> [Syntactic Slot Formula]`). This forces the model to locate and verify a physical textual marker inside the cited sentence *before* declaring the category, unlocking genuine self-correction and zero-shot fidelity.
+
+### 1.2 Triad Quality Architecture: Pure Formulas + Physical Hard Gates + Code Gate Bottom-Line
+To completely eliminate false positives and categorization drift across diverse LLM families (from 8B/14B small models to 27B/31B production models), grammar extraction and syntactic parsing enforce a three-layer defense triad:
+
+1. **Pure Formulaic Definitions (`Formula`)**:
+   - Eliminate verbose, ambiguous natural language explanations from prompt instructions.
+   - Every grammatical category is defined strictly via algebraic COBUILD slot formulas (e.g. `It + [be] + [Evaluative adj / Noun] + [that-S / to-V / wh-S]`, `[Negative / Restrictive Element] + [aux / be] + [Subject NP] + [Main Verb]`).
+   - Formulas leverage LLM strengths in pattern matching and token slot binding while stripping away semantic fuzziness.
+
+2. **Physical Hard Exclusion Gates (`Gate: 100% BANNED`)**:
+   - Every category enforces binary syntactic exclusions preventing semantic slippage:
+     - **Cleft Sentences Gate**: Quote MUST physically contain a relative linker (`that`, `who`, `whom`, `which`). Deleting `It [be]` and relative linker must leave an independent clause. Ambient time/weather clauses (`It's [time], and...`) or extraposed clauses without relative linkers $\rightarrow$ **100% BANNED**.
+     - **Evaluative It-Frameworks Gate**: Quote MUST physically contain dummy impersonal `it` (or `it's`). Ambient time/weather/distance statements (`It's 4:15`) or lexical noun subjects $\rightarrow$ **100% BANNED**.
+     - **Inversion Gate**: The auxiliary/verb must physically precede the subject noun phrase. Standard word order $\rightarrow$ **100% BANNED**.
+     - **Concessive Gate**: Must use a subordinating linker. Coordinate contrast connectors (`but`, `however`, `yet`) or causal linkers (`because`) $\rightarrow$ **100% BANNED**.
+
+3. **Deterministic Code Gate Bottom-Line (`evaluator.py`)**:
+   - LLMs (particularly $\le$14B parameter models) can suffer from self-deception in chain-of-thought audits (e.g. claiming a sentence satisfies the dummy `it` gate when `it` is absent).
+   - Zero-cost Python regex assertions in `evaluator.py` enforce physical invariants before acceptance:
+     - `category == "Evaluative It-frameworks"` asserts `\bit(?:'s)?\b` presence AND rejects ambient time patterns (`\bit(?:'s|\s+is|\s+was)\s+\d{1,2}(?::\d{2})?\b`).
+     - `category == "Cleft sentences"` asserts `\b(?:that|who|whom|which)\b` relative linkers.
+   - Any hallucination or category boundary violation is immediately rejected and returned for surgical retry, guaranteeing zero-defect delivery.
+
 ---
 
 ## 2. Self-Contained Unit Structure
@@ -78,9 +111,9 @@ wiki/<UnitName>/sources/<UnitName>.md | media/
 - `enable_expert_audit`  : master switch for Level 2 LLM-as-a-Judge semantic audit (default: `false`)
 - `judge_model`          : L2 judge model; SHOULD differ from generation `model` (e.g., `gemma4:12b` or `phi4:14b`)
 - `min_passing_items`    : per-quiz passing floor after triage and discards (default: `3`)
-- `quarantine_on_fail`   : route failed artifacts to `_quarantine/` (default: `true`)
 - `enable_prose_pipeline`: multi-turn prose→JSON generation toggle (default: `true`)
 - `enable_vocab_prose`   : prose pipeline toggle for vocabulary extractions (default: `false`)
+- **Transparent Delivery (No Quarantine)**: Content is always delivered directly to `extractions/` or `handouts/`. Quality audit scores and review status (`qa_status: "review_needed"`) are embedded in frontmatter and logs rather than hiding files in quarantine.
 
 ### 3.3 Reasoning & Thinking Parameter Protocols
 - Models featuring internal reasoning channels (e.g., `gpt-oss:20b` dual-channel `<|channel|>analysis` vs `<|channel|>final`) operate under Ollama's native routing.
@@ -125,6 +158,8 @@ Use `snake_case` for all JSON keys and variable names.
 - [x] Expert Model Audit-Repair-Rewrite Pipeline: Direct surgical cure and rewriting by the expert model replacing slow multi-attempt blind regeneration loops.
 - [x] Configuration Disk Hot-Reloading: Instant runtime synchronization with `wiki_config.json` via file mtime tracking without dashboard restarts.
 - [x] Clean Prompt & Schema Separation: Stripped code variable names and JSON formatting instructions from prompt templates, guaranteeing 100% compatibility across Prose-to-JSON and One-Shot modes.
+- [x] Example Contamination Elimination (Few-Shot/Example Pitfall Discovery): Stripped all concrete lexical/word examples from prompt definitions and audit templates, preventing token-hijacking hallucinations and replacing them with pure syntactic functional definitions and strict physical-marker audit pipelines.
+- [x] Triad Quality Architecture (Pure Formulas + Physical Hard Gates + Code Gate Bottom-Line): Defined grammatical structures purely via algebraic COBUILD slot formulas, backed by strict binary exclusion gates (Cleft, Evaluative It, Inversion, Concessive) and deterministic zero-cost Python Code Gate regex invariants in `evaluator.py`, eliminating category drift and false positives across all model scales.
 
 ### Pending
 - **Quality Tier Routing & Human Review UI**:

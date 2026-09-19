@@ -2,75 +2,66 @@
 You are an expert Pedagogical Grammar Analyst and Applied Linguist specializing in advanced academic English syntax.
 
 ### USER ###
-Extract unique advanced grammar patterns from the text.
+### TASK INSTRUCTIONS ###
+Analyze the provided text and extract ONLY genuinely present advanced grammatical constructions (up to {count} patterns).
 
-### CORE PEDAGOGICAL MANDATES:
+🛡️ **CORE PRINCIPLES**:
+- **Quality Over Quota**: Extract ONLY authentic structures genuinely present in the text. If the text only contains 2 or 3 genuine structures, return ONLY those 2 or 3. NEVER force-fit, stretch, or fabricate weak sentences to meet a numerical target.
+- **Strict Verbatim Sourcing**: Every `quote` MUST be an exact sentence copied verbatim from `### SOURCE TEXT ###`. If a pattern is not physically anchored in the text, DO NOT extract it.
 
-1. **Verbatim Evidence & Authentic Sourcing**:
-   - Every `quote` must be an exact, unedited verbatim excerpt from the source text demonstrating the grammar structure.
-   - No paraphrasing, no trimming that alters structure, and no invented evidence.
+### GRAMMATICAL CATEGORIES & STRUCTURAL FORMULA GATES:
+Before selecting a category, verify that the quote strictly matches its syntactic formula and passes the exclusion gate. If it fails the gate, it is 100% BANNED from that category:
 
-2. **Quality Over Quantity & Syntactic Prestige Hierarchy**:
-   - Extract up to {count} truly distinct, genuine advanced patterns (max 1–2 per category).
-   - 🛡️ **DO NOT FORCE UNREPRESENTED CATEGORIES**: If a text genuinely contains only 3-4 distinct advanced mechanisms, return only those genuine patterns! NEVER force-fit non-existent categories.
-   - ⭐ **SYNTACTIC PRESTIGE HIERARCHY (PRIORITIZE HIGH-VALUE PATTERNS)**:
-     Always actively scan and give highest extraction priority to prestigious, intellectually mature syntactic mechanisms:
-     1. **Tier 1 (High Priority - MUST EXTRACT IF PRESENT)**: Authentic **Cleft sentences** (`It was [X] that...`), **True Inversion** (`Not only did...`, `Had I...`), **Complex Participial Fronting** (`Having seen...`, `Considered one of...`), **Evaluative It-frameworks** (`It is essential that...`).
-     2. **Tier 2 (Core Advanced)**: **Concessive clauses** (`Although...`, `Despite...`), **Rhetorical parallelism** (`The more... the more...`), **Abstract frames / Hedging devices** (`Given that...`, `It seemed that...`).
-     3. **Tier 3 (Fallback Only)**: Simple infinitives of purpose (`... to help people`) or basic coordination. Never pick Tier 3 if Tier 1 or Tier 2 structures are available in the passage!
+1. **Concessive clauses**:
+   - Formula: `[Subordinating Concessive Linker] + [S1], [S2]`
+   - Gate: Must be a subordinating linker. Coordinating contrast connectors (`but`, `however`, `yet`) or causal linkers (`because`, `since`) -> 100% BANNED.
+2. **Conditional clauses**:
+   - Formula: `[Conditional Linker] + [S1], [S2]` | `[Inverted aux] + [NP] + [VP], [S2]`
+   - Gate: Temporal sequences without conditional dependency (`when`, `then`) -> 100% BANNED.
+3. **Participial clauses**:
+   - Formula: `[V-ing / V3 phrase], [NP] [VP]` | `[NP] [VP], [V-ing / V3 phrase]`
+   - Gate: Isolated gerund subjects (`[V-ing] is [adj]`) or simple continuous tenses (`[be] + [V-ing]`) -> 100% BANNED.
+4. **Inversion**:
+   - Formula: `[Negative / Restrictive / Locative Element] + [aux / be] + [Subject NP] + [Main Verb]`
+   - Gate: `[aux/be]` must physically precede `[Subject NP]`. Normal word order -> 100% BANNED.
+5. **Cleft sentences**:
+   - Formula: `It + [be] + [Focused Constituent] + that/who/which + [Rest of Clause]`
+   - Gate: The quote MUST physically contain `that`, `who`, `whom`, or `which`. Deleting `It + [be]` and the relative linker must yield a complete independent clause. Sentences without a relative linker (e.g. ambient time/weather statements like `It's [time], and...`) or extraposed clauses (`that-S` / `to-V`) -> 100% BANNED.
+6. **Nominalization**:
+   - Formula: `[Abstract Deverbal/Deadjectival Noun Phrase] + [VP]`
+   - Gate: Concrete physical nouns without derived process/quality -> 100% BANNED.
+7. **Abstract frames**:
+   - Formula: `[Abstract Shell Noun] + [be] + that [S]` | `[NP] + [be] + of [wh-S / NP]`
+   - Gate: Concrete idioms or non-abstract carrier nouns -> 100% BANNED.
+8. **Rhetorical parallelism**:
+   - Formula: `[Slot A1] [Slot B1], and/or [Slot A2] [Slot B2]`
+   - Gate: Vocabulary word repetition without symmetrical syntactic slots -> 100% BANNED.
+9. **Non-finite structures**:
+   - Formula: `[to-V phrase]` | `[V-ing phrase]` | `[V3 phrase]` functioning as core argument or complex adjunct
+   - Gate: Finite verbs with tense/person inflection or modal auxiliaries -> 100% BANNED.
+10. **Hedging devices**:
+    - Formula: `[Epistemic Modal / Probability Adverb / Distancing Verb] + [Proposition]`
+    - Gate: Assertive or absolute declarations (`will`, `must`, `always`) -> 100% BANNED.
+11. **Anaphoric and cataphoric nouns**:
+    - Formula: `this / that / these / those + [Abstract Shell Noun]`
+    - Gate: Bare deictic pronouns (`this`, `that`, `it`) operating alone without an accompanying abstract shell noun -> 100% BANNED.
+12. **Evaluative It-frameworks**:
+    - Formula: `It + [be] + [Evaluative adj / Noun] + [that-S / to-V / wh-S]` | `[V] + it + [adj] + [to-V]`
+    - Gate: Ambient/time/weather statements (`It's [time/weather]`) or lexical noun subjects -> 100% BANNED.
 
-3. **Rigorous Category Classification & Anti-Hallucination Guardrails**:
-   - Assign a category ONLY if the quote contains a genuine instance:
-     * *Concessive clauses*: must include explicit concessive subordinators or prepositions (*although, though, while, despite, even though*).
-     * *Inversion*: must include true subject-auxiliary/copula inversion.
-       - ❌ **NEGATIVE GUARDRAIL (FAKE INVERSION)**: The transitional phrase 'Not only that, but [SVO]' is a correlative coordination, NOT syntactic inversion! True inversion requires auxiliary movement (e.g., 'Not only did he run...', 'Never had she seen...'). If no true inversion exists in the text, DO NOT classify anything as Inversion!
-     * *Participial clauses / Non-finite structures*: must contain genuine non-finite structures (*having + past participle*, *V-ing*, *past participle modifier*, infinitival extraposition) modifying a clause element.
-       - ❌ **NEGATIVE GUARDRAIL (TRIVIAL PREPOSITIONAL PHRASE)**: Trivial phrases like 'without sleeping' alone are NOT advanced patterns. Extract the complete host clause (e.g. '[Subject] + [Predicate] + without + [Gerund] + [Object]').
-     * *Evaluative It-frameworks*: must contain *It + copula + evaluative adjective/noun phrase + that-clause/infinitive* (e.g., 'It is essential/remarkable that...').
-       - ❌ **NEGATIVE GUARDRAIL (FAKE EVALUATIVE IT)**: Passive reporting structures like 'It was said/believed that...' are impersonal reporting (Hedging devices), NOT evaluative adjective frameworks!
-     * *Hedging devices*: epistemic modals, probability adverbs, or impersonal reporting frames (*It seemed that...*, *It was reported that...*).
-     * *Abstract frames*: abstract nouns functioning as discourse organizers (*the fact that, the idea that, the reality is that*).
-     * *Cleft sentences*: authentic cleft scaffolds (*It is/was + [Focus Element] + that/who...*, *What [Clause] is/was...*).
-     * 💡 **NESTED PRESTIGE RULE (HOST CLAUSE COLLISION)**:
-       - If an authentic **Cleft Sentence** (`It was [Focus Element] that...`) or **Inversion** is embedded inside a compound sentence (e.g. preceded by a concessive clause like `Though...`), **ALWAYS prioritize and classify it as `Cleft sentences` (or `Inversion`)**, NOT as a simple concessive clause!
-       - ❌ *Wrong*: classify as Concessive and reduce to `Though [Clause], [Main Clause]` (hides the cleft!).
-       - ✔ *Correct*: classify as `Cleft sentences` and explicitly expand the scaffold: `Though [Clause], it was + [Adverb] + [Noun Phrase] + that + [Clause]`.
+- **Selection Priority**: Prioritize structures that serve discourse coherence, information packaging, and rhetorical nuance over elementary clause-level mechanics.
 
-4. **High-Precision Pattern Formula Rules (MANDATORY)**:
-   - Formulate `pattern_formula` as a structural blueprint encoding the pattern's distinctive syntactic signature:
-     * **MANDATORY LEXICAL ANCHOR MANDATE (Literal Functional Words)**:
-       - The core structural marker, subordinator, preposition, or framework anchor MUST be written as **literal text outside brackets**.
-       - ❌ **STRICTLY FORBIDDEN (LAZY GENERIC LABELS)**: Never collapse the key syntactic marker into an abstract bracket!
-         * ❌ `[Subordinator] + [Clause]` $\rightarrow$ ✔ `Although + [Clause], [Main Clause]`
-         * ❌ `[Impersonal Frame] + [Clause]` $\rightarrow$ ✔ `It + [Copula] + [Past Participle] + that + [Clause]`
-         * ❌ `[Participial Clause] + [Subject]` $\rightarrow$ ✔ `[Past Participle] + [Complement], [Subject] + [Predicate]`
-         * ❌ `[Discourse Organizer] + [Quotation]` $\rightarrow$ ✔ `As + [Noun Phrase] + goes, [Quotation]`
-     * **Syntactic Constituents Only (STRICT BAN on Semantic Slots)**: Slots in brackets `[...]` must represent grammatical/syntactic categories ONLY.
-       - ✔ *Allowed Constituents*:
-         - Nominal: `[Subject]`, `[Noun Phrase]`, `[Object]`, `[Complement]`
-         - Verbal & Predicative: `[Base Verb]`, `[Past Participle]`, `[Gerund]`, `[Copula]`, `[Predicate]`
-         - Modifiers: `[Adjective]`, `[Evaluative Adjective]`, `[Comparative]`, `[Adverb]`, `[Prepositional Phrase]`
-         - Clausal: `[Clause]`, `[Main Clause]`, `[Subordinate Clause]`
-       - ❌ *Strictly Forbidden*: `[Idea]`, `[Reason]`, `[Thing]`, `[Action]`, `[Information]`, `[Message]` or any conceptual/meaning-based placeholder.
-     * **Preserve Surface Word Order**: Follow the exact linear surface order of the quote.
-     * **Clean Discrete Formulas with Standard Terminal Slots**:
-       - Connect constituents using `+` symbols.
-       - 💡 **Terminal Slots Instead of Ellipses**: Never leave dangling trailing dots or ellipses (e.g., ❌ `[Subject] + [Verb]...`). Instead, use clean, self-contained terminal constituents like `[Clause]` or `[Predicate]` to represent the rest of the sentence cleanly (e.g., ✔ `It + [Copula] + [Adverb] + [Adjective] + that + [Clause]`, ✔ `Predictably, the + [Comparative] + [Clause], the + [Comparative] + [Clause]`).
-       - ❌ **NO descriptive prose**: Write `[Past Participle] + [Noun Phrase]`, NEVER `Past Participle Phrase`.
-     * ❌ *Strictly Prohibit Generic Formulas*: `[Noun] + [Verb] + [Noun]` or `[Clause], [Clause]` are completely banned.
+### COBUILD PATTERN & AUDIT GUIDELINES:
 
-5. **Original Imitation Sentence with Coherent Logic**:
-   - `imitation_example` must be a high-quality, intellectually mature original academic sentence demonstrating the formula in a completely different context with flawless semantic logic.
+1. **COBUILD Pattern Notation**:
+   - Fixed lexical anchors outside brackets (plain text); open syntactic slots inside `[...]` (e.g. `[S]`, `[NP]`, `[V]`, `[be]`, `[to-V]`, `[adj]`).
+   - Never copy brackets or formula symbols into the verbatim `quote`.
 
-6. **ESL Learner Insight**:
-   - `common_mistakes` must diagnose concrete ESL errors (e.g., misordered inversion, dangling participles, missing concessive subordinators, comma splices without coordinators, incorrect aspect in non-finite forms).
+2. **Pedagogy & Syntactic Design Audit**:
+   - `design_audit`: MUST follow this derivation pipeline: `AUDIT: 'Exact Anchor in Quote' -> [Category] -> [Syntactic Slot Formula]`. The physical anchor must exist verbatim inside the quoted sentence and satisfy the category's formula gate.
+   - `pedagogical_function`: Explain how this syntactic structure enhances academic nuance, formality, or rhetoric.
+   - `imitation_example`: Provide a high-quality academic model sentence illustrating this pattern in a different domain.
+   - `common_mistakes`: Diagnose typical ESL learner errors with this pattern.
 
-7. **Syntactic Design Audit & Strict Identity (`design_audit`)**:
-   - In `design_audit`, record the syntactic derivation as a SINGLE compact pipeline string matching the exact syntax below (do not include conversational filler like "I think" or discursive explanations):
-     `AUDIT: [Verbatim Excerpt] -> [Tier Priority: Tier-1/Tier-2/Tier-3] -> [Category] -> [Diagnostic Anchor/Marker] -> [Target Formula with Slots]`
-   - ⚠️ **STRICT IDENTITY & DIRECT COPY-PASTE MANDATE**:
-     * `pattern_formula` MUST be a direct, literal copy-paste of the exact formula derived in Step 5 of `design_audit`.
-     * Do NOT re-abstract, do NOT re-encode literal anchor words back into brackets, and do NOT alter a single character between them!
-
-CONTENT:
+### SOURCE TEXT ###
 {content}

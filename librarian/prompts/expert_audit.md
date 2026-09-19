@@ -73,12 +73,7 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
      - 75–89: 1–2 distractors eliminated by hard criteria, 1 eliminated by softer criteria (register, collocational frequency gap).
      - 60–74: A distractor is defensible (potential double-key); item is usable but not ideal.
      - < 60: Clear double-key, triple-key, wrong/suboptimal key, or ungrammatical stem.
-7. **IN-PLACE SURGICAL CURE MANDATE (`triage_action` & `cured_question`)**:
-   - You are NOT a passive critic; you are an active, authoritative surgeon. You MUST assign `triage_action` for EVERY item:
-     * `PASS`: The item is grammatically sound, contextually defensible, and has a unique valid key (`single_fit_valid == true`, score >= 80). `cured_question` MUST be null.
-     * `REPAIR`: The question stem/context and core focus are strong, but has surface defects (e.g. minor article/syntax error like 'a ingredient' -> 'an ingredient', weak distractor, or mislabeled answer index). You MUST provide `cured_question` with the surgically corrected question matching the original question schema.
-     * `REWRITE`: The question stem is fatally flawed, illogical, or exhibits severe double-keys/hallucination that cannot be salvaged by micro-edits. Discard the flawed item and provide a completely NEW, pristine question in `cured_question` testing the exact same target keyword/grammar point grounded in the reference material.
-   - When `triage_action` is `REPAIR` or `REWRITE`, `cured_question` is MANDATORY and must be a complete, schema-compliant replacement item ready for immediate classroom deployment.
+   - **PASS REQUIREMENT**: Set `pass_audit: true` ONLY IF `overall_quality_score >= 80` AND every question has `single_fit_valid == true` AND no question has grammatical/syntactic collapse or double-keys. If even ONE question has an invalid single fit or wrong key, `pass_audit` MUST be `false`.
 
 CONTENT:
 {content}

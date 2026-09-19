@@ -120,7 +120,7 @@
             ]
           },
           "cured_question": {
-            "type": ["object", "null"]
+            "type": "object"
           }
         },
         "required": [

@@ -306,8 +306,12 @@ class LLMClient:
         self.last_done_reason = None
 
 
-        # 1. OPTIMIZATION: Move Personas to System Role
-        if messages and messages[0]["role"] == "user":
+        # Deep copy messages to prevent mutating caller's list or recursively mangling messages
+        messages = [dict(m) for m in messages]
+        retry_count = kwargs.get("_qa_retry_count", 0)
+
+        # 1. OPTIMIZATION: Move Personas to System Role (Initial Turn only)
+        if retry_count == 0 and messages and messages[0]["role"] == "user":
             content = messages[0]["content"]
             
             # 1.1 Priority: Explicit Tagged Blocks
@@ -352,7 +356,7 @@ class LLMClient:
         profile = get_model_profile(self.model)
         use_gbnf = profile.get("enforce_gbnf", False)
         schema_already_present = any("### JSON SCHEMA REQUIREMENT ###" in m.get("content", "") for m in messages)
-        if schema and not use_gbnf and not schema_already_present:
+        if schema and not use_gbnf and not schema_already_present and retry_count == 0:
             schema_dict = schema if isinstance(schema, dict) else get_json_schema(schema, include_descriptions=False)
             schema_json_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
             schema_prompt = (
@@ -371,10 +375,10 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_prompt})
 
-        # 3.1 Gemma compatibility: combine system instructions with the user message
-        # because the Gemma chat template does not render a separate system turn.
-        is_gemma_family = "gemma" in (self.model or "").lower()
-        if is_gemma_family:
+        # 3.1 Gemma & Gemini compatibility: combine system instructions with the first user message
+        # because Gemma and Gemini chat templates do not render a separate system turn.
+        is_no_system_role_family = any(k in (self.model or "").lower() for k in ("gemma", "gemini"))
+        if is_no_system_role_family:
             sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
             user_msg = next((m for m in messages if m["role"] == "user"), None)
             if sys_msgs and user_msg:
@@ -536,8 +540,9 @@ class LLMClient:
                                     break
                             expr_item["word"] = w_val
 
-                # Auto-sync slotted pattern_formula from design_audit for grammar if missing slots
+                # Auto-sync slotted pattern_formula from design_audit for grammar if missing slots, and normalize slots
                 if isinstance(data, dict) and "grammar_patterns" in data and isinstance(data["grammar_patterns"], list):
+                    from .processor import WikiProcessor
                     for g_item in data["grammar_patterns"]:
                         if isinstance(g_item, dict):
                             cur_formula = str(g_item.get("pattern_formula", "")).strip()
@@ -549,8 +554,10 @@ class LLMClient:
                                     if "[" in p and "]" in p:
                                         cand_formula = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
                                         if "[" in cand_formula:
-                                            g_item["pattern_formula"] = cand_formula
+                                            cur_formula = cand_formula
                                             break
+                            if cur_formula:
+                                g_item["pattern_formula"] = WikiProcessor.normalize_grammar_formula(cur_formula)
 
                 # Auto-align quoted_sentence for vocabulary & expressions if target word exists in source passage
                 # Solves off-by-one sentence mismatches (e.g. model quoting an adjacent sentence) without masking hallucinations
@@ -676,9 +683,9 @@ class LLMClient:
                     failure_cat = "SCHEMA_MISMATCH"
                     raise map_err
 
-                # 6.4. QA EVALUATION & RETRY LOOP (Max 2 Retries with Structured Surgical Feedback)
+                # 6.4. QA EVALUATION & RETRY LOOP (Max 1 Retry with Structured Surgical Feedback)
                 retry_count = kwargs.pop("_qa_retry_count", 0)
-                max_qa_retries = 2
+                max_qa_retries = 1
                 if retry_count < max_qa_retries and not kwargs.get("_disable_qa_retry", False):
                     try:
                         from .evaluator import LogEvaluator
@@ -697,7 +704,11 @@ class LLMClient:
                             audit = LogEvaluator.evaluate_log(simulated_log)
                             composite = audit.get("composite_score")
                             if composite is None:
-                                composite = 100.0
+                                # If output was empty dict or had no gradable items, fail with 0.0 rather than false 100.0
+                                if not dict_to_eval or not any(dict_to_eval.get(k) for k in ("vocabulary", "expressions", "grammar_patterns", "questions", "concepts", "branches")):
+                                    composite = 0.0
+                                else:
+                                    composite = 100.0
                             
                             flags = audit.get("flags", [])
                             # Level 1 Code Gate: Filter out issues already healed deterministically by Python logic
@@ -707,13 +718,9 @@ class LLMClient:
                                 if "missing fill-in-the-blank slot" not in f
                             ]
 
+                            from .evaluator import FATAL_QA_FLAGS
                             has_fatal_flags = any(
-                                "does not appear in quoted sentence" in f
-                                or "duplicate" in f
-                                or "copy-pasted definition" in f
-                                or "Selection clustering" in f
-                                or "Redundant headwords" in f
-                                or "Overly basic general-English" in f
+                                any(fatal in f for fatal in FATAL_QA_FLAGS)
                                 for f in actionable_flags
                             )
 
@@ -721,50 +728,126 @@ class LLMClient:
                                 scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
                                 
-                                # Format clear, surgical feedback for the model based on task type
-                                issue_bullets = "\n".join([f"- {f}" for f in actionable_flags[:5]])
+                                # Format 3-element surgical defect tickets: [FIELD] -> [VIOLATION] -> [WHERE TO LOOK]
                                 t_name_lower = str(t_name).lower()
-                                if "quiz" in t_name_lower or "vocabulary" in t_name_lower:
-                                    fix_rules = (
-                                        "MANDATORY QUIZ FIX RULES:\n"
-                                        "1. SINGLE BEST FIT: Exactly ONE option must be defensively correct; all 3 distractors must be unambiguously disqualified.\n"
-                                        "2. ZERO KEY LEAK / NO DUPLICATES: Distractors must not repeat the target word, duplicate other options, or recycle headwords from this unit.\n"
-                                        "3. SYNTACTIC PARALLELISM: All 4 options must share the exact same part of speech, inflection, and grammatical frame.\n"
-                                        "4. SINGLE BLANK: Every stem must contain strictly four underscores '____' for the blank (no multiple blanks).\n"
-                                        "5. INDEX ACCURACY: 'correct_answer_index' must accurately point to the intended option (0=A, 1=B, 2=C, 3=D)."
-                                    )
-                                elif "translation" in t_name_lower:
-                                    fix_rules = (
-                                        "MANDATORY TRANSLATION FIX RULES:\n"
-                                        "1. LANGUAGE PURITY: Source sentence must be purely in the target language; all 4 options must be 100% natural English.\n"
-                                        "2. TARGET REQUISITE: The target vocabulary and grammar formula must be strictly embodied in the correct English translation.\n"
-                                        "3. RIGOROUS DISTRACTORS: Engineer authentic L1 interference, collocation shift, or formula distortion without trivial punctuation tricks."
-                                    )
-                                elif "reading" in t_name_lower:
-                                    fix_rules = (
-                                        "MANDATORY READING COMPREHENSION FIX RULES:\n"
-                                        "1. TEXTUAL ANCHOR: Every question must be fully warranted by verbatim evidence from the passage.\n"
-                                        "2. SCOPE INTEGRITY: Distractors should employ legitimate traps (overgeneralization, misattribution) rather than factual absurdities.\n"
-                                        "3. ACCURATE EXPLANATIONS: Provide distinct justification for why the correct option is unique and all 3 distractors are eliminated."
-                                    )
-                                else:
-                                    fix_rules = (
-                                        "MANDATORY EXTRACTION FIX RULES:\n"
-                                        "1. ZERO HALLUCINATION: All words and quoted sentences MUST physically exist verbatim in the source text.\n"
-                                        "2. Every quoted sentence MUST literally contain the target word/expression.\n"
-                                        "3. Eliminate duplicate items and ensure each definition is distinct and context-specific.\n"
-                                        "4. Quality > Quota: Do not pad with nonexistent words.\n"
-                                        "5. COVERAGE: Spread the picks across the ENTIRE passage - never pull more than ~3 words from one sentence.\n"
-                                        "6. REGISTER: Drop ultra-basic general-English words (e.g. 'public', 'bear', 'big', 'thing') and keep only genuine B1+ academic/analytical lexis."
+
+                                def _find_item_index(clean_str: str, array_name: str) -> str:
+                                    """Attempts to find the exact 0-based array index in dict_to_eval."""
+                                    if not isinstance(dict_to_eval, dict):
+                                        return "..."
+                                    target_list = dict_to_eval.get(array_name)
+                                    if not isinstance(target_list, list) or not target_list:
+                                        return "..."
+                                    # Extract quoted snippet or word inside single quotes from flag (e.g. 'Wearing rubber boots...')
+                                    quote_match = re.search(r"['‘]([^'’]+?)['’]", clean_str)
+                                    if not quote_match:
+                                        return "..."
+                                    snippet = quote_match.group(1).rstrip(".… ").strip().lower()
+                                    if not snippet:
+                                        return "..."
+                                    for idx, it in enumerate(target_list):
+                                        if not isinstance(it, dict):
+                                            continue
+                                        # Check across relevant text fields
+                                        for key in ("quote", "quoted_sentence", "word", "target_word", "pattern_formula", "question", "source_sentence"):
+                                            val = str(it.get(key) or "").lower()
+                                            if snippet in val or (len(snippet) >= 8 and snippet[:15] in val):
+                                                return str(idx)
+                                    return "..."
+
+                                def _format_defect_ticket(flag: str) -> str:
+                                    clean = flag.lstrip("❌⚠️✂️ ").strip()
+                                    clean_lower = clean.lower()
+
+                                    # Grammar patterns
+                                    if "grammar" in t_name_lower or "pattern" in clean_lower:
+                                        idx_str = _find_item_index(clean, "grammar_patterns")
+                                        return (
+                                            f"- [FIELD]: `grammar_patterns[{idx_str}]`\n"
+                                            f"  [ERROR]: {clean}\n"
+                                            f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                        )
+
+                                    # Quizzes (Vocabulary / Reading / Translation / General)
+                                    if "quiz" in t_name_lower or "question" in clean_lower:
+                                        idx_str = _find_item_index(clean, "questions")
+                                        if "target_word" in clean_lower or "synchronization" in clean_lower or "key" in clean_lower:
+                                            return (
+                                                f"- [FIELD]: `questions[{idx_str}].target_word` vs `options[...]`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `### SOURCE TEXT ###`"
+                                            )
+                                        if "blank" in clean_lower or "____" in clean:
+                                            return (
+                                                f"- [FIELD]: `questions[{idx_str}].question`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### TASK INSTRUCTIONS ###`"
+                                            )
+                                        if "distractor" in clean_lower or "recycl" in clean_lower or "duplicate" in clean_lower:
+                                            return (
+                                                f"- [FIELD]: `questions[{idx_str}].options`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### TASK INSTRUCTIONS ###`"
+                                            )
+                                        return (
+                                            f"- [FIELD]: `questions[{idx_str}]`\n"
+                                            f"  [ERROR]: {clean}\n"
+                                            f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                        )
+
+                                    # Vocabulary & Expression extractions
+                                    if any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
+                                        array_key = "vocabulary" if "vocabulary" in (dict_to_eval or {}) else ("expressions" if "expressions" in (dict_to_eval or {}) else "items")
+                                        idx_str = _find_item_index(clean, array_key)
+                                        field_prefix = f"{array_key}[{idx_str}]"
+                                        if any(k in clean_lower for k in ("quoted_sentence", "quote", "not appear in quoted sentence", "non-verbatim")):
+                                            return (
+                                                f"- [FIELD]: `{field_prefix}.quoted_sentence`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                            )
+                                        if "not found" in clean_lower or "hallucinat" in clean_lower:
+                                            return (
+                                                f"- [FIELD]: `{field_prefix}.word`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `### SOURCE TEXT ###`"
+                                            )
+                                        if "definition" in clean_lower or "duplicate" in clean_lower:
+                                            return (
+                                                f"- [FIELD]: `{field_prefix}.definition`\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                            )
+
+                                    # Generic defect ticket fallback
+                                    return (
+                                        f"- [ERROR]: {clean}\n"
+                                        f"  [LOOKUP]: Turn 1 context sections"
                                     )
 
+                                ticket_bullets = "\n\n".join([_format_defect_ticket(f) for f in actionable_flags[:5]])
+
+                                # Single fatal critical invariant per task type
+                                if "grammar" in t_name_lower:
+                                    critical_invariant = (
+                                        "Every `quote` MUST be an exact sentence copied verbatim from `### SOURCE TEXT ###`. "
+                                        "The `quote`, `category`, `pattern_formula`, and `design_audit` MUST be synchronized together. "
+                                        "If the category does not exist in the source text, switch to one that does."
+                                    )
+                                elif "translation" in t_name_lower:
+                                    critical_invariant = "The source sentence must strictly embody the target formula, and the correct option must be 100% natural English."
+                                elif "reading" in t_name_lower:
+                                    critical_invariant = "Every question stem and correct answer must be uniquely warranted by verbatim evidence from `### SOURCE TEXT ###`."
+                                elif "quiz" in t_name_lower or "vocabulary" in t_name_lower:
+                                    critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
+                                else:
+                                    critical_invariant = "Every headword and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`."
+
                                 critique_prompt = (
-                                    f"\n\n### 🚨 [QUALITY AUDIT REVIEW #{retry_count + 1}/{max_qa_retries} - Score: {composite:.1f}/100]\n"
-                                    f"Lowest dimension: {lowest_dim}.\n"
-                                    f"Your previous response had the following critical issues:\n"
-                                    f"{issue_bullets}\n\n"
-                                    f"{fix_rules}\n\n"
-                                    f"Please output the corrected, complete JSON object resolving these issues."
+                                    f"\n\n### 🚨 QUALITY AUDIT DEFECT TICKET\n"
+                                    f"Fix ONLY the following defective item(s) while keeping all valid items completely intact:\n\n"
+                                    f"{ticket_bullets}\n\n"
+                                    f"🛑 MANDATE: {critical_invariant} Return ONLY the complete corrected JSON object."
                                 )
                                 import logging
                                 logging.getLogger("librarian").info(
@@ -792,7 +875,7 @@ class LLMClient:
                                 # Strip only trailing prior QA critique and previous assistant output to avoid nesting review feedback,
                                 # while preserving all preceding conversation context (e.g. system prompts, surgical instructions, etc.)
                                 base_messages = list(messages)
-                                while len(base_messages) >= 2 and base_messages[-1].get("role") == "user" and "### 🚨 [QUALITY AUDIT REVIEW" in base_messages[-1].get("content", "") and base_messages[-2].get("role") == "assistant":
+                                while len(base_messages) >= 2 and base_messages[-1].get("role") == "user" and any(k in base_messages[-1].get("content", "") for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT")) and base_messages[-2].get("role") == "assistant":
                                     base_messages = base_messages[:-2]
 
                                 retry_messages = list(base_messages)
@@ -812,7 +895,48 @@ class LLMClient:
                         import logging
                         logging.getLogger("librarian").warning(f"Evaluator check skipped due to error: {eval_err}")
 
-                # 6.5. LOG FINAL HEALED & VALIDATED RESPONSE
+                # 6.5. ATTACH FINAL QA AUDIT METADATA TO RESULT OBJECT
+                try:
+                    from .evaluator import LogEvaluator
+                    dict_for_final_eval = data if isinstance(data, dict) else (dataclasses.asdict(result_obj) if dataclasses.is_dataclass(result_obj) else None)
+                    if dict_for_final_eval:
+                        final_simulated_log = {
+                            "log_name": f"{t_name}.log",
+                            "task": t_name,
+                            "model": self.model or "unknown",
+                            "system_prompt": system_prompt,
+                            "user_prompt": user_prompt,
+                            "context_prompt": f"{system_prompt}\n{user_prompt}".strip(),
+                            "raw_response": final_json,
+                            "parsed_json": dict_for_final_eval,
+                        }
+                        final_audit = LogEvaluator.evaluate_log(final_simulated_log)
+                        if isinstance(result_obj, dict):
+                            result_obj["_qa_audit"] = final_audit
+                        else:
+                            try:
+                                setattr(result_obj, "_qa_audit", final_audit)
+                            except Exception:
+                                pass
+                except Exception as final_eval_err:
+                    import logging
+                    logging.getLogger("librarian").debug(f"Final QA audit attachment skipped: {final_eval_err}")
+
+                # 6.6. DERIVE TRUTHFUL OUTCOME STATUS FROM QA AUDIT & LOG
+                from .evaluator import FATAL_QA_FLAGS
+                task_status = "SUCCESS"
+                task_fail_cat = None
+                if final_audit and isinstance(final_audit, dict):
+                    comp_score = final_audit.get("composite_score")
+                    audit_flags = final_audit.get("flags", [])
+                    has_audit_fatal = any(
+                        any(fatal in f for fatal in FATAL_QA_FLAGS)
+                        for f in audit_flags
+                    )
+                    if (comp_score is not None and comp_score < 80.0) or has_audit_fatal:
+                        task_status = "QUARANTINED"
+                        task_fail_cat = "QA_FATAL_FLAG" if has_audit_fatal else "QA_LOW_SCORE"
+
                 from .logger import log_task
                 log_task(
                     f"{t_name}_{mode_str}",
@@ -820,7 +944,8 @@ class LLMClient:
                     user_prompt,
                     final_json,
                     schema=schema_dict,
-                    status="SUCCESS",
+                    status=task_status,
+                    failure_category=task_fail_cat,
                     mode=mode_str,
                     api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
                     duration=call_duration,
@@ -1056,10 +1181,15 @@ class LLMClient:
         if not isinstance(data, dict) or not user_prompt:
             return
 
-        # Extract the passage content from user prompt
-        source_content = user_prompt.split("CONTENT:", 1)[1].strip() if "CONTENT:" in user_prompt else user_prompt
+        # Extract the passage content from user prompt (supporting ### SOURCE TEXT ### and CONTENT:)
+        if "### SOURCE TEXT ###" in user_prompt:
+            source_content = user_prompt.split("### SOURCE TEXT ###", 1)[1].strip()
+        elif "CONTENT:" in user_prompt:
+            source_content = user_prompt.split("CONTENT:", 1)[1].strip()
+        else:
+            source_content = user_prompt
         # Strip any trailing retry critique prompts from user_prompt
-        source_content = source_content.split("### 🚨 [QUALITY AUDIT REVIEW", 1)[0].strip()
+        source_content = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", source_content, flags=re.IGNORECASE)[0].strip()
         if not source_content:
             return
 
@@ -1221,6 +1351,9 @@ class LLMClient:
 
         provided_options = kwargs.pop("options", {})
         options.update(provided_options)
+
+        # Support keep_alive from profile, kwargs, or wiki_config.json (e.g. keep_alive: 0 or "0m" to unload immediately)
+        keep_alive = kwargs.pop("keep_alive", profile.get("keep_alive", config.data.get("keep_alive")))
         
         payload = {
             "model": self.model,
@@ -1229,6 +1362,8 @@ class LLMClient:
             "options": options,
             **kwargs
         }
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
         
         # Smart profile resolution (GBNF, think, etc.)
         model_lower = (self.model or "").lower()

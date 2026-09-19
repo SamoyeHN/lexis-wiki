@@ -33,7 +33,6 @@ DEFAULT_CONFIG = {
     "enable_expert_audit": False,
     "judge_model": "",
     "min_passing_items": 3,
-    "quarantine_on_fail": True,
     "enable_prose_pipeline": True,
     "enable_vocab_prose": False
 }

@@ -17,23 +17,23 @@ Create an advanced {target_language}-to-English **Comparative Translation Apprai
    - ❌ **STRICTLY PROHIBITED**: Copying sentences verbatim from the input text or reading passage. Design brand-new, intellectually mature academic or professional scenarios.
    - **Target Keyword**: The exact English vocabulary headword or phrase tested directly from the VOCABULARY list.
    - **Target Grammar Pattern**: The exact pattern name and formula selected from the GRAMMAR list.
-   - **{target_language} Source Sentence**: Provide a natural, polished, formal, and idiomatic {target_language} source sentence. Do NOT mix English words into the source sentence unless referring to standard international acronyms.
+   - **{target_language} Sentence**: Provide a natural, polished, formal, and idiomatic {target_language} source sentence. Do NOT mix English words into the source sentence unless referring to standard international acronyms.
    - **Idiomatic Translation**: A complete, pristine, publishable academic English translation of the entire source sentence that seamlessly integrates both the Target Keyword and the Target Grammar Pattern.
    - **Flawed Translation**: A complete English translation of the same source sentence that represents an authentic student or machine-translation error. It MUST contain an objective, diagnostic defect from the flaw taxonomy below, while remaining superficially plausible.
-   - **Flaw Type**: A concise diagnostic label classifying the exact defect in Flawed Translation (e.g., 'L1 literal word order', 'Collocation clash: wrong dependent preposition', 'Grammar formula breakdown', 'Scope / Polarity distortion').
+   - **Flaw Type**: A concise diagnostic label classifying the exact defect in Flawed Translation (e.g., 'Chinglish literal word order', 'Collocation clash: wrong dependent preposition', 'Grammar formula breakdown', 'Scope / Polarity distortion').
    - **Diagnostic Critique**: A contrastive pedagogical critique (2 to 4 sentences) explicitly explaining why the Idiomatic Translation is superior and identifying the exact structural, collocational, or pragmatic rule violated by the Flawed Translation.
 
 3. **Authentic Flaw Taxonomy (High Diagnostic Value, NO Absurd Giveaway)**:
    - The Flawed Translation MUST NOT be comical, gibberish, or an obvious giveaway. It must mirror typical higher-intermediate learner pitfalls:
-     * *Trap 1 (L1 Negative Transfer / Literal Word Order)*: Mechanically projects {target_language} (L1) syntactic structures or verbatim word order into English, resulting in un-idiomatic calques, missing dummy subjects (e.g., 'There have...'), unnatural modifier/adverb placement, or literal verb stacking.
+     * *Trap 1 (L1 Negative Transfer & Chinglish Syntax)*: Mechanically translates {target_language} word order or syntactic habits, resulting in missing dummy subjects (e.g., 'There have many people...'), incorrect adverb placement, or verb stacking.
      * *Trap 2 (Collocation & Preposition Clash)*: Misuses prepositions or verb-noun collocations (e.g., *comply to* instead of *comply with*, *make a damage*, or transitive verbs taking unnecessary prepositions).
      * *Trap 3 (Morpho-syntactic & Formula Breakdown)*: Distorts the target formula or non-finite verb morphology (e.g., failed subject-auxiliary inversion, bare infinitive after preposition, or dangling participle).
 
 4. **Design Audit**:
    - `AUDIT: [{target_language} Anchor -> Target Keyword: [word] + Grammar Formula] -> [Idiomatic Core: ...] -> [Flaw Type: ...] -> [Pedagogical Takeaway]`
 
-UNIT VOCABULARY LIST:
+VOCABULARY:
 {vocabulary_content}
 
-UNIT GRAMMAR LIST:
+GRAMMAR:
 {grammar_content}

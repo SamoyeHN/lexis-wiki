@@ -29,6 +29,37 @@ STOP_SLOTS = frozenset({
     "field", "area", "role", "object", "domain", "type", "situation", "goal"
 })
 
+# Grammar pattern slot whitelist for bracketed formulas (case-insensitive)
+ALLOWED_GRAMMAR_SLOTS = frozenset({
+    "s", "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "adj", "adv",
+    "det", "prep", "conj", "clause", "noun phrase", "verb phrase", "predicate", "subject",
+    "object", "complement", "adverbial", "focus element", "subordinate clause",
+    "main clause", "dependent clause", "modal", "copula", "past participle",
+    "present participle", "infinitive", "gerund", "adjective phrase", "adverb phrase",
+    "prepositional phrase", "quotation", "wh-word", "wh-clause", "head noun",
+    "verb-ing", "verb-ed"
+})
+
+# Standard COBUILD bare POS tokens for unbracketed pattern formulas
+COBUILD_POS_TOKENS = frozenset({
+    "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "adj", "adv",
+    "det", "prep", "conj", "clause", "s", "n", "pron", "modal"
+})
+
+# Fatal QA flags that invalidate pedagogical delivery and trigger quarantine / retry
+FATAL_QA_FLAGS = (
+    "does not appear in quoted sentence",
+    "Non-verbatim quote detected",
+    "duplicate",
+    "copy-pasted definition",
+    "Selection clustering",
+    "Redundant headwords",
+    "Overly basic general-English",
+    "Grammar formula anchor",
+    "Hallucinated quote",
+    "pure fabrication",
+)
+
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
 COMMON_IRREGULARS = {
     'lead': ('led',), 'led': ('lead',),
@@ -75,6 +106,67 @@ COMMON_IRREGULARS = {
     'feel': ('felt',), 'felt': ('feel',),
 }
 
+# Common English contractions for contraction-aware anchor matching
+CONTRACTIONS_MAP = {
+    "it's": "it is", "it’s": "it is", "its": "it is",  # in context of contracted copula
+    "that's": "that is", "that’s": "that is",
+    "there's": "there is", "there’s": "there is",
+    "what's": "what is", "what’s": "what is",
+    "here's": "here is", "here’s": "here is",
+    "he's": "he is", "he’s": "he is",
+    "she's": "she is", "she’s": "she is",
+    "who's": "who is", "who’s": "who is",
+    "i'm": "i am", "i’m": "i am",
+    "you're": "you are", "you’re": "you are",
+    "we're": "we are", "we’re": "we are",
+    "they're": "they are", "they’re": "they are",
+    "can't": "cannot", "can’t": "cannot",
+    "won't": "will not", "won’t": "will not",
+    "don't": "do not", "don’t": "do not",
+    "doesn't": "does not", "doesn’t": "does not",
+    "didn't": "did not", "didn’t": "did not",
+    "isn't": "is not", "isn’t": "is not",
+    "aren't": "are not", "aren’t": "are not",
+    "wasn't": "was not", "wasn’t": "was not",
+    "weren't": "were not", "weren’t": "were not",
+    "haven't": "have not", "haven’t": "have not",
+    "hasn't": "has not", "hasn’t": "has not",
+    "hadn't": "had not", "hadn’t": "had not",
+    "wouldn't": "would not", "wouldn’t": "would not",
+    "shouldn't": "should not", "shouldn’t": "should not",
+    "couldn't": "could not", "couldn’t": "could not",
+    "mustn't": "must not", "mustn’t": "must not",
+    "i've": "i have", "i’ve": "i have",
+    "you've": "you have", "you’ve": "you have",
+    "we've": "we have", "we’ve": "we have",
+    "they've": "they have", "they’ve": "they have",
+    "i'll": "i will", "i’ll": "i will",
+    "you'll": "you will", "you’ll": "you will",
+    "he'll": "he will", "he’ll": "he will",
+    "she'll": "she will", "she’ll": "she will",
+    "we'll": "we will", "we’ll": "we will",
+    "they'll": "they will", "they’ll": "they will",
+    "i'd": "i would", "i’d": "i would",
+    "you'd": "you would", "you’d": "you would",
+    "he'd": "he would", "he’d": "he would",
+    "she'd": "she would", "she’d": "she would",
+    "we'd": "we would", "we’d": "we would",
+    "they'd": "they would", "they’d": "they would",
+}
+
+_CONTRACTION_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(CONTRACTIONS_MAP.keys(), key=len, reverse=True)) + r")\b",
+    re.IGNORECASE
+)
+
+def _expand_contractions(text: str) -> str:
+    """Expands English contractions to full words for robust anchor matching."""
+    if not text:
+        return ""
+    def _repl(m: re.Match) -> str:
+        tok = m.group(1).lower()
+        return CONTRACTIONS_MAP.get(tok, tok)
+    return _CONTRACTION_RE.sub(_repl, text)
 
 def _safe_str(val: Any, default: str = "") -> str:
     """Safely converts a value to string, mapping None to default rather than 'None'."""
@@ -126,7 +218,9 @@ def _ngram_coverage(quote_clean: str, source_clean: str, n: int = 3) -> float:
 
 
 def _is_hallucinated_quote(quote: str) -> bool:
-    """Detect if model explicitly notes quote is inferred or missing from text."""
+    """Detect if model explicitly notes quote is inferred or missing from text,
+    or if it copied a pattern template (containing syntactic slot brackets like [S], [NP], [to-V]) into quote.
+    """
     q_lower = quote.lower()
     indicators = [
         "not present in text",
@@ -138,25 +232,38 @@ def _is_hallucinated_quote(quote: str) -> bool:
         "constructed from",
         "not explicitly mentioned",
     ]
-    return any(ind in q_lower for ind in indicators)
+    if any(ind in q_lower for ind in indicators):
+        return True
+    # If quote contains grammatical slot placeholders like [S], [NP], [to-V], [VP], it's a copied template, not an authentic passage quote
+    if re.search(r"\[(S|NP|VP|V|to-V|V3|V-ing|adj|adv|be|aux|modal)\]", quote, re.IGNORECASE):
+        return True
+    return False
 
 
 def _extract_source_content(user_prompt: str) -> str:
-    """Extracts isolated source text from user prompt (under CONTENT:, # Source Material, etc.)
+    """Extracts isolated source text from user prompt (under ### SOURCE TEXT ###, CONTENT:, # Source Material, etc.)
     Returns empty string if no authentic content block is found to prevent instruction text from
     being falsely matched as verbatim source.
+    Also strips any appended QA review / retry critique blocks so error reports are never treated as source material.
     """
     if not user_prompt:
         return ""
-    # Standard CONTENT: marker
-    match = re.search(r"CONTENT:\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
+    # 1. Primary: Standard ### SOURCE TEXT ### or CONTENT: marker
+    match = re.search(r"(?:###\s*SOURCE\s*TEXT\s*###|CONTENT:)\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
+    content = ""
     if match:
-        return match.group(1).strip()
-    # Secondary headings if CONTENT: was omitted
-    match_sec = re.search(r"(?:#+\s*(?:Source Material|Input Content|Text Context|Transcript))\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
-    if match_sec:
-        return match_sec.group(1).strip()
-    return ""
+        content = match.group(1).strip()
+    else:
+        # 2. Secondary: Other standard headings if primary markers were omitted
+        match_sec = re.search(r"(?:#+\s*(?:Source Material|Input Content|Text Context|Transcript))\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
+        if match_sec:
+            content = match_sec.group(1).strip()
+    
+    if content:
+        # Strictly strip any retry critique block (e.g. ### 🚨 [QUALITY AUDIT REVIEW...)
+        content = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", content, flags=re.IGNORECASE)[0].strip()
+
+    return content
 
 
 def _extract_wordlist(user_prompt: str) -> List[str]:
@@ -343,7 +450,8 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 matches += 1
             elif not wordlist:
                 # Packaging / conversion phase: check if target word exists in the drafted prompt text
-                clean_prompt = _clean_core(effective_prompt)
+                draft_prompt = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", effective_prompt, flags=re.IGNORECASE)[0]
+                clean_prompt = _clean_core(draft_prompt)
                 if clean_target in clean_prompt:
                     matches += 1
                 else:
@@ -363,11 +471,12 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     for item in items:
         quote = item.get("quoted_sentence") or item.get("quote")
         word = str(item.get("word") or item.get("pattern_formula") or "").strip()
-        if not (quote and isinstance(quote, str)):
+        checks += 1
+
+        if not (quote and isinstance(quote, str) and quote.strip()):
+            flags.append(f"❌ Missing quote/quoted_sentence for item: '{word[:40]}'")
             continue
             
-        checks += 1
-        
         # Check 1: Explicit hallucination acknowledgment
         if _is_hallucinated_quote(quote):
             flags.append(f"❌ Hallucinated quote (explicitly inferred/absent): '{quote[:50]}...'")
@@ -401,26 +510,27 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 matches = max(0, matches - 1)
                 continue
 
+
         # Check 3: Cleaned quote in source or high n-gram coverage
         core_quote = _clean_core(quote)
         is_verbatim = False
         if core_quote:
-            if core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.85:
+            if core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.80:
                 is_verbatim = True
             elif "..." in quote or "…" in quote:
                 # If model used ellipsis to omit middle parts of a long sentence, check each segment
                 segments = [s.strip() for s in re.split(r'\.{3,}|…', quote) if s.strip()]
                 meaningful_segs = [s for s in segments if len(_clean_core(s).split()) >= 2]
-                if meaningful_segs and all(_clean_core(seg) in core_src or _ngram_coverage(_clean_core(seg), core_src, n=3) >= 0.85 for seg in meaningful_segs):
+                if meaningful_segs and all(_clean_core(seg) in core_src or _ngram_coverage(_clean_core(seg), core_src, n=3) >= 0.80 for seg in meaningful_segs):
                     is_verbatim = True
 
         if is_verbatim:
             matches += 1
         else:
-            flags.append(f"⚠️ Non-verbatim quote detected: '{quote[:40]}...'")
+            flags.append(f"❌ Non-verbatim quote detected: '{quote[:40]}...'")
             
     if checks == 0:
-        return W_VERBATIM, flags
+        return 0.0, ["❌ No items to evaluate for source faithfulness"]
     return max(0.0, round((matches / checks) * W_VERBATIM, 1)), flags
 
 
@@ -483,11 +593,57 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
         elif task_type == "grammar":
             pattern = _safe_str(item.get("pattern_formula"))
             audit = _safe_str(item.get("design_audit"))
+            quote = _safe_str(item.get("quote"))
+            category = _safe_str(item.get("category"))
             checks += 1
-            if re.search(r"\[.+?\]", pattern) and audit:
+            
+            reasons = []
+            if not audit:
+                reasons.append("missing design_audit")
+            if not pattern:
+                reasons.append("missing pattern_formula")
+            if not _safe_str(item.get("imitation_example")):
+                reasons.append("missing imitation_example")
+            if not _safe_str(item.get("common_mistakes")):
+                reasons.append("missing common_mistakes")
+            
+            # Auto-unwrap accidental brackets around literal functional words (e.g. [it], [that], [if])
+            from .processor import WikiProcessor
+            pattern = WikiProcessor.unwrap_literal_brackets(pattern)
+
+            # Minimal Anti-Triviality Gate: penalize simple patterns whose ONLY anchor is a standalone conversational filler/coordinator (e.g. 'But [S]', 'And [S]')
+            slot_count = len(re.findall(r"\[.*?\]", pattern))
+            lits = [
+                w for w in re.sub(r"\[.*?\]|\(.*?\)|[+,/]", " ", pattern).split()
+                if len(_clean_core(w)) >= 2
+            ]
+            TRIVIAL_ANCHOR_WORDS = frozenset({"but", "and", "so", "or", "of", "course", "well", "now", "here"})
+            TRIVIAL_PHRASES = frozenset({"but", "and", "so", "or", "of course", "here is", "heres"})
+            clean_lits = [re.sub(r"[^\w\s]", "", l).lower().strip() for l in lits if re.sub(r"[^\w\s]", "", l).strip()]
+            combined_lit_phrase = " ".join(clean_lits)
+            if slot_count <= 1 and ((combined_lit_phrase in TRIVIAL_PHRASES) or (clean_lits and all(l in TRIVIAL_ANCHOR_WORDS for l in clean_lits))):
+                reasons.append(f"trivial formula anchored only by conversational filler or conjunction: '{pattern}'")
+
+            # Evaluative It-frameworks physical anchor check: quote must physically contain dummy pronoun 'it'
+            if category == "Evaluative It-frameworks":
+                if not re.search(r"\bit(?:'s)?\b", quote, re.IGNORECASE):
+                    reasons.append("category 'Evaluative It-frameworks' assigned to quote without dummy pronoun 'it'")
+                elif re.search(r"\bit(?:'s|\s+is|\s+was)\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|o'clock))?\b", quote, re.IGNORECASE):
+                    reasons.append("ambient time statement (e.g. 'It's 4:15') misclassified as 'Evaluative It-frameworks'")
+
+            # Cleft sentences physical anchor check: must physically contain that/who/whom/which
+            if category == "Cleft sentences":
+                if not re.search(r"\b(?:that|who|whom|which)\b", quote, re.IGNORECASE):
+                    reasons.append("category 'Cleft sentences' assigned to quote without relative linker ('that', 'who', 'whom', 'which')")
+
+            # Quote cleanliness warning: trailing ellipsis
+            if quote.rstrip().endswith(("...", "…")):
+                flags.append(f"⚠️ Quote ends with trailing ellipsis: '{quote[:40]}...'")
+
+            if not reasons:
                 passes += 1
             else:
-                flags.append("⚠️ Grammar pattern missing slot formula or design audit")
+                flags.append(f"⚠️ Grammar pattern '{pattern[:40]}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "quiz":
             options = item.get("options", [])
             idx = item.get("correct_answer_index")
@@ -744,7 +900,7 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
     if not task_type or task_type == "unknown":
         task_type = _detect_task_type("", parsed_data)
         
-    if task_type not in ("vocabulary", "expressions"):
+    if task_type not in ("vocabulary", "expressions", "grammar"):
         return parsed_data, []
 
     items = _extract_items(parsed_data, task_type)
@@ -759,6 +915,7 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
     key_by_type = {
         "vocabulary": "vocabulary",
         "expressions": "expressions",
+        "grammar": "grammar_patterns",
     }
     array_key = key_by_type.get(task_type)
     if not array_key or array_key not in parsed_data or not isinstance(parsed_data[array_key], list):
@@ -766,16 +923,81 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
 
     surviving_items = []
     pruned_flags = []
+    seen_dedup_keys = set()
 
     for item in parsed_data[array_key]:
         if not isinstance(item, dict):
             surviving_items.append(item)
             continue
 
+        # Deterministic deduplication check
+        if task_type == "grammar":
+            formula_val = str(item.get("pattern_formula", "")).strip().lower()
+            quote_val = str(item.get("quote", "")).strip().lower()
+            dedup_key = (formula_val, quote_val)
+        else:
+            word_val = str(item.get("word", "")).strip().lower()
+            dedup_key = (word_val,)
+            
+        if any(dedup_key) and dedup_key in seen_dedup_keys:
+            pruned_flags.append(f"✂️ Pruned duplicate item: {dedup_key[0]}")
+            continue
+        if any(dedup_key):
+            seen_dedup_keys.add(dedup_key)
+
         word = str(item.get("word") or item.get("pattern_formula") or "").strip()
         quote = str(item.get("quoted_sentence") or item.get("quote") or "").strip()
         
-        if not word:
+        if not word and not quote:
+            continue
+
+        # Specialized pruning for grammar
+        if task_type == "grammar":
+            core_quote = _clean_core(quote)
+            category = str(item.get("category") or "").strip()
+            imitation = str(item.get("imitation_example") or "").strip()
+            mistakes = str(item.get("common_mistakes") or "").strip()
+
+            if not (core_quote and category and imitation and mistakes):
+                missing_fields = []
+                if not core_quote: missing_fields.append("quote")
+                if not category: missing_fields.append("category")
+                if not imitation: missing_fields.append("imitation_example")
+                if not mistakes: missing_fields.append("common_mistakes")
+                pruned_flags.append(f"✂️ Pruned incomplete grammar pattern '{word[:30]}' (missing required: {', '.join(missing_fields)})")
+                continue
+
+            # Quote must exist in source text (verbatim or high n-gram coverage)
+            quote_in_src = (core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.80)
+            if not quote_in_src:
+                # Check segment coverage if ellipsis is present
+                if "..." in quote or "…" in quote:
+                    segments = [s.strip() for s in re.split(r'\.{3,}|…', quote) if s.strip()]
+                    meaningful_segs = [s for s in segments if len(_clean_core(s).split()) >= 2]
+                    if meaningful_segs and all(_clean_core(seg) in core_src or _ngram_coverage(_clean_core(seg), core_src, n=3) >= 0.80 for seg in meaningful_segs):
+                        quote_in_src = True
+
+            if not quote_in_src:
+                pruned_flags.append(f"✂️ Pruned hallucinated grammar pattern '{word[:30]}' (quote not found in source text)")
+                continue
+
+            # Anchor verification: literal functional anchors must exist in quote
+            if "[" in word:
+                raw_lits = re.sub(r"\[.*?\]|\(.*?\)|[+,/]", " ", word).split()
+            else:
+                raw_tokens = re.sub(r"[,+/]", " ", word).split()
+                raw_lits = [t for t in raw_tokens if t.lower() not in COBUILD_POS_TOKENS]
+            
+            expanded_quote = _clean_core(_expand_contractions(quote))
+            quote_tokens = set(core_quote.split()) | set(expanded_quote.split())
+            missing_anchors = [
+                lit for lit in raw_lits 
+                if len(_clean_core(lit)) >= 2 and _clean_core(lit) not in quote_tokens
+            ]
+            if missing_anchors:
+                pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
+                continue
+
             surviving_items.append(item)
             continue
 

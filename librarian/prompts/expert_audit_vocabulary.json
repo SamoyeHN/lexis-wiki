@@ -120,47 +120,7 @@
             ]
           },
           "cured_question": {
-            "type": ["object", "null"],
-            "properties": {
-              "target_word": {
-                "type": "string",
-                "minLength": 1
-              },
-              "question": {
-                "type": "string",
-                "minLength": 1
-              },
-              "options": {
-                "type": "array",
-                "minItems": 4,
-                "maxItems": 4,
-                "items": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "correct_answer_index": {
-                "type": "integer",
-                "enum": [0, 1, 2, 3]
-              },
-              "definition": {
-                "type": "string",
-                "minLength": 1
-              },
-              "explanation": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "target_word",
-              "question",
-              "options",
-              "correct_answer_index",
-              "definition",
-              "explanation"
-            ],
-            "additionalProperties": false
+            "type": "object"
           }
         },
         "required": [
