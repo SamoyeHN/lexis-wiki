@@ -99,10 +99,23 @@ Settings can be edited directly in the Dashboard UI or persistently saved in `wi
 | `model` | `str` | Primary generation model | `"qwen2.5:14b"` |
 | `enable_expert_audit`| `bool` | Master toggle for Level 2 LLM-as-a-Judge semantic auditing | `false` |
 | `judge_model` | `str` | Dedicated Level 2 evaluation judge model | `"mistral-small3.2:24b"` |
-| `enable_prose_pipeline`| `bool`| Multi-turn Prose-to-JSON pipeline toggle | `true` |
+| `compile_defaults.max_parallel` | `int` | Maximum parallel extraction tasks | `1` |
 | `tts_engine` | `str` | Listening quiz TTS engine (`kokoro` or `edge`) | `"edge"` |
 | `tts_voice_a` | `str` | Dialogue Speaker 1 Voice | `"en-US-AriaNeural"` / `"af_sarah"` |
 | `tts_voice_b` | `str` | Dialogue Speaker 2 Voice | `"en-GB-RyanNeural"` / `"am_michael"` |
+
+### 💡 Recommendation Setting for different VRAM
+
+- **For 12 GB VRAM**:
+  - Run model below 12b.
+  - Set `max_parallel: 1` in wiki_config.json.
+  - Align your local LLM server slots as well:
+    - **Ollama**: Set the environment variable `OLLAMA_NUM_PARALLEL=1`.
+    - **LM Studio**: Set **`Max Concurrent Predictions`** to `1` in the model loading panel.
+    
+- **For 24 GB VRAM and above**:
+  - Set `max_parallel: 2` in wiki_config.json.
+  - Adjust server slots accordingly.
 
 ### Local TTS Service Endpoints
 

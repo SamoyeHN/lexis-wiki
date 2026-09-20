@@ -258,7 +258,7 @@ class LLMClient:
             if api_key and api_key != "ollama":
                 headers["Authorization"] = f"Bearer {api_key}"
             try:
-                response = requests.get(url, headers=headers, timeout=2)
+                response = requests.get(url, headers=headers, timeout=5)
                 response.raise_for_status()
                 data = response.json()
                 # Support OpenAI standard {"data": [{"id": "model_name"}]} and llama-server {"models": [...]}
@@ -853,7 +853,8 @@ class LLMClient:
                                 logging.getLogger("librarian").info(
                                     f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) via multi-turn self-correction..."
                                 )
-                                # Log failed attempt with QA_LOW_SCORE
+                                # Log retry attempt with truthful failure category
+                                retry_fail_cat = "QA_FATAL_FLAG" if has_fatal_flags else "QA_LOW_SCORE"
                                 from .logger import log_task
                                 log_task(
                                     f"{t_name}_{mode_str}",
@@ -861,8 +862,8 @@ class LLMClient:
                                     user_prompt,
                                     final_json,
                                     schema=schema_dict,
-                                    status="FAILED",
-                                    failure_category="QA_LOW_SCORE",
+                                    status="RETRYING",
+                                    failure_category=retry_fail_cat,
                                     mode=mode_str,
                                     api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
                                     duration=call_duration,
@@ -934,7 +935,7 @@ class LLMClient:
                         for f in audit_flags
                     )
                     if (comp_score is not None and comp_score < 80.0) or has_audit_fatal:
-                        task_status = "QUARANTINED"
+                        task_status = "REVIEW_NEEDED"
                         task_fail_cat = "QA_FATAL_FLAG" if has_audit_fatal else "QA_LOW_SCORE"
 
                 from .logger import log_task
@@ -1345,11 +1346,14 @@ class LLMClient:
         user_model_opts = profile.get("options", {})
         if isinstance(user_model_opts, dict):
             options.update(user_model_opts)
-        for opt_k in ("temperature", "num_ctx", "num_predict", "top_p", "top_k", "repeat_penalty", "seed"):
+        for opt_k in ("temperature", "num_ctx", "num_predict", "max_tokens", "top_p", "top_k", "repeat_penalty", "seed"):
             if opt_k in profile:
-                options[opt_k] = profile[opt_k]
+                target_k = "num_predict" if opt_k == "max_tokens" else opt_k
+                options[target_k] = profile[opt_k]
 
         provided_options = kwargs.pop("options", {})
+        if "max_tokens" in provided_options and "num_predict" not in provided_options:
+            provided_options["num_predict"] = provided_options.pop("max_tokens")
         options.update(provided_options)
 
         # Support keep_alive from profile, kwargs, or wiki_config.json (e.g. keep_alive: 0 or "0m" to unload immediately)
@@ -1459,9 +1463,12 @@ class LLMClient:
         user_model_opts = profile.get("options", {})
         if isinstance(user_model_opts, dict):
             payload.update(user_model_opts)
-        for opt_k in ("temperature", "max_tokens", "top_p", "seed"):
+        for opt_k in ("temperature", "max_tokens", "num_predict", "top_p", "seed"):
             if opt_k in profile:
-                payload[opt_k] = profile[opt_k]
+                target_k = "max_tokens" if opt_k == "num_predict" else opt_k
+                payload[target_k] = profile[opt_k]
+        if "num_predict" in payload and "max_tokens" not in payload:
+            payload["max_tokens"] = payload.pop("num_predict")
         think_setting = kwargs.pop("think", profile.get("think"))
         if think_setting is False or think_setting == "none":
             # Standard OpenAI / llama-server / vLLM parameters to suppress CoT thinking
@@ -1487,6 +1494,24 @@ class LLMClient:
         try:
             timeout_val = (5, self.timeout) if not stream else (5, None)
             response = requests.post(url, json=payload, headers=headers, timeout=timeout_val, stream=stream)
+            
+            # Robust self-healing for LM Studio / local servers that do not accept {"type": "json_object"}
+            # e.g., LM Studio errors with: "'response_format.type' must be 'json_schema' or 'text'"
+            if response.status_code == 400 and payload.get("response_format", {}).get("type") == "json_object":
+                err_text = response.text.lower()
+                if "response_format" in err_text or "json_object" in err_text:
+                    if schema:
+                        # Auto-promote to json_schema mode
+                        schema_name = getattr(schema, "__name__", "ResponseSchema") if not isinstance(schema, dict) else "ResponseSchema"
+                        payload["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": {"name": schema_name, "strict": True, "schema": get_json_schema(schema, include_descriptions=False)}
+                        }
+                    else:
+                        # Server only accepts 'text' or doesn't support json_object
+                        payload.pop("response_format", None)
+                    response = requests.post(url, json=payload, headers=headers, timeout=timeout_val, stream=stream)
+
             response.raise_for_status()
             if stream: return self._iterate_openai(response)
             data = response.json()
@@ -1495,6 +1520,13 @@ class LLMClient:
             content = choice.get("message", {}).get("content", "")
             self.last_raw_response = content
             return content
+        except requests.exceptions.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = f" - Server Response: {response.text}"
+            except Exception:
+                pass
+            raise LLMError(f"OpenAI Communication Error: {e}{err_body}")
         except Exception as e:
             raise LLMError(f"OpenAI Communication Error: {e}")
 

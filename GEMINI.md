@@ -126,6 +126,19 @@ wiki/<UnitName>/sources/<UnitName>.md | media/
   - Edge-TTS: `http://localhost:5050/v1/audio/speech`
 - **Voice Validation**: Invalid voices self-heal to defaults: Kokoro (`af_sarah`/`am_michael`), Edge-TTS (`en-US-AriaNeural`/`en-GB-RyanNeural`).
 
+### 3.5 Bidirectional Concurrency & VRAM Alignment Protocol
+- **Default Serialization (`max_parallel: 1`)**:
+  - `wiki_config.json` sets `"compile_defaults": { "max_parallel": 1 }` as the global gold standard for consumer GPU stability.
+  - Applying single-stream sequential extraction avoids catastrophic token truncation, thread lock contention, and unified KV Cache fragmentation during long-context generation (e.g. Vocabulary/Grammar extractions reaching 3,500–6,500 total tokens).
+- **Bidirectional Hardware-to-Server Alignment (Client & Server Synergy)**:
+  - Setting `max_parallel: 1` in client configuration only restricts incoming client requests; it cannot modify local engine slot pre-allocation.
+  - To prevent server-side out-of-memory errors (`Context size has been exceeded` / `failed to find free space in the KV cache`):
+    - **LM Studio**: Explicitly align **`Max Concurrent Predictions` (Number of Slots)** to `1` (or `2` only when VRAM $\ge$ 24GB).
+    - **Ollama**: Pass/export environment variable `OLLAMA_NUM_PARALLEL=1` (and `OLLAMA_MAX_LOADED_MODELS=1`).
+- **VRAM Sizing Guide for 12B/14B Production Models (e.g., `gemma4:12b`, `qwen3.6:14b`)**:
+  - **12 GB VRAM GPUs (e.g., RTX 3060 / 4070)**: **Strictly `max_parallel = 1`** on both client and engine. Guarantees 100% layer GPU offload (e.g. 48/48 layers) and allocates 100% of remaining VRAM exclusively to the active KV Cache, achieving peak sustained generation speeds (70–80 tokens/sec) without out-of-memory aborts.
+  - **$\ge$ 24 GB VRAM GPUs (e.g., RTX 3090 / 4090 / Mac Studio)**: May safely scale to `max_parallel = 2` (with server slots set to 2) for parallel speedups.
+
 ---
 
 ## 4. Naming Conventions
@@ -162,6 +175,14 @@ Use `snake_case` for all JSON keys and variable names.
 - [x] Triad Quality Architecture (Pure Formulas + Physical Hard Gates + Code Gate Bottom-Line): Defined grammatical structures purely via algebraic COBUILD slot formulas, backed by strict binary exclusion gates (Cleft, Evaluative It, Inversion, Concessive) and deterministic zero-cost Python Code Gate regex invariants in `evaluator.py`, eliminating category drift and false positives across all model scales.
 
 ### Pending
+- **Primary Focus: Extraction Quality Improvement (Source-to-Wiki)**:
+  - Before downstream quiz generation enhancements, prioritize and maximize extraction quality, precision, and pedagogical rigor across vocabulary, expressions, and grammar extractions.
+  - Eliminate near-synonym noise, enforce strict contextual single-word discipline, and guarantee 100% authentic syntactic slot binding.
+- **LLM Proficiency Enhancements (Cognitive Diagnostics & Evidence Augmentation)**:
+  - *Context*: Insights from standardized LLM assessment research (e.g. CSEBench, CSE Levels 3–6 evaluation) show that smaller open-source models (7B–14B) achieve dramatic proficiency jumps (from CSE-3/5 up to CSE-6) when supplied with compact structural evidence and pre-computed scratchpad constraints.
+  - *Design & Implementation*:
+    1. **Scratchpad Formula (Primary / Highest Impact)**: Enforce intermediate reasoning scratchpad derivation in Prose-to-JSON Turn 1 / CoT (e.g., `[Collocation Anchor: target + dependent preposition/noun] -> [Taxonomy Distractor Traps]`) before committing to final question stems or options.
+    2. **Academic Collocation List (ACL) Pattern Integration**: Connect high-quality academic collocation patterns (from curated ACL collections) to supply verified, zero-hallucination dependent prepositions and verb-noun pairings as compact prompt-injected evidence for quiz item authoring.
 - **Quality Tier Routing & Human Review UI**:
   - 90–100: 自动交付（Passed - High Quality）。
   - 75–89: 自动交付但标注审查候选（Review Candidate）。

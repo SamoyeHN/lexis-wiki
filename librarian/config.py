@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
         "expressions": 5,
         "grammar": 5,
         "concepts": 3,
-        "max_parallel": 3
+        "max_parallel": 1
     },
     "tts_engine": "kokoro",
     "tts_url": "http://localhost:8880/v1/audio/speech",

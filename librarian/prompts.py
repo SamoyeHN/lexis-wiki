@@ -168,7 +168,7 @@ class Prompts:
                 "   - For each entry, execute the canonical audit pipeline:\n"
                 "     `AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [CEFR Level (B1–C2)] -> [VERBATIM_CONFIRMED]`\n"
                 "   - MANDATE: The first bracket `[Surface Word in Text]` must be the exact literal word copied directly from the passage.\n\n"
-                "CONTENT:\n{content}\n"
+                "{syllabus_section}CONTENT:\n{content}\n"
             ),
             "extract_expressions": (
                 "### SYSTEM ###\n"
@@ -199,7 +199,7 @@ class Prompts:
                 "   - Execute the canonical derivation pipeline:\n"
                 "     `AUDIT: [Surface Excerpt in Text] -> Canonical Slotted Form -> Category -> VERBATIM_CONFIRMED`\n"
                 "   - Only wrap the first segment `[Surface Excerpt in Text]` in square brackets; keep intermediate labels clean.\n\n"
-                "CONTENT:\n{content}\n"
+                "{syllabus_section}CONTENT:\n{content}\n"
             ),
             "extract_grammar": (
                 "### SYSTEM ###\n"
@@ -209,7 +209,7 @@ class Prompts:
                 "Analyze the provided text and extract ONLY genuinely present advanced grammatical constructions (up to {count} patterns).\n\n"
                 "🛡️ **CORE PRINCIPLES**:\n"
                 "- **Quality Over Quota**: Extract ONLY authentic structures genuinely present in the text. If the text only contains 2 or 3 genuine structures, return ONLY those 2 or 3. NEVER force-fit, stretch, or fabricate weak sentences to meet a numerical target.\n"
-                "- **Strict Verbatim Sourcing**: Every `quote` MUST be an exact sentence copied verbatim from `### SOURCE TEXT ###`. If a pattern is not physically anchored in the text, DO NOT extract it.\n\n"
+                "- **Strict Verbatim Sourcing**: Every `quote` MUST be an exact sentence copied verbatim from the source passage. If a pattern is not physically anchored in the text, DO NOT extract it.\n\n"
                 "### GRAMMATICAL CATEGORIES & STRUCTURAL FORMULA GATES:\n"
                 "Before selecting a category, verify that the quote strictly matches its syntactic formula and passes the exclusion gate. If it fails the gate, it is 100% BANNED from that category:\n\n"
                 "1. **Concessive clauses**:\n"
@@ -258,7 +258,7 @@ class Prompts:
                 "   - `pedagogical_function`: Explain how this syntactic structure enhances academic nuance, formality, or rhetoric.\n"
                 "   - `imitation_example`: Provide a high-quality academic model sentence illustrating this pattern in a different domain.\n"
                 "   - `common_mistakes`: Diagnose typical ESL learner errors with this pattern.\n\n"
-                "### SOURCE TEXT ###\n{content}\n"
+                "{syllabus_section}### SOURCE TEXT ###\n{content}\n"
             ),
 
             "extract_summary": (

@@ -358,18 +358,45 @@ def main():
             daemon_threads = True
         
         server_created = False
-        for attempt in range(3):
-            try:
-                httpd = ThreadingHTTPServer(("", port), DashboardHTTPRequestHandler)
-                server_created = True
-                break
-            except OSError as bind_err:
-                if attempt < 2:
-                    print(f"Port {port} busy, retrying cleanup (attempt {attempt+1}/3)...")
-                    _free_port(port)
-                    time.sleep(1.0)
-                else:
-                    raise bind_err
+        original_port = port
+        httpd = None
+
+        def _try_bind_port(target_port: int):
+            for attempt in range(3):
+                try:
+                    return ThreadingHTTPServer(("", target_port), DashboardHTTPRequestHandler)
+                except OSError as bind_err:
+                    # WinError 10013 is permission/excluded port - cleanup won't help, don't waste time retrying 3 times
+                    is_permission_err = getattr(bind_err, 'winerror', None) == 10013 or "10013" in str(bind_err)
+                    if not is_permission_err and attempt < 2:
+                        print(f"Port {target_port} busy, retrying cleanup (attempt {attempt+1}/3)...")
+                        _free_port(target_port)
+                        time.sleep(0.8)
+                    else:
+                        raise bind_err
+
+        try:
+            httpd = _try_bind_port(port)
+            server_created = True
+        except OSError as bind_err:
+            # Fallback to alternate ports if default/specified port is occupied or blocked by Windows excluded ports
+            print(f"⚠️ Port {port} is unavailable ({bind_err}). Probing alternative ports...")
+            fallback_ports = [8888, 8089, 8090, 8008, 8800, 5000, 3000]
+            for candidate_port in fallback_ports:
+                if candidate_port == original_port:
+                    continue
+                try:
+                    _free_port(candidate_port)
+                    httpd = _try_bind_port(candidate_port)
+                    port = candidate_port
+                    server_created = True
+                    print(f"✅ Successfully bound to alternative port {port}.")
+                    break
+                except OSError:
+                    continue
+            
+            if not server_created:
+                raise bind_err
 
         with httpd:
             httpd.timeout = 0.5  # Check for KeyboardInterrupt every 0.5s on Windows

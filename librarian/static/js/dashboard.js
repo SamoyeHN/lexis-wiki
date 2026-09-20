@@ -1766,19 +1766,50 @@
                 }
 
                 // If saved active model exists on this endpoint, preserve it.
-                // Otherwise default to the first available model from this endpoint.
-                const targetSelected = (activeModel && modelsList.includes(activeModel)) ? activeModel : modelsList[0];
+                // Support exact match first, then fuzzy match (case-insensitive, tag-ignoring, or basename matching)
+                let targetSelected = null;
+                if (activeModel) {
+                    if (modelsList.includes(activeModel)) {
+                        targetSelected = activeModel;
+                    } else {
+                        // Fuzzy search: e.g. "gemma-4-12b" matching "google/gemma-4-12b-qat"
+                        const norm = (s) => s.toLowerCase().replace(/[:/._-]/g, '');
+                        const actNorm = norm(activeModel);
+                        const match = modelsList.find(m => {
+                            const mNorm = norm(m);
+                            return mNorm.includes(actNorm) || actNorm.includes(mNorm);
+                        });
+                        if (match) {
+                            targetSelected = match;
+                        }
+                    }
+                }
+
+                // If active model still not matched but exists in saved config, add it as a preserved choice
+                // so user's configured model is never silently lost or wiped
+                let effectiveActiveModel = targetSelected || modelsList[0];
+
                 const judgeSelect = document.getElementById('config-judge-model');
                 const savedJudgeModel = (appConfig && appConfig.judge_model) || '';
                 if (judgeSelect) {
                     judgeSelect.innerHTML = '<option value="">(Same as Active Generation Model)</option>';
                 }
 
+                // If activeModel is configured but not in LM Studio's current list, add it at the top as an option
+                if (activeModel && !modelsList.includes(activeModel) && !targetSelected) {
+                    const savedOpt = document.createElement('option');
+                    savedOpt.value = activeModel;
+                    savedOpt.innerText = `${activeModel} (Configured, Not Loaded)`;
+                    savedOpt.selected = true;
+                    modelSelect.appendChild(savedOpt);
+                    effectiveActiveModel = activeModel;
+                }
+
                 modelsList.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m;
                     opt.innerText = m;
-                    if (m === targetSelected) {
+                    if (m === effectiveActiveModel) {
                         opt.selected = true;
                     }
                     modelSelect.appendChild(opt);
@@ -1794,7 +1825,7 @@
                     }
                 });
 
-                document.getElementById('headbar-model-name').innerText = targetSelected || 'Ready';
+                document.getElementById('headbar-model-name').innerText = effectiveActiveModel || 'Ready';
             })
             .catch(() => {
                 if (refreshIcon) refreshIcon.classList.remove('spin-icon');

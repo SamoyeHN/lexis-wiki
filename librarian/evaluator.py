@@ -1307,8 +1307,8 @@ class LogEvaluator:
             s = model_stats[model]
             s["runs"] += 1
 
-            # Exclude FAILED status logs from the quality leaderboard composite score
-            if evaluation.get("status") == "FAILED":
+            # Exclude FAILED or RETRYING status logs from the quality leaderboard composite score
+            if evaluation.get("status") in ("FAILED", "RETRYING"):
                 s["failed_runs"] += 1
                 continue
 

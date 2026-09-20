@@ -1609,61 +1609,49 @@ class WikiProcessor:
         s_prompt_template, s_schema = Prompts.get("extract_summary")
         m_prompt_template, m_schema = Prompts.get("extract_mindmap")
 
-        v_kwargs = {"content": clean_content or content, "count": v_count}
-        e_kwargs = {"content": clean_content or content, "count": e_count}
-        g_kwargs = {"content": clean_content or content, "count": g_count}
-        s_kwargs = {"content": clean_content or content, "count": c_count}
-        m_kwargs = {"content": clean_content or content}
-
-        # Format baseline prompts
-        v_prompt_formatted = v_prompt_template.format(**v_kwargs)
-        e_prompt_formatted = e_prompt_template.format(**e_kwargs)
-        g_prompt_formatted = g_prompt_template.format(**g_kwargs)
-
-        # Dynamic Dual-Track Syllabus Injection for Vocabulary
+        v_syllabus_sec = ""
         if syllabus_vocab:
             logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary/phrase item(s) in source markdown.")
             vocab_bullets = "\n".join([f"- {w}" for w in syllabus_vocab])
-            syllabus_vocab_instruction = (
-                f"\n\n### TARGET VOCABULARY LIST ###\n"
+            v_syllabus_sec = (
+                f"\n### TARGET VOCABULARY LIST ###\n"
                 f"The text has {len(syllabus_vocab)} syllabus candidate items:\n"
                 f"{vocab_bullets}\n\n"
-                f"From this syllabus list, prioritize and select the most essential, pedagogically significant academic vocabulary (up to {v_count} words total) that appear in the passage below. For each selected word, find its authentic verbatim sentence in the passage."
+                f"From this syllabus list, prioritize and select the most essential, pedagogically significant academic vocabulary (up to {v_count} words total) that appear in the passage below. For each selected word, find its authentic verbatim sentence in the passage.\n\n"
             )
-            if "### SOURCE TEXT ###" in v_prompt_formatted:
-                v_prompt_formatted = v_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_vocab_instruction}\n\n### SOURCE TEXT ###")
-            else:
-                v_prompt_formatted = v_prompt_formatted.replace("CONTENT:\n", f"{syllabus_vocab_instruction}\n\nCONTENT:\n")
 
-        # Dynamic Dual-Track Syllabus Injection for Expressions
+        e_syllabus_sec = ""
         if syllabus_expressions:
             logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown.")
             expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions])
-            syllabus_expr_instruction = (
-                f"\n\n### TARGET EXPRESSIONS LIST ###\n"
+            e_syllabus_sec = (
+                f"\n### TARGET EXPRESSIONS LIST ###\n"
                 f"The text has {len(syllabus_expressions)} syllabus multi-word candidate items:\n"
                 f"{expr_bullets}\n\n"
-                f"From these syllabus expressions, prioritize and extract genuine expressions (up to {e_count} expressions total) that appear in the passage below. For each selected expression, derive its canonical slotted base form in design_audit and copy it to 'word'."
+                f"From these syllabus expressions, prioritize and extract genuine expressions (up to {e_count} expressions total) that appear in the passage below. For each selected expression, derive its canonical slotted base form in design_audit and copy it to 'word'.\n\n"
             )
-            if "### SOURCE TEXT ###" in e_prompt_formatted:
-                e_prompt_formatted = e_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_expr_instruction}\n\n### SOURCE TEXT ###")
-            else:
-                e_prompt_formatted = e_prompt_formatted.replace("CONTENT:\n", f"{syllabus_expr_instruction}\n\nCONTENT:\n")
 
-        # Dynamic Dual-Track Syllabus Injection for Grammar
+        g_syllabus_sec = ""
         if syllabus_grammar:
             logger.info(f"📋 Detected {len(syllabus_grammar)} syllabus grammar pattern(s) in source markdown.")
             grammar_bullets = "\n".join([f"- {g}" for g in syllabus_grammar])
-            syllabus_grammar_instruction = (
-                f"\n\n### TARGET GRAMMAR TOPICS ###\n"
+            g_syllabus_sec = (
+                f"\n### TARGET GRAMMAR TOPICS ###\n"
                 f"The text has {len(syllabus_grammar)} syllabus grammar pattern candidates:\n"
                 f"{grammar_bullets}\n\n"
-                f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint."
+                f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint.\n\n"
             )
-            if "### SOURCE TEXT ###" in g_prompt_formatted:
-                g_prompt_formatted = g_prompt_formatted.replace("### SOURCE TEXT ###", f"{syllabus_grammar_instruction}\n\n### SOURCE TEXT ###")
-            else:
-                g_prompt_formatted = g_prompt_formatted.replace("CONTENT:\n", f"{syllabus_grammar_instruction}\n\nCONTENT:\n")
+
+        v_kwargs = {"content": clean_content or content, "count": v_count, "syllabus_section": v_syllabus_sec}
+        e_kwargs = {"content": clean_content or content, "count": e_count, "syllabus_section": e_syllabus_sec}
+        g_kwargs = {"content": clean_content or content, "count": g_count, "syllabus_section": g_syllabus_sec}
+        s_kwargs = {"content": clean_content or content, "count": c_count}
+        m_kwargs = {"content": clean_content or content}
+
+        # Format prompts directly via explicit placeholders
+        v_prompt_formatted = v_prompt_template.format(**v_kwargs)
+        e_prompt_formatted = e_prompt_template.format(**e_kwargs)
+        g_prompt_formatted = g_prompt_template.format(**g_kwargs)
 
         tasks = [
             ("vocabulary", v_prompt_formatted, self._interpolate_schema(v_schema, v_kwargs)),
@@ -2892,6 +2880,7 @@ class WikiProcessor:
         # QA status & review flag are recorded in frontmatter for teacher visibility
         # -------------------------------------------------------------
         qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+        has_fatal_flags = False
         if qa_audit and isinstance(qa_audit, dict):
             composite = qa_audit.get("composite_score")
             flags = qa_audit.get("flags", [])
@@ -3035,7 +3024,10 @@ class WikiProcessor:
                 qa_composite = qa_audit.get("composite_score")
                 if qa_composite is not None:
                     lines.append(f"qa_score: {round(float(qa_composite))}")
-                    qa_status = "passed" if qa_composite >= 80.0 else "review_needed"
+                    from .evaluator import FATAL_QA_FLAGS
+                    flags = qa_audit.get("flags", [])
+                    has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
+                    qa_status = "passed" if (qa_composite >= 80.0 and not has_fatal) else "review_needed"
                     lines.append(f"qa_status: \"{qa_status}\"")
 
             for name, val in fields:
@@ -3128,7 +3120,10 @@ class WikiProcessor:
                 qa_composite = qa_audit.get("composite_score")
                 if qa_composite is not None:
                     lines.append(f"qa_score: {round(float(qa_composite))}")
-                    qa_status = "passed" if qa_composite >= 80.0 else "review_needed"
+                    from .evaluator import FATAL_QA_FLAGS
+                    flags = qa_audit.get("flags", [])
+                    has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
+                    qa_status = "passed" if (qa_composite >= 80.0 and not has_fatal) else "review_needed"
                     lines.append(f"qa_status: \"{qa_status}\"")
 
             lines.extend([
