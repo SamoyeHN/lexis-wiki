@@ -168,6 +168,74 @@ def _expand_contractions(text: str) -> str:
         return CONTRACTIONS_MAP.get(tok, tok)
     return _CONTRACTION_RE.sub(_repl, text)
 
+def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """
+    Deterministic Level 1 Code Gate: Auto-Remap Grammar Category.
+    If a quote has 100% indisputable physical structural markers pointing to a specific
+    macro domain, but the LLM mislabeled it, automatically remap the category in place
+    and return a diagnostic notice.
+    """
+    if not isinstance(item, dict):
+        return item, None
+    quote = str(item.get("quote", "")).strip()
+    category = str(item.get("category", "")).strip()
+    if not quote or not category:
+        return item, None
+
+    # Closed set of interpretive verbs across all forms + optional modals
+    INTERPRETIVE_VERBS_REGEX = (
+        r"(?:(?:would|could|might|may|can|will)\s+)?"
+        r"(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)"
+    )
+
+    # 1. Cohesion & Framing ironclad markers:
+    # , which + [interpretive verb] + that (Anaphoric Encapsulation) OR Shell noun that-clause
+    has_which_propositional = bool(re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\s+that\b", quote, re.IGNORECASE))
+    has_shell_noun_frame = bool(re.search(r"\bthe\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that\b", quote, re.IGNORECASE))
+    if (has_which_propositional or has_shell_noun_frame) and category != "Cohesion & Framing":
+        orig_cat = category
+        item["category"] = "Cohesion & Framing"
+        marker_name = "propositional encapsulator ', which + [interpretive verb] + that'" if has_which_propositional else "shell noun complement frame"
+        notice = f"ℹ️ Deterministic Auto-Remap: Corrected category from '{orig_cat}' to 'Cohesion & Framing' (Marker: {marker_name})"
+        return item, notice
+
+    # 2. Rhetoric & Emphasis ironclad markers:
+    # Explicit antithesis (not X, but Y), correlatives (not only... but also), or fronted inversion
+    has_antithesis = bool(re.search(r"\bnot\s+.*?\s*,\s*but\b", quote, re.IGNORECASE))
+    has_correlative = bool(re.search(r"\b(?:not\s+only\b.*?\bbut\s+also|either\b.*?\bor\b|neither\b.*?\bnor\b)\b", quote, re.IGNORECASE))
+    has_fronted_inversion = bool(re.search(r"^\s*(?:not\s+only|only\s+(?:if|when|after|by)|never|seldom|hardly|scarcely)\b", quote, re.IGNORECASE))
+    has_cleft = bool(
+        re.search(r"\bIt\s+(?:is|was|were|'s)\s+(?:only|not\s+only|because|when|in|on|at|by|with|[a-z]{3,}\s+who|[a-z]{3,}\s+that)\b", quote, re.IGNORECASE)
+        and not re.search(r"\bIt\s+(?:is|was|were|'s)\s+(?:said|thought|believed|reported|expected|suggested|indicated|argued|claimed|known|important|essential|necessary|likely|clear|obvious|vital|crucial|apparent|natural|possible)\s+that\b", quote, re.IGNORECASE)
+    )
+    
+    if (has_antithesis or has_correlative or has_fronted_inversion or has_cleft) and category != "Rhetoric & Emphasis":
+        orig_cat = category
+        item["category"] = "Rhetoric & Emphasis"
+        marker_name = "antithesis 'not... but...'" if has_antithesis else ("correlative coordination" if has_correlative else ("fronted inversion" if has_fronted_inversion else "structural cleft"))
+        notice = f"ℹ️ Deterministic Auto-Remap: Corrected category from '{orig_cat}' to 'Rhetoric & Emphasis' (Marker: {marker_name})"
+        return item, notice
+
+    # 3. Information Packaging ironclad markers:
+    # Evaluative Dummy-It extraposition (It is/was + Adj + that/to) mislabeled as Rhetoric & Emphasis
+    has_evaluative_it = bool(re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been)\s+(?:[a-z]{4,}\s+)?(?:important|essential|necessary|likely|clear|obvious|vital|crucial|apparent|natural|possible|hard|easy|difficult|wise|useful)\s+(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE))
+    if has_evaluative_it and category == "Rhetoric & Emphasis":
+        orig_cat = category
+        item["category"] = "Information Packaging"
+        notice = f"ℹ️ Deterministic Auto-Remap: Corrected category from '{orig_cat}' to 'Information Packaging' (Marker: Evaluative Dummy-It extraposition)"
+        return item, notice
+
+    # Ordinary elaborative relative clause (, which + VP without that) mislabeled as Cohesion & Framing
+    has_ordinary_which = bool(re.search(r",\s*which\s+[a-z]+", quote, re.IGNORECASE) and not re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\b", quote, re.IGNORECASE))
+    if has_ordinary_which and category == "Cohesion & Framing":
+        orig_cat = category
+        item["category"] = "Information Packaging"
+        notice = f"ℹ️ Deterministic Auto-Remap: Corrected category from '{orig_cat}' to 'Information Packaging' (Marker: Elaborative non-restrictive relative clause)"
+        return item, notice
+
+    return item, None
+
+
 def _safe_str(val: Any, default: str = "") -> str:
     """Safely converts a value to string, mapping None to default rather than 'None'."""
     if val is None:
@@ -258,10 +326,19 @@ def _extract_source_content(user_prompt: str) -> str:
         match_sec = re.search(r"(?:#+\s*(?:Source Material|Input Content|Text Context|Transcript))\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
         if match_sec:
             content = match_sec.group(1).strip()
+        else:
+            # 3. Tertiary: Raw markdown source with optional YAML frontmatter and section heading
+            match_md = re.search(r"(?:^|\n)(?:---\s*\n.*?\n---\s*\n)?(?:##\s+[^\n]+\n+)(.*)", user_prompt, re.DOTALL)
+            if match_md:
+                content = match_md.group(1).strip()
     
     if content:
-        # Strictly strip any retry critique block (e.g. ### 🚨 [QUALITY AUDIT REVIEW...)
-        content = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", content, flags=re.IGNORECASE)[0].strip()
+        # Strictly strip any trailing draft blocks or retry critique blocks
+        content = re.split(
+            r"\n\s*###+\s*(?:🚨|\[QUALITY AUDIT REVIEW|VOCABULARY DRAFT|GRAMMAR PATTERNS DRAFT|QUIZ DRAFT|DRAFT)",
+            content,
+            flags=re.IGNORECASE
+        )[0].strip()
 
     return content
 
@@ -624,17 +701,102 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             if slot_count <= 1 and ((combined_lit_phrase in TRIVIAL_PHRASES) or (clean_lits and all(l in TRIVIAL_ANCHOR_WORDS for l in clean_lits))):
                 reasons.append(f"trivial formula anchored only by conversational filler or conjunction: '{pattern}'")
 
-            # Evaluative It-frameworks physical anchor check: quote must physically contain dummy pronoun 'it'
-            if category == "Evaluative It-frameworks":
-                if not re.search(r"\bit(?:'s)?\b", quote, re.IGNORECASE):
-                    reasons.append("category 'Evaluative It-frameworks' assigned to quote without dummy pronoun 'it'")
-                elif re.search(r"\bit(?:'s|\s+is|\s+was)\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|o'clock))?\b", quote, re.IGNORECASE):
-                    reasons.append("ambient time statement (e.g. 'It's 4:15') misclassified as 'Evaluative It-frameworks'")
+            # Auto-Remap explicit category mismatches if not already healed
+            _, remap_notice = auto_remap_grammar_category(item)
+            if remap_notice:
+                flags.append(remap_notice)
+                category = str(item.get("category", "")).strip()
 
-            # Cleft sentences physical anchor check: must physically contain that/who/whom/which
-            if category == "Cleft sentences":
-                if not re.search(r"\b(?:that|who|whom|which)\b", quote, re.IGNORECASE):
-                    reasons.append("category 'Cleft sentences' assigned to quote without relative linker ('that', 'who', 'whom', 'which')")
+            # Four Macro Functional Domains deterministic checks
+            # 1. Rhetoric & Emphasis: Check for inversion markers, genuine cleft relative clauses, or parallelism coordination
+            if category == "Rhetoric & Emphasis":
+                has_inversion_trigger = bool(re.search(r"\b(?:only|never|hardly|scarcely|seldom|rarely|little|not only|neither|nor|no sooner)\b", quote, re.IGNORECASE))
+                has_cleft = bool(re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been|had\s+been)\b", quote, re.IGNORECASE) and re.search(r"\b(?:that|who|whom|which)\b", quote, re.IGNORECASE))
+                has_wh_cleft = bool(re.search(r"\bWhat\s+[a-z0-9_']+\s+(?:is|was|were)\b", quote, re.IGNORECASE))
+                has_parallel_coordination = bool(
+                    re.search(r"\b(?:not only\b.*?\bbut\b|either\b.*?\bor\b|neither\b.*?\bnor\b|both\b.*?\band\b|not\s+.*?\s*,\s*but\b)\b", quote, re.IGNORECASE)
+                    or ";" in quote or "," in quote
+                )
+                if not (has_inversion_trigger or has_cleft or has_wh_cleft or has_parallel_coordination):
+                    reasons.append("category 'Rhetoric & Emphasis' assigned to quote lacking rhetorical markers (inversion, cleft focus, or structural balance)")
+
+            # 2. Logic & Stance: Check for conditional, concessive, epistemic hedging, or stance modal assertions
+            elif category == "Logic & Stance":
+                has_cond = bool(re.search(r"\b(?:if|unless|provided\s+that|supposing|as\s+long\s+as|had\s+\w+\s+\w+|should\s+\w+\s+\w+|were\s+\w+\s+\w+)\b", quote, re.IGNORECASE))
+                has_concessive = bool(re.search(r"\b(?:although|though|even though|even if|while|whereas|despite|in spite of)\b", quote, re.IGNORECASE))
+                has_stance_or_hedging = bool(re.search(r"\b(?:can|cannot|can't|could|may|might|must|should|would|will|suggest|indicate|appear|seem|likely|probably|presumably|arguably|tends?\s+to)\b", quote, re.IGNORECASE))
+                if not (has_cond or has_concessive or has_stance_or_hedging):
+                    reasons.append("category 'Logic & Stance' assigned to quote lacking logical condition, concessive linker, or epistemic/stance modal assertion")
+
+            # 3. Information Packaging: Check for non-finite verb forms, nominalization, dummy-it extraposition, or elaborative non-restrictive clause
+            elif category == "Information Packaging":
+                ING_NON_VERBS = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "ring", "spring", "king", "wing", "sing", "during", "ceiling"})
+                ing_tokens = [w.lower() for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", quote) if w.lower() not in ING_NON_VERBS]
+                has_participle = bool(ing_tokens or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced)\b", quote, re.IGNORECASE))
+                TO_NOUNS = frozenset({"school", "work", "bed", "church", "college", "prison", "jail", "court", "sea", "town", "home", "market", "class", "them", "him", "her", "us", "me", "you", "it", "this", "that", "these", "those"})
+                to_matches = [m.group(1).lower() for m in re.finditer(r"\bto\s+([a-z]{2,})\b", quote, re.IGNORECASE)]
+                has_infinitive_clause = any(word not in TO_NOUNS for word in to_matches)
+                has_dummy_it = bool(re.search(r"\bit(?:'s|\s+is|\s+was|\s+has\s+been)\s+(?:[a-z]{4,}\s+)?(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE))
+                has_nominalization = bool(re.search(r"\b[a-z]{3,}(?:tion|sion|ment|ance|ence|ity|ness)\b", quote, re.IGNORECASE))
+                has_elaborative_relative = bool(re.search(r",\s*which\s+[a-z]+", quote, re.IGNORECASE))
+                if not (has_participle or has_infinitive_clause or has_dummy_it or has_nominalization or has_elaborative_relative):
+                    reasons.append("category 'Information Packaging' assigned to quote lacking non-finite clauses, evaluative it-extraposition, dense nominalization, or elaborative clause")
+
+            # 4. Cohesion & Framing: Check for shell nouns, complement that-clauses, or encapsulation
+            elif category == "Cohesion & Framing":
+                has_shell_frame = bool(re.search(r"\b(?:the\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that|this\s+(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|led\s+to|leads\s+to)|the\s+extent\s+to\s+which)\b", quote, re.IGNORECASE))
+                has_anaphoric_encapsulation = bool(re.search(r"\b(?:this|these|such)\s+[a-z]{4,}\b", quote, re.IGNORECASE) or bool(re.search(r"\bthat\s+is\s+why\b", quote, re.IGNORECASE)))
+                # Closed set of interpretive verbs across all inflectional forms (base, 3sg, past, participle) + optional modal auxiliaries
+                INTERPRETIVE_VERBS_REGEX = (
+                    r"(?:(?:would|could|might|may|can|will)\s+)?"
+                    r"(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)"
+                )
+                has_which_propositional = bool(re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\b", quote, re.IGNORECASE))
+                has_rel_frame = bool(re.search(r"\b(?:in\s+which|by\s+which|through\s+which|whereby)\b", quote, re.IGNORECASE))
+                if not (has_shell_frame or has_anaphoric_encapsulation or has_which_propositional or has_rel_frame):
+                    reasons.append("category 'Cohesion & Framing' assigned to quote lacking abstract shell frame, prepositional relative, or discourse encapsulation")
+
+            # Boundary tolerance (any-macro-domain rule): if the strict per-category gate above
+            # rejected the model's chosen category, but the quote structurally fits ANOTHER of
+            # the 4 macro functional domains, it is a defensible boundary case (boundary
+            # sentences sit on two domains and have no unique label). Tolerate it instead of
+            # rejecting — only reject quotes that match NO domain (kept as the original fatal
+            # reason, so genuinely marker-less quotes are still quarantined).
+            if any(r.startswith("category '") for r in reasons):
+                _ING_EXCLUDE = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "ring", "spring", "king", "wing", "sing", "during", "ceiling"})
+                _TO_EXCLUDE = frozenset({"school", "work", "bed", "church", "college", "prison", "jail", "court", "sea", "town", "home", "market", "class", "them", "him", "her", "us", "me", "you", "it", "this", "that", "these", "those"})
+                _fits_rhetoric = (
+                    re.search(r"\b(?:only|never|hardly|scarcely|seldom|rarely|little|not only|neither|nor|no sooner)\b", quote, re.IGNORECASE)
+                    or (re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been|had\s+been)\b", quote, re.IGNORECASE) and re.search(r"\b(?:that|who|whom|which)\b", quote, re.IGNORECASE))
+                    or re.search(r"\bWhat\s+[a-z0-9_']+\s+(?:is|was|were)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:not only\b.*?\bbut\b|either\b.*?\bor\b|neither\b.*?\bnor\b|both\b.*?\band\b|not\s+.*?\s*,\s*but\b)\b", quote, re.IGNORECASE)
+                    or ";" in quote or "," in quote
+                )
+                _fits_logic = (
+                    re.search(r"\b(?:if|unless|provided\s+that|supposing|as\s+long\s+as|had\s+\w+\s+\w+|should\s+\w+\s+\w+|were\s+\w+\s+\w+)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:although|though|even though|even if|while|whereas|despite|in spite of)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:can|cannot|can't|could|may|might|must|should|would|will|suggest|indicate|appear|seem|likely|probably|presumably|arguably|tends?\s+to)\b", quote, re.IGNORECASE)
+                )
+                _ing_tokens = [w.lower() for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", quote) if w.lower() not in _ING_EXCLUDE]
+                _to_words = [m.group(1).lower() for m in re.finditer(r"\bto\s+([a-z]{2,})\b", quote, re.IGNORECASE)]
+                _fits_info = (
+                    _ing_tokens
+                    or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced)\b", quote, re.IGNORECASE)
+                    or any(w not in _TO_EXCLUDE for w in _to_words)
+                    or re.search(r"\bit(?:'s|\s+is|\s+was|\s+has\s+been)\s+(?:[a-z]{4,}\s+)?(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b[a-z]{3,}(?:tion|sion|ment|ance|ence|ity|ness)\b", quote, re.IGNORECASE)
+                    or re.search(r",\s*which\s+[a-z]+", quote, re.IGNORECASE)
+                )
+                _fits_cohesion = (
+                    re.search(r"\b(?:the\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that|this\s+(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|led\s+to|leads\s+to)|the\s+extent\s+to\s+which)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:this|these|such)\s+[a-z]{4,}\b", quote, re.IGNORECASE)
+                    or re.search(r"\bthat\s+is\s+why\b", quote, re.IGNORECASE)
+                    or re.search(r",\s*which\s+(?:(?:would|could|might|may|can|will)\s+)?(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:in\s+which|by\s+which|through\s+which|whereby)\b", quote, re.IGNORECASE)
+                )
+                if _fits_rhetoric or _fits_logic or _fits_info or _fits_cohesion:
+                    reasons[:] = [r for r in reasons if not r.startswith("category '")]
+                    flags.append("ℹ️ Boundary pattern: chosen category rejected by strict gate, but quote fits another macro-domain — tolerated (any-macro-domain rule)")
 
             # Quote cleanliness warning: trailing ellipsis
             if quote.rstrip().endswith(("...", "…")):
@@ -826,7 +988,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 flags.append(f"❌ Found {dup_defs} duplicate or copy-pasted definition(s) across different terms")
                 passes = max(0, passes - dup_defs)
 
-    return max(0.0, round((passes / checks) * W_PEDAGOGY, 1)), flags
+    raw_score = round((passes / checks) * W_PEDAGOGY, 1)
+    # Apply soft deduction for auto-remapped grammar categories (2.0 pts per remapped item)
+    if task_type == "grammar":
+        remap_count = sum(1 for f in flags if "ℹ️ Deterministic Auto-Remap:" in f)
+        if remap_count > 0:
+            raw_score = max(0.0, raw_score - (remap_count * 2.0))
+
+    return max(0.0, raw_score), flags
 
 
 def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: str = "") -> Tuple[Optional[float], List[str]]:
@@ -997,6 +1166,11 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             if missing_anchors:
                 pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
                 continue
+
+            # Level 1 Code Gate: Auto-remap explicit category mismatches
+            item, remap_notice = auto_remap_grammar_category(item)
+            if remap_notice:
+                pruned_flags.append(remap_notice)
 
             surviving_items.append(item)
             continue

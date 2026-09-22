@@ -22,27 +22,6 @@
       "items": {
         "type": "object",
         "properties": {
-          "design_audit": {
-            "type": "string",
-            "minLength": 1
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "Concessive clauses",
-              "Conditional clauses",
-              "Participial clauses",
-              "Inversion",
-              "Cleft sentences",
-              "Nominalization",
-              "Abstract frames",
-              "Rhetorical parallelism",
-              "Non-finite structures",
-              "Hedging devices",
-              "Anaphoric and cataphoric nouns",
-              "Evaluative It-frameworks"
-            ]
-          },
           "quote": {
             "type": "string",
             "minLength": 1
@@ -54,6 +33,19 @@
           "pedagogical_function": {
             "type": "string",
             "minLength": 1
+          },
+          "design_audit": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Rhetoric & Emphasis",
+              "Cohesion & Framing",
+              "Information Packaging",
+              "Logic & Stance"
+            ]
           },
           "imitation_example": {
             "type": "string",
@@ -76,11 +68,11 @@
           }
         },
         "required": [
-          "design_audit",
-          "category",
           "quote",
           "pattern_formula",
           "pedagogical_function",
+          "design_audit",
+          "category",
           "imitation_example",
           "common_mistakes",
           "cefr_level"

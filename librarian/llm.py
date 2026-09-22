@@ -323,8 +323,8 @@ class LLMClient:
                 messages[0]["content"] = user_text.strip()
                 messages.insert(0, {"role": "system", "content": sys_text.strip()})
             
-            # 1.2 Secondary: Legacy '---' delimiter (only if no tags)
-            elif "---" in content:
+            # 1.2 Secondary: Legacy '---' delimiter (only if not YAML frontmatter)
+            elif "---" in content and not re.search(r"^\s*---\s*\n.*?\n---\s*\n", content, re.DOTALL):
                 parts = content.split("---", 1)
                 messages[0]["content"] = parts[1].strip()
                 messages.insert(0, {"role": "system", "content": parts[0].strip()})
@@ -558,6 +558,13 @@ class LLMClient:
                                             break
                             if cur_formula:
                                 g_item["pattern_formula"] = WikiProcessor.normalize_grammar_formula(cur_formula)
+                            
+                            # Level 1 Code Gate: Auto-remap explicit category mismatches
+                            from .evaluator import auto_remap_grammar_category
+                            _, remap_notice = auto_remap_grammar_category(g_item)
+                            if remap_notice:
+                                import logging
+                                logging.getLogger("librarian").info(remap_notice)
 
                 # Auto-align quoted_sentence for vocabulary & expressions if target word exists in source passage
                 # Solves off-by-one sentence mismatches (e.g. model quoting an adjacent sentence) without masking hallucinations
@@ -838,10 +845,12 @@ class LLMClient:
                                     critical_invariant = "The source sentence must strictly embody the target formula, and the correct option must be 100% natural English."
                                 elif "reading" in t_name_lower:
                                     critical_invariant = "Every question stem and correct answer must be uniquely warranted by verbatim evidence from `### SOURCE TEXT ###`."
-                                elif "quiz" in t_name_lower or "vocabulary" in t_name_lower:
+                                elif "quiz" in t_name_lower:
                                     critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
+                                elif any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
+                                    critical_invariant = "Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`. Headwords must be strictly single words."
                                 else:
-                                    critical_invariant = "Every headword and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`."
+                                    critical_invariant = "Every cited element and sentence must physically exist verbatim in `### SOURCE TEXT ###`."
 
                                 critique_prompt = (
                                     f"\n\n### 🚨 QUALITY AUDIT DEFECT TICKET\n"

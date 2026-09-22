@@ -1671,15 +1671,18 @@ class WikiProcessor:
                     task_names_to_run.append(cat)
             tasks = [t for t in tasks if t[0] in task_names_to_run]
 
-        # Route vocabulary extraction through the Prose-to-JSON pipeline (mirrors quiz).
+        # Route extraction through the Prose-to-JSON pipeline.
         # Turn 1 = free natural-language selection (preserves native reasoning);
-        # Turn 2 = deterministic JSON packing. Other extractions stay one-shot JSON.
-        # Vocabulary has its OWN switch (default OFF -> one-shot JSON). The shared
-        # `enable_prose_pipeline` flag is reserved for the quiz prose pipeline below.
+        # Turn 2 = deterministic packaging. Other extractions stay one-shot JSON.
         use_prose_vocab = self.config.get("enable_vocab_prose", False)
         vocab_requested = any(name == "vocabulary" for name, _, _ in tasks)
         if use_prose_vocab and vocab_requested:
             tasks = [t for t in tasks if t[0] != "vocabulary"]
+
+        use_prose_grammar = self.config.get("enable_grammar_prose", False)
+        grammar_requested = any(name == "grammar" for name, _, _ in tasks)
+        if use_prose_grammar and grammar_requested:
+            tasks = [t for t in tasks if t[0] != "grammar"]
 
         # 2. Run extractions in parallel
         results = []
@@ -1700,9 +1703,7 @@ class WikiProcessor:
                         failed_tasks.append((name, str(task_err)))
                         logger.error(f"Extraction task '{name}' failed for {file_stem}: {task_err}", exc_info=True)
 
-                # Vocabulary runs its own 2-turn Prose-to-JSON pipeline (kept out of the
-                # one-shot JSON pool above). Inject it into `results` as "vocabulary" so the
-                # downstream merge/save logic stays completely unchanged.
+                # Vocabulary runs its own 2-turn Prose-to-JSON pipeline
                 if use_prose_vocab and vocab_requested:
                     try:
                         logger.info(f"🚀 Vocabulary extraction via Prose-to-JSON pipeline ({file_stem})...")
@@ -1717,6 +1718,22 @@ class WikiProcessor:
                     except Exception as vocab_err:
                         failed_tasks.append(("vocabulary", str(vocab_err)))
                         logger.error(f"Vocabulary prose pipeline failed for {file_stem}: {vocab_err}", exc_info=True)
+
+                # Grammar runs its own 2-turn Prose-to-JSON pipeline
+                if use_prose_grammar and grammar_requested:
+                    try:
+                        logger.info(f"🚀 Grammar extraction via Prose-to-JSON pipeline ({file_stem})...")
+                        grammar_data = self._run_grammar_prose_pipeline(
+                            g_prompt_template.format(**g_kwargs),
+                            g_kwargs,
+                            self._interpolate_schema(g_schema, g_kwargs),
+                            file_stem,
+                        )
+                        if grammar_data:
+                            results.append(("grammar", grammar_data))
+                    except Exception as grammar_err:
+                        failed_tasks.append(("grammar", str(grammar_err)))
+                        logger.error(f"Grammar prose pipeline failed for {file_stem}: {grammar_err}", exc_info=True)
 
             # 3. Process, Merge, and Save Results
             vocab_data = None
@@ -3064,9 +3081,43 @@ class WikiProcessor:
                     header_val = f"[[{header_val}]]"
                 
                 lines.append(f"## {header_val}")
-                
-                # Iterate remaining fields as bullet points
-                for fname, fval in body_entries:
+
+                # Iterate remaining fields as bullet points with canonical field ordering
+                CANONICAL_FIELD_ORDERS = {
+                    "grammar": [
+                        "quote",
+                        "pattern_formula",
+                        "pedagogical_function",
+                        "imitation_example",
+                        "common_mistakes",
+                        "cefr_level"
+                    ],
+                    "vocabulary": [
+                        "part_of_speech",
+                        "word_cefr_level",
+                        "definition",
+                        "quoted_sentence",
+                        "example_usage"
+                    ],
+                    "expressions": [
+                        "part_of_speech",
+                        "word_cefr_level",
+                        "definition",
+                        "quoted_sentence",
+                        "example_usage"
+                    ]
+                }
+
+                preferred_order = CANONICAL_FIELD_ORDERS.get(category, [])
+                def _field_sort_key(entry):
+                    fname = entry[0].lower()
+                    if fname in preferred_order:
+                        return (0, preferred_order.index(fname))
+                    return (1, fname)
+
+                sorted_body_entries = sorted(body_entries, key=_field_sort_key)
+
+                for fname, fval in sorted_body_entries:
                     label = fname.replace("_", " ").title()
                     if fval:
                         if category == "grammar" and fname == "pattern_formula":
@@ -3074,7 +3125,6 @@ class WikiProcessor:
                         lines.append(f"- **{label}**: {fval}")
                 lines.append("")
 
-            
             return "\n".join(lines)
 
         # 2. Handle Summary Extractions (with nested Concepts)
@@ -3482,45 +3532,39 @@ class WikiProcessor:
         return html.replace("</body>", f"<script>const quizData = {json_data};</script></body>")
 
     @staticmethod
-    def _build_vocab_prose_draft_prompt(v_prompt: str, count) -> str:
+    def _build_vocab_prose_draft_prompt(v_prompt: str, count: int) -> str:
         """Turn 1 prompt for the vocabulary Prose-to-JSON pipeline.
 
-        Appends a free-reasoning "draft mode" block to the extraction prompt so the
-        model can argue its word selections in natural language (preserving its native
-        thinking) BEFORE any JSON structure is imposed.
+        Appends a strict FORMAT MANDATE draft layout instruction to the vocabulary prompt.
+        Follows the strict FORMAT MANDATE architecture established in quiz and grammar prose generation,
+        banning pre-analysis, stream-of-consciousness monologues, and repetitive drafts to prevent
+        smaller models from over-generating tens of thousands of tokens.
         """
         count_str = str(count) if count is not None else "the target"
         return (
-            v_prompt
-            + "\n\n### EXTRACTION DRAFT MODE (PROSE, NOT JSON) ###\n"
-            "Do NOT output JSON yet. Produce a plain, structured text draft so you can "
-            "reason freely and critically about which words are genuinely worth teaching.\n\n"
-            "### SELECTION REASONING (MANDATORY for every candidate) ###\n"
-            "For each candidate, decide in plain English WHY it earns a spot:\n"
-            "- CEFR band (B1-C2) and why it is genuine academic/analytical lexis; and\n"
-            "- that it is NOT a trivially basic general-English word a learner already knows "
-            "(reject e.g. 'public', 'bear', 'big', 'people', 'make', 'way' and similar); and\n"
-            "- that it is distributed across DIFFERENT sentences/paragraphs (avoid clustering; "
-            "aim for at most ~3 headwords per sentence); and\n"
-            "- that it is strictly a single-word lemma (strictly ONE word; multi-word expressions and collocations are prohibited).\n"
-            "If a candidate fails ANY of these tests, LEAVE IT OUT rather than force it in.\n\n"
-            f"### VOCABULARY LIST FORMAT (up to {count_str} words, each drawn from a verbatim sentence) ###\n"
-            "Emit consecutive items using EXACTLY this layout (one block per word; "
-            "no JSON, no markdown tables, no code fences, no extra commentary):\n\n"
-            "- Word: [base lemma headword]\n"
-            "- Context Sentence: \"[exact verbatim sentence from the passage]\"\n"
-            "- Part of Speech: [noun / verb / adjective / adverb / preposition / conjunction / interjection]\n"
-            "- Definition: [concise, context-specific meaning]\n"
-            "- Example Usage: [original, high-quality academic illustrative sentence]\n"
-            "- CEFR: [B1 / B2 / C1 / C2]\n"
+            f"{v_prompt}\n\n"
+            "### GENERATION FORMAT MANDATE (VOCABULARY EXTRACTION DRAFT):\n"
+            f"Output all authentic academic vocabulary words directly and consecutively using this clean, structured text format (up to {count_str} items).\n"
+            "🚫 DO NOT include pre-analysis, stream-of-consciousness deliberations, self-correction monologues, or repetitive drafts. "
+            "Begin immediately with 'Item 1:' and write out the items cleanly:\n\n"
+            "Item 1:\n"
             "- Audit: AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [PoS] -> [CEFR] -> [VERBATIM_CONFIRMED]\n"
+            "- Context Sentence: \"[exact 100% verbatim sentence copied directly from the passage without ANY alteration or rewriting]\"\n"
+            "- Word: [single-word base lemma headword derived from the audit above, strictly ONE word]\n"
+            "- Part of Speech: [noun / verb / adjective / adverb / preposition / conjunction / interjection]\n"
+            "- Definition: [concise, context-specific English meaning]\n"
+            "- Example Usage: [original, high-quality academic illustrative sentence in a different context]\n"
+            "- CEFR: [B1 / B2 / C1 / C2]\n\n"
+            "Item 2:\n"
+            "...\n\n"
+            "Ensure all items follow this exact item layout consecutively without extra commentary, markdown tables, or code fences."
         )
 
     @staticmethod
-    def _parse_vocab_prose(text) -> list:
+    def _parse_vocab_prose(text, source_text: str = None) -> list:
         """Deterministically parse the Turn-1 prose draft into a list of vocabulary item dicts.
 
-        The draft is a sequence of blank-line-separated blocks, each with lines like:
+        The draft is a sequence of blocks, each with lines like:
             - Word: X
             - Context Sentence: "Y"
             - Part of Speech: Z
@@ -3528,26 +3572,24 @@ class WikiProcessor:
             - Example Usage: E
             - CEFR: L
             - Audit: A
-        Parsing in code (instead of a second LLM call) eliminates the small-model
-        repetition-collapse / field-crosstalk that a prose->JSON re-serialization invites.
         """
         import re
         if not text or not isinstance(text, str):
             return []
-        text = text.replace("\r\n", "\n")
-        word_line = re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Word[ \t]*[:：][ \t]*(.*)$")
-        boundaries = [m.start() for m in word_line.finditer(text)]
+        # Split blocks by 'Item \d+' or 'Audit:' or 'Word:'
+        item_split = re.compile(r"(?im)^[ \t]*(?:Item\s+\d+[:：]?|[-*]?[ \t]*(?:Design\s+Audit|Audit|Word)[ \t]*[:：])")
+        boundaries = [m.start() for m in item_split.finditer(text)]
         if not boundaries:
             return []
 
         patterns = {
             "word": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Word[ \t]*[:：][ \t]*(.*)$"),
-            "quoted_sentence": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Context[ \t]+Sentence[ \t]*[:：][ \t]*(.*)$"),
+            "quoted_sentence": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*(?:Context[ \t]+Sentence|Quote)[ \t]*[:：][ \t]*(.*)$"),
             "part_of_speech": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Part[ \t]+of[ \t]+Speech[ \t]*[:：][ \t]*(.*)$"),
             "definition": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Definition[ \t]*[:：][ \t]*(.*)$"),
             "example_usage": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Example[ \t]+Usage[ \t]*[:：][ \t]*(.*)$"),
             "word_cefr_level": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*CEFR[ \t]*[:：][ \t]*(.*)$"),
-            "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Audit[ \t]*[:：][ \t]*(.*)$"),
+            "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*(?:Design[ \t]+Audit|Audit)[ \t]*[:：][ \t]*(.*)$"),
         }
         valid_cefr = ("B1", "B2", "C1", "C2")
         valid_pos = ("noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection")
@@ -3555,6 +3597,10 @@ class WikiProcessor:
         def grab(block, key):
             m = patterns[key].search(block)
             return m.group(1).strip() if m else ""
+
+        normalized_source = ""
+        if source_text:
+            normalized_source = re.sub(r'\s+', ' ', source_text).replace('“', '"').replace('”', '"').replace("‘", "'").replace("’", "'").lower()
 
         items = []
         for i, start in enumerate(boundaries):
@@ -3581,14 +3627,19 @@ class WikiProcessor:
             if not word:
                 continue
             lowered = word.lower()
-            # Reject meta/placeholder tokens the model sometimes leaks from the prompt
-            # (e.g. "[base lemma headword]", "part of speech") — these are never real headwords.
             if any(p in lowered for p in (
                 "headword", "lemma", "part of speech", "part-of-speech",
                 "context sentence", "example usage", "placeholder",
                 "surface word", "audit: ",
             )):
                 continue
+
+            # Deterministic source verification if source_text is provided
+            if normalized_source and quote:
+                cleaned_q = re.sub(r'\s+', ' ', quote).replace('“', '"').replace('”', '"').replace("‘", "'").replace("’", "'").strip('."\' ').lower()
+                if cleaned_q and cleaned_q not in normalized_source:
+                    continue
+
             items.append({
                 "word": word,
                 "quoted_sentence": quote,
@@ -3601,16 +3652,17 @@ class WikiProcessor:
         return items
 
     def _run_vocab_prose_pipeline(self, v_prompt, v_kwargs, v_schema, file_stem):
-        """Prose-to-JSON pipeline for vocabulary extraction.
+        """Two-Turn Prose-to-JSON pipeline for vocabulary extraction.
 
-        Turn 1 (json_format=False) lets the model reason freely about word selection in
-        natural language, preserving its native thinking. The draft is then parsed into the
-        VocabularyExtraction schema by deterministic code (no second LLM call), which avoids
-        the small-model repetition-collapse that a prose->JSON re-serialization invites.
-        If the prose draft cannot be parsed, it falls back to the original one-shot JSON call.
+        Turn 1 (Prose Drafting): Unconstrained generation with full native thinking,
+        producing clean, academic, single-word vocabulary items with authentic citations.
+        Turn 2 (Deterministic Packaging): Temperature 0 structured serialization with
+        full source text anchor, strict QA retry loop, and Deterministic Code Gate filtering.
         """
         count = v_kwargs.get("count", 20)
+        source_content = v_kwargs.get("content", "")
         draft_prompt = self._build_vocab_prose_draft_prompt(v_prompt, count)
+
         logger.info("🧠 Turn 1: prose vocabulary selection (native reasoning, json_format=False)...")
         prose_draft = llm.chat(
             [{"role": "user", "content": draft_prompt}],
@@ -3618,25 +3670,294 @@ class WikiProcessor:
             task_name=f"extract_vocabulary_{file_stem}_turn1_prose",
         )
 
-        items = self._parse_vocab_prose(prose_draft)
-        if items:
-            cefr_counts = {}
-            for it in items:
-                cefr_counts[it["word_cefr_level"]] = cefr_counts.get(it["word_cefr_level"], 0) + 1
-            overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
-            logger.info(f"✅ Parsed {len(items)} vocabulary items from prose draft (deterministic; no 2nd LLM call).")
-            return validate_and_map(VocabularyExtraction, {
-                "title": "Vocabulary",
-                "overall_cefr_level": overall,
-                "vocabulary": items,
-            })
+        if prose_draft:
+            logger.info("📦 Turn 2: packaging Turn 1 vocabulary prose draft into structured JSON Schema...")
+            source_content = v_kwargs.get("content", "")
+            packaging_prompt = (
+                "You are a deterministic lexicographical data converter.\n"
+                "Faithfully serialize every vocabulary item from the Turn 1 draft into the required VocabularyExtraction JSON schema format.\n"
+                "MANDATES:\n"
+                "- ⚠️ FAITHFUL 1:1 PACKAGING MANDATE: Convert all vocabulary items from the draft directly and consecutively into 'vocabulary'. Do NOT add, hallucinate, rewrite, or drop any items.\n"
+                "- Map 'Audit' to 'design_audit'.\n"
+                "- Map 'Context Sentence' to 'quoted_sentence': 🛑 CRITICAL: STRIP ALL SURROUNDING QUOTATION MARKS (\"...\") and escaped slashes. The 'quoted_sentence' field MUST contain only the raw sentence text without enclosing quotes.\n"
+                "- Map 'Word' to 'word' (strictly a single dictionary base lemma).\n"
+                "- Map 'Part of Speech' to 'part_of_speech' (strictly one of: noun, verb, adjective, adverb, preposition, conjunction, interjection).\n"
+                "- Map 'Definition' to 'definition'.\n"
+                "- Map 'CEFR' to 'word_cefr_level' (B1, B2, C1, or C2).\n"
+                "- Map 'Example Usage' to 'example_usage'.\n"
+                "- Set 'title' to 'Vocabulary'.\n"
+                "- Derive 'overall_cefr_level' from the most frequent CEFR level of the vocabulary.\n"
+                "- Clean any meta-tokens, code fences, or extraneous remarks.\n\n"
+                f"### VOCABULARY DRAFT ###\n{prose_draft}"
+            )
 
-        # Fallback: prose draft unparsable -> original one-shot JSON extraction.
+            try:
+                vocab_obj = llm.chat(
+                    [{"role": "user", "content": packaging_prompt}],
+                    schema=v_schema,
+                    temperature=0.0,
+                    task_name=f"extract_vocabulary_{file_stem}_turn2_package",
+                )
+                if vocab_obj:
+                    # Clean surrounding quotes on items while preserving all items faithfully
+                    raw_items = getattr(vocab_obj, "vocabulary", []) if hasattr(vocab_obj, "vocabulary") else vocab_obj.get("vocabulary", [])
+                    for it in raw_items:
+                        q = it.quoted_sentence if hasattr(it, "quoted_sentence") else it.get("quoted_sentence", "")
+                        q_clean = q.strip().strip('"\'“”‘’').strip()
+                        if hasattr(it, "quoted_sentence"):
+                            it.quoted_sentence = q_clean
+                        elif isinstance(it, dict):
+                            it["quoted_sentence"] = q_clean
+
+                    logger.info("✅ Successfully packaged Turn 1 draft into Vocabulary JSON Schema via Turn 2.")
+                    return vocab_obj
+            except Exception as pkg_err:
+                logger.warning(f"⚠️ Turn 2 packaging encountered error: {pkg_err}. Engaging deterministic parser fallback...")
+
+            # Fallback to deterministic code parsing if Turn 2 call fails
+            items = self._parse_vocab_prose(prose_draft, source_text=source_content)
+            if items:
+                cefr_counts = {}
+                for it in items:
+                    cefr_counts[it["word_cefr_level"]] = cefr_counts.get(it["word_cefr_level"], 0) + 1
+                overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
+                logger.info(f"✅ Parsed {len(items)} vocabulary items from prose draft via deterministic parser.")
+                return validate_and_map(VocabularyExtraction, {
+                    "title": "Vocabulary",
+                    "overall_cefr_level": overall,
+                    "vocabulary": items,
+                })
+
+        # Final Fallback: prose draft unparsable -> original one-shot JSON extraction.
         logger.warning("⚠️ Vocabulary prose draft was unparsable; falling back to one-shot JSON extraction.")
         data = llm.chat(
             [{"role": "user", "content": v_prompt}],
             schema=v_schema,
             task_name=f"extract_vocabulary_{file_stem}_json_fallback",
+        )
+        return data
+
+    def _build_grammar_prose_draft_prompt(self, g_prompt: str, count: int) -> str:
+        """Appends a clear plain-text draft layout instruction to the grammar prompt.
+
+        Follows the strict FORMAT MANDATE architecture established in quiz prose generation,
+        banning pre-analysis, monologues, and repetitive outlines to prevent smaller models
+        from over-generating tens of thousands of stream-of-consciousness tokens.
+        """
+        count_str = str(count) if count is not None else "the target"
+        return (
+            f"{g_prompt}\n\n"
+            "### GENERATION FORMAT MANDATE (GRAMMAR EXTRACTION DRAFT):\n"
+            f"Output all authentic grammar patterns directly and consecutively using this clean, structured text format (at most {count_str} items).\n"
+            "MANDATES:\n"
+            "- Extract ONLY genuine structures present in the passage. If only 2 or 3 genuine patterns exist, output ONLY 2 or 3. NEVER force-fit or fabricate weak items!\n"
+            "- Each item MUST be anchored to a distinct, unique verbatim sentence. NEVER reuse the same sentence for multiple items.\n"
+            "- 🚫 DO NOT include pre-analysis, stream-of-consciousness deliberations, self-correction monologues, or repetitive drafts. "
+            "Begin immediately with 'Item 1:' and write out the items cleanly:\n\n"
+            "Item 1:\n"
+            "- Quote: \"[exact 100% verbatim sentence copied directly from the text without ANY alteration or rewriting]\"\n"
+            "- Pattern Formula: [COBUILD algebraic slot formula, e.g. plain text anchors + [NP]/[VP]/[adj]/[to-V]]\n"
+            "- Pedagogical Function: [concise academic explanation of how this structure enhances formality or rhetorical nuance]\n"
+            "- Design Audit: AUDIT: [Physical Anchor in quote] -> [Formula] -> [Syntactic Function] -> [Allocated Category]\n"
+            "- Category: [strictly one of: Rhetoric & Emphasis, Cohesion & Framing, Information Packaging, Logic & Stance - aligned with the Audit & Pedagogical Function above]\n"
+            "- Imitation Example: [high-quality academic model sentence illustrating this pattern in a different domain]\n"
+            "- Common Mistakes: [typical ESL learner errors with this pattern]\n"
+            "- CEFR: [B1 / B2 / C1 / C2]\n\n"
+            "Item 2:\n"
+            "...\n\n"
+            f"Ensure all items follow this exact item layout consecutively without extra commentary, markdown tables, or code fences."
+        )
+
+    @classmethod
+    def _parse_grammar_prose(cls, text: str, source_text: str = None) -> list:
+        """Deterministically parse the Turn-1 grammar prose draft into a list of grammar item dicts.
+
+        The draft is a sequence of blank-line-separated blocks, each with lines like:
+            - Category: X
+            - Quote: "Y"
+            - Pattern Formula: F
+            - Pedagogical Function: P
+            - Imitation Example: E
+            - Common Mistakes: M
+            - CEFR: L
+            - Audit: A
+        Deterministic code parsing avoids model token stalls, token truncation, and hallucinated keys.
+        If `source_text` is provided, quotes are verified against the source to reject hallucinated or rewritten quotes.
+        """
+        if not text or not isinstance(text, str):
+            return []
+        text = text.replace("\r\n", "\n")
+        # Split blocks by 'Item \d+' or 'Design Audit:' or 'Quote:' or 'Category:'
+        item_boundary = re.compile(r"(?im)^[ \t]*(?:Item[ \t]+\d+|[-*]?[ \t]*(?:Design\s+Audit|Audit|Quote|Category)[ \t]*[:：])")
+        boundaries = [m.start() for m in item_boundary.finditer(text)]
+        if not boundaries:
+            # Fallback to category line
+            category_line = re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Category[ \t]*[:：][ \t]*(.*)$")
+            boundaries = [m.start() for m in category_line.finditer(text)]
+            if not boundaries:
+                return []
+
+        patterns = {
+            "category": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Category[ \t]*[:：][ \t]*(.*)$"),
+            "quote": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Quote[ \t]*[:：][ \t]*(.*)$"),
+            "pattern_formula": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Pattern[ \t]+Formula[ \t]*[:：][ \t]*(.*)$"),
+            "pedagogical_function": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Pedagogical[ \t]+Function[ \t]*[:：][ \t]*(.*)$"),
+            "imitation_example": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Imitation[ \t]+Example[ \t]*[:：][ \t]*(.*)$"),
+            "common_mistakes": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Common[ \t]+Mistakes[ \t]*[:：][ \t]*(.*)$"),
+            "cefr_level": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*CEFR[ \t]*[:：][ \t]*(.*)$"),
+            "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*(?:Design\s+Audit|Audit)[ \t]*[:：][ \t]*(.*)$"),
+        }
+        valid_cefr = ("B1", "B2", "C1", "C2")
+
+        from .schemas import GRAMMAR_CATEGORIES, normalize_enum_value
+        allowed_cats = get_args(GRAMMAR_CATEGORIES) if 'get_args' in globals() else (
+            "Concessive clauses", "Conditional clauses", "Participial clauses",
+            "Inversion", "Cleft sentences", "Nominalization", "Abstract frames",
+            "Rhetorical parallelism", "Non-finite structures", "Hedging devices",
+            "Anaphoric and cataphoric nouns", "Evaluative It-frameworks"
+        )
+
+        # Pre-clean source text for fuzzy-normalised presence check (collapse whitespace and normalize quotes)
+        normalized_source = None
+        if source_text:
+            normalized_source = re.sub(r'\s+', ' ', source_text).replace('“', '"').replace('”', '"').replace("‘", "'").replace("’", "'").lower()
+
+        def grab(block, key):
+            m = patterns[key].search(block)
+            return m.group(1).strip() if m else ""
+
+        items = []
+        for i, start in enumerate(boundaries):
+            end = boundaries[i + 1] if i + 1 < len(boundaries) else len(text)
+            block = text[start:end]
+
+            raw_cat = grab(block, "category").strip("[]\"'").strip()
+            norm_cat = normalize_enum_value(GRAMMAR_CATEGORIES, raw_cat) if raw_cat else "Information Packaging"
+
+            quote = grab(block, "quote")
+            if len(quote) >= 2 and quote[0] in "\"'" and quote[-1] in "\"'":
+                quote = quote[1:-1].strip()
+
+            formula = grab(block, "pattern_formula")
+            if formula:
+                formula = cls.normalize_grammar_formula(formula)
+
+            cefr = grab(block, "cefr_level").upper().strip()
+            if cefr not in valid_cefr:
+                cefr = "B2"
+
+            if not quote or not formula:
+                continue
+
+            # Deterministic Verbatim Gate: If source text is available, verify quote authenticity
+            if normalized_source:
+                cleaned_quote = re.sub(r'\s+', ' ', quote).replace('“', '"').replace('”', '"').replace("‘", "'").replace("’", "'").strip('."\' ').lower()
+                # Check if core quote exists in text (at least 20 chars substring or exact word tokens)
+                if cleaned_quote and cleaned_quote not in normalized_source:
+                    logger.warning(
+                        f"🛡️ Deterministic Code Gate: Dropping fabricated/tampered quote '{quote[:50]}...' "
+                        f"in category '{norm_cat}' (not found in source passage)."
+                    )
+                    continue
+
+            items.append({
+                "category": norm_cat,
+                "pattern_formula": formula,
+                "quote": quote,
+                "pedagogical_function": grab(block, "pedagogical_function"),
+                "imitation_example": grab(block, "imitation_example"),
+                "common_mistakes": grab(block, "common_mistakes"),
+                "cefr_level": cefr,
+                "design_audit": grab(block, "design_audit"),
+            })
+        return items
+
+    def _run_grammar_prose_pipeline(self, g_prompt, g_kwargs, g_schema, file_stem):
+        """Prose-to-JSON pipeline for grammar extraction.
+
+        Turn 1 (json_format=False) gives the model unconstrained reasoning to analyze
+        sentence syntax, verify physical markers, and formulate COBUILD rules without JSON syntax overhead.
+        Turn 2 (packaging prompt with schema and temperature=0.0) deterministically packages
+        the Turn 1 prose draft into the strict GrammarExtraction JSON schema.
+        A deterministic code parser acts as a robust zero-failure fallback if Turn 2 is unavailable.
+        """
+        from .schemas import GrammarExtraction
+        count = g_kwargs.get("count", 5)
+        draft_prompt = self._build_grammar_prose_draft_prompt(g_prompt, count)
+        logger.info("🧠 Turn 1: prose grammar extraction (unconstrained syntactic reasoning, json_format=False)...")
+        prose_draft = llm.chat(
+            [{"role": "user", "content": draft_prompt}],
+            json_format=False,
+            task_name=f"extract_grammar_{file_stem}_turn1_prose",
+        )
+
+        if prose_draft:
+            logger.info("📦 Turn 2: packaging Turn 1 grammar prose draft into structured JSON Schema...")
+            source_content = g_kwargs.get("content", "")
+            packaging_prompt = (
+                "You are a deterministic grammatical data converter.\n"
+                "Faithfully serialize every grammar pattern from the Turn 1 draft into the required GrammarExtraction JSON schema format.\n"
+                "MANDATES:\n"
+                "- ⚠️ FAITHFUL 1:1 PACKAGING MANDATE: Convert all grammar patterns presented in the draft directly and consecutively into 'grammar_patterns'. Do NOT add, hallucinate, rewrite, or drop any items.\n"
+                "- Map 'Design Audit' (or 'Audit') to 'design_audit'.\n"
+                "- Map 'Quote' to 'quote': 🛑 CRITICAL: STRIP ALL SURROUNDING QUOTATION MARKS (\"...\") and escaped slashes. The 'quote' field MUST contain only the raw sentence text without enclosing quotes.\n"
+                "- Map 'Category' to 'category': 🛑 MUST be strictly one of these exact 4 strings (NO extra words, NO parentheses, NO custom variants): 'Rhetoric & Emphasis', 'Cohesion & Framing', 'Information Packaging', 'Logic & Stance'.\n"
+                "- Map 'Pattern Formula' to 'pattern_formula'.\n"
+                "- Map 'Pedagogical Function' to 'pedagogical_function'.\n"
+                "- Map 'Imitation Example' to 'imitation_example'.\n"
+                "- Map 'Common Mistakes' to 'common_mistakes'.\n"
+                "- Map 'CEFR' to 'cefr_level' (B1, B2, C1, or C2).\n"
+                "- Set 'title' to 'Grammar'.\n"
+                "- Derive 'overall_cefr_level' from the most frequent CEFR level of the patterns.\n"
+                "- Clean any meta-tokens, code fences, or extraneous remarks.\n"
+                "- 🛑 VERBATIM FIDELITY CHECK: every 'quote' MUST be copied word-for-word from the SOURCE TEXT at the end of this prompt (no rewording, no reordering, no splicing across sentences, no formula tokens).\n\n"
+                f"### GRAMMAR PATTERNS DRAFT ###\n{prose_draft}"
+            )
+            if source_content:
+                packaging_prompt += f"\n\n### SOURCE TEXT ###\n{source_content}"
+
+            try:
+                grammar_obj = llm.chat(
+                    [{"role": "user", "content": packaging_prompt}],
+                    schema=g_schema,
+                    temperature=0.0,
+                    task_name=f"extract_grammar_{file_stem}_turn2_package",
+                )
+                if grammar_obj:
+                    # Clean surrounding quotes on items while preserving all items faithfully
+                    raw_patterns = getattr(grammar_obj, "grammar_patterns", []) if hasattr(grammar_obj, "grammar_patterns") else grammar_obj.get("grammar_patterns", [])
+                    for p in raw_patterns:
+                        q = p.quote if hasattr(p, "quote") else p.get("quote", "")
+                        q_clean = q.strip().strip('"\'“”‘’').strip()
+                        if hasattr(p, "quote"):
+                            p.quote = q_clean
+                        elif isinstance(p, dict):
+                            p["quote"] = q_clean
+
+                    logger.info("✅ Successfully packaged Turn 1 draft into Grammar JSON Schema via Turn 2.")
+                    return grammar_obj
+            except Exception as pkg_err:
+                logger.warning(f"⚠️ Turn 2 packaging encountered error: {pkg_err}. Engaging deterministic parser fallback...")
+
+            # Fallback to deterministic code parsing if Turn 2 call fails
+            items = self._parse_grammar_prose(prose_draft, source_text=source_content)
+            if items:
+                cefr_counts = {}
+                for it in items:
+                    cefr_counts[it["cefr_level"]] = cefr_counts.get(it["cefr_level"], 0) + 1
+                overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
+                logger.info(f"✅ Parsed {len(items)} grammar patterns from prose draft via deterministic parser.")
+                return validate_and_map(GrammarExtraction, {
+                    "title": "Grammar",
+                    "overall_cefr_level": overall,
+                    "grammar_patterns": items,
+                })
+
+        logger.warning("⚠️ Grammar prose draft was unparsable; falling back to one-shot JSON extraction.")
+        data = llm.chat(
+            [{"role": "user", "content": g_prompt}],
+            schema=g_schema,
+            task_name=f"extract_grammar_{file_stem}_json_fallback",
         )
         return data
 

@@ -3,202 +3,91 @@
 > **Purpose**: This document serves as the single source of truth for the Lexis Wiki project -- an AI-powered wiki generator that produces Obsidian-style educational content from source materials using a schema-first prompt architecture.
 
 ---
-## 1. Prompt Architecture
+## 1. Architecture & Core Philosophy
 
-Prompts drive pedagogical quality and assessment design; JSON schemas enforce output structure.
+### 1.1 Separation of Responsibilities
+- **Schema = Structure**: `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs.
+- **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, and distractor engineering—completely free of mechanical JSON formatting instructions or code variable names.
+- **Code = Invariant Enforcement**: Deterministic Python logic enforces physical invariants, normalization, and bounds at zero token cost.
 
-- **Clean Separation of Responsibilities**:
-  - **Schema = Structure**: `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs.
-  - **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, distractor engineering, and `MANDATE:` rules—completely free of mechanical JSON formatting instructions or code variable names.
-- **Dual-Mode Structured Output Architecture**:
-  - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: When calling local engines (Ollama), `format: "json"` is active (`"enforce_gbnf": false` in `wiki_config.json`). The system automatically injects the JSON Schema derived programmatically from `schemas.py` into the system role. This eliminates GBNF grammar parser stalls, tokenizer conflicts (e.g. 131k/248k tokenizers in Nemotron/Gemma/Qwen), and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
-  - **Strict GBNF / Native Schema Mode**: Supported via `"enforce_gbnf": true` in `wiki_config.json` for engines with hardware-accelerated grammar transducers (e.g., OpenAI `json_schema` strict mode).
-  - **Automatic Empty-Output Fallback**: If strict GBNF mode fails or returns empty tokens, `llm.py` automatically catches the failure, logs a warning, and retries seamlessly in `format: "json"`.
-  - **Two-Turn Decoupled Generation Pipeline (Prose-to-JSON)**:
-    - *Turn 1 (Prose Drafting)*: Unconstrained text generation with full reasoning and thinking capability, focusing 100% on linguistic depth, complex CEFR sentence framing, and 3-vector distractor traps without JSON token constraints.
-    - *Turn 2 (Deterministic Packaging)*: Fast, temperature-0 packing that transforms the prose draft into strict JSON conforming to `schemas.py`.
-  - **Expert / Judge Model Architecture**:
-    - The generation model drafts content (via Prose-to-JSON or One-Shot).
-    - The expert judge model executes independent blind solving, semantic auditing, and minimal-invasive surgical repair/rewriting. Keeping the generation model and the audit judge distinct preserves assessment rigor and catches double-key divergence.
+### 1.2 Generation Pipeline Modes
+- **Extraction (Vocabulary / Expressions / Grammar)**: Defaults to **One-Shot** (`enable_vocab_prose: false`, `enable_grammar_prose: false`). One-Shot provides 80% faster generation and superior verbatim grounding for text-extraction tasks.
+- **Assessment / Quiz Generation**: Defaults to **Two-Turn Decoupled Pipeline (Prose-to-JSON)** (`enable_prose_pipeline: true`):
+  - Two stateless, independent HTTP calls:
+    1. $\text{Call}_1$: $\text{Source Text} + \text{Pedagogical Prompt} \longrightarrow \text{Prose Draft}$ (native thinking/reasoning without JSON constraints).
+    2. $\text{Call}_2$: $\text{Packaging Prompt} + \text{Turn 1 Draft} + \text{Source Text} \longrightarrow \text{Strict JSON}$ (fast temperature-0 packaging).
+  - *Benefits*: Prevents VRAM exhaustion and KV cache fragmentation on consumer GPUs ($\le$ 12GB), shields JSON structure from prose contamination, and purges reasoning tokens before structured serialization.
+- **Structured Output Strategy**:
+  - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: Automatically injects programmatic JSON Schema derived from `schemas.py` into the system prompt. Eliminates GBNF grammar parser stalls, tokenizer conflicts, and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
+  - **Strict Schema Mode (`enforce_gbnf: true`)**: Used for engines with hardware-accelerated grammar transducers. If empty tokens are returned, `llm.py` automatically falls back to `format: "json"`.
+- **True Multi-Turn Sessions (Self-Correction Retries Only)**:
+  - Multi-turn conversational appending (`conversation.append(...)`) is reserved exclusively for the QA Self-Correction Retry Loop in `llm.py` when validation fails or QA score $< 80$.
 
-- **Human-Readable Logging**:
-  - `librarian/logger.py` automatically indents and formats `--- RAW RESPONSE ---` with 2-space pretty-printed JSON in all task logs under `logs/`.
-
-### 1.1 Architectural Discovery: The Example Contamination Pitfall (Few-Shot / One-Shot Side Effects)
-
-- **The Discovery (Token Anchoring & Prompt-Driven Hallucination)**:
-  - While conventional prompt engineering advocates few-shot or in-prompt concrete examples (e.g., `(e.g., although, despite)`, `the extent to which`, `AUDIT: Identified concessive clause anchored by 'although'`), empirical logs proved that concrete lexical examples in extraction/audit prompts have severe pathological side effects:
-    1. **Attention Hijacking (Memory Anchoring)**: The LLM's self-attention heavily latches onto concrete lexical strings appearing in prompt instructions. Instead of reading the source text first, the model prioritizes matching or reproducing the prompt's examples.
-    2. **Text Falsification / Forced Fitting**: When the example word (e.g. `the extent to which`, `although`) does not exist in the source text, the model actively tampers with quotations (e.g. replacing `and` with `although`) or falsely attributes the structure to unrelated sentences (e.g. classifying `which means that...` as `abstract frames ('the extent to which')`).
-    3. **Cognitive Inversion (Prompt-driven instead of Text-driven)**: Human linguistic extraction follows: `Source Text -> Discover Authentic Structure -> Classify`. Prompt examples invert this pipeline into: `Prompt Example Word -> Search Text -> If Missing, Hallucinate or Fake Quote`.
-- **Architectural Solution (Zero Concrete Examples in Definitions)**:
-  - **Pure Syntactic & Functional Descriptions**: Grammatical categories and schema fields must be defined purely through abstract linguistic functions (e.g., *Subordinate clauses or prepositional structures expressing contrast...*, *abstract shell nouns governing complement propositions...*), completely stripped of concrete vocabulary examples.
-  - **Structural Pipeline Auditing**: Replace descriptive examples in `design_audit` with abstract placeholder derivation pipelines (e.g., `AUDIT: 'Physical Marker in Quote' -> [Category] -> [Syntactic Slot Formula]`). This forces the model to locate and verify a physical textual marker inside the cited sentence *before* declaring the category, unlocking genuine self-correction and zero-shot fidelity.
-
-### 1.2 Triad Quality Architecture: Pure Formulas + Physical Hard Gates + Code Gate Bottom-Line
-To completely eliminate false positives and categorization drift across diverse LLM families (from 8B/14B small models to 27B/31B production models), grammar extraction and syntactic parsing enforce a three-layer defense triad:
-
-1. **Pure Formulaic Definitions (`Formula`)**:
-   - Eliminate verbose, ambiguous natural language explanations from prompt instructions.
-   - Every grammatical category is defined strictly via algebraic COBUILD slot formulas (e.g. `It + [be] + [Evaluative adj / Noun] + [that-S / to-V / wh-S]`, `[Negative / Restrictive Element] + [aux / be] + [Subject NP] + [Main Verb]`).
-   - Formulas leverage LLM strengths in pattern matching and token slot binding while stripping away semantic fuzziness.
-
-2. **Physical Hard Exclusion Gates (`Gate: 100% BANNED`)**:
-   - Every category enforces binary syntactic exclusions preventing semantic slippage:
-     - **Cleft Sentences Gate**: Quote MUST physically contain a relative linker (`that`, `who`, `whom`, `which`). Deleting `It [be]` and relative linker must leave an independent clause. Ambient time/weather clauses (`It's [time], and...`) or extraposed clauses without relative linkers $\rightarrow$ **100% BANNED**.
-     - **Evaluative It-Frameworks Gate**: Quote MUST physically contain dummy impersonal `it` (or `it's`). Ambient time/weather/distance statements (`It's 4:15`) or lexical noun subjects $\rightarrow$ **100% BANNED**.
-     - **Inversion Gate**: The auxiliary/verb must physically precede the subject noun phrase. Standard word order $\rightarrow$ **100% BANNED**.
-     - **Concessive Gate**: Must use a subordinating linker. Coordinate contrast connectors (`but`, `however`, `yet`) or causal linkers (`because`) $\rightarrow$ **100% BANNED**.
-
-3. **Deterministic Code Gate Bottom-Line (`evaluator.py`)**:
-   - LLMs (particularly $\le$14B parameter models) can suffer from self-deception in chain-of-thought audits (e.g. claiming a sentence satisfies the dummy `it` gate when `it` is absent).
-   - Zero-cost Python regex assertions in `evaluator.py` enforce physical invariants before acceptance:
-     - `category == "Evaluative It-frameworks"` asserts `\bit(?:'s)?\b` presence AND rejects ambient time patterns (`\bit(?:'s|\s+is|\s+was)\s+\d{1,2}(?::\d{2})?\b`).
-     - `category == "Cleft sentences"` asserts `\b(?:that|who|whom|which)\b` relative linkers.
-   - Any hallucination or category boundary violation is immediately rejected and returned for surgical retry, guaranteeing zero-defect delivery.
+### 1.3 Linguistic Grounding & Extraction Mandates
+- **Zero Concrete Examples in Definition Prompts (Eliminating Example Contamination)**:
+  - Grammatical categories and schema fields are defined purely through abstract linguistic functions without concrete vocabulary examples.
+  - Empirical finding: Concrete prompt examples hijack self-attention, prompting models to hallucinate or force-fit non-existent structures.
+  - Prompts enforce structural pipeline auditing: `AUDIT: 'Physical Marker in Quote' -> [Category] -> [Syntactic Slot Formula]`.
+- **Four Macro Functional Domains for Grammar**:
+  1. **`Rhetoric & Emphasis`**: Symmetry, rhythmic balance, fronted inversion, or cleft focus.
+  2. **`Cohesion & Framing`**: Abstract shell nouns, complement that-propositions, and anaphoric discourse encapsulation (including `, which + [interpretive verb: means/meant, suggests/suggested] + that`).
+  3. **`Information Packaging`**: Non-finite participial adjuncts, dense nominalizations, evaluative dummy-it extrapositions, and elaborative relative clauses.
+  4. **`Logic & Stance`**: Conditionals, concessive refutations, and calibrated epistemic stance/hedging.
+- **Prohibition Outlet Principle & Quality Over Quota**:
+  - Every strict negative constraint provides an explicit permissible outlet (traffic routing to legal categories, graceful skip, or surgical rewrite).
+  - Quotas are evidence-driven: models never force artificial category distributions. Items cluster naturally based on source text evidence.
 
 ---
 
-## 2. Self-Contained Unit Structure
+## 2. Stateless Storage & Decoupled Display Architecture
 
-Each unit is a self-contained folder under `wiki/`. All lookups use `normalize_name()` (case-insensitive, ignores spaces/special chars).
-
-### 2.1 Directory Layout
-
+### 2.1 Self-Contained Unit Layout
+Units reside in self-contained folders under `wiki/`:
 ```
-wiki/<UnitName>/sources/<UnitName>.md | media/ 
+wiki/<UnitName>/sources/<UnitName>.md | media/
               /extractions/<UnitName>_{vocab,grammar,summary,mindmap}.md
               /handouts/<UnitName>_[type]_quiz.html
 ```
+All lookups use `normalize_name()` (case-insensitive, ignoring spaces and special characters).
 
-### 2.2 Stateless Rules
-
-- **Deprecation of Global `raw/` and `raw/media/` Directories**.
-- **Zero Background Scans / No Self-Healing**: There are no automatic, implicit, or startup scans running in the background to self-heal or move files. Content is managed and organized strictly through explicit compilation commands (`lexis compile`) or explicit dashboard upload/compile buttons.
-- **No metadata files (Removal of `unit.json`).** The architecture is 100% stateless. `unit.json` has been completely eliminated from the system. Unit title = formatted folder name (e.g., `Book_4_Unit_1` → `Book 4 Unit 1`).
-- **Active media** = newest file in `sources/media/` by mtime; dashboard click updates mtime.
-- **Video Handout Validation**: The `/api/check-video-source` endpoint robustly validates video units by checking both (1) companion transcript markdown files in the unit's `sources/media/` directory, and (2) primary standalone transcript files directly inside the `sources/` directory (matching `sources/<UnitName>.md` which contains the video's YAML frontmatter).
-- **Media & Supplementary Layout**:
-  - **Standalone Video Unit**: Video file is saved under `sources/media/<UnitName>.<ext>`, and transcript `.md` is saved as the primary source at `sources/<UnitName>.md`.
-  - **Supplementary Video (Existing Unit)**: Both the video file (e.g., `Three_Gorges_Dam.mkv`) and its transcript `.md` (e.g., `Three_Gorges_Dam.md`) are saved under `sources/media/` to protect the primary text source (`sources/<UnitName>.md` or `.txt`) from overwrite.
-- **Library Sorting (Recency-First)**: The Document Library automatically displays files sorted by modification time (`mtime`) descending when the default `'recent'` sorting option is active. This places newly uploaded, created, or edited units first, directly next to the "Add Source" card.
-- **Instant Workspace Transition on Completion**: The poller instantly opens the workspace and auto-switches to the **Raw Source** tab the moment background transcription completes.
-- **Commands**: `lexis rename <old> <new>` renames unit + all internals.
-
-### 2.3 Display Layer Decoupling (Display Title vs. Physical Slug)
-
-- **Principle**: Decouple user-facing display titles (`f.title`) from the underlying physical filesystem identifiers (`unit_name` / `slug`).
-- **Stable Physical Primary Keys**:
-  - The folder name (e.g., `Book_4_Unit_1`) and primary filename (e.g., `Book_4_Unit_1.md`) serve as immutable physical anchors/slugs.
-  - All internal linkages, API endpoints (`/api/compile`, `/api/generate-quiz`), frontend state routing (`currentUnit`), and derived artifacts (`extractions/`, `handouts/`) strictly use the physical slug. This eliminates broken wikilinks, browser 404s, stale cache issues, and media path desynchronization.
-- **Dynamic Display Title Extraction**:
-  - The primary source file (`sources/<UnitName>.md`) defines the display title via its YAML frontmatter `title: "..."` (e.g., `title: "Unit 1: The Road to Success"`).
-  - The backend (`/api/raw-files`) automatically parses this frontmatter title and delivers it as `title`.
-  - The Dashboard UI (card titles, list view, sidebar tree, breadcrumb nav, workspace header, name sorting) prioritizes `f.title`, gracefully falling back to the formatted folder name (`stem.replace(/_/g, ' ')`) when no YAML title is present.
-- **Zero Renaming Side-Effects & Media Protection**:
-  - Users can freely edit lesson titles, add subtitles, or adjust course names in Markdown without triggering risky cascading filesystem renames.
-  - Media files (video and audio in `sources/media/`) remain permanently intact with their original filenames.
+### 2.2 Stateless Rules & Media Preservation
+- **No Global Raw Dirs & Zero Background Scans**: `raw/` is deprecated. Zero background scans or self-healing file moves exist; operations occur strictly through explicit CLI commands (`lexis compile`) or dashboard actions.
+- **Zero Metadata Files**: `unit.json` is completely eliminated.
+- **Display Layer Decoupling**:
+  - Physical folder name (`unit_name` / slug) acts as the immutable filesystem primary key for all routes, API endpoints, and artifacts.
+  - Primary source frontmatter (`title: "..."`) provides the dynamic display title.
+  - Renaming course titles or lesson headers never triggers cascading filesystem operations or broken media links.
+- **Media Organization**:
+  - Standalone video unit: video in `sources/media/<UnitName>.<ext>`, transcript at `sources/<UnitName>.md`.
+  - Supplementary video: both video and transcript reside in `sources/media/` to protect the primary text source.
 
 ---
 
 ## 3. Configuration & Runtime Architecture
 
 ### 3.1 Live Configuration Hot-Reloading (`config.py`)
-- **Zero-Restart Disk Synchronization**: `config.py` monitors the filesystem modification timestamp (`st_mtime`) of `wiki_config.json`.
-- Any external edits (e.g. toggling `enable_prose_pipeline`, switching `model`, updating `judge_model`, or tuning `enable_expert_audit`) are instantly and silently hot-reloaded into memory across both CLI and the running Web Dashboard without requiring server restarts.
+- `config.py` monitors the modification time (`st_mtime`) of `wiki_config.json`. Configuration changes apply immediately across CLI and Web Dashboard without restarting the server.
 
 ### 3.2 Audit & Generation Controls (`wiki_config.json`)
-- `enable_expert_audit`  : master switch for Level 2 LLM-as-a-Judge semantic audit (default: `false`)
-- `judge_model`          : L2 judge model; SHOULD differ from generation `model` (e.g., `gemma4:12b` or `phi4:14b`)
-- `min_passing_items`    : per-quiz passing floor after triage and discards (default: `3`)
-- `enable_prose_pipeline`: multi-turn prose→JSON generation toggle (default: `true`)
-- `enable_vocab_prose`   : prose pipeline toggle for vocabulary extractions (default: `false`)
-- **Transparent Delivery (No Quarantine)**: Content is always delivered directly to `extractions/` or `handouts/`. Quality audit scores and review status (`qa_status: "review_needed"`) are embedded in frontmatter and logs rather than hiding files in quarantine.
+- `enable_expert_audit`: Master switch for Level 2 LLM-as-a-Judge semantic audit (default: `false`).
+- `judge_model`: Independent evaluation model (should differ from generation `model`).
+- `min_passing_items`: Per-quiz minimum passing floor (default: `3`).
+- `enable_prose_pipeline`: Multi-turn prose-to-JSON for quizzes (default: `true`).
+- `enable_vocab_prose`: Prose pipeline for vocabulary (default: `false`).
+- `enable_grammar_prose`: Prose pipeline for grammar (default: `false`).
+- **Transparent Delivery (No Quarantine)**: Content is delivered directly to `extractions/` or `handouts/`. Quality audit scores and status flags (`qa_status: "review_needed"`) are embedded in frontmatter and logs.
 
-### 3.3 Reasoning & Thinking Parameter Protocols
-- Models featuring internal reasoning channels (e.g., `gpt-oss:20b` dual-channel `<|channel|>analysis` vs `<|channel|>final`) operate under Ollama's native routing.
-- The system avoids imposing artificial token masks (`think: false`) that trigger reasoning spillover into output text; clean channel separation is maintained natively.
-
-### 3.4 Dashboard Input Configuration & TTS Defaults
-- **Autofill Prevention**: Passwords require `autocomplete="new-password"`; URL fields require `autocomplete="url"`, `inputmode="url"`.
-- **TTS API Endpoints**:
-  - Kokoro: `http://localhost:8880/v1/audio/speech`
-  - Edge-TTS: `http://localhost:5050/v1/audio/speech`
-- **Voice Validation**: Invalid voices self-heal to defaults: Kokoro (`af_sarah`/`am_michael`), Edge-TTS (`en-US-AriaNeural`/`en-GB-RyanNeural`).
-
-### 3.5 Bidirectional Concurrency & VRAM Alignment Protocol
+### 3.3 Hardware Alignment & Concurrency Protocols
 - **Default Serialization (`max_parallel: 1`)**:
-  - `wiki_config.json` sets `"compile_defaults": { "max_parallel": 1 }` as the global gold standard for consumer GPU stability.
-  - Applying single-stream sequential extraction avoids catastrophic token truncation, thread lock contention, and unified KV Cache fragmentation during long-context generation (e.g. Vocabulary/Grammar extractions reaching 3,500–6,500 total tokens).
-- **Bidirectional Hardware-to-Server Alignment (Client & Server Synergy)**:
-  - Setting `max_parallel: 1` in client configuration only restricts incoming client requests; it cannot modify local engine slot pre-allocation.
-  - To prevent server-side out-of-memory errors (`Context size has been exceeded` / `failed to find free space in the KV cache`):
-    - **LM Studio**: Explicitly align **`Max Concurrent Predictions` (Number of Slots)** to `1` (or `2` only when VRAM $\ge$ 24GB).
-    - **Ollama**: Pass/export environment variable `OLLAMA_NUM_PARALLEL=1` (and `OLLAMA_MAX_LOADED_MODELS=1`).
-- **VRAM Sizing Guide for 12B/14B Production Models (e.g., `gemma4:12b`, `qwen3.6:14b`)**:
-  - **12 GB VRAM GPUs (e.g., RTX 3060 / 4070)**: **Strictly `max_parallel = 1`** on both client and engine. Guarantees 100% layer GPU offload (e.g. 48/48 layers) and allocates 100% of remaining VRAM exclusively to the active KV Cache, achieving peak sustained generation speeds (70–80 tokens/sec) without out-of-memory aborts.
-  - **$\ge$ 24 GB VRAM GPUs (e.g., RTX 3090 / 4090 / Mac Studio)**: May safely scale to `max_parallel = 2` (with server slots set to 2) for parallel speedups.
+  - Consumer GPUs ($\le$ 12GB VRAM, e.g., RTX 3060/4070): strictly `max_parallel = 1` on both client and engine (Ollama `OLLAMA_NUM_PARALLEL=1`, LM Studio 1 slot). Guarantees 100% layer GPU offload and allocates remaining VRAM exclusively to the active KV cache.
+  - Large GPUs ($\ge$ 24GB VRAM): safely scale to `max_parallel = 2` with server slots set to 2.
+- **TTS Service Defaults**:
+  - Kokoro: `http://localhost:8880/v1/audio/speech` (default voices: `af_sarah` / `am_michael`).
+  - Edge-TTS: `http://localhost:5050/v1/audio/speech` (default voices: `en-US-AriaNeural` / `en-GB-RyanNeural`).
 
 ---
 
-## 4. Naming Conventions
-
-Use `snake_case` for all JSON keys and variable names.
-
-### Must-use (per schemas.py)
-- **`concepts`** (not `items`) -- semantic concept topics
-- **`part_of_speech`** (not `pos`) -- lexical category
-- **`explanation`** -- pedagogical reasoning across all quiz types
-- **`target_language`** (not `language`) -- translation target lang
-
----
-
-## 5. To-Do List
-
-> ✅ Complete | 🔄 In Progress | ⬜ Pending
-
-### Completed
-- [x] Embed raw audio data (Base64) into HTML handouts
-- [x] Unit Dependency Graph visualization
-- [x] Video Quiz Extension (Bilibili/MP4 via Whisper)
-- [x] pyproject.toml dependency management
-- [x] QA: Evaluation schema (faithfulness/completeness/pedagogical/schema adherence) + retry loop at <80% threshold
-- [x] Level 2 Expert Model Quality Audit (LLM-as-a-Judge pedagogical quality audit, blind quiz test solver, contextual appropriateness & distractor trap validation, multi-turn self-correction loop)
-- [x] Multi-turn Prose-to-JSON quiz generation pipeline (Turn 1 unconstrained prose drafting with native reasoning/thinking parameters; Turn 2 deterministic packaging without token stalls)
-- [x] Selective Item Regeneration & Surgical Splicing (Psychometric targeted healing: only flagged defective items are regenerated and spliced into untouched locked items)
-- [x] Display Layer Decoupling (Human-facing display titles decoupled from immutable filesystem slugs while preserving zero-side-effect media protection)
-- [x] Two-Level Auditing Across All Quiz Types: Completed Level 1 (Deterministic Code Gate) and Level 2 (LLM-as-a-Judge Expert Semantic Audit) verification pipeline across Vocabulary, Translation, Reading, Video, and Listening quizzes.
-- [x] Expert Model Audit-Repair-Rewrite Pipeline: Direct surgical cure and rewriting by the expert model replacing slow multi-attempt blind regeneration loops.
-- [x] Configuration Disk Hot-Reloading: Instant runtime synchronization with `wiki_config.json` via file mtime tracking without dashboard restarts.
-- [x] Clean Prompt & Schema Separation: Stripped code variable names and JSON formatting instructions from prompt templates, guaranteeing 100% compatibility across Prose-to-JSON and One-Shot modes.
-- [x] Example Contamination Elimination (Few-Shot/Example Pitfall Discovery): Stripped all concrete lexical/word examples from prompt definitions and audit templates, preventing token-hijacking hallucinations and replacing them with pure syntactic functional definitions and strict physical-marker audit pipelines.
-- [x] Triad Quality Architecture (Pure Formulas + Physical Hard Gates + Code Gate Bottom-Line): Defined grammatical structures purely via algebraic COBUILD slot formulas, backed by strict binary exclusion gates (Cleft, Evaluative It, Inversion, Concessive) and deterministic zero-cost Python Code Gate regex invariants in `evaluator.py`, eliminating category drift and false positives across all model scales.
-
-### Pending
-- **Primary Focus: Extraction Quality Improvement (Source-to-Wiki)**:
-  - Before downstream quiz generation enhancements, prioritize and maximize extraction quality, precision, and pedagogical rigor across vocabulary, expressions, and grammar extractions.
-  - Eliminate near-synonym noise, enforce strict contextual single-word discipline, and guarantee 100% authentic syntactic slot binding.
-- **LLM Proficiency Enhancements (Cognitive Diagnostics & Evidence Augmentation)**:
-  - *Context*: Insights from standardized LLM assessment research (e.g. CSEBench, CSE Levels 3–6 evaluation) show that smaller open-source models (7B–14B) achieve dramatic proficiency jumps (from CSE-3/5 up to CSE-6) when supplied with compact structural evidence and pre-computed scratchpad constraints.
-  - *Design & Implementation*:
-    1. **Scratchpad Formula (Primary / Highest Impact)**: Enforce intermediate reasoning scratchpad derivation in Prose-to-JSON Turn 1 / CoT (e.g., `[Collocation Anchor: target + dependent preposition/noun] -> [Taxonomy Distractor Traps]`) before committing to final question stems or options.
-    2. **Academic Collocation List (ACL) Pattern Integration**: Connect high-quality academic collocation patterns (from curated ACL collections) to supply verified, zero-hallucination dependent prepositions and verb-noun pairings as compact prompt-injected evidence for quiz item authoring.
-- **Quality Tier Routing & Human Review UI**:
-  - 90–100: 自动交付（Passed - High Quality）。
-  - 75–89: 自动交付但标注审查候选（Review Candidate）。
-  - 60–74: 进入待人工抽检队列（Needs Human Review）。
-  - < 60: 触发精准回炉重试；重试超限后打上未解决标记。
-- **Multilingual User Interface (i18n)**:
-  - *Context*: 仪表板与各编辑模态框（如 Source & Syllabus Editor、工作区与配置面板）需支持国际化与本地化多语言切换。
-  - *Design*: 建立轻量级客户端 i18n 资源字典与切换机制，将界面文字解耦键值化。默认界面全面采用简洁、地道的专业学术英语（Concise English UI），杜绝双语生硬混杂，并支持一键无感切换简体中文及其他语种。
-- **UI/UX**: HTML HUB, wiki file list with categories, breadcrumb nav, Bootstrap 5 CDN only.
-- **Visualization**: Knowledge graph legend/zoom/filter/export, clickable nodes with side preview.
-
----
-
-## 6. Two-Level QA Quality Audit Architecture
-
-The system enforces quality through a strict two-tier verification pipeline:
+## 4. Two-Level QA Quality Audit Architecture
 
 ```
 [ Generation Phase (Fast Generation Model) ]
@@ -209,8 +98,8 @@ The system enforces quality through a strict two-tier verification pipeline:
 │  - Zero token cost, instantaneous (<5ms) python logic  │
 └────────────────────────────────────────────────────────┘
                     │
-                    ├─► [❌ FAILED: Schema violation, missing keys, target desync, duplicate options]
-                    │       └─► Triggers immediate structural repair / normalization
+                    ├─► [❌ Defect: Schema violation, target desync, category mismatch]
+                    │       └─► Instant programmatic repair / auto-remap
                     ▼ [✅ PASSED]
 ┌────────────────────────────────────────────────────────┐
 │ Level 2: Expert Model Quality Audit (Semantic Audit)   │
@@ -218,101 +107,117 @@ The system enforces quality through a strict two-tier verification pipeline:
 │  - Independent Blind Solver Resolution                 │
 └────────────────────────────────────────────────────────┘
                     │
-                    ├─► [❌ FAILED: Hallucination, ambiguous stem, invalid distractors, double keys]
-                    │       └─► Executes Minimal-Invasive Surgical Cure or Full Rewrite
+                    ├─► [❌ Defect: Double keys, ambiguous stems, trivial distractors]
+                    │       └─► Targeted surgical cure or complete rewrite
                     ▼ [✅ PASSED]
           [ Final Content Delivery / HTML Handout ]
 ```
 
-### Level 1: Deterministic Code Gate (Structure & Physical Truth)
-Pure Python validation ensuring structural completeness and absolute invariants:
-- **Schema & Array Bounds**: Strict enforcement of required keys, field types, and exact item counts (e.g., exactly 4 options per quiz question).
-- **Physical Ground Truth Anchors**:
-  - `target_word` strictly matches `options[correct_answer_index]`.
-  - Quoted text/sentences exist verbatim in source material.
-  - Option uniqueness (no duplicate options).
-- **Answer Distribution & Option Integrity**:
-  - Options automatically shuffled and randomized by deterministic Python logic.
-  - Explanation option labels (`Option A/B/C/D`) are atomically remapped upon option shuffling or index repair.
+### 4.1 Level 1: Deterministic Code Gate (`evaluator.py`)
+- **Physical Invariants**: Verbatim quotation verification, single-blank constraints (`re.findall(r'_{2,}', stem) <= 1`), option bounds (exactly 4 non-empty options), and headword-answer key synchronization.
+- **Deterministic Category Auto-Remap & Soft Penalty**:
+  - When sentences exhibit incontrovertible physical markers (e.g. Antithesis `not... but...` misclassified as `Logic & Stance`, or Propositional Encapsulation `, which + [interpretive verb: means/meant, suggests/suggested] + that` misclassified as `Information Packaging`), code deterministically remaps `category` to the correct macro domain.
+  - Deducts a soft penalty (-2.0 pts per item) from the pedagogy score, recording an audit trace while avoiding expensive 30s LLM retry loops.
+- **Option Sanitization & Fisher-Yates Shuffling**: Strips redundant prefixes (`A.`, `B.`) and shuffles options with atomic index remapping to eliminate positional key bias.
 
-### Level 2: Expert Model Quality Audit (Content & Pedagogical Correctness)
-High-reasoning semantic evaluation focusing on linguistic rigor:
-- **Blind Solver Test**: The expert model independently solves the item without access to declared answers. Divergence indicates ambiguous stems or insufficient textual evidence.
-- **Absolute Single-Fit Validity**: Verifies that the correct answer is the ONLY defensible choice while all 3 distractors are objectively and conclusively eliminated.
-- **Cognitive Distractor Trap Quality**: Validates that distractors represent authentic educational traps (e.g., Chinglish L1 negative transfer, Scope Shift, Speaker Attribution) rather than trivial or absurd giveaways.
-- **Factuality & Faithfulness**: Verifies that conclusions are fully warranted by the provided context or timestamped transcript evidence.
-
-### 6.1 Modality-Specific Two-Level Audit Coverage
-
-- **Vocabulary Quiz**:
-  - **Level 1**: Strict Single Blank Gate (`re.findall(r'_{2,}', stem) <= 1`), target word exact synchronization with `options[correct_answer_index]`, verbatim quotation integrity, single-word exclusivity.
-  - **Level 2**: Blind solver resolution, collocational precision, POS distractor trap legitimacy, elimination of valid alternative near-synonyms.
-- **Translation Quiz (Comparative Translation Appraisal)**:
-  - **Level 1**: Target sentence presence, target keyword synchronization inside idiomatic translation, dual distinct candidate versions (Idiomatic vs Flawed), flaw type labeling, and correct option index bounds.
-  - **Level 2**: Blind solver resolution, pragmatic and idiomatic academic naturalness, contrastive defect legitimacy (L1 Chinglish transfer, collocation/preposition clash, formula breakdown), and single defensible translation target.
-- **Reading Comprehension Quiz**:
-  - **Level 1**: Text snippet verbatim anchoring, option count invariants, complete explanation coverage across all 4 options.
-  - **Level 2**: Blind solver inference validation, strict rejection of scope shifts / extreme modifiers / false attribution distractors, proof that the declared key is uniquely and incontrovertibly supported by passage evidence.
-- **Video Comprehension Quiz**:
-  - **Level 1**: Option bounds (strictly 4 options, non-empty, unique), correct index check [0-3], timestamp format validation (`[MM:SS]` or `[HH:MM:SS]`), and transcript chronological anchor verification.
-  - **Level 2**: Blind solver validation with timestamped transcript, verification of genuine video evidence at target timestamp (rejection of timestamp hallucination and trivial number recall), single-fit proof, and video distractor trap analysis (cross-timestamp shift, rumor vs fact, over-generalization).
-- **Listening Comprehension Quiz**:
-  - **Level 1**: Dialogue script turn bounds (>= 4 speaker turns), option count invariants (strictly 4 options, non-empty, unique), correct index check [0-3], and category validation (`Detail`, `Main Idea`, `Inference`).
-  - **Level 2**: Blind solver validation against dialogue script, strict speaker attribution verification (rejection of speaker role swaps between Speaker 1 and Speaker 2), verbatim catch trap analysis, and single-fit proof without subjective conjecture.
-
-### 6.2 Universal Expert Audit Criteria & System Boundaries
-
-To eliminate cognitive divergence, early truncations, and contradictory judging across models, all Level 2 Expert Auditing modules (Vocabulary, Reading Comprehension, Translation, Video, Listening) strictly adhere to four universal system boundaries:
-
-1. **Exhaustive 100% Cardinality Mandate (`total_items` Closure)**:
-   - The judge model receives exactly $N$ items and MUST output an evaluation array of length exactly $N$ (`questions[0...N-1]`). Early truncation or skipping to `summary_verdict` is strictly prohibited.
-   - Deterministic Code Gate checks: `len(audit_questions) == len(questions)` and issues a warning if a cardinality deficit is detected.
-
-2. **Unified 3-Tier Score-Action Mapping**:
-   The judge must strictly align pedagogical scores with surgical triage actions:
-   - **Tier 3 (`PASS`, Score 80–100, `single_fit_valid: true`)**:
-     - Item is psychometrically robust with unambiguous evidence and authentic distractors.
-     - `cured_question` MUST be `null`.
-   - **Tier 2 (`REPAIR`, Score 60–79, `single_fit_valid: true`)**:
-     - Question stem context and target anchors are fundamentally sound, but localized distractor defects exist (e.g. distractor recycling, weak plausibility, minor typo, misaligned index).
-     - **Minimal Invasive Surgical Invariant**: The judge MUST keep the original stem, target keyword/anchor, and valid context completely intact. Only flawed distractors or surface options are refreshed in `cured_question`.
-   - **Tier 1 (`REWRITE`, Score 20–59, `single_fit_valid: false`)**:
-     - Fatal defect: unsolvable double-keys, ungrounded keys, grammatical breakdown, or core translation fidelity mismatch.
-     - Entire item is discarded and rewritten from the target curriculum pool in `cured_question`.
-
-3. **Budget & Parameter Safeguards**:
-   - High-token budget (`num_predict: 16384`) allocated for local and remote judge models to ensure complete multi-item cognitive distractor justifications without token exhaustion.
+### 4.2 Level 2: Expert Model Semantic Audit (LLM-as-a-Judge)
+- **Universal Constraints**:
+  - **Cardinality Closure**: Judge evaluates all $N$ items without early truncation.
+  - **3-Tier Triage Mapping**:
+    - **Tier 3 (`PASS`, 80–100, `single_fit_valid: true`)**: `cured_question` is null.
+    - **Tier 2 (`REPAIR`, 60–79, `single_fit_valid: true`)**: Minimal-invasive surgical repair preserving original stem and context while replacing flawed distractors.
+    - **Tier 1 (`REWRITE`, 20–59, `single_fit_valid: false`)**: Unsolvable defect; item discarded and regenerated.
+  - **High Token Budget**: `num_predict: 16384` allocated to prevent incomplete distractor evaluations.
 
 ---
 
-## 7. Automatic Interlinking (Wikilinks)
+## 5. Naming & Formatting Conventions
 
-The system generates an Obsidian-style wiki. The following interlinking rules apply:
-
-- `librarian/processor.py` automatically wraps extracted vocabulary `word` and grammar `name` in double brackets `[[ ]]` during Markdown formatting.
-- Concept `connections` are formatted as `[[Linked Concept]]`.
-
----
-
-## 8. Frontmatter Traceability
-
-All generated Markdown files must include properly structured YAML frontmatter:
-
-- **Source tracking**: `source: "[[filename.md]]"` to trace back to the original material.
-- **Semantic categorization**: Use meaningful categories (e.g., `category: ["vocabulary", "extraction"]`).
-- **Consistent titling**: Vocabulary and grammar titles follow a uniform format (e.g, "Book 3 Unit 4").
+- **JSON Keys & Schema Fields**: Use `snake_case` strictly across all payloads (`schemas.py`).
+  - Mandatory keys: `concepts` (not `items`), `part_of_speech` (not `pos`), `explanation`, `target_language`.
+- **Markdown & Frontmatter**:
+  - Extracted vocabulary `word` and grammar `name` wrapped in double brackets `[[ ]]`.
+  - Concept connections formatted as `[[Linked Concept]]`.
+  - YAML frontmatter must include `source: "[[filename.md]]"`, `category`, and title.
 
 ---
 
-## 9. Validation Over Cleaning
+## 6. To-Do List
 
-Enforce structure through the schema API rather than post-processing. If the returned JSON is malformed, investigate the schema or prompt alignment before adding cleanup logic.
+> ✅ Complete | 🔄 In Progress | ⬜ Pending
 
----
+### Completed
+- [x] Embed raw audio data (Base64) into HTML handouts
+- [x] Unit Dependency Graph visualization
+- [x] Video Quiz Extension (Bilibili/MP4 via Whisper)
+- [x] pyproject.toml dependency management
+- [x] Two-turn decoupled Prose-to-JSON quiz generation pipeline
+- [x] Level 1 Deterministic Code Gate and Level 2 Expert Model Semantic Audit across all quiz modalities
+- [x] Psychometric targeted healing (selective item regeneration and surgical splicing)
+- [x] Display layer decoupling (display titles decoupled from physical slugs)
+- [x] Live configuration hot-reloading via filesystem mtime tracking
+- [x] Clean prompt & schema separation (removal of code variables and formatting from prompts)
+- [x] Elimination of example contamination (pure syntactic definitions replacing concrete prompt examples)
+- [x] Four Macro Functional Domains & Triad Quality Architecture for grammar extraction
+- [x] Deterministic grammar category auto-remap with soft penalty scoring
+- [x] Expanded tense and inflection support for interpretive verbs (`meant`, `suggested`, `indicated`, `showed`)
 
-## 10. MCP Tool Integration and Design Guidelines
-
-To maintain visual excellence, security, and accuracy:
-- **Bootstrap Reference**: Always use the `context7` MCP server to query and fetch the latest official specifications and best practices for Bootstrap 5 elements (e.g., spinners, classes, grid layout).
-- **Web Verification**: Use the `playwright` MCP server to load, interact with, and view generated web pages or local HTML dashboards to verify that interfaces display correctly.
-- **Web Design with Stitch**: Utilize the `stitch` MCP server for prototyping and executing advanced design systems and mockups to ensure a premium, modern, and highly polished visual aesthetic.
+### Pending
+- **Primary Focus: Source-to-Wiki Extraction Quality**:
+  - Maximize precision and pedagogical rigor across vocabulary, expressions, and grammar extractions prior to quiz generation updates.
+  - Enforce single-word contextual discipline and authentic syntactic slot binding.
+- **Linguistic Engine Integration (spaCy Computational Linguistics Pipeline)**:
+  - *Context*: Regex-based pattern matching lacks structural syntax awareness, causing boundary conflicts with nested clauses, long-distance modifiers, and lexical list maintenance. Introducing spaCy (`en_core_web_sm`, ~12MB) provides deterministic dependency parsing, accurate part-of-speech tagging, and phrase extraction.
+  - *Core Capabilities*:
+    1. **Sentence Boundary Tokenization & Indexing (`[S-1]`, `[S-2]`)**: Pre-tokenize source text into an indexed, punctuation-complete sentence pool. Prompts present numbered sentences so LLMs select sentence IDs rather than transcribing full text, eliminating copy-paste hallucinations, trailing ellipses (`...`), and verbatim mismatches.
+    2. **Multi-Word Expression & Phrase Boundary Extraction**: Extract noun chunks (`noun_chunks`), phrasal verbs (`prep`/`prt` particle dependencies), and idiomatic verbal collocations directly from the dependency tree, ensuring multi-word expressions have verified grammatical boundaries.
+    3. **Dependency-Based Macro Domain Classification Gate**:
+       - Distinguish cleft focus from evaluative dummy-it extraposition via expletive (`expl`) vs subject complement (`csubj`/`ccomp`) tags without brittle adjective whitelists.
+       - Accurately identify non-finite participial adjuncts (`advcl` with `VerbForm=Part`) without false positives on nominal `-ing` words.
+       - Deterministically detect fronted inversion via inverted subject-auxiliary linear order (`aux`/`ROOT` preceding `nsubj`).
+    4. **Context-Aware Lemmatization**: Programmatically derive canonical base dictionary headwords from sentence context, eliminating inflected headwords (`-ed`, `-ing`).
+    5. **Automated COBUILD Slot Formula Abstraction**: Traverse dependency subtrees to mechanically abstract concrete surface constituents into algebraic slot placeholders (e.g. mapping subject subtrees to `[Subject]`, object noun chunks to `[NP]`, and finite complement clauses to `[that-clause]`), while preserving invariant syntactic anchors (`depends, not on... but on...`). Guarantees 100% canonical, dictionary-grade COBUILD formulas without relying on prone-to-hallucination LLM transcription.
+- **Deterministic Code Substitution Roadmap**:
+  - Prioritize code-based deterministic enforcement over LLM prompting for repetitive, rule-bound tasks:
+    1. **COBUILD Slot Formula Normalization**: Enforce closed symbol mappings (e.g., normalize `[sb]` / `[someone]` to standard slot representations and auto-close brackets).
+    2. **CEFR / Frequency Objective Lookup**: Integrate lightweight offline reference lexicons (CEFR-J, Oxford 3000/5000, AWL) for sub-millisecond, objective proficiency categorization.
+    3. **Distractor Sanitization & Position Shuffling**: Automated option collision prevention, prefix stripping, and Fisher-Yates position randomization with atomic key synchronization.
+    4. **Common Mistakes Template Injection**: Maintain curated pedagogical defect templates for core grammatical structures, enriching generic or repetitive model explanations.
+    5. **Quote Boundary Magnetic Snapping**: Leverage the indexed sentence pool to auto-snap partial quotes to pristine, authentic source sentences.
+- **Code-Driven Lexical Pipeline & Zero-Double-Key Distractor Assembly (WordNet & Collocation Base)**:
+  - *Context*: Rather than burdening the LLM with complex prompt instructions to engineer distractors, prevent synonym collisions, and balance prepositions, the code directly pre-computes valid, mutually exclusive options using lexical databases (WordNet / Academic Collocation List).
+  - *Core Capabilities*:
+    1. **Pre-Computed Distractor Synthesis**: Code queries WordNet for strict antonyms, taxonomy siblings, and distinct semantic categories.
+    2. **Dependent Preposition Collocational Clashing**: Code selects distractors that are grammatically incompatible with the target sentence's post-blank preposition (e.g., target `rely (+ on)` vs distractors `trust` (transitive), `believe (+ in)`), physically guaranteeing a zero double-key environment at zero token cost.
+    3. **LLM Task Simplification (Context Generation Only)**: The LLM's role is stripped of distractor generation and reduced purely to its greatest strength: generating authentic academic context stems containing `____ [anchor prep]`.
+- **Level 1 In-Place Self-Healing & Phase-Out of LLM Retry Loops**:
+  - *Context*: Small models (8B–12B) exhibit confirmation bias and lack deep functional grammar reasoning in multi-turn dialogues (agreeing with whatever category is suggested in conversational turns). LLM retry loops are therefore eliminated.
+  - *Design*: Level 1 is transformed into a deterministic self-healing gate:
+    1. **Deterministic Category Auto-Remap**: Incontrovertible structural markers (inverted subject-aux, expletives, antithesis `not... but...`, shell nouns) trigger direct programmatic reassignment of `category` in memory (<0.01ms).
+    2. **Canonical Lemmatization & Boundary Snapping**: In-place replacement of inflected words and partial quotes via spaCy dependency trees and indexed sentence pools.
+    3. **Elimination of Multi-Turn Retries**: Generates content strictly in a single pass (One-Shot for extraction, single-pass generation for quiz stems).
+- **Dual-Track Assessment Architecture (Achievement vs. Proficiency Difficulty Control)**:
+  - *Context*: LLMs lack token-counting awareness, rendering naive length prompts (`limit to 20 words`) completely dysfunctional. Simultaneously, educational assessment demands two distinct pedagogical modalities: **Achievement Testing (学业测试 / Curriculum Mastery)** and **Proficiency Testing (能力测试 / Generalized Application)**.
+  - *Dual-Track Design*:
+    1. **Track 1: Authentic Passage Cloze (Achievement Testing / 学业水平测试)**:
+       - Rather than asking the LLM to hallucinate synthetic stems, code directly selects authentic source sentences from the indexed sentence pool (`[S-id]`) containing the target vocabulary or phrase, masking the headword (`____`).
+       - *Pedagogical Value*: 100% textbook-aligned, authentic lexical register, perfect curriculum difficulty grounding, zero token cost for stem authoring.
+    2. **Track 2: Clause-Slot Bounded Generation (Proficiency Testing / 综合语言能力测试)**:
+       - To test generalized transfer without length runaway, enforce strict **Clause-Count Syntactic Slot Skeletons** in the prompt (e.g., `[Main Clause with target word] + [single subordinating conjunction: because/although/while] + [Simple Clause]`, strictly forbidding nested `which/that` or participial appendages).
+       - *Pedagogical Value*: Structurally anchors sentence length to a natural 15–22 word span, preventing monologue bloat or GRE-level run-on sentences.
+    3. **Deterministic Readability & Length Gate (Level 1 Post-Audit)**:
+       - Instantaneous code-level validation using word count (`14 <= len(stem.split()) <= 28`), Flesch-Kincaid grade level, and Oxford/CEFR lexical density ceilings to catch and prune outlier items.
+- **Phase-Out and Deprecation of Level 2 Judge Model**:
+  - *Context*: When distractors, single-fit validity, verbatim grounding, and category assignments are mathematically guaranteed by WordNet, spaCy, and Level 1 Code Gates, Level 2 LLM-as-a-Judge semantic audits become redundant.
+  - *Roadmap*: Transition system to a pure, ultra-fast **Single-Tier Architecture (LLM Creative Generation + Deterministic Level 1 Self-Healing Gate)**, cutting generation time and VRAM usage by over 70%.
+- **Quality Tier Routing & Human Review UI**:
+  - 90–100: Automatic delivery (Passed - High Quality).
+  - 75–89: Automatic delivery flagged as Review Candidate.
+  - 60–74: Routed to Human Review Queue.
+  - < 60: Precision retry loop; permanent unresolve flag if retry limit exceeded.
+- **Multilingual User Interface (i18n)**:
+  - Implement lightweight client-side i18n dictionary decoupling UI strings.
+  - Default to concise, professional academic English, with seamless one-click switching to Simplified Chinese and other languages.
+- **UI/UX & Visualization**:
+  - Knowledge graph enhancements: legend, zoom, filter, export, and clickable side-preview nodes.
+  - Dashboard hub with category grouping and breadcrumb navigation (Bootstrap 5 CDN).

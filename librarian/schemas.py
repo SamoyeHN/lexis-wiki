@@ -223,6 +223,11 @@ def _normalize_enum(val: Any, allowed_args: tuple) -> Any:
     # 7. Safe fallback to default canonical enum
     return allowed_args[0]
 
+def normalize_enum_value(enum_type: Any, val: Any) -> Any:
+    """Public helper to normalize an enum/Literal value against its allowed arguments."""
+    allowed = get_args(enum_type) if get_args(enum_type) else ()
+    return _normalize_enum(val, allowed)
+
 def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
     """
     Instantiates a dataclass from a dictionary, with recursive type mapping,
@@ -364,13 +369,13 @@ EXPRESSION_TYPES = Literal["phrasal verb", "idiom", "collocation", "set phrase"]
 
 @dataclasses.dataclass
 class VocabularyItem:
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     word_cefr_level: VOCAB_CEFR_LEVELS = dataclasses.field(default="B2")
-    quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class VocabularyExtraction:
@@ -380,13 +385,13 @@ class VocabularyExtraction:
 
 @dataclasses.dataclass
 class ExpressionItem:
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: EXPRESSION_TYPES = dataclasses.field(default="phrasal verb")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
-    quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class ExpressionsExtraction:
@@ -395,30 +400,22 @@ class ExpressionsExtraction:
     expressions: List[ExpressionItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 GRAMMAR_CATEGORIES = Literal[
-    "Concessive clauses",
-    "Conditional clauses",
-    "Participial clauses",
-    "Inversion",
-    "Cleft sentences",
-    "Nominalization",
-    "Abstract frames",
-    "Rhetorical parallelism",
-    "Non-finite structures",
-    "Hedging devices",
-    "Anaphoric and cataphoric nouns",
-    "Evaluative It-frameworks",
+    "Rhetoric & Emphasis",
+    "Cohesion & Framing",
+    "Information Packaging",
+    "Logic & Stance",
 ]
 
 @dataclasses.dataclass
 class GrammarItem:
-    category: GRAMMAR_CATEGORIES = "Concessive clauses"
-    pattern_formula: str = dataclasses.field(default="", metadata={"minLength": 1})
     quote: str = dataclasses.field(default="", metadata={"minLength": 1})
+    pattern_formula: str = dataclasses.field(default="", metadata={"minLength": 1})
     pedagogical_function: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    category: GRAMMAR_CATEGORIES = "Information Packaging"
     imitation_example: str = dataclasses.field(default="", metadata={"minLength": 1})
     common_mistakes: str = dataclasses.field(default="", metadata={"minLength": 1})
     cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class GrammarExtraction:

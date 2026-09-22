@@ -112,6 +112,40 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         self.assertEqual(score, 25.0)
         self.assertEqual(flags, [])
 
+    def test_pedagogy_any_macro_domain_tolerance(self):
+        """Boundary patterns (chosen category fails the strict check but the quote fits
+        ANOTHER macro functional domain) must be tolerated; only quotes matching NO domain
+        are rejected (keeping the original fatal reason)."""
+        # Boundary: labelled Information Packaging but structurally Rhetoric (not only ... but).
+        # The strict IP check fails, but the any-macro-domain rule tolerates it -> PASS.
+        boundary_item = {
+            "category": "Information Packaging",
+            "pattern_formula": "[S] + [VP] + [NP]",
+            "quote": "You will not only work hard in class, but also keep a balanced life outside it.",
+            "design_audit": "AUDIT: boundary pattern",
+            "imitation_example": "Students not only memorize, but also apply.",
+            "common_mistakes": "n/a",
+        }
+        score_b, flags_b = _score_pedagogy([boundary_item], "grammar", SAMPLE_SOURCE)
+        # Auto-remaps to Rhetoric & Emphasis and receives soft penalty deduction of 2.0 (23.0 / 25.0)
+        self.assertEqual(score_b, 23.0)
+        self.assertEqual(boundary_item["category"], "Rhetoric & Emphasis")
+        self.assertFalse(any("failed pedagogy check" in f for f in flags_b))
+        self.assertTrue(any("Deterministic Auto-Remap" in f for f in flags_b))
+
+        # Marker-less: matches NO macro domain -> must still be rejected (fatal reason kept).
+        weak_item = {
+            "category": "Information Packaging",
+            "pattern_formula": "[S] + [VP] + [NP]",
+            "quote": "The clock woke me up every morning in college.",
+            "design_audit": "AUDIT: simple sentence",
+            "imitation_example": "It rang early.",
+            "common_mistakes": "n/a",
+        }
+        score_w, flags_w = _score_pedagogy([weak_item], "grammar", SAMPLE_SOURCE)
+        self.assertEqual(score_w, 0.0)
+        self.assertTrue(any("failed pedagogy check" in f and "lacking" in f for f in flags_w))
+
     def test_pedagogy_anti_triviality_and_clean_formulas(self):
         """Conversational fillers (e.g. But [S]) must be flagged; flexible syntactic formulas pass."""
         # 1. Flexible natural formula passes without artificial slot rejections
@@ -359,23 +393,60 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         self.assertTrue(any("trivial formula" in f for f in flags))
 
 
-    def test_evaluative_it_missing_it_fails_pedagogy_check(self):
-        """Verify that assigning Evaluative It-frameworks to a quote lacking 'it' fails pedagogy check."""
-        source = "CONTENT:\nThe larger lesson, though, is that our thoughts are saturated with the familiar."
+    def test_information_packaging_lacking_markers_fails_pedagogy_check(self):
+        """Verify that assigning Information Packaging to a quote lacking non-finite, dummy-it, or nominalization fails check."""
+        source = "CONTENT:\nHe walks to school every day."
         item = {
-            "category": "Evaluative It-frameworks",
-            "pattern_formula": "[Abstract Noun Subject], [be] that [S]",
-            "quote": "The larger lesson, though, is that our thoughts are saturated with the familiar.",
-            "design_audit": "AUDIT: The larger lesson...",
-            "imitation_example": "The key insight is that education shapes perspective.",
-            "common_mistakes": "Confusing evaluative it with nominalization.",
+            "category": "Information Packaging",
+            "pattern_formula": "[Subject] + walks + to + [NP]",
+            "quote": "He walks to school every day.",
+            "design_audit": "AUDIT: He walks to school...",
+            "imitation_example": "She drives to work every morning.",
+            "common_mistakes": "Simple present tense errors.",
         }
         score, flags = _score_pedagogy([item], "grammar", source)
         self.assertEqual(score, 0.0)
-        self.assertTrue(any("assigned to quote without dummy pronoun 'it'" in f for f in flags))
+        self.assertTrue(any("assigned to quote lacking non-finite clauses" in f for f in flags))
+
+
+    def test_auto_remap_antithesis_and_past_tense_interpretive_verbs(self):
+        """Verify that explicit physical mismatches are auto-remapped with past tense verbs and soft deduction."""
+        source = (
+            "CONTENT:\n"
+            "Whether a job is to be designated as labor or work depends, not on the job itself, but on the tastes of the individual who undertakes it. "
+            "He reported the anomaly immediately, which suggested that the system was compromised."
+        )
+        items = [
+            # 1. Antithesis mislabeled as Logic & Stance -> auto-remaps to Rhetoric & Emphasis
+            {
+                "category": "Logic & Stance",
+                "pattern_formula": "[Subject] + depends, not on + [NP], but on + [NP]",
+                "quote": "Whether a job is to be designated as labor or work depends, not on the job itself, but on the tastes of the individual who undertakes it.",
+                "design_audit": "AUDIT: Antithesis not... but...",
+                "imitation_example": "Success depends, not on luck, but on persistent effort.",
+                "common_mistakes": "Missing comma.",
+            },
+            # 2. Past tense interpretive verb (, which suggested that) mislabeled as Information Packaging -> auto-remaps to Cohesion & Framing
+            {
+                "category": "Information Packaging",
+                "pattern_formula": "[Clause], which + suggested + that + [Proposition]",
+                "quote": "He reported the anomaly immediately, which suggested that the system was compromised.",
+                "design_audit": "AUDIT: which suggested that...",
+                "imitation_example": "The meter spiked, which showed that pressure had escalated.",
+                "common_mistakes": "Incorrect relative pronoun.",
+            }
+        ]
+        score, flags = _score_pedagogy(items, "grammar", source)
+        # Both items remapped: 25.0 - (2 * 2.0) = 21.0
+        self.assertEqual(score, 21.0)
+        self.assertEqual(items[0]["category"], "Rhetoric & Emphasis")
+        self.assertEqual(items[1]["category"], "Cohesion & Framing")
+        self.assertTrue(any("Antithesis" in f or "not... but..." in f for f in flags))
+        self.assertTrue(any("which + [interpretive verb] + that" in f for f in flags))
 
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

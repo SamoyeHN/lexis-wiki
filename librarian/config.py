@@ -34,7 +34,8 @@ DEFAULT_CONFIG = {
     "judge_model": "",
     "min_passing_items": 3,
     "enable_prose_pipeline": True,
-    "enable_vocab_prose": False
+    "enable_vocab_prose": False,
+    "enable_grammar_prose": False
 }
 
 class Config:

@@ -180,7 +180,7 @@ For best results when running locally with **Ollama**:
 
 | Tier | Model | Recommended Use Case |
 |------|-------|----------------------|
-| 🥇 **Pedagogical Master** | `gemma4:12b` / `mistral-small3.2:24b` / `qwen3.5:9b` | Outstanding distractor traps, academic vocabulary, and Level 2 semantic audit |
+| 🥇 **Pedagogical Master** | `gemma4:12b` / `qwen3.5:9b` / `gpt-oss:20b` | Outstanding distractor traps, academic vocabulary, and Level 2 semantic audit |
 | ⚡ **Fast & Lightweight** | `gemma4:e4b` / `granite4.2:8b` | High-speed drafting and vocabulary extraction on low-VRAM laptops |
 | 🛡️ **Judge & Audit Specialist**| `gemma4:31b` / `qwen3.8:27b` | Blind-solving verification and surgical distractor repair |
 
