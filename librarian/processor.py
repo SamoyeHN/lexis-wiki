@@ -812,7 +812,8 @@ class WikiProcessor:
         quiz_obj: Any,
         banned_sentences: List[str] = None,
         unit_headwords: List[str] = None,
-        strict_distractor_recycling: bool = True
+        strict_distractor_recycling: bool = True,
+        allow_authentic_cloze: bool = False
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Stem Copying & In-List Distractor Recycling.
@@ -904,18 +905,28 @@ class WikiProcessor:
                             f"Item #{idx + 1} ('{target}'): Target word leaks verbatim into stem text outside blank."
                         )
 
-            # 1. Stem Copying Gate (Zero-Tolerance)
+            # 1. Stem Copying Gate (Zero-Tolerance for synthetic items, permitted for Track 1 Cloze when enabled)
             if stem and banned:
                 clean_stem = re.sub(r'_{2,}', ' ', stem)
                 for b_sent in banned:
                     overlap_len = cls._max_consecutive_word_overlap(clean_stem, b_sent)
                     if overlap_len >= 7:
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Item #{idx + 1} ('{target}'): Stem copies {overlap_len} consecutive words "
-                            f"from input example/source: \"{b_sent[:60]}...\""
-                        )
-                        break
+                        # If this stem is an exact cloze mask of an authentic passage sentence, check if Track 1 cloze mode is enabled
+                        is_authentic_cloze = False
+                        if allow_authentic_cloze and target:
+                            b_masked = re.sub(rf'\b{re.escape(target)}\b', '____', b_sent, flags=re.IGNORECASE)
+                            norm_stem = re.sub(r'[^\w\s]', '', stem).strip().lower()
+                            norm_b_masked = re.sub(r'[^\w\s]', '', b_masked).strip().lower()
+                            if norm_stem == norm_b_masked or overlap_len >= min(len(clean_stem.split()) - 2, 10):
+                                is_authentic_cloze = True
+
+                        if not is_authentic_cloze:
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Item #{idx + 1} ('{target}'): Stem copies {overlap_len} consecutive words "
+                                f"from input example/source: \"{b_sent[:60]}...\""
+                            )
+                            break
 
             # 2. In-List Distractor Recycling Gate
             if options and headword_set and strict_distractor_recycling:
@@ -1648,10 +1659,77 @@ class WikiProcessor:
         indexed_content, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(raw_source_text)
         self._last_sentence_pool = sentence_pool
 
+        # Deterministically mine genuine academic grammar skeletons from sentence pool via spaCy
+        grammar_skeletons = LinguisticEngine.mine_grammar_skeletons(sentence_pool, target_count=g_count, syllabus_grammar=syllabus_grammar)
+        g_skeletons_sec = ""
+        if grammar_skeletons:
+            logger.info(f"🏛️ Mined {len(grammar_skeletons)} deterministic academic grammar skeletons from text.")
+            skeleton_bullets = []
+            for idx, s in enumerate(grammar_skeletons, 1):
+                skeleton_bullets.append(
+                    f"{idx}. [{s['sid']}] ({s['category']}) Formula: `{s['pattern_formula']}`"
+                )
+            g_skeletons_sec = (
+                f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
+                f"The following {len(grammar_skeletons)} academic structural patterns have been mathematically identified in the passage.\n"
+                f"For EACH pattern below, locate sentence [{s['sid']}] in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the high-intelligence pedagogical fields (pedagogical_function, imitation_example, common_mistakes, and cefr_level):\n\n"
+                + "\n".join(skeleton_bullets) + "\n\n"
+            )
+
+        # Deterministically mine genuine academic expressions and collocations (ACL + spaCy)
+        expression_skeletons = LinguisticEngine.mine_expression_skeletons(raw_source_text, target_count=e_count)
+        e_skeletons_sec = ""
+        if expression_skeletons:
+            logger.info(f"💬 Mined {len(expression_skeletons)} deterministic academic expression/collocation skeletons from text.")
+            expr_skel_bullets = []
+            for idx, s in enumerate(expression_skeletons, 1):
+                expr_skel_bullets.append(
+                    f"{idx}. [{s['sid']}] ({s['type']}) Formula: `{s['pattern_formula']}`"
+                )
+            e_skeletons_sec = (
+                f"\n### DETERMINISTIC TARGET EXPRESSIONS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & ACL) ###\n"
+                f"The following {len(expression_skeletons)} high-value academic expressions, collocations, and phrasal units have been mathematically verified in the passage.\n"
+                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt classification type and canonical slotted formula directly into 'word', and craft its definition and example_usage:\n\n"
+                + "\n".join(expr_skel_bullets) + "\n\n"
+            )
+
+        # Deterministically mine genuine academic vocabulary targets (AWL + Lemmatization)
+        # If no syllabus_vocab is provided in markdown, automatically extract top AWL/academic words from text
+        v_skeletons_sec = ""
+        vocab_skeletons = []
+        if not syllabus_vocab:
+            vocab_skeletons = LinguisticEngine.mine_vocabulary_skeletons(raw_source_text, target_count=v_count)
+            if vocab_skeletons:
+                logger.info(f"📚 Mined {len(vocab_skeletons)} deterministic academic vocabulary skeletons (AWL) from text.")
+                v_skel_bullets = []
+                for idx, s in enumerate(vocab_skeletons, 1):
+                    awl_tag = " [AWL]" if s.get("is_awl") else ""
+                    v_skel_bullets.append(
+                        f"{idx}. [{s['sid']}] **{s['word']}** ({s['part_of_speech']}){awl_tag}"
+                    )
+                v_skeletons_sec = (
+                    f"\n### DETERMINISTIC TARGET VOCABULARY (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & AWL) ###\n"
+                    f"The following {len(vocab_skeletons)} high-value academic headwords have been mathematically extracted and lemmatized from the passage.\n"
+                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt exact canonical base headword in 'word' and part_of_speech, and craft its pedagogical definition, CEFR level, and example_usage:\n\n"
+                    + "\n".join(v_skel_bullets) + "\n\n"
+                )
+
         # Prepare kwargs with indexed content for extractions (with pristine fallback)
-        v_kwargs = {"content": indexed_content or raw_source_text, "count": v_count, "syllabus_section": v_syllabus_sec}
-        e_kwargs = {"content": indexed_content or raw_source_text, "count": e_count, "syllabus_section": e_syllabus_sec}
-        g_kwargs = {"content": indexed_content or raw_source_text, "count": g_count, "syllabus_section": g_syllabus_sec}
+        v_kwargs = {
+            "content": indexed_content or raw_source_text,
+            "count": len(vocab_skeletons) if vocab_skeletons else v_count,
+            "syllabus_section": v_syllabus_sec or v_skeletons_sec
+        }
+        e_kwargs = {
+            "content": indexed_content or raw_source_text,
+            "count": len(expression_skeletons) if expression_skeletons else e_count,
+            "syllabus_section": e_skeletons_sec or e_syllabus_sec
+        }
+        g_kwargs = {
+            "content": indexed_content or raw_source_text,
+            "count": len(grammar_skeletons) if grammar_skeletons else g_count,
+            "syllabus_section": g_skeletons_sec or g_syllabus_sec
+        }
         s_kwargs = {"content": raw_source_text, "count": c_count}
         m_kwargs = {"content": raw_source_text}
 
@@ -1857,6 +1935,34 @@ class WikiProcessor:
 
             # Save other results (grammar, summary)
             for category, data in other_results:
+                if category == "grammar" and grammar_skeletons:
+                    from .schemas import GrammarExtraction, GrammarItem
+                    patterns = getattr(data, "grammar_patterns", []) if dataclasses.is_dataclass(data) else data.get("grammar_patterns", [])
+                    # Match existing patterns to skeletons
+                    returned_quotes = [getattr(p, "quote", "") if dataclasses.is_dataclass(p) else p.get("quote", "") for p in patterns]
+                    clean_ret = [re.sub(r'[^a-zA-Z0-9]', '', q).lower() for q in returned_quotes]
+                    
+                    # If model truncated and missed skeletons, auto-complete the missing skeletons
+                    for skel in grammar_skeletons:
+                        skel_clean = re.sub(r'[^a-zA-Z0-9]', '', skel["quote"]).lower()
+                        is_present = any(skel_clean in cr or cr in skel_clean for cr in clean_ret if len(cr) > 10)
+                        if not is_present:
+                            logger.info(f"🩹 Auto-completing omitted grammar skeleton [{skel['sid']}] ({skel['category']}): {skel['pattern_formula']}")
+                            completed_item = GrammarItem(
+                                quote=skel["quote"],
+                                pattern_formula=skel["pattern_formula"],
+                                pedagogical_function=f"Constructs advanced academic discourse via {skel['category'].lower()} syntax.",
+                                design_audit=f"AUDIT: [{skel['sid']}] -> {skel['category']} -> {skel['pattern_formula']}",
+                                category=skel["category"],
+                                imitation_example=f"The study demonstrates that {skel['pattern_formula']}, establishing empirical validity.",
+                                common_mistakes="ESL learners frequently misapply slot boundary constraints or omit required subordinators.",
+                                cefr_level="B2"
+                            )
+                            if dataclasses.is_dataclass(data):
+                                data.grammar_patterns.append(completed_item)
+                            elif isinstance(data, dict):
+                                data.setdefault("grammar_patterns", []).append(dataclasses.asdict(completed_item))
+
                 all_saved.extend(self._save_extraction_results(data, source_path.name, category_override=category))
 
             if failed_tasks:
@@ -1912,8 +2018,36 @@ class WikiProcessor:
 
         if template_name == "vocabulary":
             raw_vocab = data.get("content", "")
+            # Achievement MCQ vs Proficiency MCQ Switch:
+            # - Mode 'cloze' or enable_authentic_cloze: True -> Achievement MCQ (学业测试 / 0-token 真实原句完形)
+            # - Mode 'generative' or enable_authentic_cloze: False -> Proficiency MCQ (能力测试 / LLM 语境迁移单选题)
+            vocab_mode = self.config.get_quiz_config("vocabulary", "mode", "cloze")
+            enable_cloze = (vocab_mode == "cloze") if isinstance(vocab_mode, str) else bool(vocab_mode)
+            cloze_section = ""
+            if enable_cloze:
+                cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
+                if cloze_items:
+                    logger.info(f"🎯 Built {len(cloze_items)} authentic passage cloze stems (Achievement MCQ Mode).")
+                    cloze_bullets = []
+                for idx, c in enumerate(cloze_items, 1):
+                    dist_hint = ", ".join(c.get("precomputed_distractors", []))
+                    cloze_bullets.append(
+                        f"Item {idx}:\n"
+                        f"- Target: {c['target_word']}\n"
+                        f"- Part of Speech: {c['part_of_speech']}\n"
+                        f"- Authentic Question Stem: {c['question']}\n"
+                        f"- Contextual Definition: {c['definition']}\n"
+                        f"- Suggested Collision-Free Distractors: [{dist_hint}]"
+                    )
+                cloze_section = (
+                    f"\n\n### PRE-FORMED AUTHENTIC PASSAGE CLOZE ITEMS (ACHIEVEMENT MCQ MODE) ###\n"
+                    f"The following {len(cloze_items)} assessment items have been deterministically constructed from the authentic passage text.\n"
+                    f"For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the precomputed candidates) and craft the pedagogical explanation and design audit:\n\n"
+                    + "\n\n".join(cloze_bullets) + "\n\n"
+                )
+
             sanitized_vocab, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_vocab)
-            kwargs["vocabulary_content"] = sanitized_vocab
+            kwargs["vocabulary_content"] = sanitized_vocab + cloze_section
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
             kwargs["passage_content"] = data["passage"]
@@ -2064,7 +2198,7 @@ class WikiProcessor:
                         "Write out the assessment items strictly using this clean, structured format (do NOT use markdown tables or repetitive outlines):\n\n"
                         "Item 1:\n"
                         "- Target: [exact word or phrase from the list, without part of speech in parentheses]\n"
-                        "- Question: [academic sentence with strictly four underscores '____' for the blank]\n"
+                        "- Question: [use the Authentic Question Stem provided above, or write an academic sentence with strictly four underscores '____' for the blank]\n"
                         "- Options:\n"
                         "  A. option text\n"
                         "  B. option text\n"
@@ -2269,10 +2403,12 @@ class WikiProcessor:
                             target_language=curr_tgt_lang
                         )
                     else:
+                        is_cloze_mode = (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
                         l1_defective, l1_defects = self.audit_quiz_integrity(
                             quiz_dict_eval,
                             banned_sentences=banned_quiz_sentences,
-                            unit_headwords=unit_headwords
+                            unit_headwords=unit_headwords,
+                            allow_authentic_cloze=is_cloze_mode
                         )
 
                     if l1_defects:
@@ -3129,6 +3265,12 @@ class WikiProcessor:
                     if fval:
                         if category == "grammar" and fname == "pattern_formula":
                             fval = self.normalize_grammar_formula(str(fval))
+                        elif fname.lower() in ("quote", "quoted_sentence"):
+                            fval_str = str(fval).strip()
+                            # Strip internal sentence pool tokens like [S-26] or S-26: from front of quote
+                            fval_str = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", fval_str, flags=re.IGNORECASE).strip()
+                            fval_str = fval_str.strip("\"'“”‘’").strip()
+                            fval = fval_str
                         lines.append(f"- **{label}**: {fval}")
                 lines.append("")
 

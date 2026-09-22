@@ -190,6 +190,11 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
     if category not in FOUR_DOMAINS:
         return item, None
 
+    INTERPRETIVE_VERBS_REGEX = (
+        r"(?:(?:would|could|might|may|can|will)\s+)?"
+        r"(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)"
+    )
+
     # Step 1: Query the spaCy Computational Dependency Classification
     dep_category = LinguisticEngine.classify_grammar_dependency(quote)
     if dep_category and dep_category != category:
@@ -205,11 +210,6 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
         return item, notice
 
     # Step 2: Fallback to fast-path regex checks for patterns spaCy tree might span across fragments
-    INTERPRETIVE_VERBS_REGEX = (
-        r"(?:(?:would|could|might|may|can|will)\s+)?"
-        r"(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)"
-    )
-
     # 1. Cohesion & Framing ironclad markers:
     has_which_propositional = bool(re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\s+that\b", quote, re.IGNORECASE))
     has_shell_noun_frame = bool(re.search(r"\bthe\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that\b", quote, re.IGNORECASE))
@@ -238,7 +238,8 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
 
     # 3. Information Packaging ironclad markers:
     has_evaluative_it = bool(re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been)\s+(?:[a-z]{4,}\s+)?(?:important|essential|necessary|likely|clear|obvious|vital|crucial|apparent|natural|possible|hard|easy|difficult|wise|useful)\s+(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE))
-    if has_evaluative_it and category == "Rhetoric & Emphasis":
+    has_dummy_it_obj = bool(re.search(r"\b(?:find|found|make|made|think|thought|consider|considered|deem|deemed)\s+it\s+(?:difficult|hard|easy|possible|impossible|necessary|vital|crucial|wise|useful)\s+to\b", quote, re.IGNORECASE))
+    if (has_evaluative_it or has_dummy_it_obj) and category in ("Rhetoric & Emphasis", "Cohesion & Framing"):
         orig_cat = category
         item["category"] = "Information Packaging"
         notice = f"ℹ️ Deterministic Auto-Remap: Corrected category from '{orig_cat}' to 'Information Packaging' (Marker: Evaluative Dummy-It extraposition)"
@@ -335,8 +336,8 @@ def _extract_source_content(user_prompt: str) -> str:
     """
     if not user_prompt:
         return ""
-    # 1. Primary: Standard ### SOURCE TEXT ### or CONTENT: marker
-    match = re.search(r"(?:###\s*SOURCE\s*TEXT\s*###|CONTENT:)\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
+    # 1. Primary: Standard ### PASSAGE..., ### SOURCE TEXT ### or CONTENT: marker
+    match = re.search(r"(?:###\s*(?:PASSAGE[^\n#]*|SOURCE\s*TEXT)\s*###|CONTENT:)\s*\n(.*)", user_prompt, re.DOTALL | re.IGNORECASE)
     content = ""
     if match:
         content = match.group(1).strip()
@@ -561,6 +562,8 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
     flags: List[str] = []
     source = _extract_source_content(user_prompt)
+    if not source and context_prompt:
+        source = _extract_source_content(context_prompt)
     core_src = _clean_core(source)
     checks = matches = 0
     
@@ -679,13 +682,29 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 flags.append(f"⚠️ Vocabulary item '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "expressions":
             word = _safe_str(item.get("word"))
+            definition = _safe_str(item.get("definition"))
+            example = _safe_str(item.get("example_usage"))
+            quote = _safe_str(item.get("quoted_sentence"))
             checks += 1
+
             is_multiword = bool(re.search(r"\[.+?\]|one's", word, re.IGNORECASE) or len(word.split()) > 1)
             is_trivial = word.lower() in ("talk", "listen", "turn", "watch", "sit down", "talk to", "listen to", "look at")
-            if is_multiword and not is_trivial:
+            has_example = bool(example)
+            is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
+
+            if is_multiword and not is_trivial and definition and is_distinct_example:
                 passes += 1
             else:
-                flags.append(f"⚠️ Expression lacks multi-word/slot form or is too basic: '{word}'")
+                reasons = []
+                if not is_multiword or is_trivial:
+                    reasons.append("lacks multi-word/slot form or is too basic")
+                if not definition:
+                    reasons.append("missing definition")
+                if not has_example:
+                    reasons.append("missing example_usage")
+                elif not is_distinct_example:
+                    reasons.append("example_usage is an unoriginal duplicate of quoted_sentence")
+                flags.append(f"⚠️ Expression '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "grammar":
             pattern = _safe_str(item.get("pattern_formula"))
             audit = _safe_str(item.get("design_audit"))
@@ -717,8 +736,12 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             TRIVIAL_PHRASES = frozenset({"but", "and", "so", "or", "of course", "here is", "heres"})
             clean_lits = [re.sub(r"[^\w\s]", "", l).lower().strip() for l in lits if re.sub(r"[^\w\s]", "", l).strip()]
             combined_lit_phrase = " ".join(clean_lits)
-            if slot_count <= 1 and ((combined_lit_phrase in TRIVIAL_PHRASES) or (clean_lits and all(l in TRIVIAL_ANCHOR_WORDS for l in clean_lits))):
-                reasons.append(f"trivial formula anchored only by conversational filler or conjunction: '{pattern}'")
+            # Reject un-abstracted trivial formulas anchored only by sentence-connectors (e.g. 'However, [S]', 'Therefore, [Clause]')
+            if slot_count <= 1:
+                if (combined_lit_phrase in TRIVIAL_PHRASES) or (clean_lits and all(l in TRIVIAL_ANCHOR_WORDS for l in clean_lits)):
+                    reasons.append(f"trivial formula anchored only by conversational filler or conjunction: '{pattern}'")
+                elif clean_lits and any(l in {"however", "therefore", "moreover", "furthermore", "meanwhile", "nevertheless", "in fact", "actually"} for l in clean_lits):
+                    reasons.append(f"un-abstracted superficial pattern anchored only on discourse adverbial connector: '{pattern}'")
 
             # Auto-Remap explicit category mismatches if not already healed
             _, remap_notice = auto_remap_grammar_category(item)
@@ -1024,7 +1047,7 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
     key_by_type = {
         "vocabulary": ("word",),
         "expressions": ("word",),
-        "grammar": ("pattern_formula", "quote"),
+        "grammar": ("quote", "pattern_formula"),
         "quiz": ("target_word", "question", "translated_sentence", "correct_english_answer"),
         "summary": ("concept_name",),
         "mindmap": ("branch_name",),
@@ -1033,6 +1056,15 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
     keys = key_by_type.get(task_type, ("word", "quote", "question"))
     headwords = []
     for item in items:
+        if task_type == "grammar":
+            # Composite identity for grammar: quote is primary, formula is secondary
+            q_val = str(item.get("quote") or "").strip().lower()
+            f_val = str(item.get("pattern_formula") or "").strip().lower()
+            if q_val:
+                headwords.append(q_val)
+            elif f_val:
+                headwords.append(f_val)
+            continue
         for key in keys:
             value = item.get(key)
             if value:
@@ -1085,11 +1117,12 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
     if not isinstance(parsed_data, dict):
         return parsed_data, []
     
-    if not task_type or task_type == "unknown":
-        task_type = _detect_task_type("", parsed_data)
-        
-    if task_type not in ("vocabulary", "expressions", "grammar"):
-        return parsed_data, []
+    if not task_type or task_type == "unknown" or task_type not in ("vocabulary", "expressions", "grammar"):
+        detected = _detect_task_type(task_type or "", parsed_data)
+        if detected in ("vocabulary", "expressions", "grammar"):
+            task_type = detected
+        else:
+            return parsed_data, []
 
     items = _extract_items(parsed_data, task_type)
     if not items:
@@ -1130,6 +1163,11 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             if snapped and snapped != raw_q:
                 item[quote_field] = snapped
                 pruned_flags.append(f"ℹ️ In-Place Self-Healing: Snapped quote '{raw_q[:30]}...' -> full authentic sentence")
+            else:
+                # Strip internal [S-id] prefix if quote was verbatim with S-id attached
+                cleaned_q = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", raw_q, flags=re.IGNORECASE).strip()
+                cleaned_q = cleaned_q.strip("\"'“”‘’").strip()
+                item[quote_field] = cleaned_q
 
         # Deterministic deduplication check
         if task_type == "grammar":
@@ -1203,21 +1241,28 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 continue
 
             # Anchor verification: literal functional anchors must exist in quote
-            if "[" in word:
-                raw_lits = re.sub(r"\[.*?\]|\(.*?\)|[+,/]", " ", word).split()
-            else:
-                raw_tokens = re.sub(r"[,+/]", " ", word).split()
-                raw_lits = [t for t in raw_tokens if t.lower() not in COBUILD_POS_TOKENS]
-            
+            raw_lits = re.findall(r"[a-zA-Z0-9_\'/]+", re.sub(r"\[.*?\]|\(.*?\)", " ", word))
             expanded_quote = _clean_core(_expand_contractions(quote))
             quote_tokens = set(core_quote.split()) | set(expanded_quote.split())
-            missing_anchors = [
-                lit for lit in raw_lits 
-                if len(_clean_core(lit)) >= 2 and _clean_core(lit) not in quote_tokens
-            ]
+            missing_anchors = []
+            for lit in raw_lits:
+                alts = [a.strip() for a in lit.split("/") if a.strip()]
+                valid_alts = [a for a in alts if len(_clean_core(a)) >= 2 and _clean_core(a) not in COBUILD_POS_TOKENS]
+                if not valid_alts:
+                    continue
+                if not any(_clean_core(a) in quote_tokens for a in valid_alts):
+                    missing_anchors.append(lit)
+            
             if missing_anchors:
-                pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
-                continue
+                # Level 1 In-Place Self-Healing: Attempt to synthesize canonical formula from quote
+                canonical_formula = LinguisticEngine.generate_cobuild_formula(quote, category=item.get("category"))
+                if canonical_formula and canonical_formula != word and canonical_formula != "[Subject] + [VP] + [Clause]":
+                    item["pattern_formula"] = canonical_formula
+                    pruned_flags.append(f"ℹ️ In-Place Self-Healing: Repaired mismatched formula '{word[:30]}' -> '{canonical_formula}' (anchors {missing_anchors} not in quote)")
+                    word = canonical_formula
+                else:
+                    pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
+                    continue
 
             # Level 1 Code Gate: Auto-remap explicit category mismatches
             item, remap_notice = auto_remap_grammar_category(item)

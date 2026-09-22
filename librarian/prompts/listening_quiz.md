@@ -28,8 +28,9 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
      * *Trap 3 (Overstated Generalization)*: Uses extreme absolutes (*completely impossible*, *abandon entirely*, *useless*) when the speaker only expressed cautious reservation or conditional qualification.
 
 4. **Design Audit & Explanation**:
-   - `design_audit`: Follow this rigorous 4-part structure:
-     `AUDIT: [Skill Category: Detail/Inference/Main Idea] -> [Dialogue Anchor: Speaker Name, Turn # (Verbatim Clue)] -> [Trap 1 (Speaker Swap): ...] [Trap 2 (Verbatim Catch): ...] [Trap 3 (Overstatement): ...] -> [Why Distractors Fail: Objective Dialogue Disqualifications]`
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [Speaker & Turn #] -> [Skill: Detail/Inference/Main Idea] -> [Key Traps: Speaker Swap/Verbatim Catch/Overstatement]`
+     (e.g. `AUDIT: [Speaker 1, Turn 3] -> Detail -> Speaker Swap`). DO NOT write paragraphs or quote dialogue here.
    - `explanation`: State the exact dialogue turn and speaker supporting the correct answer, and contrastively explain why each distractor trap is invalid. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
    - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `correct_answer_index`: MUST be an integer 0, 1, 2, or 3 matching the exact position of the true answer in 'options'. Do NOT use alternative key names.

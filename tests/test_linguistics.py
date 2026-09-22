@@ -257,4 +257,113 @@ class TestLinguisticEngine:
         assert item["pattern_formula"] == "Although + [Clause], [Subject] + [VP]"
         assert any("Standardized COBUILD formula" in n for n in notices)
 
+    def test_acl_and_awl_loading(self):
+        """LinguisticEngine must load ACL and AWL datasets without error."""
+        acl = LinguisticEngine.get_acl_collocations()
+        awl = LinguisticEngine.get_awl_words()
+        assert len(acl) > 2000
+        assert len(awl) > 500
+        assert "adverse effect" in acl
+        assert "analysis" in awl or "analyse" in awl
 
+    def test_mine_expression_skeletons(self):
+        """LinguisticEngine must extract ACL collocations and phrasal verbs with slotted formulas."""
+        text = (
+            "Researchers carried out a detailed study to explore whether work has an adverse effect on personal satisfaction. "
+            "When people slave away in repetitive tasks, they often struggle to cope with chronic stress. "
+            "The administration must take into account these findings before implementing policies."
+        )
+        mined = LinguisticEngine.mine_expression_skeletons(text, target_count=5)
+        assert len(mined) >= 3
+        phrases = [m["phrase"] for m in mined]
+        types = {m["type"] for m in mined}
+        assert any("adverse effect" in p or "detailed study" in p for p in phrases)
+        assert any("carry out" in p or "slave away" in p or "cope with" in p or "take into account" in p for p in phrases)
+        # Check slotted formulas
+        assert all("pattern_formula" in m and len(m["pattern_formula"]) > 0 for m in mined)
+
+    def test_mine_possessive_expressions(self):
+        """LinguisticEngine must extract authentic [one's] idiomatic phrases via spaCy poss dependency."""
+        text = (
+            "Students should attain their best in college and make up their mind early. "
+            "She lost her temper during the debate, but managed to keep her promise."
+        )
+        mined = LinguisticEngine.mine_expression_skeletons(text, target_count=5)
+        formulas = [m["pattern_formula"] for m in mined]
+        assert any("[one's]" in f for f in formulas)
+        assert any("attain [one's] best" in f or "make up [one's] mind" in f or "lose [one's] temper" in f for f in formulas)
+
+    def test_mine_vocabulary_skeletons(self):
+        """LinguisticEngine must extract AWL academic headwords with canonical lemmatization."""
+        text = (
+            "To laborers, on the other hand, leisure means autonomy from compulsion, so it is natural for them to imagine "
+            "that the fewer hours they have to spend laboring, and the more hours they have free for play, the better. "
+            "They will also work with more diligence and precision because they have fostered a sense of personal pride in their jobs. "
+            "On the other hand, laborers, whose sole incentive is earning their livelihood, feel that the time they spend on the daily grind "
+            "is wasted and doesn't contribute to their happiness."
+        )
+        mined = LinguisticEngine.mine_vocabulary_skeletons(text, target_count=5)
+        assert len(mined) >= 3
+        words = [m["word"] for m in mined]
+        assert any(m["is_awl"] for m in mined)
+        assert any(w in ("incentive", "contribute", "sole", "precision", "diligence", "autonomy") for w in words)
+        # Headwords must be lemmatized base forms
+        assert all(w.islower() and w.isalpha() for w in words)
+
+    def test_build_authentic_cloze_items(self):
+        """LinguisticEngine must build authentic cloze items with masked blanks and collision-free distractors."""
+        vocab_md = (
+            "## [[foundation]]\n"
+            "- **Part Of Speech**: noun\n"
+            "- **Definition**: The solid base on which something is established.\n"
+            "- **Quoted Sentence**: But know this: The future is built on the strong foundation of the past.\n\n"
+            "## [[available]]\n"
+            "- **Part Of Speech**: adjective\n"
+            "- **Definition**: Able to be used or obtained.\n"
+            "- **Quoted Sentence**: You may feel overwhelmed by the wealth of courses available to you.\n"
+        )
+        cloze_items = LinguisticEngine.build_authentic_cloze_items(vocab_md, target_count=2)
+        assert len(cloze_items) == 2
+        assert cloze_items[0]["target_word"] == "foundation"
+        assert "built on the strong ____ of the past" in cloze_items[0]["question"]
+        assert len(cloze_items[0]["precomputed_distractors"]) == 3
+        assert "foundation" not in cloze_items[0]["precomputed_distractors"]
+        assert "____" in cloze_items[1]["question"]
+
+    def test_sentence_pointer_hydration(self):
+        """LinguisticEngine and evaluator must deterministically hydrate [S-ID] (e.g. S-1, S-126) into authentic sentences."""
+        from librarian.evaluator import prune_hallucinated_items
+        source = (
+            "CONTENT:\n"
+            "Do you know the fairy tale of Goldilocks and the Three Bears? "
+            "Whether a job is designated as work depends, not on the job itself, but on the tastes. "
+            "Although he was exhausted, he finished the academic investigation."
+        )
+        _, pool = LinguisticEngine.tokenize_and_index_sentences(source)
+        assert "S-1" in pool
+        assert "S-2" in pool
+        assert "S-3" in pool
+
+        # Test snapping with various forms: [S-2], S-2, [s-2], and multi-digit
+        snapped = LinguisticEngine.snap_to_sentence_pool("[S-2]", pool)
+        assert "Whether a job is designated as work depends" in snapped
+
+        snapped_lower = LinguisticEngine.snap_to_sentence_pool("s-3", pool)
+        assert "finished the academic investigation" in snapped_lower
+
+        # Test end-to-end hydration in prune_hallucinated_items
+        vocab_data = {
+            "vocabulary": [
+                {
+                    "word": "fairy",
+                    "quoted_sentence": "[S-1]",
+                    "part_of_speech": "noun",
+                    "definition": "A mythical creature.",
+                    "example_usage": "She believed in fairies.",
+                    "word_cefr_level": "B1",
+                    "design_audit": "AUDIT: fairy -> fairy -> noun -> B1 -> VERBATIM_CONFIRMED"
+                }
+            ]
+        }
+        hydrated, _ = prune_hallucinated_items(vocab_data, source, task_type="vocabulary")
+        assert hydrated["vocabulary"][0]["quoted_sentence"] == "Do you know the fairy tale of Goldilocks and the Three Bears?"

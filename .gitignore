@@ -17,7 +17,7 @@ Thumbs.db
 
 # Scripts and test files
 scripts/
-tests/
+
 
 # Execution logs
 logs/

@@ -9,11 +9,22 @@ DEFAULT_CONFIG = {
     "model": "gemma4:e4b",
     "wiki_dir": "wiki",
     "quiz_defaults": {
-        "vocabulary": 10,
-        "reading": 5,
-        "translation": 5,
-        "listening": 5,
-        "video": 5
+        "vocabulary": {
+            "count": 10,
+            "mode": "cloze"
+        },
+        "reading": {
+            "count": 5
+        },
+        "translation": {
+            "count": 5
+        },
+        "listening": {
+            "count": 5
+        },
+        "video": {
+            "count": 5
+        }
     },
     "compile_defaults": {
         "vocabulary": 20,
@@ -35,7 +46,8 @@ DEFAULT_CONFIG = {
     "min_passing_items": 3,
     "enable_prose_pipeline": True,
     "enable_vocab_prose": False,
-    "enable_grammar_prose": False
+    "enable_grammar_prose": False,
+    "enable_authentic_cloze": True
 }
 
 class Config:
@@ -133,6 +145,42 @@ class Config:
     def get(self, key, default=None):
         self.load_config()
         return self.data.get(key, default)
+
+    def get_quiz_config(self, quiz_type: str, param: str, default=None):
+        """
+        Hierarchical getter for quiz configurations supporting both modern nested
+        and legacy flat settings:
+        1. Checks quiz_defaults[quiz_type][param] (e.g. quiz_defaults.vocabulary.mode)
+        2. Checks quiz_defaults[quiz_type] if param is 'count'
+        3. Falls back to top-level key (e.g. enable_authentic_cloze, count, etc.)
+        4. Returns default
+        """
+        self.load_config()
+        qd = self.data.get("quiz_defaults", {})
+        type_cfg = qd.get(quiz_type)
+
+        if isinstance(type_cfg, dict):
+            if param in type_cfg:
+                return type_cfg[param]
+        elif param == "count" and isinstance(type_cfg, (int, float)):
+            return int(type_cfg)
+
+        # Fallback to mapped top-level keys
+        top_level_fallbacks = {
+            "mode": "enable_authentic_cloze",
+            "enable_authentic_cloze": "enable_authentic_cloze",
+            "enable_prose": "enable_prose_pipeline",
+            "cefr_level": "cefr_level",
+            "target_language": "target_language"
+        }
+        fallback_key = top_level_fallbacks.get(param, param)
+        if fallback_key in self.data:
+            val = self.data[fallback_key]
+            if param == "mode" and isinstance(val, bool):
+                return "cloze" if val else "generative"
+            return val
+
+        return default
 
     @property   
     def wiki_path(self):

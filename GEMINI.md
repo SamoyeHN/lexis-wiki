@@ -161,6 +161,13 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Four Macro Functional Domains & Triad Quality Architecture for grammar extraction
 - [x] Deterministic grammar category auto-remap with soft penalty scoring
 - [x] Expanded tense and inflection support for interpretive verbs (`meant`, `suggested`, `indicated`, `showed`)
+- [x] Dual-Track Assessment Track 1: Authentic Passage Cloze (0-token authentic stem masking and precomputed zero-collision distractors)
+- [x] In-place deterministic slot standardization (`[sb]`, `[sth]`, `[one's]`) with spaCy `poss` dependency binding
+- [x] Streamed intra-paragraph sentence tokenization (`[S-ID]`) preserving authentic markdown paragraph boundaries
+- [x] Elimination of redundant candidate quotes in target skeletons; inverted cognitive flow (Passage first, Targets second)
+- [x] Restored authentic full sentence requirement for `quoted_sentence` and `quote`, restricting `[S-ID]` exclusively to `design_audit` tag chains
+- [x] Level 1 deterministic self-healing for unoriginal/copied `example_usage` and empty extraction fallback from sentence pool
+- [x] Quiz prompt lean refactor: tag-chain `design_audit` across all 5 quiz modalities (reading, listening, vocab, translation, video)
 
 ### Pending
 - **Primary Focus: Source-to-Wiki Extraction Quality**:
@@ -199,17 +206,17 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - **Dual-Track Assessment Architecture (Achievement vs. Proficiency Difficulty Control)**:
   - *Context*: LLMs lack token-counting awareness, rendering naive length prompts (`limit to 20 words`) completely dysfunctional. Simultaneously, educational assessment demands two distinct pedagogical modalities: **Achievement Testing (学业测试 / Curriculum Mastery)** and **Proficiency Testing (能力测试 / Generalized Application)**.
   - *Dual-Track Design*:
-    1. **Track 1: Authentic Passage Cloze (Achievement Testing / 学业水平测试)**:
+    1. **Track 1: Achievement MCQ (学业水平测试 / Passage Cloze)**:
        - Rather than asking the LLM to hallucinate synthetic stems, code directly selects authentic source sentences from the indexed sentence pool (`[S-id]`) containing the target vocabulary or phrase, masking the headword (`____`).
        - *Pedagogical Value*: 100% textbook-aligned, authentic lexical register, perfect curriculum difficulty grounding, zero token cost for stem authoring.
-    2. **Track 2: Clause-Slot Bounded Generation (Proficiency Testing / 综合语言能力测试)**:
+    2. **Track 2: Proficiency MCQ (综合语言能力测试 / Clause-Slot Bounded Generation)**:
        - To test generalized transfer without length runaway, enforce strict **Clause-Count Syntactic Slot Skeletons** in the prompt (e.g., `[Main Clause with target word] + [single subordinating conjunction: because/although/while] + [Simple Clause]`, strictly forbidding nested `which/that` or participial appendages).
        - *Pedagogical Value*: Structurally anchors sentence length to a natural 15–22 word span, preventing monologue bloat or GRE-level run-on sentences.
     3. **Deterministic Readability & Length Gate (Level 1 Post-Audit)**:
        - Instantaneous code-level validation using word count (`14 <= len(stem.split()) <= 28`), Flesch-Kincaid grade level, and Oxford/CEFR lexical density ceilings to catch and prune outlier items.
-- **Phase-Out and Deprecation of Level 2 Judge Model**:
+- **Adjust functions of Level 2 Judge Model**:
   - *Context*: When distractors, single-fit validity, verbatim grounding, and category assignments are mathematically guaranteed by WordNet, spaCy, and Level 1 Code Gates, Level 2 LLM-as-a-Judge semantic audits become redundant.
-  - *Roadmap*: Transition system to a pure, ultra-fast **Single-Tier Architecture (LLM Creative Generation + Deterministic Level 1 Self-Healing Gate)**, cutting generation time and VRAM usage by over 70%.
+
 - **Quality Tier Routing & Human Review UI**:
   - 90–100: Automatic delivery (Passed - High Quality).
   - 75–89: Automatic delivery flagged as Review Candidate.

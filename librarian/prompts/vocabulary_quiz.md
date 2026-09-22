@@ -11,9 +11,8 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
    - ⚠️ **ACTIVE TARGET USAGE MANDATE**: `target_word` MUST match `options[correct_answer_index]` character-for-character. The word placed into the blank `____` must perfectly agree with the declared target's part of speech and required inflectional form.
 
 2. **Question (Contextual & Structural Anchoring)**:
-   - Write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (e.g., concession, condition, cause, or contrast).
+   - When **PRE-FORMED AUTHENTIC PASSAGE CLOZE ITEMS** are provided below, adopt their verbatim question stems directly (Achievement MCQ Mode). Otherwise, write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (Proficiency MCQ Mode).
    - 🔒 **STRICT SINGLE BLANK MANDATE**: Each question stem MUST contain EXACTLY ONE single continuous blank `____` (strictly four underscores, no quotation marks around question). ❌ MULTIPLE BLANKS ARE ABSOLUTELY PROHIBITED: NEVER include two or more blanks in a single sentence (e.g., no '____ ... ____').
-   - 🚫 **NO COPYING INPUT EXAMPLES**: NEVER copy, adapt, or fill-in-the-blank mask any sentence from the input (neither 'Quoted Sentence' nor 'Example Usage'). Copying examples from the list is strictly prohibited!
    - 🎯 **Strict Part-of-Speech Slot Matching**: The blank (____) MUST grammatically require the exact part of speech and syntactic role of the target word. If the target is a noun, the blank must strictly require a noun (e.g., 'The ____ of the...'). Do NOT place a noun into a verb or adjective slot.
    - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its morphological derivatives must NEVER appear anywhere in the stem outside the blank `____`.
    - ⚓ **MANDATORY CONTEXTUAL & COLLOCATIONAL ANCHORS**:
@@ -34,8 +33,9 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied vo
      3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.
 
 4. **Design Audit & Explanation**:
-   - `design_audit`: Follow this rigorous 4-part structure:
-     `AUDIT: [Target Word + Part of Speech + Required Form] -> [Sentence Clues & Syntactic Slot Anchor] -> [Trap 1 (Antonym/Polarity): ...] [Trap 2 (Collocation/Syntax Clash): ...] [Trap 3 (Domain Mismatch): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [Target Word] -> [Syntactic Slot Anchor / Clue] -> [Traps: Antonym / Collocation Clash / Domain Mismatch]`
+     (e.g. `AUDIT: [comply] -> with [NP] -> Collocation Clash (to/for)`). DO NOT write paragraphs or quote full sentences here.
    - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
    - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `definition`: Concise dictionary meaning of the target in this context.

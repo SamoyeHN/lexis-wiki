@@ -30,7 +30,9 @@ Create an advanced {target_language}-to-English **Comparative Translation Apprai
      * *Trap 3 (Morpho-syntactic & Formula Breakdown)*: Distorts the target formula or non-finite verb morphology (e.g., failed subject-auxiliary inversion, bare infinitive after preposition, or dangling participle).
 
 4. **Design Audit**:
-   - `AUDIT: [{target_language} Anchor -> Target Keyword: [word] + Grammar Formula] -> [Idiomatic Core: ...] -> [Flaw Type: ...] -> [Pedagogical Takeaway]`
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [Keyword] + [Grammar Formula] -> [Flaw Type]`
+     (e.g. `AUDIT: [comply] + [Although + Clause] -> Collocation Clash (to vs with)`). DO NOT write paragraphs or quote full sentences here.
 
 VOCABULARY:
 {vocabulary_content}

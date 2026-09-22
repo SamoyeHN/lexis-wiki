@@ -30,8 +30,9 @@ Create an advanced reading comprehension assessment based on the provided passag
      * *Trap 3 (Plausible Distortion / False Inference)*: sounds factually reasonable in real-world knowledge, but is unsupported, unmentioned, or directly contradicted by the text.
 
 4. **Design Audit & Explanation**:
-   - `design_audit`: Follow this rigorous 4-part structure:
-     `AUDIT: [Skill Category: Main Idea/Detail/Inference/Tone] -> [Textual Anchor (Paragraph # / Specific Quote)] -> [Trap 1 (Literal Match): ...] [Trap 2 (Scope Shift): ...] [Trap 3 (Distortion): ...] -> [Why Distractors Fail: Objective Ground-Truth Disqualifications]`
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [S-ID] -> [Skill: Main Idea/Detail/Inference/Tone] -> [Key Traps: Literal Match/Scope Shift/Distortion]`
+     (e.g. `AUDIT: [S-14] -> Detail -> Literal Match + Scope Shift`). DO NOT write paragraphs or quote full sentences here.
    - `explanation`: State the exact text evidence for the correct answer, and contrastively explain why each distractor fails. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
    - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
 

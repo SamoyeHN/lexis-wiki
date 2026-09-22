@@ -275,7 +275,7 @@
                     <div class="bento-card d-flex flex-column gap-2" style="padding: 1.15rem;">
                         <div class="d-flex align-items-center justify-content-between mb-0.5">
                             <div class="d-flex align-items-center gap-2">
-                                <h6 class="fw-bold mb-0 text-info" style="font-size: 0.85rem;"><i class="bi bi-folder2-open me-1.5"></i>Unit Files</h6>
+                                <h6 class="fw-bold mb-0 text-info" style="font-size: 0.85rem;"><i class="bi bi-folder2-open me-2"></i>Unit Files</h6>
                                 <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-0.5 rounded-pill" id="workspace-sidebar-files-count" style="font-size: 0.65rem;">0</span>
                             </div>
                             <button type="button" class="btn btn-sm btn-outline-info py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" data-bs-toggle="collapse" data-bs-target="#collapseAddMedia" aria-expanded="false" aria-controls="collapseAddMedia" style="font-size: 0.68rem;" title="Toggle Add Media Source Form">
@@ -712,7 +712,7 @@
                     </div>
                     <div class="col-md-3 col-sm-6">
                         <label class="font-monospace text-on-surface small mb-0.5 d-block" style="font-size: 9px;">Endpoint URL</label>
-                        <input type="text" id="config-api-url" class="form-control form-control-sm" placeholder="localhost:11434" oninput="onEndpointInput()" onchange="fetchModels(true)">
+                        <input type="text" id="config-api-url" class="form-control form-control-sm" placeholder="http://localhost:11434" oninput="onEndpointInput()" onchange="fetchModels(true)">
                     </div>
                     <div class="col-md-3 col-sm-6">
                         <label class="font-monospace text-on-surface small mb-0.5 d-block" style="font-size: 9px;">Access Token</label>
@@ -816,82 +816,94 @@
         <!-- Tab 3: Quiz Defaults -->
         <div id="tab-quiz" class="settings-tab-content">
             <div class="settings-section-card">
-                <h6 class="fw-bold mb-3 text-info"><i class="bi bi-card-checklist me-1"></i>Quiz Entry Counts</h6>
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <h6 class="fw-bold mb-0 text-info"><i class="bi bi-card-checklist me-1"></i>Quiz Entry Counts</h6>
+                    <span class="badge font-monospace rounded-pill px-2 py-1" id="config-quiz-total-val" style="font-size: 0.7rem; background: rgba(14, 165, 233, 0.12); border: 1px solid var(--card-border); color: var(--on-surface);">Total: 30 questions</span>
+                </div>
                 <p class="text-muted small mb-3" style="font-size: 0.78rem;">Default number of questions for each quiz type when generating handouts.</p>
-                <div class="d-flex flex-column gap-2" style="font-size: 9px;">
+                <div class="row g-3">
                     <!-- Vocabulary -->
-                    <div>
-                        <div class="d-flex justify-content-between">
-                            <span>Vocabulary</span>
-                            <span class="text-info fw-bold" id="config-quiz-vocabulary-val">10</span>
+                    <div class="col-md-6">
+                        <div class="quiz-default-tile">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-semibold" style="font-size: 9px;"><i class="bi bi-type me-1 text-info"></i>Vocabulary</span>
+                                <span class="text-info fw-bold" style="font-size: 11px;" id="config-quiz-vocabulary-val">10</span>
+                            </div>
+                            <input type="range" class="custom-slider w-100" id="config-quiz-vocabulary" min="0" max="30" value="10" oninput="document.getElementById('config-quiz-vocabulary-val').innerText = this.value">
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <span class="text-muted" style="font-size: 8px;">Assessment Track Mode</span>
+                                <select id="config-quiz-vocab-mode" class="form-select form-select-sm py-0 px-1" style="width: auto; height: 22px;">
+                                    <option value="cloze">Achievement MCQ </option>
+                                    <option value="generative">Proficiency MCQ </option>
+                                </select>
+                            </div>
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-vocabulary" min="0" max="30" value="10" oninput="document.getElementById('config-quiz-vocabulary-val').innerText = this.value">
                     </div>
                     <!-- Reading -->
-                    <div>
-                        <div class="d-flex justify-content-between">
-                            <span>Reading</span>
-                            <span class="text-success fw-bold" id="config-quiz-reading-val">5</span>
+                    <div class="col-md-6">
+                        <div class="quiz-default-tile">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-semibold" style="font-size: 9px;"><i class="bi bi-journal-text me-1 text-success"></i>Reading</span>
+                                <span class="text-success fw-bold" style="font-size: 11px;" id="config-quiz-reading-val">5</span>
+                            </div>
+                            <input type="range" class="custom-slider w-100" id="config-quiz-reading" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-reading-val').innerText = this.value">
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-reading" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-reading-val').innerText = this.value">
                     </div>
                     <!-- Translation -->
-                    <div>
-                        <div class="d-flex justify-content-between">
-                            <span>Translation</span>
-                            <span class="text-warning fw-bold" id="config-quiz-translation-val">5</span>
+                    <div class="col-md-6">
+                        <div class="quiz-default-tile">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-semibold" style="font-size: 9px;"><i class="bi bi-translate me-1 text-warning"></i>Translation</span>
+                                <span class="text-warning fw-bold" style="font-size: 11px;" id="config-quiz-translation-val">5</span>
+                            </div>
+                            <input type="range" class="custom-slider w-100" id="config-quiz-translation" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-translation-val').innerText = this.value">
+                            <div class="mt-2">
+                                <label class="text-on-surface d-block mb-0.5" for="config-target-language" style="font-size: 8px;">Target Language</label>
+                                <input type="text" id="config-target-language" class="form-control form-control-sm" value="Chinese">
+                            </div>
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-translation" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-translation-val').innerText = this.value">
                     </div>
                     <!-- Listening -->
-                    <div>
-                        <div class="d-flex justify-content-between">
-                            <span>Listening</span>
-                            <span class="text-purple fw-bold" id="config-quiz-listening-val" style="color: #a855f7 !important;">5</span>
+                    <div class="col-md-6">
+                        <div class="quiz-default-tile">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-semibold" style="font-size: 9px;"><i class="bi bi-headphones me-1" style="color: #a855f7;"></i>Listening</span>
+                                <span class="fw-bold" style="font-size: 11px; color: #a855f7 !important;" id="config-quiz-listening-val">5</span>
+                            </div>
+                            <input type="range" class="custom-slider w-100" id="config-quiz-listening" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-listening-val').innerText = this.value">
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-listening" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-listening-val').innerText = this.value">
                     </div>
                     <!-- Video -->
-                    <div>
-                        <div class="d-flex justify-content-between">
-                            <span>Video</span>
-                            <span class="text-danger fw-bold" id="config-quiz-video-val">5</span>
+                    <div class="col-md-6">
+                        <div class="quiz-default-tile">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-semibold" style="font-size: 9px;"><i class="bi bi-play-circle me-1 text-danger"></i>Video</span>
+                                <span class="text-danger fw-bold" style="font-size: 11px;" id="config-quiz-video-val">5</span>
+                            </div>
+                            <input type="range" class="custom-slider w-100" id="config-quiz-video" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-video-val').innerText = this.value">
                         </div>
-                        <input type="range" class="custom-slider w-100" id="config-quiz-video" min="0" max="30" value="5" oninput="document.getElementById('config-quiz-video-val').innerText = this.value">
                     </div>
                 </div>
             </div>
 
-            <div class="settings-section-card">
-                <h6 class="fw-bold text-info mb-3"><i class="bi bi-globe me-1"></i>Translation Quiz Language</h6>
-                <p class="text-muted small mb-2" style="font-size: 0.78rem;">Default target language specifically used for translation quiz generation.</p>
-                <div class="row g-2">
-                    <div class="col-md-6 col-sm-12">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Target Language</label>
-                        <input type="text" id="config-target-language" class="form-control form-control-sm" value="Chinese">
-                    </div>
-                </div>
-            </div>
 
             <div class="settings-section-card">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="fw-bold text-warning mb-0"><i class="bi bi-award-fill me-1"></i>Level 2 Expert Model Quality Audit (LLM-as-a-Judge)</h6>
+                    <h6 class="fw-bold text-warning mb-0">
+                        <i class="bi bi-award-fill me-1"></i>Expert Audit
+                        <span class="fw-normal text-muted" style="font-size: 0.85em;">(LLM Judge)</span>
+                        <i class="bi bi-question-circle text-muted" style="font-size: 0.72rem; vertical-align: super; margin-left: 3px; cursor: help;" tabindex="0" role="button" aria-label="What does Expert Audit do?" data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="A judge model blind solves and auto-fixes ambiguous or double-answer items."></i>
+                    </h6>
                     <div class="form-check form-switch mb-0">
                         <input class="form-check-input" type="checkbox" id="config-enable-expert-audit" style="cursor: pointer;">
                     </div>
                 </div>
-                <p class="text-muted small mb-2" style="font-size: 0.78rem;">
-                    Enforces blind solver test & distractor cognitive trap audit before delivering handouts. Automatically triggers surgical self-correction when ambiguities or double keys are detected.
-                </p>
                 <div class="row g-2">
                     <div class="col-md-7 col-sm-12">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Dedicated Judge Model (Separation of Powers)</label>
-                        <select id="config-judge-model" class="form-select form-select-sm" style="font-size: 0.8rem;">
+                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Judge model</label>
+                        <select id="config-judge-model" class="form-select form-select-sm">
                             <option value="">(Same as Active Generation Model)</option>
                         </select>
-                        <div class="form-text text-muted" style="font-size: 0.68rem; margin-top: 4px;">
-                            <i class="bi bi-shield-check text-success me-1"></i><strong>Safe Model Hot-Swap</strong>: Automatically unloads generation models from GPU before audit, preventing VRAM overflow on single-GPU machines.
-                        </div>
                     </div>
                 </div>
             </div>

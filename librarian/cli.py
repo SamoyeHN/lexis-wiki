@@ -179,7 +179,10 @@ def main():
             try:
                 q_count = int(q_count)
                 defaults = config.get("quiz_defaults") or {}
-                defaults[q_type] = q_count
+                if isinstance(defaults.get(q_type), dict):
+                    defaults[q_type]["count"] = q_count
+                else:
+                    defaults[q_type] = q_count
                 success, message = config.update_config("quiz_defaults", defaults)
                 print(message)
             except ValueError:

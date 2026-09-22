@@ -5,13 +5,18 @@ to achieve deterministic sentence indexing, macro grammar domain classification,
 boundary-accurate phrase extraction, canonical lemmatization, and zero-collision distractors.
 """
 
+import json
+import os
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class LinguisticEngine:
     _spacy_nlp = None
     _wn = None
+    _acl_data = None
+    _awl_data = None
 
     @classmethod
     def get_spacy(cls):
@@ -29,6 +34,40 @@ class LinguisticEngine:
             cls._wn = wn
         return cls._wn
 
+    @classmethod
+    def get_acl_collocations(cls) -> Dict[str, str]:
+        """Lazy-loads the Academic Collocation List (ACL, ~2474 items). Returns dict mapping core pattern -> canonical original."""
+        if cls._acl_data is None:
+            cls._acl_data = {}
+            acl_path = Path(__file__).parent / "data" / "academic_collocations.json"
+            if acl_path.exists():
+                try:
+                    with open(acl_path, "r", encoding="utf-8") as f:
+                        raw_items = json.load(f)
+                    for item in raw_items:
+                        # strip optional prefixes/suffixes like (a), (be), (to), (of) for robust matching
+                        core = re.sub(r"^\([a-z\s]+\)\s*", "", item)
+                        core = re.sub(r"\s*\([a-z\s]+\)$", "", core).strip().lower()
+                        if len(core) >= 3:
+                            cls._acl_data[core] = item
+                except Exception:
+                    pass
+        return cls._acl_data
+
+    @classmethod
+    def get_awl_words(cls) -> Set[str]:
+        """Lazy-loads the Academic Word List (AWL, 560+ headwords)."""
+        if cls._awl_data is None:
+            cls._awl_data = set()
+            awl_path = Path(__file__).parent / "data" / "academic_word_list.json"
+            if awl_path.exists():
+                try:
+                    with open(awl_path, "r", encoding="utf-8") as f:
+                        cls._awl_data = set(json.load(f))
+                except Exception:
+                    pass
+        return cls._awl_data
+
     # -------------------------------------------------------------------------
     # 1. Sentence Boundary Tokenization & Indexing ([S-1], [S-2])
     # -------------------------------------------------------------------------
@@ -41,29 +80,69 @@ class LinguisticEngine:
             sentence_pool: Dict mapping 'S-1' -> pristine full sentence text.
         """
         nlp = cls.get_spacy()
-        doc = nlp(text)
+        # Cleanly separate frontmatter if present so spaCy only tokenizes authentic body prose
+        fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)", text, re.DOTALL)
+        frontmatter = fm_match.group(1) if fm_match else ""
+        body = fm_match.group(2) if fm_match else text
+
+        doc = nlp(body)
 
         sentence_pool: Dict[str, str] = {}
-        indexed_parts: List[str] = []
-
+        indexed_paragraphs: List[str] = []
         counter = 1
-        for sent in doc.sents:
-            sent_str = sent.text.strip()
-            if not sent_str:
-                continue
-            # Filter out non-content artifact lines (like markdown headers or standalone symbols)
-            words = [t for t in sent if t.is_alpha]
-            if len(words) < 2 and not sent_str.endswith((".", "?", "!")):
-                # Keep as-is in text stream but don't index as pedagogical sentence
-                indexed_parts.append(sent_str)
+
+        # Process paragraph-by-paragraph to preserve natural paragraph boundaries while streaming sentences within paragraphs
+        raw_paragraphs = re.split(r'\n{2,}', body.strip())
+        for para in raw_paragraphs:
+            para = para.strip()
+            if not para:
                 continue
 
-            sid = f"S-{counter}"
-            sentence_pool[sid] = sent_str
-            indexed_parts.append(f"[{sid}] {sent_str}")
-            counter += 1
+            # If the paragraph is a pure markdown header or bold block (e.g. '## Text A', '**Title**')
+            lines = [l.strip() for l in para.split("\n") if l.strip()]
+            if all(l.startswith("#") or (l.startswith("**") and l.endswith("**")) for l in lines):
+                indexed_paragraphs.append(para)
+                continue
 
-        indexed_text = " ".join(indexed_parts)
+            # Separate optional leading heading lines in this paragraph
+            prefix_lines = []
+            content_lines = []
+            for l in lines:
+                if not content_lines and (l.startswith("#") or (l.startswith("**") and l.endswith("**"))):
+                    prefix_lines.append(l)
+                else:
+                    content_lines.append(l)
+
+            prefix_str = "\n\n".join(prefix_lines) + "\n\n" if prefix_lines else ""
+            para_text = " ".join(content_lines).strip()
+            if not para_text:
+                if prefix_lines:
+                    indexed_paragraphs.append("\n\n".join(prefix_lines))
+                continue
+
+            para_doc = nlp(para_text)
+            para_sent_parts = []
+            for sent in para_doc.sents:
+                sent_str = sent.text.strip()
+                if not sent_str:
+                    continue
+                words = [t for t in nlp(sent_str) if t.is_alpha]
+                if len(words) < 2 and not sent_str.endswith((".", "?", "!")):
+                    para_sent_parts.append(sent_str)
+                    continue
+
+                sid = f"S-{counter}"
+                sentence_pool[sid] = sent_str
+                para_sent_parts.append(f"[{sid}] {sent_str}")
+                counter += 1
+
+            indexed_para = prefix_str + " ".join(para_sent_parts)
+            indexed_paragraphs.append(indexed_para.strip())
+
+        if frontmatter:
+            indexed_text = frontmatter + "\n\n" + "\n\n".join(indexed_paragraphs)
+        else:
+            indexed_text = "\n\n".join(indexed_paragraphs)
         return indexed_text, sentence_pool
 
     @classmethod
@@ -76,26 +155,28 @@ class LinguisticEngine:
         if not raw_quote_or_id or not sentence_pool:
             return None
 
-        clean_input = raw_quote_or_id.strip()
+        clean_input = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", raw_quote_or_id.strip(), flags=re.IGNORECASE).strip()
 
         # 1. Direct ID lookup (e.g. '[S-3]' or 'S-3' or 'Sentence 3')
-        id_match = re.search(r"\bS-(\d+)\b", clean_input, re.IGNORECASE)
+        id_match = re.search(r"\bS-(\d+)\b", raw_quote_or_id, re.IGNORECASE)
         if id_match:
             sid = f"S-{id_match.group(1)}"
             if sid in sentence_pool:
-                return sentence_pool[sid]
+                return re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", sentence_pool[sid], flags=re.IGNORECASE).strip()
 
         # 2. Exact match in sentence pool
         for sid, sent in sentence_pool.items():
-            if clean_input.lower() == sent.lower():
-                return sent
+            sent_clean = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", sent, flags=re.IGNORECASE).strip()
+            if clean_input.lower() == sent_clean.lower():
+                return sent_clean
 
         # 3. Substring containment: if quote is a fragment of a pool sentence
         clean_target = re.sub(r"\.{3,}|…", "", clean_input).strip().lower()
         if len(clean_target) >= 15:
             for sid, sent in sentence_pool.items():
-                if clean_target in sent.lower():
-                    return sent
+                sent_clean = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", sent, flags=re.IGNORECASE).strip()
+                if clean_target in sent_clean.lower():
+                    return sent_clean
 
         # 4. High overlap fallback
         clean_tokens = set(re.findall(r"\w{3,}", clean_target))
@@ -103,13 +184,14 @@ class LinguisticEngine:
             best_sent = None
             max_overlap = 0.0
             for sid, sent in sentence_pool.items():
-                sent_tokens = set(re.findall(r"\w{3,}", sent.lower()))
+                sent_clean = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", sent, flags=re.IGNORECASE).strip()
+                sent_tokens = set(re.findall(r"\w{3,}", sent_clean.lower()))
                 if not sent_tokens:
                     continue
                 overlap = len(clean_tokens & sent_tokens) / len(clean_tokens)
                 if overlap > max_overlap and overlap >= 0.75:
                     max_overlap = overlap
-                    best_sent = sent
+                    best_sent = sent_clean
             if best_sent:
                 return best_sent
 
@@ -229,14 +311,20 @@ class LinguisticEngine:
                         core_anchor = token.lemma_.lower()
                         break
 
-        # 4. Information Packaging
-        if dep_type == "generic":
-            for token in doc:
-                if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
-                    if not any(c.dep_ in ("nsubj", "nsubjpass") for c in token.children) and token.lemma_.lower() not in ("include", "accord", "regard"):
-                        dep_type = "participial_adjunct"
-                        core_anchor = token.tag_
-                        break
+            # Correlative comparative: the more..., the more... (Rhetoric & Emphasis or Information Packaging)
+            COMPARATIVE_WORDS = r"(?:more|less|fewer|better|worse|[a-z]{2,}er)"
+            if re.search(rf"\bthe\s+{COMPARATIVE_WORDS}\b(?!\s+hand\b).*?(?:,\s*|\band\s+the\s+{COMPARATIVE_WORDS}\b.*?,?\s*)\bthe\s+{COMPARATIVE_WORDS}\b", text_lower):
+                dep_type = "correlative_comparative"
+                core_anchor = "the...the"
+
+            if dep_type == "generic":
+                for token in doc:
+                    if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
+                        if not any(c.dep_ in ("nsubj", "nsubjpass") for c in token.children) and token.lemma_.lower() not in ("include", "accord", "regard"):
+                            dep_type = "participial_adjunct"
+                            core_anchor = token.tag_
+                            break
+            # Dummy-It Subject Extraposition: It is adj that/to-V
             if dep_type == "generic" and any(t.text.lower() == "it" and t.dep_ in ("expl", "nsubj") for t in doc):
                 for t in doc:
                     if t.text.lower() == "it" and t.head.lemma_ in ("be", "seem"):
@@ -244,6 +332,15 @@ class LinguisticEngine:
                             dep_type = "dummy_it_extraposition"
                             core_anchor = "it be adj to/that"
                             break
+            # Dummy-It Object Extraposition: find/make/think it adj to-V
+            if dep_type == "generic":
+                for t in doc:
+                    if t.lemma_ in ("find", "make", "think", "consider", "deem", "believe") and t.pos_ in ("VERB", "AUX"):
+                        for c in t.children:
+                            if c.pos_ == "ADJ" and any(gc.text.lower() == "it" and gc.dep_ in ("nsubj", "dobj") for gc in c.children):
+                                dep_type = "dummy_it_object"
+                                core_anchor = f"{t.lemma_} it {c.lemma_}"
+                                break
 
         return (macro_domain, dep_type, core_anchor)
 
@@ -415,6 +512,13 @@ class LinguisticEngine:
                     if has_predicate and has_complement:
                         return "Information Packaging"
 
+        # Evaluative Dummy-It Object (find/make/think it adj to-V)
+        for t in doc:
+            if t.lemma_ in ("find", "make", "think", "consider", "deem", "believe") and t.pos_ in ("VERB", "AUX"):
+                for c in t.children:
+                    if c.pos_ == "ADJ" and any(gc.text.lower() == "it" and gc.dep_ in ("nsubj", "dobj") for gc in c.children):
+                        return "Information Packaging"
+
         # Non-finite participial adjuncts (advcl with VBG or VBN)
         for token in doc:
             if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
@@ -488,7 +592,17 @@ class LinguisticEngine:
 
         # 4. Information Packaging
         if cat == "Information Packaging" or not cat:
-            # Dummy-It Extraposition
+            # Correlative comparative: The more..., the more...
+            COMPARATIVE_WORDS = r"(?:more|less|fewer|better|worse|[a-z]{2,}er)"
+            if re.search(rf"\bthe\s+{COMPARATIVE_WORDS}\b(?!\s+hand\b).*?(?:,\s*|\band\s+the\s+{COMPARATIVE_WORDS}\b.*?,?\s*)\bthe\s+{COMPARATIVE_WORDS}\b", text_lower):
+                return "The + [comparative] + [Clause], the + [comparative] + [Clause]"
+            # Dummy-It Object Extraposition (find/make/think it adj to-V)
+            for t in doc:
+                if t.lemma_ in ("find", "make", "think", "consider", "deem", "believe") and t.pos_ in ("VERB", "AUX"):
+                    for c in t.children:
+                        if c.pos_ == "ADJ" and any(gc.text.lower() == "it" and gc.dep_ in ("nsubj", "dobj") for gc in c.children):
+                            return f"[Subject] + {t.lemma_} + it + [{c.lemma_.capitalize()}] + to-V"
+            # Dummy-It Subject Extraposition
             if any(t.text.lower() == "it" and t.dep_ in ("expl", "nsubj") for t in doc):
                 for t in doc:
                     if t.text.lower() == "it" and t.head.lemma_ in ("be", "seem"):
@@ -498,10 +612,12 @@ class LinguisticEngine:
             for token in doc:
                 if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
                     if not any(c.dep_ in ("nsubj", "nsubjpass") for c in token.children) and token.lemma_.lower() not in ("include", "accord", "regard"):
-                        if token.i < len(doc) // 2:
-                            return "[V-ing/V-ed Phrase], [Subject] + [VP]"
+                        is_fronted = token.i < token.head.i
+                        v_type = "V-ing" if token.tag_ == "VBG" else "V-ed"
+                        if is_fronted:
+                            return f"[{v_type} Phrase], [Subject] + [VP]"
                         else:
-                            return "[Subject] + [VP], [V-ing Phrase]"
+                            return f"[Subject] + [VP], [{v_type} Phrase]"
             # Elaborative clause
             if re.search(r",\s*which\s+[a-z]+", text_lower):
                 return "[Subject] + [VP], which + [VP]"
@@ -509,6 +625,552 @@ class LinguisticEngine:
         # Default fallback standard formula
         return "[Subject] + [VP] + [Clause]"
 
+    @classmethod
+    def mine_grammar_skeletons(
+        cls,
+        sentence_pool: Dict[str, str],
+        target_count: int = 5,
+        syllabus_grammar: Optional[List[str]] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Deterministically mines genuine, non-trivial grammar structural skeletons from the sentence pool.
+        Selects sentences exhibiting rich dependency structures across the Four Macro Domains.
+        Returns a list of dicts: [{'sid': 'S-9', 'quote': '...', 'category': '...', 'pattern_formula': '...'}]
+        """
+        raw_skeletons: List[Dict[str, str]] = []
+
+        for sid, sent in sentence_pool.items():
+            sent_clean = sent.strip()
+            # Skip very short or title-like sentences
+            if len(sent_clean.split()) < 7:
+                continue
+
+            cat = cls.classify_grammar_dependency(sent_clean)
+            if cat:
+                formula = cls.generate_cobuild_formula(sent_clean, category=cat)
+                # Filter out generic/un-abstracted formulas (e.g. [Subject] + [VP] + [Clause] or simple [S])
+                if formula and not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
+                    raw_skeletons.append({
+                        "sid": sid,
+                        "quote": sent_clean,
+                        "category": cat,
+                        "pattern_formula": formula,
+                    })
+
+        if not raw_skeletons:
+            return []
+
+        # Diverse selection algorithm across macro domains and distinct formulas
+        selected: List[Dict[str, str]] = []
+        seen_cats: Set[str] = set()
+        seen_formulas: Set[str] = set()
+
+        # Pass 1: maximize category diversity across the 4 domains
+        for item in raw_skeletons:
+            cat = item["category"]
+            form = item["pattern_formula"]
+            if cat not in seen_cats and form not in seen_formulas:
+                selected.append(item)
+                seen_cats.add(cat)
+                seen_formulas.add(form)
+            if len(selected) >= target_count:
+                break
+
+        # Pass 2: fill remaining slots with distinct structural formulas
+        if len(selected) < target_count:
+            for item in raw_skeletons:
+                if item not in selected and item["pattern_formula"] not in seen_formulas:
+                    selected.append(item)
+                    seen_formulas.add(item["pattern_formula"])
+                if len(selected) >= target_count:
+                    break
+
+        # Pass 3: if still under target_count, append distinct quotes with unique formulas
+        if len(selected) < target_count:
+            selected_quotes = {s["quote"] for s in selected}
+            for item in raw_skeletons:
+                if item["quote"] not in selected_quotes and item["pattern_formula"] not in seen_formulas:
+                    selected.append(item)
+                    selected_quotes.add(item["quote"])
+                    seen_formulas.add(item["pattern_formula"])
+                if len(selected) >= target_count:
+                    break
+
+        return selected[:target_count]
+
+    # -------------------------------------------------------------------------
+    # 3b. Deterministic Multi-Word Expression & Collocation Mining (ACL + spaCy)
+    # -------------------------------------------------------------------------
+    @classmethod
+    def mine_expression_skeletons(cls, text: str, target_count: int = 8) -> List[Dict[str, str]]:
+        """
+        Deterministically extracts high-value multi-word expressions, phrasal verbs,
+        and Academic Collocation List (ACL) items from the indexed sentence pool.
+        Standardizes slotted formulas (e.g. [sb], [sth], [one's]) at zero token cost.
+
+        Returns list of dicts:
+            [{
+                "sid": "S-1",
+                "quote": "full sentence text",
+                "phrase": "have an adverse effect on",
+                "type": "collocation",
+                "pattern_formula": "have an adverse effect on [sth]"
+            }, ...]
+        """
+        _, pool = cls.tokenize_and_index_sentences(text)
+        if not pool:
+            return []
+
+        nlp = cls.get_spacy()
+        acl_map = cls.get_acl_collocations()
+        awl_set = cls.get_awl_words()
+
+        COMMON_PARTICLES = frozenset({"away", "back", "down", "in", "off", "on", "out", "over", "round", "through", "up"})
+        DEPENDENT_PREPS = frozenset({"on", "upon", "to", "with", "for", "from", "into", "against", "about", "of", "in"})
+
+        raw_candidates: List[Dict[str, Any]] = []
+
+        for sid, sentence in pool.items():
+            sent_clean = sentence.strip()
+            if len(sent_clean.split()) < 5:
+                continue
+
+            doc = nlp(sent_clean)
+            text_lower = sent_clean.lower()
+
+            # 1. Academic Collocation List (ACL) Matcher
+            for core, original in acl_map.items():
+                pattern = r"\b" + re.escape(core) + r"\b"
+                if re.search(pattern, text_lower):
+                    # Determine type: verb+noun or adj+noun
+                    words = core.split()
+                    expr_type = "collocation"
+                    formula = core
+                    if original.endswith("(to)") or original.endswith("(of)") or original.endswith("(in)") or original.endswith("(with)"):
+                        prep_match = re.search(r"\(([a-z]+)\)$", original)
+                        if prep_match:
+                            formula = f"{core} {prep_match.group(1)} [sth]"
+                    elif len(words) == 2 and any(w in awl_set for w in words):
+                        formula = f"{core}"
+
+                    raw_candidates.append({
+                        "sid": sid,
+                        "quote": sent_clean,
+                        "phrase": core,
+                        "type": expr_type,
+                        "pattern_formula": formula,
+                        "score": 10 + (2 if any(w in awl_set for w in words) else 0),
+                    })
+
+            # 2. Dependency Syntax Phrasal Verbs & Prepositional Combinations
+            COLLOCATION_VERB_PREPS = {
+                "welcome": "to",
+                "provide": "with",
+                "share": "with",
+                "equip": "with",
+                "attribute": "to",
+                "contribute": "to",
+                "rely": "on",
+                "depend": "on",
+                "focus": "on",
+                "concentrate": "on",
+                "participate": "in",
+                "engage": "in",
+                "succeed": "in",
+                "benefit": "from",
+                "derive": "from",
+                "suffer": "from",
+                "cope": "with",
+                "comply": "with",
+                "lead": "to",
+                "adapt": "to",
+                "conform": "to",
+                "refer": "to",
+                "apply": "to",
+                "appeal": "to",
+                "insist": "on",
+                "consist": "of",
+            }
+
+            for token in doc:
+                if token.pos_ in ("VERB", "AUX"):
+                    v_lemma = token.lemma_.lower()
+
+                    # Check particle (e.g. wake up, get by, slave away, carry out)
+                    for c in token.children:
+                        if (c.dep_ == "prt" or (c.dep_ == "advmod" and c.text.lower() in COMMON_PARTICLES)) and c.i > token.i:
+                            p_tok = c.text.lower()
+                            # Check three-part phrasal verb: verb + particle + prep immediately following (distance <= 2)
+                            prep_child = [gc for gc in token.children if gc.dep_ == "prep" and 0 < (gc.i - c.i) <= 2]
+                            if prep_child:
+                                prep_word = prep_child[0].text.lower()
+                                p_verb = f"{v_lemma} {p_tok} {prep_word}"
+                                formula = f"{v_lemma} {p_tok} {prep_word} [sth/sb]"
+                            else:
+                                dobj = [d for d in token.children if d.dep_ == "dobj"]
+                                if dobj:
+                                    p_verb = f"{v_lemma} {p_tok}"
+                                    formula = f"{v_lemma} [sb/sth] {p_tok}"
+                                else:
+                                    p_verb = f"{v_lemma} {p_tok}"
+                                    formula = f"{v_lemma} {p_tok}"
+
+                            raw_candidates.append({
+                                "sid": sid,
+                                "quote": sent_clean,
+                                "phrase": p_verb,
+                                "type": "phrasal verb",
+                                "pattern_formula": formula,
+                                "score": 9,
+                            })
+
+                    # Check possessive object construction via spaCy 'poss' dependency (e.g. attain [one's] best, make up [one's] mind)
+                    # Restrict to genuine idiomatic and academic lexicalized noun heads to avoid trivial 'take his dad'
+                    IDIOMATIC_POSS_NOUNS = frozenset({
+                        "best", "mind", "temper", "breath", "time", "part", "way", "heart",
+                        "step", "place", "voice", "promise", "life", "potential", "future",
+                        "passion", "dream", "goal", "duty", "responsibility", "effort", "stride",
+                        "horizon", "footing", "view", "interest", "role", "purpose"
+                    })
+                    dobjs = [d for d in token.children if d.dep_ == "dobj"]
+                    for d in dobjs:
+                        poss = [p for p in d.children if p.dep_ == "poss"]
+                        if poss:
+                            noun_text = d.text.lower()
+                            noun_lemma = d.lemma_.lower()
+                            matched_noun = None
+                            if noun_text in IDIOMATIC_POSS_NOUNS:
+                                matched_noun = noun_text
+                            elif noun_lemma in IDIOMATIC_POSS_NOUNS:
+                                matched_noun = noun_lemma
+
+                            if matched_noun:
+                                prt = [p for p in token.children if p.dep_ == "prt"]
+                                if prt:
+                                    p_clean = f"{v_lemma} {prt[0].text.lower()} [one's] {matched_noun}"
+                                    formula = f"{v_lemma} {prt[0].text.lower()} [one's] {matched_noun}"
+                                else:
+                                    p_clean = f"{v_lemma} [one's] {matched_noun}"
+                                    formula = f"{v_lemma} [one's] {matched_noun}"
+
+                                raw_candidates.append({
+                                    "sid": sid,
+                                    "quote": sent_clean,
+                                    "phrase": p_clean,
+                                    "type": "collocation",
+                                    "pattern_formula": formula,
+                                    "score": 10,
+                                })
+
+                    # Check dependent preposition collocation or idiomatic frame
+                    for c in token.children:
+                        if c.dep_ == "prep" and c.i > token.i:
+                            p_text = c.text.lower()
+                            dobj = [d for d in token.children if d.dep_ == "dobj"]
+
+                            # Known academic verb+prep collocation (e.g. welcome [sb] to [sth], provide [sb] with [sth])
+                            if v_lemma in COLLOCATION_VERB_PREPS and COLLOCATION_VERB_PREPS[v_lemma] == p_text:
+                                if dobj:
+                                    coll_name = f"{v_lemma} ... {p_text}"
+                                    formula = f"{v_lemma} [sb] {p_text} [sth]"
+                                else:
+                                    coll_name = f"{v_lemma} {p_text}"
+                                    formula = f"{v_lemma} {p_text} [sth/sb]"
+                                raw_candidates.append({
+                                    "sid": sid,
+                                    "quote": sent_clean,
+                                    "phrase": coll_name,
+                                    "type": "collocation",
+                                    "pattern_formula": formula,
+                                    "score": 9,
+                                })
+                            elif not dobj and p_text in DEPENDENT_PREPS and (c.i - token.i <= 2):
+                                # Intransitive prepositional verb (e.g. rely on, contend with)
+                                p_verb = f"{v_lemma} {p_text}"
+                                formula = f"{v_lemma} {p_text} [sth/sb]"
+                                raw_candidates.append({
+                                    "sid": sid,
+                                    "quote": sent_clean,
+                                    "phrase": p_verb,
+                                    "type": "phrasal verb",
+                                    "pattern_formula": formula,
+                                    "score": 8,
+                                })
+                            elif dobj:
+                                # Fixed verbal idiom/collocation (e.g. take into account, make a difference)
+                                pobj = [p for p in c.children if p.dep_ == "pobj"]
+                                if pobj and (c.i - token.i <= 2) and pobj[0].lemma_.lower() in ("account", "consideration", "advantage", "part", "effect", "place"):
+                                    prep_phrase = f"{v_lemma} {p_text} {pobj[0].lemma_.lower()}"
+                                    formula = f"{v_lemma} {p_text} {pobj[0].lemma_.lower()} [sth]"
+                                    raw_candidates.append({
+                                        "sid": sid,
+                                        "quote": sent_clean,
+                                        "phrase": prep_phrase,
+                                        "type": "idiom",
+                                        "pattern_formula": formula,
+                                        "score": 10,
+                                    })
+
+        if not raw_candidates:
+            return []
+
+        # Sort by score descending and deduplicate phrases
+        raw_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        selected: List[Dict[str, str]] = []
+        seen_phrases: Set[str] = set()
+        seen_quotes: Set[str] = set()
+
+        # Balance across types: collocation, phrasal verb, idiom
+        for item in raw_candidates:
+            p_clean = item["phrase"].lower()
+            if p_clean not in seen_phrases and item["quote"] not in seen_quotes:
+                selected.append({
+                    "sid": item["sid"],
+                    "quote": item["quote"],
+                    "phrase": item["phrase"],
+                    "type": item["type"],
+                    "pattern_formula": item["pattern_formula"],
+                })
+                seen_phrases.add(p_clean)
+                seen_quotes.add(item["quote"])
+            if len(selected) >= target_count:
+                break
+
+        # If more slots needed, allow reusing quote if phrase is distinct
+        if len(selected) < target_count:
+            for item in raw_candidates:
+                p_clean = item["phrase"].lower()
+                if p_clean not in seen_phrases:
+                    selected.append({
+                        "sid": item["sid"],
+                        "quote": item["quote"],
+                        "phrase": item["phrase"],
+                        "type": item["type"],
+                        "pattern_formula": item["pattern_formula"],
+                    })
+                    seen_phrases.add(p_clean)
+                if len(selected) >= target_count:
+                    break
+
+        return selected[:target_count]
+
+    # -------------------------------------------------------------------------
+    # 3c. Deterministic Academic Vocabulary Mining (AWL + Lemmatization)
+    # -------------------------------------------------------------------------
+    @classmethod
+    def mine_vocabulary_skeletons(cls, text: str, target_count: int = 20) -> List[Dict[str, Any]]:
+        """
+        Deterministically mines genuine academic vocabulary targets from the indexed sentence pool.
+        Uses spaCy context-aware lemmatization to extract base dictionary headwords,
+        prioritizes the Academic Word List (AWL 560), and filters out low-value everyday words.
+
+        Returns list of dicts:
+            [{
+                "sid": "S-1",
+                "quote": "full sentence text",
+                "word": "autonomy",
+                "part_of_speech": "noun",
+                "is_awl": True
+            }, ...]
+        """
+        _, pool = cls.tokenize_and_index_sentences(text)
+        if not pool:
+            return []
+
+        nlp = cls.get_spacy()
+        awl_set = cls.get_awl_words()
+
+        # Closed whitelist of parts of speech accepted by schema
+        VALID_POS_MAP = {
+            "NOUN": "noun",
+            "VERB": "verb",
+            "ADJ": "adjective",
+            "ADV": "adverb",
+        }
+
+        # Exclude trivial grammaticalized or ultra-common verbs/words
+        TRIVIAL_WORDS = frozenset({
+            "be", "have", "do", "say", "get", "make", "go", "know", "take", "see",
+            "come", "think", "look", "want", "give", "use", "find", "tell", "ask",
+            "work", "seem", "feel", "try", "leave", "call", "good", "new", "first",
+            "last", "long", "great", "little", "own", "other", "old", "right", "big",
+            "high", "different", "small", "large", "next", "early", "young", "important",
+            "few", "public", "bad", "same", "able", "man", "woman", "person", "people",
+            "child", "time", "year", "day", "way", "thing", "life", "hand", "part",
+            "eye", "place", "case", "week", "company", "system", "program", "question",
+            "government", "number", "night", "point", "home", "water", "room", "mother",
+            "area", "money", "story", "fact", "month", "lot", "right", "study", "book",
+            "word", "business", "issue", "side", "kind", "head", "house", "service",
+            "friend", "father", "power", "hour", "game", "line", "end", "member", "law",
+            "car", "city", "community", "name", "president", "team", "minute", "idea",
+            "kid", "body", "information", "back", "parent", "face", "others", "level",
+            "office", "door", "health", "person", "art", "war", "history", "party",
+            "result", "change", "morning", "reason", "research", "girl", "guy", "moment",
+            "air", "teacher", "force", "education"
+        })
+
+        candidates: List[Dict[str, Any]] = []
+        seen_lemmas: Set[str] = set()
+
+        for sid, sentence in pool.items():
+            sent_clean = sentence.strip()
+            if len(sent_clean.split()) < 5:
+                continue
+
+            doc = nlp(sent_clean)
+            for token in doc:
+                if token.pos_ not in VALID_POS_MAP:
+                    continue
+                lemma = token.lemma_.lower().strip()
+                if len(lemma) < 3 or lemma in seen_lemmas or token.is_stop or not lemma.isalpha():
+                    continue
+
+                is_awl = lemma in awl_set
+
+                # If not in AWL and is trivial or very short, skip
+                if not is_awl and (lemma in TRIVIAL_WORDS or len(lemma) < 5):
+                    continue
+
+                # Scoring: AWL headwords get high priority, followed by word length and syllable complexity
+                score = (20 if is_awl else 0) + min(len(lemma), 12)
+
+                candidates.append({
+                    "sid": sid,
+                    "quote": sent_clean,
+                    "word": lemma,
+                    "part_of_speech": VALID_POS_MAP[token.pos_],
+                    "is_awl": is_awl,
+                    "score": score
+                })
+                seen_lemmas.add(lemma)
+
+        if not candidates:
+            return []
+
+        # Sort descending by score
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        selected: List[Dict[str, Any]] = []
+        selected_words: Set[str] = set()
+        selected_quotes: Set[str] = set()
+
+        # Pass 1: select diverse items across different sentences
+        for item in candidates:
+            if item["word"] not in selected_words and item["quote"] not in selected_quotes:
+                selected.append(item)
+                selected_words.add(item["word"])
+                selected_quotes.add(item["quote"])
+            if len(selected) >= target_count:
+                break
+
+        # Pass 2: fill remaining slots allowing multiple words from same sentence if high value
+        if len(selected) < target_count:
+            for item in candidates:
+                if item["word"] not in selected_words:
+                    selected.append(item)
+                    selected_words.add(item["word"])
+                if len(selected) >= target_count:
+                    break
+
+        return selected[:target_count]
+
+    @classmethod
+    def build_authentic_cloze_items(
+        cls,
+        vocab_content: str,
+        target_count: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Track 1: Authentic Passage Cloze (Achievement Testing / 学业水平测试)
+        Extracts extracted vocabulary items and masks their target appearance in the authentic
+        quoted passage sentence using spaCy lemmatization and exact word-boundary masking.
+        Generates 0-token, 100% textbook-grounded question stems.
+        """
+        if not vocab_content:
+            return []
+
+        nlp = cls.get_spacy()
+        blocks = re.split(r'\n(?=##\s*\[\[)', vocab_content)
+        parsed_items: List[Dict[str, str]] = []
+
+        for b in blocks:
+            m_word = re.search(r'##\s*\[\[(.*?)\]\]', b)
+            if not m_word:
+                continue
+            word = m_word.group(1).strip()
+            m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+
+            parsed_items.append({
+                "word": word,
+                "part_of_speech": m_pos.group(1).strip() if m_pos else "noun",
+                "definition": m_def.group(1).strip() if m_def else "",
+                "quote": m_quote.group(1).strip() if m_quote else ""
+            })
+
+        cloze_items: List[Dict[str, Any]] = []
+
+        for it in parsed_items:
+            w = it["word"]
+            q = it["quote"]
+            if not q:
+                continue
+
+            # Strip leading/trailing quotation marks from quote
+            q_clean = q.strip().strip('"').strip("'").strip("“").strip("”")
+            if not q_clean:
+                continue
+
+            doc = nlp(q_clean)
+            w_lower = w.lower()
+
+            # Locate token in sentence that matches the lemma or literal surface form
+            target_tok = None
+            for t in doc:
+                if t.text.lower() == w_lower or t.lemma_.lower() == w_lower:
+                    target_tok = t
+                    break
+
+            if not target_tok:
+                continue
+
+            surface_form = target_tok.text
+            # Replace target token with exact 4 underscores '____'
+            stem = re.sub(rf'\b{re.escape(surface_form)}\b', '____', q_clean, count=1)
+
+            # Ensure exactly one blank exists in stem
+            if len(re.findall(r'_{2,}', stem)) != 1:
+                continue
+
+            # Wordnet distractor generation for Track 1 Cloze
+            pos_tag = "n"
+            pos_raw = it["part_of_speech"].lower()
+            if "verb" in pos_raw: pos_tag = "v"
+            elif "adj" in pos_raw: pos_tag = "a"
+            elif "adv" in pos_raw: pos_tag = "r"
+
+            distractors = cls.generate_zero_collision_distractors(
+                target_word=surface_form,
+                pos=pos_tag,
+                count=3
+            )
+
+            cloze_items.append({
+                "target_word": surface_form,
+                "base_headword": w,
+                "part_of_speech": it["part_of_speech"],
+                "definition": it["definition"],
+                "question": stem,
+                "source_sentence": q_clean,
+                "precomputed_distractors": distractors
+            })
+
+            if len(cloze_items) >= target_count:
+                break
+
+        return cloze_items
 
     # -------------------------------------------------------------------------
     # 4. WordNet Distractor Assembly & Zero-Double-Key Guarantee

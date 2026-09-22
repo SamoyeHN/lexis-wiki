@@ -12,9 +12,9 @@ Extract academic vocabulary from the text.
 
 2. **Absolute Verbatim Sourcing (No Hallucination, No Thematic Inferences)**:
    - Every target word MUST derive directly from a literal surface word physically present in the text.
-   - ❌ NO THEMATIC EXTRAPOLATION: NEVER extract generalized themes, inferences, or external synonyms not explicitly written by the author (e.g., do NOT extract 'illness' if the text literally says 'cancer').
-   - `quoted_sentence` MUST be the exact, unedited verbatim sentence from the source text where the target word appears (or its indexed identifier e.g. `[S-1]`). NEVER truncate with ellipses (`...`).
-
+   - ❌ NO THEMATIC EXTRAPOLATION: NEVER extract generalized themes, inferences, or external synonyms not explicitly written by the author.
+   - `quoted_sentence`: MUST be the exact, complete authentic sentence from the text containing the word.
+   
 3. **Register Floor & Passage Coverage**:
    - Prioritize genuine CEFR B1–C2 academic or formal analytical lexis (AWL register).
    - Skip ultra-basic, general-English function/content words that learners already know (e.g., 'big', 'make', 'people', 'good', 'way').
@@ -23,12 +23,16 @@ Extract academic vocabulary from the text.
 4. **Lexical Form & Part of Speech**:
    - Convert inflected surface forms to their base dictionary lemma in `word`.
    - `part_of_speech` must strictly reflect its contextual function: noun, verb, adjective, adverb, preposition, conjunction, interjection.
-   - Provide an accurate, context-specific `definition` and an original, academic `example_usage`.
+   - Provide an accurate, context-specific `definition`.
+   - `example_usage`: MUST be an original, brand-new communicative academic sentence demonstrating the word in a fresh context. 🚫 STRICTLY FORBIDDEN: NEVER copy, recycle, or repeat the source text sentence! You must invent an independent example sentence.
 
 5. **Traceable Design Audit (`design_audit`)**:
    - For each entry, execute the canonical audit pipeline:
-     `AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [CEFR Level (B1–C2)] -> [VERBATIM_CONFIRMED]`
-   - MANDATE: The first bracket `[Surface Word in Text]` must be the exact literal word copied directly from the passage.
+     `AUDIT: [S-ID] -> [Base Lemma Headword] -> [Exact Contextual PoS] -> [CEFR Level (B1–C2)] -> [VERBATIM_CONFIRMED]`
+   - MANDATE: Use the pre-indexed sentence identifier `[S-ID]` (e.g. `[S-14]`) in the first bracket as the anchor to save tokens.
 
-{syllabus_section}CONTENT:
+### PASSAGE (WITH NUMBERED SENTENCES) ###
 {content}
+
+{syllabus_section}
+

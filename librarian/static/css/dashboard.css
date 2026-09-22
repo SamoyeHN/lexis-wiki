@@ -947,6 +947,15 @@
             margin-bottom: 0;
         }
 
+        /* --- Quiz Defaults tiles (tab-quiz, per quiz-type self-contained cards) --- */
+        .quiz-default-tile {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-default);
+            padding: 0.75rem 0.85rem;
+            height: 100%;
+        }
+
         /* --- Uniform form input fields in settings modal --- */
         #settings-modal .form-select-sm,
         #settings-modal .form-control-sm {
@@ -959,6 +968,14 @@
         #settings-modal option {
             background-color: var(--surface) !important;
             color: var(--on-surface) !important;
+        }
+        /* Quiz Defaults: compact vocab-mode select.
+           The modal-wide .form-select-sm rule above crushes Bootstrap's chevron safe-area
+           padding to 8px (the arrow is a background-image 12-28px from the right edge →
+           text/arrow collision). This ID-scoped rule (specificity 1,2,0 beats 1,1,0)
+           restores padding-right 2rem; font-size stays at the modal-uniform 11px. */
+        #settings-modal select#config-quiz-vocab-mode {
+            padding-right: 2rem !important;
         }
         .sidebar-file-actions {
             opacity: 0;

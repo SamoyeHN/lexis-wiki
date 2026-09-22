@@ -1573,6 +1573,26 @@
         const modalInstance = bootstrap.Modal.getInstance(modal);
         if (modalInstance) modalInstance.hide();
     }
+    // Quiz Defaults tab: live "Total questions" counter.
+    // Delegated on document so it works regardless of how the tile grid is rendered.
+    function refreshQuizTotal() {
+        const totalEl = document.getElementById('config-quiz-total-val');
+        if (!totalEl) return;
+        let total = 0;
+        ['vocabulary', 'reading', 'translation', 'listening', 'video'].forEach(function (key) {
+            const el = document.getElementById('config-quiz-' + key);
+            if (el) total += parseInt(el.value, 10) || 0;
+        });
+        totalEl.textContent = 'Total: ' + total + (total === 1 ? ' question' : ' questions');
+    }
+
+    document.addEventListener('input', function (e) {
+        const id = (e.target && e.target.id) || '';
+        if (id.indexOf('config-quiz-') === 0 && id !== 'config-quiz-vocab-mode') {
+            refreshQuizTotal();
+        }
+    });
+
     function saveGlobalConfigurationAndClose() {
         // Collect model parameters
         const api_type = document.getElementById('config-api-type').value;
@@ -1587,12 +1607,24 @@
             max_parallel: parseInt(document.getElementById('config-max-p').value)
         };
 
+        const vocab_mode = document.getElementById('config-quiz-vocab-mode')?.value || 'cloze';
         const quiz_defaults = {
-            reading: parseInt(document.getElementById('config-quiz-reading').value) || 0,
-            vocabulary: parseInt(document.getElementById('config-quiz-vocabulary').value) || 0,
-            translation: parseInt(document.getElementById('config-quiz-translation').value) || 0,
-            listening: parseInt(document.getElementById('config-quiz-listening').value) || 0,
-            video: parseInt(document.getElementById('config-quiz-video').value) || 0
+            vocabulary: {
+                count: parseInt(document.getElementById('config-quiz-vocabulary').value) || 0,
+                mode: vocab_mode
+            },
+            reading: {
+                count: parseInt(document.getElementById('config-quiz-reading').value) || 0
+            },
+            translation: {
+                count: parseInt(document.getElementById('config-quiz-translation').value) || 0
+            },
+            listening: {
+                count: parseInt(document.getElementById('config-quiz-listening').value) || 0
+            },
+            video: {
+                count: parseInt(document.getElementById('config-quiz-video').value) || 0
+            }
         };
 
         const tts_engine = document.getElementById('config-tts-engine').value;
@@ -1656,11 +1688,24 @@
                 document.getElementById('config-max-p-val').innerText = mParallel;
 
                 const qDefaults = appConfig.quiz_defaults || {};
-                const qVocab = qDefaults.vocabulary || 10;
-                const qReading = qDefaults.reading || 5;
-                const qTranslation = qDefaults.translation || 5;
-                const qListening = qDefaults.listening || 5;
-                const qVideo = qDefaults.video ?? 5;
+                const parseQCount = (val, def) => {
+                    if (val && typeof val === 'object' && val.count !== undefined) return val.count;
+                    if (typeof val === 'number') return val;
+                    return def;
+                };
+
+                const qVocab = parseQCount(qDefaults.vocabulary, 10);
+                const qReading = parseQCount(qDefaults.reading, 5);
+                const qTranslation = parseQCount(qDefaults.translation, 5);
+                const qListening = parseQCount(qDefaults.listening, 5);
+                const qVideo = parseQCount(qDefaults.video, 5);
+
+                const vocabMode = (qDefaults.vocabulary && typeof qDefaults.vocabulary === 'object' && qDefaults.vocabulary.mode) 
+                    ? qDefaults.vocabulary.mode 
+                    : (appConfig.enable_authentic_cloze === false ? 'generative' : 'cloze');
+
+                const modeSelect = document.getElementById('config-quiz-vocab-mode');
+                if (modeSelect) modeSelect.value = vocabMode;
 
                 document.getElementById('config-quiz-vocabulary').value = qVocab;
                 document.getElementById('config-quiz-vocabulary-val').innerText = qVocab;
@@ -1681,6 +1726,9 @@
                 // Level 2 Expert Audit options
                 document.getElementById('config-enable-expert-audit').checked = !!appConfig.enable_expert_audit;
                 document.getElementById('config-judge-model').value = appConfig.judge_model || '';
+
+                // Refresh the "Total questions" badge to match the loaded config
+                refreshQuizTotal();
 
 
                 // Load API type first (sets up model field visibility)
@@ -1795,8 +1843,9 @@
                     judgeSelect.innerHTML = '<option value="">(Same as Active Generation Model)</option>';
                 }
 
-                // If activeModel is configured but not in LM Studio's current list, add it at the top as an option
-                if (activeModel && !modelsList.includes(activeModel) && !targetSelected) {
+                // If activeModel is configured on THIS SAME endpoint but temporarily unloaded, preserve it as an option.
+                // If the user changed endpoint/engine (endpointChanged === true), do NOT drag the old engine's model over.
+                if (!endpointChanged && activeModel && !modelsList.includes(activeModel) && !targetSelected) {
                     const savedOpt = document.createElement('option');
                     savedOpt.value = activeModel;
                     savedOpt.innerText = `${activeModel} (Configured, Not Loaded)`;
@@ -2600,8 +2649,21 @@
     // ------------------ DYNAMIC FORMS & PARAMETERS HELPERS ------------------
     function onApiTypeChange(triggerFetch = true) {
         const val = document.getElementById('config-api-type').value;
+        const urlInput = document.getElementById('config-api-url');
+        if (urlInput) {
+            const curVal = urlInput.value.trim();
+            if (val === 'ollama') {
+                if (!curVal || curVal.includes(':1234') || curVal.includes(':8000') || curVal.includes('api.openai.com')) {
+                    urlInput.value = 'http://localhost:11434';
+                }
+            } else if (val === 'openai') {
+                if (!curVal || curVal.includes(':11434')) {
+                    urlInput.value = 'http://localhost:1234';
+                }
+            }
+        }
         if (triggerFetch) {
-            fetchModels();
+            fetchModels(true);
         }
     }
 
@@ -2662,7 +2724,8 @@
         
         let defaultCount = 10;
         if (appConfig.quiz_defaults && appConfig.quiz_defaults[val] !== undefined) {
-            defaultCount = appConfig.quiz_defaults[val];
+            const rawVal = appConfig.quiz_defaults[val];
+            defaultCount = (rawVal && typeof rawVal === 'object' && rawVal.count !== undefined) ? rawVal.count : rawVal;
         }
         updateQuizCount(defaultCount);
     }
@@ -3828,3 +3891,10 @@
             }
         }
     });
+
+    // Bootstrap 5 tooltips are NOT auto-initialized by the bundle — create instances here.
+    if (window.bootstrap && bootstrap.Tooltip) {
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+            bootstrap.Tooltip.getOrCreateInstance(el);
+        });
+    }

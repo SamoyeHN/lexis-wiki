@@ -27,7 +27,9 @@ Create a timestamp-aware video comprehension quiz based on the provided video tr
      * *Plausible Over-generalization*: Exaggerates a nuanced or seasonal trend into an absolute or universal claim.
 
 4. **Design Audit & Explanation**:
-   - `design_audit`: `AUDIT: [Timestamp Segment] -> [Core Focus: Mechanism / Controversy / Comparison] -> [Traps: Cross-timestamp shift, Rumor vs fact, Over-generalization] -> [Why Distractors Fail]`
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [Timestamp] -> [Core Focus] -> [Key Traps: Cross-timestamp/Rumor vs fact/Over-generalization]`
+     (e.g. `AUDIT: [03:15] -> Mechanism -> Cross-timestamp shift`). DO NOT write paragraphs or quote full transcript lines here.
    - `explanation`: State what the video explicitly clarifies at the given timestamp, and contrastively explain why each distractor trap is invalid. You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
    - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `correct_answer_index`: MUST be an integer 0, 1, 2, or 3 matching the exact position of the true answer in 'options'.
