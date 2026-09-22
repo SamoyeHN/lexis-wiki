@@ -26,6 +26,10 @@
             "type": "string",
             "minLength": 1
           },
+          "quoted_sentence": {
+            "type": "string",
+            "minLength": 1
+          },
           "word": {
             "type": "string",
             "minLength": 1
@@ -54,10 +58,6 @@
               "C2"
             ]
           },
-          "quoted_sentence": {
-            "type": "string",
-            "minLength": 1
-          },
           "example_usage": {
             "type": "string",
             "minLength": 1
@@ -65,11 +65,11 @@
         },
         "required": [
           "design_audit",
+          "quoted_sentence",
           "word",
           "part_of_speech",
           "definition",
           "word_cefr_level",
-          "quoted_sentence",
           "example_usage"
         ],
         "additionalProperties": false

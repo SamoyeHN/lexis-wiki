@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .config import config
 from .llm import llm
 from .prompts import Prompts
+from .linguistics import LinguisticEngine
 
 logger = logging.getLogger("librarian.processor")
 
@@ -1642,11 +1643,17 @@ class WikiProcessor:
                 f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint.\n\n"
             )
 
-        v_kwargs = {"content": clean_content or content, "count": v_count, "syllabus_section": v_syllabus_sec}
-        e_kwargs = {"content": clean_content or content, "count": e_count, "syllabus_section": e_syllabus_sec}
-        g_kwargs = {"content": clean_content or content, "count": g_count, "syllabus_section": g_syllabus_sec}
-        s_kwargs = {"content": clean_content or content, "count": c_count}
-        m_kwargs = {"content": clean_content or content}
+        # Pre-tokenize source text into an indexed sentence pool ([S-1], [S-2]) using spaCy
+        raw_source_text = clean_content or content
+        indexed_content, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(raw_source_text)
+        self._last_sentence_pool = sentence_pool
+
+        # Prepare kwargs with indexed content for extractions (with pristine fallback)
+        v_kwargs = {"content": indexed_content or raw_source_text, "count": v_count, "syllabus_section": v_syllabus_sec}
+        e_kwargs = {"content": indexed_content or raw_source_text, "count": e_count, "syllabus_section": e_syllabus_sec}
+        g_kwargs = {"content": indexed_content or raw_source_text, "count": g_count, "syllabus_section": g_syllabus_sec}
+        s_kwargs = {"content": raw_source_text, "count": c_count}
+        m_kwargs = {"content": raw_source_text}
 
         # Format prompts directly via explicit placeholders
         v_prompt_formatted = v_prompt_template.format(**v_kwargs)

@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple, get_args
 
 from .config import config
 from .schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES
+from .linguistics import LinguisticEngine
 
 # --- Dimension weights (max points per dimension). Single source of truth. ---
 W_SCHEMA = 25.0
@@ -171,8 +172,9 @@ def _expand_contractions(text: str) -> str:
 def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
     """
     Deterministic Level 1 Code Gate: Auto-Remap Grammar Category.
-    If a quote has 100% indisputable physical structural markers pointing to a specific
-    macro domain, but the LLM mislabeled it, automatically remap the category in place
+    Combines spaCy computational dependency parsing with physical marker regexes.
+    If a quote has structural markers pointing to a specific macro domain,
+    but the LLM mislabeled it, automatically remap the category in place
     and return a diagnostic notice.
     """
     if not isinstance(item, dict):
@@ -182,14 +184,33 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
     if not quote or not category:
         return item, None
 
-    # Closed set of interpretive verbs across all forms + optional modals
+    # Only auto-remap if the category is claimed to be one of the 4 Macro Domains
+    # If the item uses a legacy fine-grained label (e.g. 'Concessive clauses'), let it pass without remap
+    FOUR_DOMAINS = {"Rhetoric & Emphasis", "Cohesion & Framing", "Information Packaging", "Logic & Stance"}
+    if category not in FOUR_DOMAINS:
+        return item, None
+
+    # Step 1: Query the spaCy Computational Dependency Classification
+    dep_category = LinguisticEngine.classify_grammar_dependency(quote)
+    if dep_category and dep_category != category:
+        orig_cat = category
+        item["category"] = dep_category
+        # Detect descriptive marker for diagnostic transparency
+        marker = "structural dependency pattern"
+        if re.search(r"\bnot\s+.*?\s*,\s*but\b", quote, re.IGNORECASE):
+            marker = "antithesis 'not... but...'"
+        elif re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\s+that\b", quote, re.IGNORECASE):
+            marker = "propositional encapsulation ', which + [interpretive verb] + that'"
+        notice = f"ℹ️ Deterministic Auto-Remap (spaCy): Corrected category from '{orig_cat}' to '{dep_category}' (Marker: {marker})"
+        return item, notice
+
+    # Step 2: Fallback to fast-path regex checks for patterns spaCy tree might span across fragments
     INTERPRETIVE_VERBS_REGEX = (
         r"(?:(?:would|could|might|may|can|will)\s+)?"
         r"(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)"
     )
 
     # 1. Cohesion & Framing ironclad markers:
-    # , which + [interpretive verb] + that (Anaphoric Encapsulation) OR Shell noun that-clause
     has_which_propositional = bool(re.search(rf",\s*which\s+{INTERPRETIVE_VERBS_REGEX}\s+that\b", quote, re.IGNORECASE))
     has_shell_noun_frame = bool(re.search(r"\bthe\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that\b", quote, re.IGNORECASE))
     if (has_which_propositional or has_shell_noun_frame) and category != "Cohesion & Framing":
@@ -200,7 +221,6 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
         return item, notice
 
     # 2. Rhetoric & Emphasis ironclad markers:
-    # Explicit antithesis (not X, but Y), correlatives (not only... but also), or fronted inversion
     has_antithesis = bool(re.search(r"\bnot\s+.*?\s*,\s*but\b", quote, re.IGNORECASE))
     has_correlative = bool(re.search(r"\b(?:not\s+only\b.*?\bbut\s+also|either\b.*?\bor\b|neither\b.*?\bnor\b)\b", quote, re.IGNORECASE))
     has_fronted_inversion = bool(re.search(r"^\s*(?:not\s+only|only\s+(?:if|when|after|by)|never|seldom|hardly|scarcely)\b", quote, re.IGNORECASE))
@@ -217,7 +237,6 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
         return item, notice
 
     # 3. Information Packaging ironclad markers:
-    # Evaluative Dummy-It extraposition (It is/was + Adj + that/to) mislabeled as Rhetoric & Emphasis
     has_evaluative_it = bool(re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been)\s+(?:[a-z]{4,}\s+)?(?:important|essential|necessary|likely|clear|obvious|vital|crucial|apparent|natural|possible|hard|easy|difficult|wise|useful)\s+(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE))
     if has_evaluative_it and category == "Rhetoric & Emphasis":
         orig_cat = category
@@ -991,7 +1010,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     raw_score = round((passes / checks) * W_PEDAGOGY, 1)
     # Apply soft deduction for auto-remapped grammar categories (2.0 pts per remapped item)
     if task_type == "grammar":
-        remap_count = sum(1 for f in flags if "ℹ️ Deterministic Auto-Remap:" in f)
+        remap_count = sum(1 for f in flags if "Deterministic Auto-Remap" in f)
         if remap_count > 0:
             raw_score = max(0.0, raw_score - (remap_count * 2.0))
 
@@ -1081,6 +1100,9 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
     if not core_src:
         return parsed_data, []
 
+    # Initialize spaCy sentence pool for deterministic boundary snapping
+    _, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(source)
+
     key_by_type = {
         "vocabulary": "vocabulary",
         "expressions": "expressions",
@@ -1099,10 +1121,40 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             surviving_items.append(item)
             continue
 
+        # In-Place Self-Healing: Quote boundary magnetic snapping using sentence pool
+        # Snaps [S-id] or partial quote with '...' to the pristine, authentic source sentence
+        quote_field = "quoted_sentence" if "quoted_sentence" in item else ("quote" if "quote" in item else None)
+        if quote_field and item.get(quote_field):
+            raw_q = str(item[quote_field]).strip()
+            snapped = LinguisticEngine.snap_to_sentence_pool(raw_q, sentence_pool)
+            if snapped and snapped != raw_q:
+                item[quote_field] = snapped
+                pruned_flags.append(f"ℹ️ In-Place Self-Healing: Snapped quote '{raw_q[:30]}...' -> full authentic sentence")
+
         # Deterministic deduplication check
         if task_type == "grammar":
+            raw_quote = str(item.get("quote", "")).strip()
+            # 1. Physical sentence-level invariant dedup (Sentence pool ID)
+            sent_id = LinguisticEngine.get_sentence_id(raw_quote, sentence_pool)
+            if sent_id:
+                sent_dedup_key = f"sent_id:{sent_id}"
+                if sent_dedup_key in seen_dedup_keys:
+                    pruned_flags.append(f"✂️ Pruned duplicate item: duplicate sentence {sent_id} ({raw_quote[:35]}...)")
+                    continue
+                seen_dedup_keys.add(sent_dedup_key)
+
+            # 2. Dependency Syntax Signature Dedup (Macro domain + Dep type + Core anchor)
+            cat_val = str(item.get("category", "")).strip()
+            fp = LinguisticEngine.extract_grammar_fingerprint(raw_quote, category=cat_val)
+            if fp[1] != "generic" and fp[2]:
+                fp_key = f"syntax_fp:{fp[0]}:{fp[1]}:{fp[2]}"
+                if fp_key in seen_dedup_keys:
+                    pruned_flags.append(f"✂️ Pruned duplicate item: homogeneous grammar pattern ({fp[0]} -> {fp[1]}:{fp[2]}): {raw_quote[:35]}...")
+                    continue
+                seen_dedup_keys.add(fp_key)
+
             formula_val = str(item.get("pattern_formula", "")).strip().lower()
-            quote_val = str(item.get("quote", "")).strip().lower()
+            quote_val = raw_quote.lower()
             dedup_key = (formula_val, quote_val)
         else:
             word_val = str(item.get("word", "")).strip().lower()
@@ -1172,6 +1224,14 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             if remap_notice:
                 pruned_flags.append(remap_notice)
 
+            # Level 1 Code Gate: Auto-repair/canonicalize COBUILD formula if trivial or missing
+            current_formula = str(item.get("pattern_formula", "")).strip()
+            if not current_formula or "[" not in current_formula or current_formula.lower() in ("the + [noun] + [vp]", "[subject] + [vp]"):
+                canonical_formula = LinguisticEngine.generate_cobuild_formula(quote, category=item.get("category"))
+                if canonical_formula and canonical_formula != current_formula:
+                    item["pattern_formula"] = canonical_formula
+                    pruned_flags.append(f"ℹ️ In-Place Self-Healing: Standardized COBUILD formula -> '{canonical_formula}'")
+
             surviving_items.append(item)
             continue
 
@@ -1207,6 +1267,16 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             if core_quote and (core_quote not in core_src and _ngram_coverage(core_quote, core_src, n=3) < 0.85):
                 pruned_flags.append(f"✂️ Pruned hallucinated item '{word}' (unmatched word in unverified quote)")
                 continue
+
+        # Level 1 In-Place Self-Healing: Canonical Lemmatization for single-word vocabulary
+        if task_type == "vocabulary" and "word" in item:
+            orig_word = str(item["word"]).strip()
+            # If word is inflected (ends with -ed, -ing, -s) and does not contain brackets
+            if orig_word and "[" not in orig_word and "(" not in orig_word:
+                lemmatized = LinguisticEngine.lemmatize_headword(orig_word, quote)
+                if lemmatized and lemmatized.lower() != orig_word.lower():
+                    item["word"] = lemmatized
+                    pruned_flags.append(f"ℹ️ In-Place Self-Healing: Lemmatized headword '{orig_word}' -> '{lemmatized}'")
 
         surviving_items.append(item)
 

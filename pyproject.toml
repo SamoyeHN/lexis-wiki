@@ -19,6 +19,8 @@ dependencies = [
     "requests",
     "youtube-transcript-api",
     "yt-dlp",
+    "spacy>=3.8.0",
+    "wn>=1.1.0",
 ]
 
 [project.optional-dependencies]
