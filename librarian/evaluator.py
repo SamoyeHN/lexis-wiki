@@ -59,6 +59,8 @@ FATAL_QA_FLAGS = (
     "Grammar formula anchor",
     "Hallucinated quote",
     "pure fabrication",
+    "Incomplete target coverage",
+    "ungrounded in quote",
 )
 
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
@@ -379,6 +381,30 @@ def _extract_wordlist(user_prompt: str) -> List[str]:
     if not words:
         words = re.findall(r"^##\s+(.+?)\s*$", source, re.MULTILINE)
     return [w.strip() for w in words if w and w.strip()]
+
+
+def _extract_target_skeletons(user_prompt: str, task_type: str) -> List[Dict[str, str]]:
+    """Extract deterministic target skeletons supplied in user_prompt for coverage checking."""
+    if not user_prompt:
+        return []
+    skeletons = []
+    norm_prompt = re.sub(r'\r\n|\r', '\n', user_prompt)
+    if task_type == "grammar":
+        # Matches: 1. [S-8] (Logic & Stance) Formula: `...`
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`', norm_prompt)
+        for num, sid, cat, formula in m:
+            skeletons.append({"sid": sid.strip(), "category": cat.strip(), "formula": formula.strip()})
+    elif task_type == "expressions":
+        # Matches: 1. [S-10] (phrasal verb) Formula: `...`
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`', norm_prompt)
+        for num, sid, pos, formula in m:
+            skeletons.append({"sid": sid.strip(), "pos": pos.strip(), "formula": formula.strip()})
+    elif task_type == "vocabulary":
+        # Matches: 1. [S-14] **word** (noun)
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\*\*([^*]+)\*\*\s*\(([^)]+)\)', norm_prompt)
+        for num, sid, word, pos in m:
+            skeletons.append({"sid": sid.strip(), "word": word.strip(), "pos": pos.strip()})
+    return skeletons
 
 
 def _wordlist_matches(clean_target: str, wordlist: set) -> bool:
@@ -742,6 +768,27 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     reasons.append(f"trivial formula anchored only by conversational filler or conjunction: '{pattern}'")
                 elif clean_lits and any(l in {"however", "therefore", "moreover", "furthermore", "meanwhile", "nevertheless", "in fact", "actually"} for l in clean_lits):
                     reasons.append(f"un-abstracted superficial pattern anchored only on discourse adverbial connector: '{pattern}'")
+
+            # Structural Consistency: Literal keywords in formula MUST exist in quote
+            # (e.g. if formula requires 'while', 'not... but...', 'which', or '[V-ing Phrase]', quote must possess corresponding physical markers)
+            clean_quote = _clean_core(quote)
+            clean_quote_raw = quote.lower()
+            if pattern:
+                # Check for explicit literal connector / subordinator words in formula
+                formula_anchors = [
+                    re.sub(r"[^\w\s]", "", lit).lower().strip() 
+                    for lit in re.sub(r"\[.*?\]|\(.*?\)|[+,/]", " ", pattern).split() 
+                    if len(re.sub(r"[^\w\s]", "", lit).strip()) >= 3 and lit.lower() not in COBUILD_POS_TOKENS
+                ]
+                missing_anchors = [anc for anc in formula_anchors if anc not in clean_quote]
+                if missing_anchors:
+                    reasons.append(f"formula anchor '{', '.join(missing_anchors)}' ungrounded in quote")
+                # Check for participle requirement
+                if "[v-ing" in pattern.lower() or "[participle" in pattern.lower():
+                    ING_EXCLUDE = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "during", "ceiling"})
+                    ing_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", clean_quote_raw) if w not in ING_EXCLUDE]
+                    if not ing_tokens:
+                        reasons.append("formula requires '[V-ing]' but quote contains no participle verb ungrounded in quote")
 
             # Auto-Remap explicit category mismatches if not already healed
             _, remap_notice = auto_remap_grammar_category(item)
@@ -1455,6 +1502,20 @@ class LogEvaluator:
             composite_score = round((earned_score / applicable_weight) * 100.0, 1)
         else:
             composite_score = 0.0
+
+        # Deterministic Target Coverage Gate: check if model delivered all requested target items
+        if task_type in ("grammar", "expressions", "vocabulary"):
+            skeletons = _extract_target_skeletons(effective_prompt, task_type)
+            expected_count = len(skeletons)
+            if expected_count > 0:
+                delivered_count = len(items)
+                if delivered_count < expected_count:
+                    coverage_ratio = delivered_count / expected_count
+                    flags.append(
+                        f"❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only {delivered_count}/{expected_count} targets"
+                    )
+                    # Proportionately scale composite score so that 1/5 outputs score ~20%, NOT 100%!
+                    composite_score = round(composite_score * coverage_ratio, 1)
 
         # Special handling for expert_audit task: align composite_score with deterministic code gate
         if task_type == "expert_audit" and isinstance(parsed, dict):

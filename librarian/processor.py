@@ -1672,7 +1672,7 @@ class WikiProcessor:
             g_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
                 f"The following {len(grammar_skeletons)} academic structural patterns have been mathematically identified in the passage.\n"
-                f"For EACH pattern below, locate sentence [{s['sid']}] in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the high-intelligence pedagogical fields (pedagogical_function, imitation_example, common_mistakes, and cefr_level):\n\n"
+                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets at the beginning of that line in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the high-intelligence pedagogical fields (pedagogical_function, imitation_example, common_mistakes, and cefr_level):\n\n"
                 + "\n".join(skeleton_bullets) + "\n\n"
             )
 
@@ -3049,7 +3049,12 @@ class WikiProcessor:
                 any(fatal in f for fatal in FATAL_QA_FLAGS)
                 for f in flags
             )
-            if (composite is not None and composite < 80.0) or has_fatal_flags:
+            if (composite is not None and composite < 60.0) or has_fatal_flags:
+                logger.warning(
+                    f"🚫 {category} extraction for {filename_stem} scored {composite}/100 (fatal defect / failed). "
+                    f"Delivering to extractions/ with qa_status: 'failed' (body blocked from rendering)."
+                )
+            elif (composite is not None and composite < 80.0):
                 logger.warning(
                     f"⚠️ {category} extraction for {filename_stem} scored {composite}/100 (review recommended). "
                     f"Delivering directly to extractions/ with qa_status: 'review_needed'."
@@ -3180,6 +3185,8 @@ class WikiProcessor:
 
             # Inject QA Audit Score if available
             qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+            is_failed = False
+            failed_flags = []
             if qa_audit and isinstance(qa_audit, dict):
                 qa_composite = qa_audit.get("composite_score")
                 if qa_composite is not None:
@@ -3187,7 +3194,14 @@ class WikiProcessor:
                     from .evaluator import FATAL_QA_FLAGS
                     flags = qa_audit.get("flags", [])
                     has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
-                    qa_status = "passed" if (qa_composite >= 80.0 and not has_fatal) else "review_needed"
+                    if (qa_composite < 60.0) or has_fatal:
+                        qa_status = "failed"
+                        is_failed = True
+                        failed_flags = [f for f in flags if any(fatal in f for fatal in FATAL_QA_FLAGS) or f.startswith("❌")]
+                    elif qa_composite >= 80.0:
+                        qa_status = "passed"
+                    else:
+                        qa_status = "review_needed"
                     lines.append(f"qa_status: \"{qa_status}\"")
 
             for name, val in fields:
@@ -3195,6 +3209,17 @@ class WikiProcessor:
                     if val: lines.append(f"{name}: \"{val}\"")
             
             lines.extend(["---", "", f"# {category.title()}: {display_title}", ""])
+
+            # If extraction failed QA gate (<60% or fatal defects), block contaminated body items from rendering
+            if is_failed:
+                flag_summary = f" (Reasons: {'; '.join(failed_flags[:2])})" if failed_flags else ""
+                lines.extend([
+                    f"> [!CAUTION]",
+                    f"> **Extraction Quality Gate Failed (Score: {round(float(qa_composite or 0))}/100)**{flag_summary}",
+                    f"> The generated {category} content contained severe defects and was blocked to prevent curricular contamination.",
+                    f"> Please check the source text completeness, adjust model settings, or recompile."
+                ])
+                return "\n".join(lines) + "\n"
 
             for item in items:
                 if dataclasses.is_dataclass(item):
@@ -3315,6 +3340,8 @@ class WikiProcessor:
 
             # Inject QA Audit Score if available
             qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+            is_failed = False
+            failed_flags = []
             if qa_audit and isinstance(qa_audit, dict):
                 qa_composite = qa_audit.get("composite_score")
                 if qa_composite is not None:
@@ -3322,7 +3349,14 @@ class WikiProcessor:
                     from .evaluator import FATAL_QA_FLAGS
                     flags = qa_audit.get("flags", [])
                     has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
-                    qa_status = "passed" if (qa_composite >= 80.0 and not has_fatal) else "review_needed"
+                    if (qa_composite < 60.0) or has_fatal:
+                        qa_status = "failed"
+                        is_failed = True
+                        failed_flags = [f for f in flags if any(fatal in f for fatal in FATAL_QA_FLAGS) or f.startswith("❌")]
+                    elif qa_composite >= 80.0:
+                        qa_status = "passed"
+                    else:
+                        qa_status = "review_needed"
                     lines.append(f"qa_status: \"{qa_status}\"")
 
             lines.extend([
@@ -3330,6 +3364,20 @@ class WikiProcessor:
                 "",
                 f"# Summary: {title}",
                 "",
+            ])
+
+            # If extraction failed QA gate (<60% or fatal defects), block contaminated body from rendering
+            if is_failed:
+                flag_summary = f" (Reasons: {'; '.join(failed_flags[:2])})" if failed_flags else ""
+                lines.extend([
+                    f"> [!CAUTION]",
+                    f"> **Extraction Quality Gate Failed (Score: {round(float(qa_composite or 0))}/100)**{flag_summary}",
+                    f"> The generated summary content contained severe defects and was blocked to prevent curricular contamination.",
+                    f"> Please check the source text completeness, adjust model settings, or recompile."
+                ])
+                return "\n".join(lines) + "\n"
+
+            lines.extend([
                 "## Narrative Overview",
                 summary_text,
                 "",

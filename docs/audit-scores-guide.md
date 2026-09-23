@@ -17,7 +17,7 @@ This guide explains what these scores mean from an everyday user's perspective, 
 | **90 – 100%** | **High Quality (Passed)** | Green Badge / `qa_status: "passed"` | Verbatim accuracy, unambiguous stems, high-value distractors, rigorous single-key validity. | **Ready for Class**: Distribute, print, or assign immediately without manual editing. |
 | **80 – 89%** | **Good (Passed)** | Green Badge / `qa_status: "passed"` | Solid and accurate; meets all curricular standards; minor stylistic simplifications may exist. | **Ready for Class**: Suitable for everyday teaching. Take a quick glance if preparing for a high-stakes exam. |
 | **60 – 79%** | **Review Needed** | Amber Warning Badge / `qa_status: "review_needed"` | Minor localized imperfections (e.g. one distractor has low plausibility, or a pattern is relatively simple). | **Quick Review Recommended**: Open the file or badge tooltip, check flagged items, and adjust or re-run if needed. |
-| **< 60% or Fatal** | **Rejected / Quarantined** | Automatically moved to `_quarantine/` | Serious defects detected (e.g. double correct keys, hallucinated text evidence, insufficient items). | **Safe by Default**: Automatically blocked from the production directory. Check source text completeness and recompile. |
+| **< 60% or Fatal** | **Failed (Blocked)** | Red Warning Badge / `qa_status: "failed"` | Serious defects detected (e.g. incomplete target coverage, ungrounded formulas, hallucinated text evidence). | **Transparent Delivery Safeguard**: Shipped directly to `extractions/` with `qa_status: "failed"`. Defective body items are safely blocked from rendering to prevent curriculum contamination. Check source text completeness, adjust model settings, or recompile. |
 
 ---
 
@@ -46,12 +46,13 @@ qa_status: "passed"
 - `qa_score`: Overall composite quality score out of 100.
 - `qa_status`:
   - `"passed"`: Score $\ge 80$, physically verified against the source text.
-  - `"review_needed"`: Score $< 80$, indicates minor issues noted for teacher awareness.
+  - `"review_needed"`: Score $60–79$, indicates minor issues noted for teacher awareness.
+  - `"failed"`: Score $< 60$ or fatal defects (incomplete target coverage, hallucinated quotes). The file records the failure in frontmatter and blocks defective content items from rendering.
 
 ### What should you do?
 1. **Automatic Healing**: If the initial draft scored below 80, the system already performed one targeted self-correction retry with specific diagnostic feedback before saving.
 2. **If you see `review_needed` (60–79)**: Open the Markdown file in your editor. You can freely edit or fine-tune any definitions, formulas, or examples—your changes are saved immediately.
-3. **Quarantine Safeguard**: If `quarantine_on_fail` is enabled (default), extractions scoring below 80 or containing fabricated quotes will not appear in `extractions/`. Instead, they are quarantined under `wiki/<UnitName>/_quarantine/` with a detailed diagnostic report (`*_REJECTED.json`).
+3. **Transparent Delivery Safeguard**: If an extraction scores below 60 or suffers fatal flaws, the system never hides files in obscure quarantine folders. The file exists in `extractions/` with clear frontmatter metadata and an alert callout, while protecting your classroom notes and knowledge graph from defective items until recompiled.
 
 ---
 

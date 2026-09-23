@@ -75,7 +75,12 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - `enable_prose_pipeline`: Multi-turn prose-to-JSON for quizzes (default: `true`).
 - `enable_vocab_prose`: Prose pipeline for vocabulary (default: `false`).
 - `enable_grammar_prose`: Prose pipeline for grammar (default: `false`).
-- **Transparent Delivery (No Quarantine)**: Content is delivered directly to `extractions/` or `handouts/`. Quality audit scores and status flags (`qa_status: "review_needed"`) are embedded in frontmatter and logs.
+- **Transparent Delivery (No Quarantine)**:
+  - All content delivers directly to `extractions/` or `handouts/` under its canonical unit slug, eliminating isolated quarantine folders (`_quarantine/`).
+  - **3-Tier Frontmatter Status**:
+    - `qa_status: "passed"` ($\ge 80$): Complete delivery ready for classroom instruction.
+    - `qa_status: "review_needed"` ($60–79$): Delivered with full content, flagged for optional teacher review.
+    - `qa_status: "failed"` ($< 60$ or fatal defects): Frontmatter records score, failure status, and reasons, while defective content items are safely blocked from rendering to prevent curricular contamination.
 
 ### 3.3 Hardware Alignment & Concurrency Protocols
 - **Default Serialization (`max_parallel: 1`)**:
@@ -168,22 +173,16 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Restored authentic full sentence requirement for `quoted_sentence` and `quote`, restricting `[S-ID]` exclusively to `design_audit` tag chains
 - [x] Level 1 deterministic self-healing for unoriginal/copied `example_usage` and empty extraction fallback from sentence pool
 - [x] Quiz prompt lean refactor: tag-chain `design_audit` across all 5 quiz modalities (reading, listening, vocab, translation, video)
+- [x] Fixed grammar extraction prompt variable leakage (P0-1) across deterministic pattern targets
+- [x] Deterministic Target Coverage Gate & Formula Grounding in Evaluator (P0-2: proportionate score scaling, incomplete coverage fatal flag, and formula-quote physical grounding)
+- [x] Unified Transparent Delivery & Frontmatter Safety Blocking (P0-3: 3-tier status triage, frontmatter-only error reporting with body safety blocking on failed extractions, elimination of quarantine directory confusion)
 
 ### Pending
 - **Primary Focus: Source-to-Wiki Extraction Quality**:
   - Maximize precision and pedagogical rigor across vocabulary, expressions, and grammar extractions prior to quiz generation updates.
   - Enforce single-word contextual discipline and authentic syntactic slot binding.
-- **Linguistic Engine Integration (spaCy Computational Linguistics Pipeline)**:
-  - *Context*: Regex-based pattern matching lacks structural syntax awareness, causing boundary conflicts with nested clauses, long-distance modifiers, and lexical list maintenance. Introducing spaCy (`en_core_web_sm`, ~12MB) provides deterministic dependency parsing, accurate part-of-speech tagging, and phrase extraction.
-  - *Core Capabilities*:
-    1. **Sentence Boundary Tokenization & Indexing (`[S-1]`, `[S-2]`)**: Pre-tokenize source text into an indexed, punctuation-complete sentence pool. Prompts present numbered sentences so LLMs select sentence IDs rather than transcribing full text, eliminating copy-paste hallucinations, trailing ellipses (`...`), and verbatim mismatches.
-    2. **Multi-Word Expression & Phrase Boundary Extraction**: Extract noun chunks (`noun_chunks`), phrasal verbs (`prep`/`prt` particle dependencies), and idiomatic verbal collocations directly from the dependency tree, ensuring multi-word expressions have verified grammatical boundaries.
-    3. **Dependency-Based Macro Domain Classification Gate**:
-       - Distinguish cleft focus from evaluative dummy-it extraposition via expletive (`expl`) vs subject complement (`csubj`/`ccomp`) tags without brittle adjective whitelists.
-       - Accurately identify non-finite participial adjuncts (`advcl` with `VerbForm=Part`) without false positives on nominal `-ing` words.
-       - Deterministically detect fronted inversion via inverted subject-auxiliary linear order (`aux`/`ROOT` preceding `nsubj`).
-    4. **Context-Aware Lemmatization**: Programmatically derive canonical base dictionary headwords from sentence context, eliminating inflected headwords (`-ed`, `-ing`).
-    5. **Automated COBUILD Slot Formula Abstraction**: Traverse dependency subtrees to mechanically abstract concrete surface constituents into algebraic slot placeholders (e.g. mapping subject subtrees to `[Subject]`, object noun chunks to `[NP]`, and finite complement clauses to `[that-clause]`), while preserving invariant syntactic anchors (`depends, not on... but on...`). Guarantees 100% canonical, dictionary-grade COBUILD formulas without relying on prone-to-hallucination LLM transcription.
+- Deterministic overall_cefr_level labelling
+  - apply to word level(vocabulary/expression), sentence level(grammar/quiz/reading), passage level(reading)
 - **Deterministic Code Substitution Roadmap**:
   - Prioritize code-based deterministic enforcement over LLM prompting for repetitive, rule-bound tasks:
     1. **COBUILD Slot Formula Normalization**: Enforce closed symbol mappings (e.g., normalize `[sb]` / `[someone]` to standard slot representations and auto-close brackets).
@@ -203,17 +202,6 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
     1. **Deterministic Category Auto-Remap**: Incontrovertible structural markers (inverted subject-aux, expletives, antithesis `not... but...`, shell nouns) trigger direct programmatic reassignment of `category` in memory (<0.01ms).
     2. **Canonical Lemmatization & Boundary Snapping**: In-place replacement of inflected words and partial quotes via spaCy dependency trees and indexed sentence pools.
     3. **Elimination of Multi-Turn Retries**: Generates content strictly in a single pass (One-Shot for extraction, single-pass generation for quiz stems).
-- **Dual-Track Assessment Architecture (Achievement vs. Proficiency Difficulty Control)**:
-  - *Context*: LLMs lack token-counting awareness, rendering naive length prompts (`limit to 20 words`) completely dysfunctional. Simultaneously, educational assessment demands two distinct pedagogical modalities: **Achievement Testing (学业测试 / Curriculum Mastery)** and **Proficiency Testing (能力测试 / Generalized Application)**.
-  - *Dual-Track Design*:
-    1. **Track 1: Achievement MCQ (学业水平测试 / Passage Cloze)**:
-       - Rather than asking the LLM to hallucinate synthetic stems, code directly selects authentic source sentences from the indexed sentence pool (`[S-id]`) containing the target vocabulary or phrase, masking the headword (`____`).
-       - *Pedagogical Value*: 100% textbook-aligned, authentic lexical register, perfect curriculum difficulty grounding, zero token cost for stem authoring.
-    2. **Track 2: Proficiency MCQ (综合语言能力测试 / Clause-Slot Bounded Generation)**:
-       - To test generalized transfer without length runaway, enforce strict **Clause-Count Syntactic Slot Skeletons** in the prompt (e.g., `[Main Clause with target word] + [single subordinating conjunction: because/although/while] + [Simple Clause]`, strictly forbidding nested `which/that` or participial appendages).
-       - *Pedagogical Value*: Structurally anchors sentence length to a natural 15–22 word span, preventing monologue bloat or GRE-level run-on sentences.
-    3. **Deterministic Readability & Length Gate (Level 1 Post-Audit)**:
-       - Instantaneous code-level validation using word count (`14 <= len(stem.split()) <= 28`), Flesch-Kincaid grade level, and Oxford/CEFR lexical density ceilings to catch and prune outlier items.
 - **Adjust functions of Level 2 Judge Model**:
   - *Context*: When distractors, single-fit validity, verbatim grounding, and category assignments are mathematically guaranteed by WordNet, spaCy, and Level 1 Code Gates, Level 2 LLM-as-a-Judge semantic audits become redundant.
 

@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from typing import get_args
 
@@ -410,6 +411,141 @@ open the door to sth.
         self.assertTrue(any("Multiple blanks" in msg for msg in msgs))
 
 
+    def test_target_coverage_penalty_and_fatal_flag(self):
+        user_prompt = (
+            "### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
+            "The following 5 academic structural patterns have been pre-identified:\n"
+            "1. [S-8] (Logic & Stance) Formula: `while [Clause], [Main Clause]`\n"
+            "2. [S-21] (Information Packaging) Formula: `[Subject] + [VP], [V-ing Phrase]`\n"
+            "3. [S-23] (Cohesion & Framing) Formula: `, which suggests that [Clause]`\n"
+            "4. [S-28] (Rhetoric & Emphasis) Formula: `not only [VP], but [VP]`\n"
+            "5. [S-31] (Logic & Stance) Formula: `if [Clause], [Main Clause]`\n"
+            "\n"
+            "### PASSAGE ###\n"
+            "[S-8] While the results were preliminary, they offered promise.\n"
+            "[S-21] The team worked tirelessly, conducting several tests.\n"
+            "[S-23] The rate increased, which suggests that demand grew.\n"
+            "[S-28] They not only investigated the cause, but solved the issue.\n"
+            "[S-31] If conditions deteriorate, action will be needed.\n"
+        )
+        # Model only returned 1 out of 5 patterns
+        partial_json = {
+            "grammar_patterns": [
+                {
+                    "design_audit": "AUDIT: [S-8] -> Logic & Stance -> while [Clause], [Main Clause]",
+                    "pattern_formula": "while [Clause], [Main Clause]",
+                    "quote": "While the results were preliminary, they offered promise.",
+                    "category": "Logic & Stance",
+                    "pedagogical_function": "Concessive contrast",
+                    "imitation_example": "While this method is costly, it yields accurate outcomes.",
+                    "common_mistakes": "Do not confuse while with although in temporal contexts.",
+                    "cefr_level": "B2"
+                }
+            ]
+        }
+        log_data = {
+            "task": "grammar",
+            "model": "test-model",
+            "user_prompt": user_prompt,
+            "raw_response": json.dumps(partial_json),
+            "parsed_json": partial_json,
+        }
+        res = LogEvaluator.evaluate_log(log_data)
+        # 1/5 coverage must scale composite score to ~20%, not 100%!
+        self.assertLessEqual(res["composite_score"], 25.0)
+        self.assertTrue(any("Incomplete target coverage" in f for f in res["flags"]))
+        self.assertTrue(any("1/5 targets" in f for f in res["flags"]))
+
+    def test_ungrounded_formula_anchor_flag(self):
+        user_prompt = (
+            "### PASSAGE ###\n"
+            "[S-31] If conditions deteriorate, action will be needed.\n"
+        )
+        # Model claims formula has [V-ing Phrase] but quote has no participle
+        mismatched_json = {
+            "grammar_patterns": [
+                {
+                    "design_audit": "AUDIT: [S-31] -> Information Packaging -> [Subject] + [VP], [V-ing Phrase]",
+                    "pattern_formula": "[Subject] + [VP], [V-ing Phrase]",
+                    "quote": "If conditions deteriorate, action will be needed.",
+                    "category": "Information Packaging",
+                    "pedagogical_function": "Participial adjunct",
+                    "imitation_example": "The scientist reviewed the data, noting errors.",
+                    "common_mistakes": "Avoid dangling participles.",
+                    "cefr_level": "B2"
+                }
+            ]
+        }
+        log_data = {
+            "task": "grammar",
+            "model": "test-model",
+            "user_prompt": user_prompt,
+            "raw_response": json.dumps(mismatched_json),
+            "parsed_json": mismatched_json,
+        }
+        res = LogEvaluator.evaluate_log(log_data)
+        self.assertTrue(any("ungrounded in quote" in f for f in res["flags"]))
+
+
+    def test_transparent_delivery_failed_blocking_frontmatter(self):
+        from librarian.processor import WikiProcessor
+        wp = WikiProcessor()
+        # Simulated extraction data that failed QA with score 25 and fatal flag
+        failed_data = {
+            "title": "Test Grammar Failed",
+            "overall_cefr_level": "B2",
+            "grammar_patterns": [
+                {
+                    "name": "Defective Pattern",
+                    "pattern_formula": "while [Clause], [Main Clause]",
+                    "quote": "Unrelated sentence.",
+                    "category": "Logic & Stance"
+                }
+            ],
+            "_qa_audit": {
+                "composite_score": 25.0,
+                "flags": ["❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only 1/5 targets"]
+            }
+        }
+        md = wp._format_as_markdown(failed_data, "grammar", "TestUnit.md")
+        self.assertIn("qa_status: \"failed\"", md)
+        self.assertIn("qa_score: 25", md)
+        self.assertIn("> [!CAUTION]", md)
+        self.assertIn("Extraction Quality Gate Failed (Score: 25/100)", md)
+        # Content item must NOT be rendered in body to prevent contamination
+        self.assertNotIn("Defective Pattern", md)
+        self.assertNotIn("Unrelated sentence", md)
+
+    def test_transparent_delivery_passed_renders_body(self):
+        from librarian.processor import WikiProcessor
+        wp = WikiProcessor()
+        passed_data = {
+            "title": "Test Grammar Passed",
+            "overall_cefr_level": "B2",
+            "grammar_patterns": [
+                {
+                    "name": "Valid Pattern",
+                    "pattern_formula": "while [Clause], [Main Clause]",
+                    "quote": "While the results were preliminary, they offered promise.",
+                    "category": "Logic & Stance",
+                    "imitation_example": "Ex.",
+                    "common_mistakes": "None."
+                }
+            ],
+            "_qa_audit": {
+                "composite_score": 92.0,
+                "flags": []
+            }
+        }
+        md = wp._format_as_markdown(passed_data, "grammar", "TestUnit.md")
+        self.assertIn("qa_status: \"passed\"", md)
+        self.assertIn("qa_score: 92", md)
+        self.assertNotIn("> [!CAUTION]", md)
+        self.assertIn("Valid Pattern", md)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
 

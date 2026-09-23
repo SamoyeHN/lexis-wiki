@@ -331,7 +331,8 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
             processor.config.ensure_dirs()
 
             unit_name = "Test_Unit_Transparent_Delivery"
-            review_needed_data = {
+            # Case 1: Fatal flag triggers qa_status: "failed" and blocks body
+            failed_data = {
                 "_qa_audit": {
                     "composite_score": 65.0,
                     "flags": ["❌ Grammar formula anchor 'although' does not appear in quoted sentence: 'Test...'"],
@@ -339,13 +340,31 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
                 },
                 "grammar_patterns": []
             }
-            res = processor._save_extraction_results(review_needed_data, f"{unit_name}.md", category_override="grammar")
+            res = processor._save_extraction_results(failed_data, f"{unit_name}.md", category_override="grammar")
             md_path = tmp_dir / "wiki" / unit_name / "extractions" / f"{unit_name}_grammar.md"
             self.assertTrue(md_path.exists())
             with open(md_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            self.assertIn('qa_status: "review_needed"', content)
+            self.assertIn('qa_status: "failed"', content)
             self.assertIn("qa_score: 65", content)
+            self.assertIn("> [!CAUTION]", content)
+
+            # Case 2: Score 75 with minor warning (no fatal flag) triggers qa_status: "review_needed"
+            review_unit = "Test_Unit_Review_Needed"
+            review_data = {
+                "_qa_audit": {
+                    "composite_score": 75.0,
+                    "flags": ["⚠️ Minor stylistic repetition in examples"],
+                    "status": "SUCCESS",
+                },
+                "grammar_patterns": []
+            }
+            processor._save_extraction_results(review_data, f"{review_unit}.md", category_override="grammar")
+            rev_path = tmp_dir / "wiki" / review_unit / "extractions" / f"{review_unit}_grammar.md"
+            with open(rev_path, "r", encoding="utf-8") as f:
+                rev_content = f.read()
+            self.assertIn('qa_status: "review_needed"', rev_content)
+            self.assertIn("qa_score: 75", rev_content)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
