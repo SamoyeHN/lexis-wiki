@@ -187,7 +187,10 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:
-  - **Vocabulary**: Refine prompt to maximize contextual definition accuracy and academic rigor of original `example_usage` (preventing trivial/juvenile examples).
+  - **Vocabulary (Neuro-Symbolic Collocation & Academic Example Engine)**:
+    - **spaCy Syntactic Extraction**: Extract authentic in-text usage (preposition binding `token.dep_ == 'prep'`, verb-object heads `dobj`, and adverbial/adjectival modifiers) directly from source sentences.
+    - **Offline Academic Collocation Lexicon (ACL / Oxford Collocations)**: Integrate lightweight static dictionary (~2–5MB) to deterministically retrieve authoritative collocations (`adj+noun`, `verb+noun`, `verb+prep`) at 0 token cost.
+    - **Constrained Example Generation**: Feed retrieved authoritative collocations into the prompt as mandatory slot constraints (e.g., *"Construct example usage using the target collocation '[collocation]' "*), eliminating juvenile or trivial illustrative sentences.
   - **Grammar**: Strengthen sentence selection criteria for authentic pedagogical/discourse value, and enrich `explanation` with functional linguistic stance (nominalization, discourse framing, hedging).
 - **Deterministic CEFR Labelling (Offline Dictionary Integration)**:
   - Integrate offline frequency/proficiency lexicons (CEFR-J, Oxford 3000/5000, AWL) to objectively label CEFR levels across words, sentences, and passages without relying on LLM estimation.
