@@ -1507,6 +1507,7 @@ class LLMClient:
 
     def _chat_ollama(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/api/chat"
+        profile = get_model_profile(self.model)
         cfg_num_ctx = config.get("num_ctx", 16384)
         cfg_max_tokens = config.get("max_tokens", 8192)
 
