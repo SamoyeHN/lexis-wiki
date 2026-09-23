@@ -71,7 +71,8 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 ### 3.2 Audit & Generation Controls (`wiki_config.json`)
 - `enable_expert_audit`: Master switch for Level 2 LLM-as-a-Judge semantic audit (default: `false`).
 - `judge_model`: Independent evaluation model (should differ from generation `model`).
-- `min_passing_items`: Per-quiz minimum passing floor (default: `3`).
+- `num_ctx`: Model context window size in tokens (default: `16384`).
+- `max_tokens`: Maximum generation token budget (default: `8192`).
 - `enable_prose_pipeline`: Multi-turn prose-to-JSON for quizzes (default: `true`).
 - `enable_vocab_prose`: Prose pipeline for vocabulary (default: `false`).
 - `enable_grammar_prose`: Prose pipeline for grammar (default: `false`).

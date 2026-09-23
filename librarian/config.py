@@ -43,7 +43,6 @@ DEFAULT_CONFIG = {
     "enforce_gbnf": False,
     "enable_expert_audit": False,
     "judge_model": "",
-    "min_passing_items": 3,
     "num_ctx": 16384,
     "max_tokens": 8192,
     "enable_prose_pipeline": True,
