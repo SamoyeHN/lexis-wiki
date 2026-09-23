@@ -254,30 +254,70 @@ def main():
 
         port = args.port
 
-        # Dual-output logging: always append dashboard output to logs/dashboard.log;
+        # Dual-output logging: append dashboard output to logs/dashboard.log with ISO timestamps and size rotation;
         # when run in a terminal, also mirror it to the console. Under pythonw
         # (VBS launcher) stdout/stderr are None, so the log file is the only sink.
         try:
             from pathlib import Path
+            import datetime
             logs_dir = Path(config.project_root) / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
-            _log_file = open(logs_dir / "dashboard.log", "a", encoding="utf-8", buffering=1)
+            log_path = logs_dir / "dashboard.log"
+
+            # Log rotation: rotate if dashboard.log exceeds 5MB, keep up to 3 backups
+            MAX_LOG_BYTES = 5 * 1024 * 1024
+            BACKUP_COUNT = 3
+            if log_path.exists() and log_path.stat().st_size >= MAX_LOG_BYTES:
+                try:
+                    for i in range(BACKUP_COUNT - 1, 0, -1):
+                        s = logs_dir / f"dashboard.log.{i}"
+                        d = logs_dir / f"dashboard.log.{i+1}"
+                        if s.exists():
+                            if d.exists():
+                                d.unlink()
+                            s.rename(d)
+                    b1 = logs_dir / "dashboard.log.1"
+                    if b1.exists():
+                        b1.unlink()
+                    log_path.rename(b1)
+                except Exception:
+                    pass
+
+            _log_file = open(log_path, "a", encoding="utf-8", buffering=1)
 
             class _Tee:
                 """File-like stream that writes to both a console stream (if any)
-                and the log file. Each sink is independent: failure on one
+                and the log file with ISO timestamps. Each sink is independent: failure on one
                 (e.g. console closed) never breaks the other."""
                 def __init__(self, stream, log_file):
                     self._stream = stream
                     self._log = log_file
+                    self._at_line_start = True
 
                 def write(self, data):
-                    for target in (self._stream, self._log):
-                        if target is None:
-                            continue
+                    # Write to console as-is
+                    if self._stream is not None:
                         try:
-                            target.write(data)
-                            target.flush()
+                            self._stream.write(data)
+                            self._stream.flush()
+                        except Exception:
+                            pass
+
+                    # Write to log file with ISO timestamp prefix on each new line
+                    if self._log is not None:
+                        try:
+                            lines = data.split("\n")
+                            for idx, line in enumerate(lines):
+                                if idx > 0:
+                                    self._log.write("\n")
+                                    self._at_line_start = True
+                                if line:
+                                    if self._at_line_start:
+                                        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                        self._log.write(f"[{ts}] ")
+                                        self._at_line_start = False
+                                    self._log.write(line)
+                            self._log.flush()
                         except Exception:
                             pass
                     return len(data)
@@ -295,6 +335,15 @@ def main():
 
             sys.stdout = _Tee(sys.stdout, _log_file)
             sys.stderr = _Tee(sys.stderr, _log_file)
+
+            # Ensure python logging library outputs with timestamp, level, and logger name
+            import logging
+            logging.basicConfig(
+                format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+                level=logging.INFO,
+                force=True
+            )
         except Exception:
             # Last-resort safety for headless mode: a print() must never crash
             # the server if the log file cannot be opened.
