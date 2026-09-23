@@ -379,7 +379,19 @@ def _extract_wordlist(user_prompt: str) -> List[str]:
     if not words:
         words = re.findall(r"^##\s*\[\[([^\]]+)\]\]", source, re.MULTILINE)
     if not words:
-        words = re.findall(r"^##\s+(.+?)\s*$", source, re.MULTILINE)
+        # Fallback to headings, but strictly filter out structural/enumerated headings
+        # like 'Item 1', 'Question 2', 'Vocabulary List', 'Text A', etc.
+        raw_headings = re.findall(r"^##\s+(.+?)\s*$", source, re.MULTILINE)
+        filtered = []
+        for h in raw_headings:
+            h_clean = h.strip()
+            # Skip structural markers and item numbers
+            if re.match(r"^(?:Item|Question|Task|Section|Part|Unit|Text|Passage)\s+\d+", h_clean, re.IGNORECASE):
+                continue
+            if re.match(r"^(?:Vocabulary\s*List|Comprehension|Assessment|Questions|Overview)", h_clean, re.IGNORECASE):
+                continue
+            filtered.append(h_clean)
+        words = filtered
     return [w.strip() for w in words if w and w.strip()]
 
 
@@ -561,6 +573,9 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
         wordlist = {_clean_core(w) for w in _extract_wordlist(effective_prompt)}
         wordlist = {w for w in wordlist if w}
         checks = matches = 0
+        draft_prompt = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", effective_prompt, flags=re.IGNORECASE)[0]
+        clean_draft = _clean_core(draft_prompt)
+
         for item in items:
             target = str(item.get("target_word") or "").strip()
             if not target:
@@ -573,14 +588,18 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 matches += 1
             elif not wordlist:
                 # Packaging / conversion phase: check if target word exists in the drafted prompt text
-                draft_prompt = re.split(r"\n\s*###+\s*🚨|\n\s*###+\s*\[QUALITY AUDIT REVIEW", effective_prompt, flags=re.IGNORECASE)[0]
-                clean_prompt = _clean_core(draft_prompt)
-                if clean_target in clean_prompt:
+                if clean_target in clean_draft:
                     matches += 1
                 else:
                     flags.append(f"⚠️ Target '{target}' not found in draft content")
             else:
-                flags.append(f"❌ Target word '{target}' not found in supplied word list (possible hallucination)")
+                # Robust secondary check: wordlist was extracted, but target was not matched against it.
+                # If target is solidly grounded in the drafted prompt text (e.g. Turn 1 prose draft),
+                # treat as valid to prevent false-positive hallucination flags during conversion.
+                if clean_target in clean_draft:
+                    matches += 1
+                else:
+                    flags.append(f"❌ Target word '{target}' not found in supplied word list (possible hallucination)")
         if checks == 0:
             # No target_word items (e.g. reading/translation quizzes) -> nothing to verify -> N/A
             return None, flags
