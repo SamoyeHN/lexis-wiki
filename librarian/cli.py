@@ -28,6 +28,8 @@ def main():
     config_parser.add_argument("--set-key", type=str, help="Set the API key (for OpenAI)")
     config_parser.add_argument("--set-quiz-count", nargs=2, metavar=("TYPE", "COUNT"), help="Set default question count for a quiz type (e.g., reading 10)")
     config_parser.add_argument("--set-compile-count", nargs=2, metavar=("TYPE", "COUNT"), help="Set default extraction count for compile (e.g., vocabulary 15)")
+    config_parser.add_argument("--set-num-ctx", type=int, metavar="TOKENS", help="Set Ollama context window size (e.g., 16384)")
+    config_parser.add_argument("--set-max-tokens", type=int, metavar="TOKENS", help="Set maximum generation tokens (e.g., 8192)")
     config_parser.add_argument("--sync-factory", action="store_true", help="Regenerate all internal factory prompts/schemas from current Python dataclasses")
 
     # Compile command
@@ -198,6 +200,14 @@ def main():
                 print(message)
             except ValueError:
                 print("Error: Count must be an integer.")
+
+        if args.set_num_ctx:
+            success, message = config.update_config("num_ctx", args.set_num_ctx)
+            print(message)
+
+        if args.set_max_tokens:
+            success, message = config.update_config("max_tokens", args.set_max_tokens)
+            print(message)
 
         if args.sync_factory:
             from .prompts import Prompts

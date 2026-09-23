@@ -1507,11 +1507,12 @@ class LLMClient:
 
     def _chat_ollama(self, messages, stream, json_format, schema, **kwargs):
         url = f"{self.api_url}/api/chat"
-        profile = get_model_profile(self.model)
+        cfg_num_ctx = config.get("num_ctx", 16384)
+        cfg_max_tokens = config.get("max_tokens", 8192)
 
         options = {
-            "num_predict": 8192,
-            "num_ctx": 16384,
+            "num_predict": cfg_max_tokens,
+            "num_ctx": cfg_num_ctx,
             "repeat_penalty": 1.1,  # Safeguard against catastrophic token degeneration loops
         }
         
@@ -1525,11 +1526,6 @@ class LLMClient:
         elif "temperature" in kwargs:
             options["temperature"] = kwargs.pop("temperature")
 
-        # Highest Precedence: Any user options configured in wiki_config.json['model_options']
-        # Supports both {"options": {...}} or direct top-level keys like {"temperature": 0.6, "num_ctx": 16384}
-        user_model_opts = profile.get("options", {})
-        if isinstance(user_model_opts, dict):
-            options.update(user_model_opts)
         for opt_k in ("temperature", "num_ctx", "num_predict", "max_tokens", "top_p", "top_k", "repeat_penalty", "seed"):
             if opt_k in profile:
                 target_k = "num_predict" if opt_k == "max_tokens" else opt_k
@@ -1630,11 +1626,12 @@ class LLMClient:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         profile = get_model_profile(self.model)
 
+        cfg_max_tokens = config.get("max_tokens", 8192)
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "max_tokens": 8192,
+            "max_tokens": cfg_max_tokens,
             **kwargs
         }
         is_default_sampling = kwargs.pop("use_default_params", False) or (not schema and not json_format)
@@ -1643,10 +1640,6 @@ class LLMClient:
         elif "temperature" in kwargs:
             payload["temperature"] = kwargs.pop("temperature")
 
-        # Highest Precedence: Any user options configured in wiki_config.json['model_options']
-        user_model_opts = profile.get("options", {})
-        if isinstance(user_model_opts, dict):
-            payload.update(user_model_opts)
         for opt_k in ("temperature", "max_tokens", "num_predict", "top_p", "seed"):
             if opt_k in profile:
                 target_k = "max_tokens" if opt_k == "num_predict" else opt_k
