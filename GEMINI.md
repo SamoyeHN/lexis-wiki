@@ -179,47 +179,23 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Fixed grammar extraction prompt variable leakage (P0-1) across deterministic pattern targets
 - [x] Deterministic Target Coverage Gate & Formula Grounding in Evaluator (P0-2: proportionate score scaling, incomplete coverage fatal flag, and formula-quote physical grounding)
 - [x] Unified Transparent Delivery & Frontmatter Safety Blocking (P0-3: 3-tier status triage, frontmatter-only error reporting with body safety blocking on failed extractions, elimination of quarantine directory confusion)
+- [x] COBUILD slot formula deterministic generation via spaCy dependency trees (`generate_cobuild_formula`)
+- [x] Distractor sanitization & position shuffling with atomic key synchronization (`_shuffle_quiz_options`)
+- [x] Quote boundary magnetic snapping to indexed sentence pool (`snap_to_sentence_pool`)
+- [x] Canonical headword lemmatization & in-place self-healing (`lemmatize_headword`)
+- [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
 
 ### Pending
-- **Primary Focus: Source-to-Wiki Extraction Quality**:
-  - Maximize precision and pedagogical rigor across vocabulary, expressions, and grammar extractions prior to quiz generation updates.
-  - Enforce single-word contextual discipline and authentic syntactic slot binding.
-- Deterministic overall_cefr_level labelling
-  - apply to word level(vocabulary/expression), sentence level(grammar/quiz/reading), passage level(reading)
-- **Deterministic Code Substitution Roadmap**:
-  - Prioritize code-based deterministic enforcement over LLM prompting for repetitive, rule-bound tasks:
-    1. **COBUILD Slot Formula Normalization**: Enforce closed symbol mappings (e.g., normalize `[sb]` / `[someone]` to standard slot representations and auto-close brackets).
-    2. **CEFR / Frequency Objective Lookup**: Integrate lightweight offline reference lexicons (CEFR-J, Oxford 3000/5000, AWL) for sub-millisecond, objective proficiency categorization.
-    3. **Distractor Sanitization & Position Shuffling**: Automated option collision prevention, prefix stripping, and Fisher-Yates position randomization with atomic key synchronization.
-    4. **Common Mistakes Template Injection**: Maintain curated pedagogical defect templates for core grammatical structures, enriching generic or repetitive model explanations.
-    5. **Quote Boundary Magnetic Snapping**: Leverage the indexed sentence pool to auto-snap partial quotes to pristine, authentic source sentences.
-- **Code-Driven Lexical Pipeline & Zero-Double-Key Distractor Assembly (WordNet & Collocation Base)**:
-  - *Context*: Rather than burdening the LLM with complex prompt instructions to engineer distractors, prevent synonym collisions, and balance prepositions, the code directly pre-computes valid, mutually exclusive options using lexical databases (WordNet / Academic Collocation List).
-  - *Core Triad Architecture (One-Shot Production Standard)*:
-    1. **Symbolic Layer (WordNet)**: Offline synthesis of 3 collision-free, distinct-taxonomy distractors (<1ms, 0 tokens).
-    2. **Neural Layer (LLM One-Shot)**: Generates rich academic question stems (`____`) and pedagogical explanations (~15–25s).
-    3. **Psychometric Layer (Level 2 Expert Mode Judge)**: 27B model acts as final blind-solver evaluator for instructional elegance and CEFR alignment.
-  - *Operational Principle*: Eliminates two-turn packaging fragility, double keys, and answer-key misalignments physically at zero token cost.
-- **Level 1 In-Place Self-Healing & Phase-Out of LLM Retry Loops**:
-  - *Context*: Small models (8B–12B) exhibit confirmation bias and lack deep functional grammar reasoning in multi-turn dialogues (agreeing with whatever category is suggested in conversational turns). LLM retry loops are therefore eliminated.
-  - *Design*: Level 1 is transformed into a deterministic self-healing gate:
-    1. **Deterministic Category Auto-Remap**: Incontrovertible structural markers (inverted subject-aux, expletives, antithesis `not... but...`, shell nouns) trigger direct programmatic reassignment of `category` in memory (<0.01ms).
-    2. **Canonical Lemmatization & Boundary Snapping**: In-place replacement of inflected words and partial quotes via spaCy dependency trees and indexed sentence pools.
-    3. **Elimination of Multi-Turn Retries**: Generates content strictly in a single pass (One-Shot for extraction, single-pass generation for quiz stems).
-- **Adjusted Functions of Level 2 Judge Model (Pedagogy & Semantic Audit Focus)**:
-  - *Context*: When structural distractors, single blank format, and option indices are guaranteed by WordNet and Python code, Level 2 LLM-as-a-Judge focuses 100% on genuine instructional quality:
-    1. Validating stem context sufficiency (is the contextual clue strong enough to justify the target word?).
-    2. High-level near-synonym discrimination and pragmatic nuance audit.
-    3. Final pedagogical quality scoring and surgical distractor cure if necessary.
-
-- **Quality Tier Routing & Human Review UI**:
-  - 90–100: Automatic delivery (Passed - High Quality).
-  - 75–89: Automatic delivery flagged as Review Candidate.
-  - 60–74: Routed to Human Review Queue.
-  - < 60: Precision retry loop; permanent unresolve flag if retry limit exceeded.
-- **Multilingual User Interface (i18n)**:
-  - Implement lightweight client-side i18n dictionary decoupling UI strings.
-  - Default to concise, professional academic English, with seamless one-click switching to Simplified Chinese and other languages.
-- **UI/UX & Visualization**:
-  - Knowledge graph enhancements: legend, zoom, filter, export, and clickable side-preview nodes.
-  - Dashboard hub with category grouping and breadcrumb navigation (Bootstrap 5 CDN).
+- **Extraction Pedagogical Quality (Source-to-Wiki)**:
+  - **Vocabulary**: Refine prompt to maximize contextual definition accuracy and academic rigor of original `example_usage` (preventing trivial/juvenile examples).
+  - **Grammar**: Strengthen sentence selection criteria for authentic pedagogical/discourse value, and enrich `explanation` with functional linguistic stance (nominalization, discourse framing, hedging).
+- **Deterministic CEFR Labelling (Offline Dictionary Integration)**:
+  - Integrate offline frequency/proficiency lexicons (CEFR-J, Oxford 3000/5000, AWL) to objectively label CEFR levels across words, sentences, and passages without relying on LLM estimation.
+- **WordNet & Pre-Computed Distractor Assembly**:
+  - Implement offline synthesis of 3 collision-free, distinct-taxonomy distractors (<1ms, 0 tokens) and pair with One-Shot question stem generation to physically eliminate double keys.
+- **Common Mistakes Curated Template Injection**:
+  - Maintain curated pedagogical defect templates for core grammatical structures to enrich generic model explanations.
+- **UI/UX & Multilingual Enhancements**:
+  - Knowledge graph interactive visualization (legend, zoom, filter, preview nodes).
+  - Client-side i18n support (English / Simplified Chinese).
+  - Quality tier human review routing dashboard.
