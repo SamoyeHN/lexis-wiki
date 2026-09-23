@@ -184,12 +184,13 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Quote boundary magnetic snapping to indexed sentence pool (`snap_to_sentence_pool`)
 - [x] Canonical headword lemmatization & in-place self-healing (`lemmatize_headword`)
 - [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
+- [x] Oxford Collocations Dictionary 2nd Edition integration (20,791 headwords, ~4.9MB clean JSON, `LinguisticEngine.get_rich_collocations`)
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:
   - **Vocabulary (Neuro-Symbolic Collocation & Academic Example Engine)**:
     - **spaCy Syntactic Extraction**: Extract authentic in-text usage (preposition binding `token.dep_ == 'prep'`, verb-object heads `dobj`, and adverbial/adjectival modifiers) directly from source sentences.
-    - **Offline Academic Collocation Lexicon (ACL / Oxford Collocations)**: Integrate lightweight static dictionary (~2–5MB) to deterministically retrieve authoritative collocations (`adj+noun`, `verb+noun`, `verb+prep`) at 0 token cost.
+    - **Markdown Vocabulary Card Collocations Injection**: Automatically render authoritative Oxford collocations (`- **Common Collocations (Oxford)**:`) in `extractions/<Unit>_vocabulary.md` at 0 token cost during markdown serialization.
     - **Constrained Example Generation**: Feed retrieved authoritative collocations into the prompt as mandatory slot constraints (e.g., *"Construct example usage using the target collocation '[collocation]' "*), eliminating juvenile or trivial illustrative sentences.
   - **Grammar**: Strengthen sentence selection criteria for authentic pedagogical/discourse value, and enrich `explanation` with functional linguistic stance (nominalization, discourse framing, hedging).
 - **Deterministic CEFR Labelling (Offline Dictionary Integration)**:
