@@ -17,6 +17,7 @@ class LinguisticEngine:
     _wn = None
     _acl_data = None
     _awl_data = None
+    _ocd_data = None
 
     @classmethod
     def get_spacy(cls):
@@ -33,6 +34,72 @@ class LinguisticEngine:
             import wn
             cls._wn = wn
         return cls._wn
+
+    @classmethod
+    def get_oxford_collocations(cls) -> Dict[str, Dict[str, List[str]]]:
+        """Lazy-loads the Oxford Collocations Dictionary 2nd Edition (20,791 headwords, ~4.9MB)."""
+        if cls._ocd_data is None:
+            cls._ocd_data = {}
+            ocd_path = Path(__file__).parent / "data" / "oxford_collocations.json"
+            if ocd_path.exists():
+                try:
+                    with open(ocd_path, "r", encoding="utf-8") as f:
+                        cls._ocd_data = json.load(f)
+                except Exception:
+                    pass
+        return cls._ocd_data
+
+    @classmethod
+    def get_rich_collocations(cls, word: str, top_k: int = 5) -> List[str]:
+        """
+        Retrieves top authoritative, natural collocations for a word from Oxford Collocations Dictionary.
+        Synthesizes phrases like 'lay the foundation', 'firm foundation', 'comprehensive guide'.
+        """
+        if not word:
+            return []
+        ocd = cls.get_oxford_collocations()
+        entry = ocd.get(word.lower().strip())
+        if not entry:
+            return []
+
+        results: List[str] = []
+
+        # 1. Verb + Noun: 'lay [word]', 'establish [word]'
+        if "verb_before" in entry:
+            for v in entry["verb_before"][:3]:
+                if "(" not in v:
+                    results.append(f"{v} {word}")
+
+        # 2. Adj + Noun: 'firm [word]', 'solid [word]'
+        if "adj" in entry:
+            for adj in entry["adj"][:3]:
+                results.append(f"{adj} {word}")
+
+        # 3. Noun collocations: '[word] guide', '[word] analysis'
+        if "colloc_nouns" in entry:
+            for noun in entry["colloc_nouns"][:3]:
+                results.append(f"{word} {noun}")
+
+        # 4. Adv + Verb: '[word] heavily', '[word] directly'
+        if "verb" in entry:
+            for adv in entry["verb"][:2]:
+                results.append(f"{word} {adv}")
+
+        # 5. Preposition: '[word] for', '[word] to'
+        if "prep" in entry:
+            for p in entry["prep"][:2]:
+                results.append(f"{word} {p}")
+
+        # Dedup preserving order
+        seen = set()
+        deduped = []
+        for r in results:
+            if r.lower() not in seen:
+                seen.add(r.lower())
+                deduped.append(r)
+            if len(deduped) >= top_k:
+                break
+        return deduped
 
     @classmethod
     def get_acl_collocations(cls) -> Dict[str, str]:

@@ -45,7 +45,7 @@ DEFAULT_CONFIG = {
     "judge_model": "",
     "num_ctx": 16384,
     "max_tokens": 8192,
-    "enable_prose_pipeline": True,
+    "enable_prose_pipeline": False,
     "enable_vocab_prose": False,
     "enable_grammar_prose": False,
     "enable_authentic_cloze": True

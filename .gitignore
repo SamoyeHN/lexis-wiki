@@ -28,3 +28,8 @@ wiki/
 
 # Exclude config json
 wiki_config.json
+
+# Lexical source archives (keep compiled json only)
+librarian/data/*.mdx
+librarian/data/mdx/
+scratch/
