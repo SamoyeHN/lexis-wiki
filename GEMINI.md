@@ -12,11 +12,13 @@
 
 ### 1.2 Generation Pipeline Modes
 - **Extraction (Vocabulary / Expressions / Grammar)**: Defaults to **One-Shot** (`enable_vocab_prose: false`, `enable_grammar_prose: false`). One-Shot provides 80% faster generation and superior verbatim grounding for text-extraction tasks.
-- **Assessment / Quiz Generation**: Defaults to **Two-Turn Decoupled Pipeline (Prose-to-JSON)** (`enable_prose_pipeline: true`):
-  - Two stateless, independent HTTP calls:
-    1. $\text{Call}_1$: $\text{Source Text} + \text{Pedagogical Prompt} \longrightarrow \text{Prose Draft}$ (native thinking/reasoning without JSON constraints).
-    2. $\text{Call}_2$: $\text{Packaging Prompt} + \text{Turn 1 Draft} + \text{Source Text} \longrightarrow \text{Strict JSON}$ (fast temperature-0 packaging).
-  - *Benefits*: Prevents VRAM exhaustion and KV cache fragmentation on consumer GPUs ($\le$ 12GB), shields JSON structure from prose contamination, and purges reasoning tokens before structured serialization.
+- **Assessment / Quiz Generation Pipeline**:
+  - **Standard Production Mode: One-Shot Direct JSON (`enable_prose_pipeline: false`)**:
+    - **Empirical Baseline**: Thoroughly validated across 11 benchmark models (8B–27B). One-Shot achieves 100% structural completion, 2.2× faster generation (~30s vs ~78s), and eliminates secondary turn semantic drift, target-word loss, and answer-key misalignment.
+    - **Architecture Strategy**: Paired with deterministic WordNet pre-computed distractors and Python-level key binding, One-Shot serves as the default production configuration.
+  - **Diagnostic / Research Mode: Two-Turn Decoupled Pipeline (Prose-to-JSON)** (`enable_prose_pipeline: true`):
+    - Two stateless, independent HTTP calls ($\text{Call}_1$: Prose Draft $\rightarrow$ $\text{Call}_2$: JSON Packaging).
+    - **Purpose & Scope**: Exclusively retained for **offline debugging, pedagogical prompt inspection, raw response probing, and long-chain reading/translation reasoning analysis**. Not recommended for standard vocabulary assessment delivery due to high variance and packaging fragility in smaller models ($\le 14$B).
 - **Structured Output Strategy**:
   - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: Automatically injects programmatic JSON Schema derived from `schemas.py` into the system prompt. Eliminates GBNF grammar parser stalls, tokenizer conflicts, and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
   - **Strict Schema Mode (`enforce_gbnf: true`)**: Used for engines with hardware-accelerated grammar transducers. If empty tokens are returned, `llm.py` automatically falls back to `format: "json"`.
@@ -193,18 +195,22 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
     5. **Quote Boundary Magnetic Snapping**: Leverage the indexed sentence pool to auto-snap partial quotes to pristine, authentic source sentences.
 - **Code-Driven Lexical Pipeline & Zero-Double-Key Distractor Assembly (WordNet & Collocation Base)**:
   - *Context*: Rather than burdening the LLM with complex prompt instructions to engineer distractors, prevent synonym collisions, and balance prepositions, the code directly pre-computes valid, mutually exclusive options using lexical databases (WordNet / Academic Collocation List).
-  - *Core Capabilities*:
-    1. **Pre-Computed Distractor Synthesis**: Code queries WordNet for strict antonyms, taxonomy siblings, and distinct semantic categories.
-    2. **Dependent Preposition Collocational Clashing**: Code selects distractors that are grammatically incompatible with the target sentence's post-blank preposition (e.g., target `rely (+ on)` vs distractors `trust` (transitive), `believe (+ in)`), physically guaranteeing a zero double-key environment at zero token cost.
-    3. **LLM Task Simplification (Context Generation Only)**: The LLM's role is stripped of distractor generation and reduced purely to its greatest strength: generating authentic academic context stems containing `____ [anchor prep]`.
+  - *Core Triad Architecture (One-Shot Production Standard)*:
+    1. **Symbolic Layer (WordNet)**: Offline synthesis of 3 collision-free, distinct-taxonomy distractors (<1ms, 0 tokens).
+    2. **Neural Layer (LLM One-Shot)**: Generates rich academic question stems (`____`) and pedagogical explanations (~15–25s).
+    3. **Psychometric Layer (Level 2 Expert Mode Judge)**: 27B model acts as final blind-solver evaluator for instructional elegance and CEFR alignment.
+  - *Operational Principle*: Eliminates two-turn packaging fragility, double keys, and answer-key misalignments physically at zero token cost.
 - **Level 1 In-Place Self-Healing & Phase-Out of LLM Retry Loops**:
   - *Context*: Small models (8B–12B) exhibit confirmation bias and lack deep functional grammar reasoning in multi-turn dialogues (agreeing with whatever category is suggested in conversational turns). LLM retry loops are therefore eliminated.
   - *Design*: Level 1 is transformed into a deterministic self-healing gate:
     1. **Deterministic Category Auto-Remap**: Incontrovertible structural markers (inverted subject-aux, expletives, antithesis `not... but...`, shell nouns) trigger direct programmatic reassignment of `category` in memory (<0.01ms).
     2. **Canonical Lemmatization & Boundary Snapping**: In-place replacement of inflected words and partial quotes via spaCy dependency trees and indexed sentence pools.
     3. **Elimination of Multi-Turn Retries**: Generates content strictly in a single pass (One-Shot for extraction, single-pass generation for quiz stems).
-- **Adjust functions of Level 2 Judge Model**:
-  - *Context*: When distractors, single-fit validity, verbatim grounding, and category assignments are mathematically guaranteed by WordNet, spaCy, and Level 1 Code Gates, Level 2 LLM-as-a-Judge semantic audits become redundant.
+- **Adjusted Functions of Level 2 Judge Model (Pedagogy & Semantic Audit Focus)**:
+  - *Context*: When structural distractors, single blank format, and option indices are guaranteed by WordNet and Python code, Level 2 LLM-as-a-Judge focuses 100% on genuine instructional quality:
+    1. Validating stem context sufficiency (is the contextual clue strong enough to justify the target word?).
+    2. High-level near-synonym discrimination and pragmatic nuance audit.
+    3. Final pedagogical quality scoring and surgical distractor cure if necessary.
 
 - **Quality Tier Routing & Human Review UI**:
   - 90–100: Automatic delivery (Passed - High Quality).
