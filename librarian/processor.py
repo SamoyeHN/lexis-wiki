@@ -2023,31 +2023,63 @@ class WikiProcessor:
             # - Mode 'generative' or enable_authentic_cloze: False -> Proficiency MCQ (能力测试 / LLM 语境迁移单选题)
             vocab_mode = self.config.get_quiz_config("vocabulary", "mode", "cloze")
             enable_cloze = (vocab_mode == "cloze") if isinstance(vocab_mode, str) else bool(vocab_mode)
-            cloze_section = ""
             if enable_cloze:
-                cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
-                if cloze_items:
-                    logger.info(f"🎯 Built {len(cloze_items)} authentic passage cloze stems (Achievement MCQ Mode).")
+                # Track 1: Authentic Passage Cloze (Achievement MCQ Mode)
+                raw_cloze_items = LinguisticEngine.extract_authentic_cloze_items(raw_vocab, target_count=count)
+                if raw_cloze_items:
+                    logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode).")
                     cloze_bullets = []
-                for idx, c in enumerate(cloze_items, 1):
-                    dist_hint = ", ".join(c.get("precomputed_distractors", []))
-                    cloze_bullets.append(
-                        f"Item {idx}:\n"
-                        f"- Target: {c['target_word']}\n"
-                        f"- Part of Speech: {c['part_of_speech']}\n"
-                        f"- Authentic Question Stem: {c['question']}\n"
-                        f"- Contextual Definition: {c['definition']}\n"
-                        f"- Suggested Collision-Free Distractors: [{dist_hint}]"
+                    for idx, c in enumerate(raw_cloze_items, 1):
+                        opts_str = ", ".join(c.get("precomputed_options", []))
+                        cloze_bullets.append(
+                            f"### Item {idx} ###\n"
+                            f"- Target Word: {c['target_word']}\n"
+                            f"- Part of Speech: {c['part_of_speech']}\n"
+                            f"- Authentic Question Stem: {c['question']}\n"
+                            f"- Candidate Distractors: [{opts_str}]\n"
+                            f"- Contextual Definition: {c['definition']}"
+                        )
+                    kwargs["vocabulary_content"] = (
+                        "### AUTHENTIC PASSAGE CLOZE TARGETS (ACHIEVEMENT MCQ MODE) ###\n"
+                        "For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the candidate distractors) and craft the pedagogical explanation and design audit:\n\n"
+                        + "\n\n".join(cloze_bullets)
                     )
-                cloze_section = (
-                    f"\n\n### PRE-FORMED AUTHENTIC PASSAGE CLOZE ITEMS (ACHIEVEMENT MCQ MODE) ###\n"
-                    f"The following {len(cloze_items)} assessment items have been deterministically constructed from the authentic passage text.\n"
-                    f"For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the precomputed candidates) and craft the pedagogical explanation and design audit:\n\n"
-                    + "\n\n".join(cloze_bullets) + "\n\n"
-                )
+                else:
+                    sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
+                    kwargs["vocabulary_content"] = sanitized_vocab
+            else:
+                # Track 2: Pre-Computed Generative Skeletons (Proficiency MCQ Mode)
+                skeletons = LinguisticEngine.build_precomputed_target_skeletons(raw_vocab, target_count=count)
+                if skeletons:
+                    logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode).")
+                    skeleton_bullets = []
+                    for idx, s in enumerate(skeletons, 1):
+                        opts_str = ", ".join(s.get("prescribed_options", []))
+                        anchor_hint = s.get("context_anchor") or "general context"
+                        infl_hint = s.get("inflection", "base form")
+                        skeleton_bullets.append(
+                            f"### Item {idx} ###\n"
+                            f"- Target Word: {s['target_word']}\n"
+                            f"- Part of Speech: {s['part_of_speech']}\n"
+                            f"- Inflectional Form: {infl_hint}\n"
+                            f"- Collocational Anchor: {anchor_hint}\n"
+                            f"- Prescribed Options: [{opts_str}]\n"
+                            f"- Contextual Definition: {s['definition']}"
+                        )
+                    kwargs["vocabulary_content"] = (
+                        "### TARGET SPECIFICATIONS (PROFICIENCY MCQ MODE) ###\n"
+                        f"The following {len(skeletons)} items specify the authoritative target words, collocational anchors, and prescribed options.\n"
+                        "For EACH item below, you MUST:\n"
+                        "1. Use the EXACT Target Word and align the question stem with its required Part of Speech and Collocational Anchor.\n"
+                        "2. Use the EXACT 4 Prescribed Options for that item's `options` array.\n"
+                        "3. Compose an original CEFR-aligned academic sentence contextualizing the anchor with exactly one blank `____`.\n"
+                        "4. Provide targeted, objective explanations explicitly analyzing why the target fits and why each prescribed distractor fails:\n\n"
+                        + "\n\n".join(skeleton_bullets)
+                    )
+                else:
+                    sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
+                    kwargs["vocabulary_content"] = sanitized_vocab
 
-            sanitized_vocab, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_vocab)
-            kwargs["vocabulary_content"] = sanitized_vocab + cloze_section
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
             kwargs["passage_content"] = data["passage"]

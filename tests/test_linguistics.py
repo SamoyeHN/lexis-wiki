@@ -387,3 +387,36 @@ class TestLinguisticEngine:
         for word in d2:
             assert word in ocd
 
+    def test_build_precomputed_target_skeletons(self):
+        """LinguisticEngine must build valid pre-computed target skeletons with anchors and prescribed options."""
+        sample_vocab = """
+## [[foundation]]
+- **Part Of Speech**: noun
+- **Definition**: The solid basis on which something stands or is supported.
+- **Quoted Sentence**: "The government aims to establish a solid foundation for the economy."
+
+## [[lay]]
+- **Part Of Speech**: verb
+- **Definition**: To put or place something down in a flat or horizontal position.
+- **Quoted Sentence**: "They will lay the groundwork for upcoming bilateral negotiations."
+"""
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(sample_vocab, target_count=2)
+        assert len(skeletons) == 2
+
+        # Item 1: foundation
+        s1 = skeletons[0]
+        assert s1["target_word"] == "foundation"
+        assert s1["part_of_speech"] == "noun"
+        assert len(s1["prescribed_options"]) == 4
+        assert "foundation" in s1["prescribed_options"]
+
+        # Item 2: lay (inflected to laid in past tense sequence)
+        s2 = skeletons[1]
+        assert s2["base_headword"] == "lay"
+        assert s2["target_word"] in ("lay", "laid")
+        assert s2["part_of_speech"] == "verb"
+        assert len(s2["prescribed_options"]) == 4
+        assert s2["target_word"] in s2["prescribed_options"]
+        # Options must be strictly unique
+        assert len(set(s2["prescribed_options"])) == 4
+

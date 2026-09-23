@@ -234,7 +234,11 @@ def main():
         target_count = args.count
         if target_count is None:
             defaults = config.get("quiz_defaults") or {}
-            target_count = defaults.get(args.template, 10)
+            tmpl_val = defaults.get(args.template, 10)
+            if isinstance(tmpl_val, dict):
+                target_count = tmpl_val.get("count", 10)
+            else:
+                target_count = tmpl_val or 10
 
         print(f"Generating quiz from {args.filename} (Target: {target_count} questions, Template: {args.template})...")
         result = processor.generate_quiz(args.filename, count=target_count, template_name=args.template)

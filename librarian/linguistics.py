@@ -139,17 +139,17 @@ class LinguisticEngine:
 
         for w in words:
             for s in w.synsets():
-                # Tier 1: Direct Synonyms in synset
+                # Tier 1: Direct Synonyms in synset (Strict single-word constraint: no phrasal verbs)
                 for sw in s.words():
                     lemma = sw.lemma().lower()
-                    if lemma not in seen and "_" not in lemma and lemma in ocd:
+                    if lemma not in seen and " " not in lemma and "_" not in lemma and "-" not in lemma and lemma in ocd:
                         seen.add(lemma)
                         tier1_synonyms.append(lemma)
                 # Tier 2: Hyponyms (more specific concepts)
                 for hypo in s.hyponyms():
                     for hw in hypo.words():
                         lemma = hw.lemma().lower()
-                        if lemma not in seen and "_" not in lemma and lemma in ocd:
+                        if lemma not in seen and " " not in lemma and "_" not in lemma and "-" not in lemma and lemma in ocd:
                             seen.add(lemma)
                             tier2_hyponyms.append(lemma)
                 # Tier 3: Coordinate terms (sisters under same hypernym)
@@ -157,7 +157,7 @@ class LinguisticEngine:
                     for sis in hyper.hyponyms():
                         for sw in sis.words():
                             lemma = sw.lemma().lower()
-                            if lemma not in seen and "_" not in lemma and lemma in ocd:
+                            if lemma not in seen and " " not in lemma and "_" not in lemma and "-" not in lemma and lemma in ocd:
                                 seen.add(lemma)
                                 tier3_coordinates.append(lemma)
 
@@ -1338,6 +1338,190 @@ class LinguisticEngine:
                 break
 
         return cloze_items
+
+    @classmethod
+    def build_precomputed_target_skeletons(
+        cls,
+        vocab_content: str,
+        target_count: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Track 2: Pre-Computed Generative Skeletons (Proficiency Testing / 语境迁移单选题)
+        Extracts vocabulary items from extracted cards and synthesizes authoritative collocational
+        anchors (via Oxford Collocations Dictionary) and collision-free distractors (via WordNet + OCD).
+        Produces pre-computed item skeletons to strictly constrain LLM generation, guaranteeing zero
+        duplicate options, zero synonym pile double-keys, and perfect stem-option-explanation alignment.
+        """
+        if not vocab_content:
+            return []
+
+        nlp = cls.get_spacy()
+        ocd = cls.get_oxford_collocations()
+        blocks = re.split(r'\n(?=##\s*\[\[)', vocab_content)
+        parsed_items: List[Dict[str, str]] = []
+
+        for b in blocks:
+            m_word = re.search(r'##\s*\[\[(.*?)\]\]', b)
+            if not m_word:
+                continue
+            word = m_word.group(1).strip()
+            # Filter out multi-word idioms or phrases from single-word vocabulary MCQ targets
+            if " " in word or "-" in word:
+                continue
+
+            m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+
+            parsed_items.append({
+                "word": word,
+                "part_of_speech": m_pos.group(1).strip() if m_pos else "noun",
+                "definition": m_def.group(1).strip() if m_def else "",
+                "quote": m_quote.group(1).strip() if m_quote else ""
+            })
+
+        skeletons: List[Dict[str, Any]] = []
+
+        for it in parsed_items:
+            w = it["word"]
+            w_lower = w.lower()
+            raw_pos = it["part_of_speech"].lower()
+            
+            # Map POS category
+            canonical_pos = "noun"
+            if "verb" in raw_pos:
+                canonical_pos = "verb"
+            elif "adj" in raw_pos:
+                canonical_pos = "adj"
+            elif "adv" in raw_pos:
+                canonical_pos = "adv"
+
+            # 1. Retrieve Authentic Oxford Collocational Anchor
+            anchor = None
+            anchor_type = "collocation"
+
+            if w_lower in ocd:
+                entry = ocd[w_lower]
+                if canonical_pos == "verb":
+                    # Verb: Look for direct noun objects
+                    candidates = entry.get("noun_after", []) + entry.get("colloc_nouns", [])
+                    if candidates:
+                        anchor = candidates[0].split()[0].lower()
+                elif canonical_pos == "noun":
+                    # Noun: Look for typical modifying adjectives
+                    candidates = entry.get("adj", []) + entry.get("verb_before", [])
+                    if candidates:
+                        anchor = candidates[0].split()[0].lower()
+                elif canonical_pos == "adj":
+                    # Adjective: Look for nouns modified
+                    candidates = entry.get("noun_after", []) + entry.get("colloc_nouns", [])
+                    if candidates:
+                        anchor = candidates[0].split()[0].lower()
+
+            # 2. Syntactic Fallback: Extract anchor from quoted sentence if OCD entry is empty
+            if not anchor and it["quote"]:
+                q_clean = it["quote"].strip().strip('"').strip("'").strip("“").strip("”")
+                try:
+                    doc = nlp(q_clean)
+                    for tok in doc:
+                        if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            for child in tok.children:
+                                if child.dep_ in ("dobj", "pobj"):
+                                    anchor = child.lemma_.lower()
+                                    break
+                                elif child.dep_ == "prep":
+                                    for pchild in child.children:
+                                        if pchild.dep_ == "pobj":
+                                            anchor = pchild.lemma_.lower()
+                                            break
+                            if not anchor and tok.head and tok.head.pos_ in ("NOUN", "VERB"):
+                                anchor = tok.head.lemma_.lower()
+                            break
+                except Exception:
+                    pass
+
+            # 3. Generate 3 Zero-Collision Distractors
+            distractors = cls.generate_vocab_distractors(
+                target_word=w_lower,
+                pos=canonical_pos,
+                context_anchor=anchor,
+                target_count=3
+            )
+
+            # Ensure we have valid distractors; fallback to zero_collision if needed
+            if len(distractors) < 3:
+                pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else "n")
+                distractors = cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3)
+
+            # Assemble full options (target + 3 distractors)
+            raw_options = [w_lower] + distractors[:3]
+
+            # 4. Deterministic Inflection Variation Engine
+            # Synergize with LLM: Python deterministically synthesizes grammatical inflections
+            # (past tense, participle, plural) so LLM can fearlessly compose varied academic frames.
+            inflection_tag = None
+            inflection_desc = "base form"
+            final_target = w_lower
+            final_options = raw_options
+
+            try:
+                from lemminflect import getInflection
+                # Apply inflection to verbs or nouns based on item index (e.g. mix past, ing, plural)
+                item_seq = len(skeletons)
+                if canonical_pos == "verb":
+                    # Alternate: past participle (VBN) / present participle (VBG) / base form
+                    if item_seq % 3 == 1:
+                        inflection_tag = "VBN"
+                        inflection_desc = "past participle (-ed / -en)"
+                    elif item_seq % 3 == 2:
+                        inflection_tag = "VBG"
+                        inflection_desc = "present participle / gerund (-ing)"
+                elif canonical_pos == "noun":
+                    # Alternate: plural (NNS) / singular base form
+                    if item_seq % 2 == 1:
+                        inflection_tag = "NNS"
+                        inflection_desc = "plural (-s)"
+
+                if inflection_tag:
+                    infl_opts = []
+                    for opt in raw_options:
+                        parts = opt.split()
+                        if parts:
+                            head = parts[0]
+                            infl = getInflection(head, tag=inflection_tag)
+                            if infl:
+                                infl_opts.append(" ".join([infl[0]] + parts[1:]))
+                            else:
+                                infl_opts.append(opt)
+                        else:
+                            infl_opts.append(opt)
+                    # Only adopt if all 4 options inflected successfully and are unique
+                    if len(infl_opts) == 4 and len(set(infl_opts)) == 4:
+                        final_options = infl_opts
+                        w_parts = w_lower.split()
+                        w_infl = getInflection(w_parts[0], tag=inflection_tag) if w_parts else None
+                        if w_infl:
+                            final_target = " ".join([w_infl[0]] + w_parts[1:])
+                    else:
+                        inflection_desc = "base form"
+            except Exception:
+                inflection_desc = "base form"
+
+            skeletons.append({
+                "target_word": final_target,
+                "base_headword": w,
+                "part_of_speech": canonical_pos,
+                "inflection": inflection_desc,
+                "context_anchor": anchor,
+                "prescribed_options": final_options,
+                "definition": it["definition"],
+                "candidate_quote": it["quote"]
+            })
+
+            if len(skeletons) >= target_count:
+                break
+
+        return skeletons
 
     # -------------------------------------------------------------------------
     # 4. WordNet Distractor Assembly & Zero-Double-Key Guarantee
