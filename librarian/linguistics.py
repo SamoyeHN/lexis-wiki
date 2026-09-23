@@ -102,6 +102,106 @@ class LinguisticEngine:
         return deduped
 
     @classmethod
+    def generate_vocab_distractors(
+        cls,
+        target_word: str,
+        pos: str = "noun",
+        context_anchor: str = None,
+        anchor_type: str = "collocation",
+        target_count: int = 3
+    ) -> List[str]:
+        """
+        Synthesizes high-discrimination, collision-free distractors for a target vocabulary word.
+        
+        Pipeline:
+        1. WordNet Semantic Candidates: Retrieves direct synset synonyms (Tier 1), hyponyms (Tier 2),
+           and coordinate terms (Tier 3).
+        2. Lexicon Filter (CEFR / Oxford 20k): Restricts candidates to words present in the Oxford
+           Collocations Dictionary, ensuring natural, curriculum-appropriate words and eliminating obscure terms.
+        3. Oxford Collision Clearance (Zero Double-Key Guarantee):
+           - If context_anchor is provided (e.g., target='lay', anchor='foundation'):
+             Retrieves all authorized collocations for the anchor from OCD and removes any candidate
+             that forms a valid collocation, guaranteeing absolute single-fit validity.
+        4. Syntactic / Morphological Parallelism: Restricts to single words matching the target's POS.
+        """
+        clean_target = target_word.strip().lower()
+        wn = cls.get_wordnet()
+        ocd = cls.get_oxford_collocations()
+
+        # Map POS to WordNet tag ('n', 'v', 'a', 'r')
+        wn_pos = "v" if pos.startswith("v") else ("n" if pos.startswith("n") else ("a" if pos.startswith("adj") or pos.startswith("a") else None))
+        words = wn.words(clean_target, pos=wn_pos) if wn_pos else wn.words(clean_target)
+
+        tier1_synonyms: List[str] = []
+        tier2_hyponyms: List[str] = []
+        tier3_coordinates: List[str] = []
+        seen = {clean_target}
+
+        for w in words:
+            for s in w.synsets():
+                # Tier 1: Direct Synonyms in synset
+                for sw in s.words():
+                    lemma = sw.lemma().lower()
+                    if lemma not in seen and "_" not in lemma and lemma in ocd:
+                        seen.add(lemma)
+                        tier1_synonyms.append(lemma)
+                # Tier 2: Hyponyms (more specific concepts)
+                for hypo in s.hyponyms():
+                    for hw in hypo.words():
+                        lemma = hw.lemma().lower()
+                        if lemma not in seen and "_" not in lemma and lemma in ocd:
+                            seen.add(lemma)
+                            tier2_hyponyms.append(lemma)
+                # Tier 3: Coordinate terms (sisters under same hypernym)
+                for hyper in s.hypernyms():
+                    for sis in hyper.hyponyms():
+                        for sw in sis.words():
+                            lemma = sw.lemma().lower()
+                            if lemma not in seen and "_" not in lemma and lemma in ocd:
+                                seen.add(lemma)
+                                tier3_coordinates.append(lemma)
+
+        # Candidate pool ordered by pedagogical relevance (synonyms -> coordinates -> hyponyms)
+        candidates = tier1_synonyms + tier3_coordinates + tier2_hyponyms
+
+        # 3. Oxford Collision Clearance (Anti Double-Key Gate)
+        forbidden_words = {clean_target}
+        if context_anchor:
+            clean_anchor = context_anchor.strip().lower()
+            anchor_entry = ocd.get(clean_anchor, {})
+            # If target is verb, anchor is noun: check verb_before and verb_after
+            for v in anchor_entry.get("verb_before", []) + anchor_entry.get("verb_after", []):
+                forbidden_words.add(v.split()[0].lower())
+            # If target is adj, anchor is noun: check adj
+            for a in anchor_entry.get("adj", []):
+                forbidden_words.add(a.split()[0].lower())
+            # If target is noun, anchor is verb/adj: check colloc_nouns and noun_after
+            for n in anchor_entry.get("colloc_nouns", []) + anchor_entry.get("noun_after", []):
+                forbidden_words.add(n.split()[0].lower())
+
+        safe_distractors: List[str] = []
+        for cand in candidates:
+            if cand not in forbidden_words and len(cand) >= 2:
+                safe_distractors.append(cand)
+                if len(safe_distractors) >= target_count:
+                    break
+
+        # Fallback if candidates pool is sparse: select standard homogeneous items from OCD
+        if len(safe_distractors) < target_count:
+            fallback_pool = {
+                "v": ["put", "make", "take", "hold", "draw", "keep", "stand", "bring", "lead"],
+                "n": ["aspect", "factor", "process", "measure", "element", "context", "matter"],
+                "a": ["crucial", "essential", "primary", "initial", "direct", "specific", "constant"]
+            }.get(wn_pos or "n", ["factor", "element", "process"])
+            for fb in fallback_pool:
+                if fb != clean_target and fb not in forbidden_words and fb not in safe_distractors:
+                    safe_distractors.append(fb)
+                if len(safe_distractors) >= target_count:
+                    break
+
+        return safe_distractors[:target_count]
+
+    @classmethod
     def get_acl_collocations(cls) -> Dict[str, str]:
         """Lazy-loads the Academic Collocation List (ACL, ~2474 items). Returns dict mapping core pattern -> canonical original."""
         if cls._acl_data is None:

@@ -367,3 +367,23 @@ class TestLinguisticEngine:
         }
         hydrated, _ = prune_hallucinated_items(vocab_data, source, task_type="vocabulary")
         assert hydrated["vocabulary"][0]["quoted_sentence"] == "Do you know the fairy tale of Goldilocks and the Three Bears?"
+
+    def test_generate_vocab_distractors(self):
+        """LinguisticEngine must generate high-discrimination, collision-free distractors using WordNet and OCD."""
+        # Test 1: lay + anchor 'foundation' (must exclude build/establish and return collision-free near-synonyms)
+        d1 = LinguisticEngine.generate_vocab_distractors("lay", pos="verb", context_anchor="foundation")
+        assert len(d1) == 3
+        assert "lay" not in d1
+        # 'build' or 'establish' would cause double keys with foundation; must be excluded
+        assert "build" not in d1
+        assert "establish" not in d1
+
+        # Test 2: obstacle (noun)
+        d2 = LinguisticEngine.generate_vocab_distractors("obstacle", pos="noun")
+        assert len(d2) == 3
+        assert "obstacle" not in d2
+        # All distractors must be valid words in Oxford Collocations Dictionary
+        ocd = LinguisticEngine.get_oxford_collocations()
+        for word in d2:
+            assert word in ocd
+
