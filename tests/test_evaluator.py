@@ -214,7 +214,7 @@ class TestPedagogyEvaluation(unittest.TestCase):
     def test_quiz_target_inflected_in_correct_option_passes(self):
         inflected_quiz = [{
             "target_word": "assert",
-            "question": "She ____ her position.",
+            "question": "During the heated debate, she firmly ____ her position against the opposing council.",
             "options": ["asserted", "denied", "suggested", "questioned"],
             "correct_answer_index": 0,
             "explanation": "Asserted fits.",
@@ -235,6 +235,54 @@ class TestPedagogyEvaluation(unittest.TestCase):
         score, flags = _score_pedagogy(recycled_quiz, "quiz", user_prompt=user_prompt)
         self.assertEqual(score, 0.0)
         self.assertTrue(any("in-list distractor recycling" in f for f in flags))
+
+    def test_quiz_multiple_blanks_flagged_and_penalized(self):
+        double_blank_quiz = [{
+            "target_word": "challenged",
+            "question": "The defense attorney presented a novel ____ case that left the prosecution deeply ____ with unresolved ethical dilemmas.",
+            "options": ["challenged", "tempted", "ordered", "disputed"],
+            "correct_answer_index": 0,
+            "explanation": "Challenged fits.",
+        }]
+        score, flags = _score_pedagogy(double_blank_quiz, "quiz")
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("Multiple blanks (2) detected" in f for f in flags))
+        # Ensure evaluate_log flags fatal and caps score
+        log_data = {
+            "log_name": "test_double_blank.log",
+            "task": "quiz",
+            "model": "test_model",
+            "status": "SUCCESS",
+            "parsed_json": {"questions": double_blank_quiz},
+            "raw_response": "{}"
+        }
+        res = LogEvaluator.evaluate_log(log_data)
+        self.assertLessEqual(res["composite_score"], 59.0)
+        self.assertEqual(res["status"], "REVIEW_NEEDED")
+
+    def test_quiz_stem_leakage_flagged_and_penalized(self):
+        leak_quiz = [{
+            "target_word": "challenged",
+            "question": "The legal ________ was challenged by the opposing party during the hearing.",
+            "options": ["challenged", "tempted", "ordered", "disputed"],
+            "correct_answer_index": 0,
+            "explanation": "Challenged fits.",
+        }]
+        score, flags = _score_pedagogy(leak_quiz, "quiz")
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("Target word leaks verbatim into question stem" in f for f in flags))
+        # Ensure evaluate_log flags fatal and caps score
+        log_data = {
+            "log_name": "test_leak.log",
+            "task": "quiz",
+            "model": "test_model",
+            "status": "SUCCESS",
+            "parsed_json": {"questions": leak_quiz},
+            "raw_response": "{}"
+        }
+        res = LogEvaluator.evaluate_log(log_data)
+        self.assertLessEqual(res["composite_score"], 59.0)
+        self.assertEqual(res["status"], "REVIEW_NEEDED")
 
 
 class TestNormalizedScoringAndLogAudit(unittest.TestCase):

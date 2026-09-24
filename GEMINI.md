@@ -5,10 +5,19 @@
 ---
 ## 1. Architecture & Core Philosophy
 
-### 1.1 Separation of Responsibilities
-- **Schema = Structure**: `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs.
-- **Prompt = Pedagogy & Quality**: `.md` prompts focus 100% on educational standards (CEFR/TOEFL), item-writing rules, and distractor engineering—completely free of mechanical JSON formatting instructions or code variable names.
-- **Code = Invariant Enforcement**: Deterministic Python logic enforces physical invariants, normalization, and bounds at zero token cost.
+### 1.1 Separation of Responsibilities (Neuro-Symbolic Quad-Tier Architecture)
+- **Symbolic Grounding & Lexical Corpus (NLP & Lexicons = Semantic Truth & Constraints)**:
+  - `LinguisticEngine` combines offline computational NLP (spaCy syntactic dependency trees, POS tagging, morphological inflection lemmatization) with authoritative lexical databases (WordNet taxonomy, Oxford Collocations Dictionary 2nd Ed.).
+  - Deterministically pre-computes single-fit collocational anchors (preposition binding, adjective-noun collocations, verb-object valency) and 3 zero-collision, taxonomically distinct distractors at zero token cost (<1ms).
+  - Pre-binds parallel inflectional morphology (e.g. all-VBN past participles) and CRC32 deterministic option positions, generating itemized `🎯 Micro-Task for LLM` constraint blueprints.
+- **Code = Invariant Enforcement & Physical Gate**:
+  - Deterministic Python logic (`evaluator.py`, `processor.py`) enforces physical invariants, string normalization, blank constraints (`re.findall(r'_{2,}', stem) == 1`), atomic option remapping, and bounds at zero token cost.
+  - Acts as the Level 1 Deterministic Code Gate to instantly filter, remap, or self-heal structural defects without burning LLM retry tokens.
+- **Prompt = Pedagogy & Context Generation**:
+  - `.md` prompts focus 100% on educational standards (CEFR/TOEFL), cognitive depth, and executing embedded micro-tasks.
+  - LLM acts as an academic sentence crafter and psychometric discriminator: crafts natural contextual stems fulfilling the exact syntactic constraints, and generates deep pedagogical explanations by quoting target and distractor wordings directly—completely free of mechanical JSON formatting or distractor generation burdens.
+- **Schema = Structural Integrity**:
+  - `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs. Eliminates syntactic drift and structural formatting instructions from system prompts.
 
 ### 1.2 Generation Pipeline Modes
 - **Extraction (Vocabulary / Expressions / Grammar)**: Defaults to **One-Shot** (`enable_vocab_prose: false`, `enable_grammar_prose: false`). One-Shot provides 80% faster generation and superior verbatim grounding for text-extraction tasks.
@@ -185,6 +194,7 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Canonical headword lemmatization & in-place self-healing (`lemmatize_headword`)
 - [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
 - [x] Oxford Collocations Dictionary 2nd Edition integration (20,791 headwords, ~4.9MB clean JSON, `LinguisticEngine.get_rich_collocations`)
+- [x] Adjective Distractor Quadruple Transformation (WordNet bipolar cluster harvesting, opposite satellite antonym tracing, modified noun collocation clash, preposition valency gate, and academic adjective families)
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:

@@ -895,14 +895,20 @@ class WikiProcessor:
                         f"Item #{idx + 1} ('{target}'): Missing blank '____' in stem."
                     )
 
-                # Flag any remaining verbatim target leak in the stem outside the blank
+                # Flag any remaining target leak (verbatim or inflectional root) in the stem outside the blank
                 if target:
                     esc_target = re.escape(target)
-                    stem_no_blank = re.sub(r'_{2,}', '', stem)
-                    if re.search(rf"\b{esc_target}\b", stem_no_blank, flags=re.IGNORECASE):
+                    stem_no_blank = re.sub(r'_{2,}', ' ', stem)
+                    stem_words = re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)
+                    target_root = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target.lower())
+                    leaked_in_stem = [
+                        w for w in stem_words
+                        if w.lower() == target.lower() or (len(target_root) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_root)
+                    ]
+                    if leaked_in_stem:
                         flagged_indices.add(idx)
                         defect_messages.append(
-                            f"Item #{idx + 1} ('{target}'): Target word leaks verbatim into stem text outside blank."
+                            f"Item #{idx + 1} ('{target}'): Target word leaks into stem text outside blank: {leaked_in_stem}"
                         )
 
             # 1. Stem Copying Gate (Zero-Tolerance for synthetic items, permitted for Track 1 Cloze when enabled)
@@ -966,6 +972,68 @@ class WikiProcessor:
                     defect_messages.append(
                         f"Item #{idx + 1} ('{target}'): Distractors recycle headwords from current unit: {recycled_distractors}"
                     )
+
+            # 3. Degraded-Options Gate (double-key clearance invariant)
+            #    A double-key hit must be dropped AND refilled — never silently
+            #    truncated. Fewer than 4 options is a structural defect.
+            if "target_word" in q_dict and options and len(options) < 4:
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Item #{idx + 1} ('{target}'): Degraded item — only {len(options)} options "
+                    f"(exactly 4 required). Clear double-keys by refilling, not by truncation."
+                )
+
+            # 4. Deterministic Double-Key Gate (frame-aware)
+            #    Frame gate: a distractor that shares the target's bound
+            #    preposition (OCD frame present in the stem) AND sits in the
+            #    target's semantic neighborhood is a second valid key (1 hit
+            #    suffices: overlap-with, liberty-from).
+            #    Pile gate: in slot items, a single near-synonym can be a
+            #    legitimate context-excludable distractor (e.g. scan ~ conform),
+            #    so 2+ non-antonym same-slot distractors form a "synonym pile"
+            #    double-key (designate x label/denote/number, adverse x
+            #    unfavourable/reproachful). Whitelisted sense antonyms never
+            #    count (deliberate contrast distractors eliminated by polarity).
+            if "target_word" in q_dict and target and options and isinstance(options, list):
+                try:
+                    from .linguistics import LinguisticEngine
+                    stem_tokens = {w.lower() for w in re.findall(r"\b[a-zA-Z]+\b", stem or "")}
+                    bound_preps = [
+                        p for p in (LinguisticEngine.get_oxford_collocations().get(target, {}).get("prep") or [])
+                        if p.lower() in stem_tokens
+                    ]
+                    anchor = bound_preps[0] if bound_preps else None
+                    near, ants = LinguisticEngine.semantic_fields(target)
+                    ocd = LinguisticEngine.get_oxford_collocations()
+                    frame_hits, pile = [], []
+                    for o_idx, opt in enumerate(options):
+                        if o_idx == correct_idx:
+                            continue
+                        d = str(opt).strip().lower()
+                        if not d or " " in d or len(d) < 2 or d in ants:
+                            continue
+                        if d not in near:
+                            continue
+                        if anchor and anchor.lower() in (ocd.get(d, {}).get("prep") or []):
+                            frame_hits.append(d)
+                        else:
+                            pile.append(d)
+                    if frame_hits:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Double-key distractor(s) sharing bound frame '{anchor}' — "
+                            f"{frame_hits}. These options are also valid answers in this context; "
+                            f"replace with frame-cleared distractors."
+                        )
+                    elif len(pile) >= 2:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Synonym-pile double-key — same-slot near-synonyms "
+                            f"{pile} all plausibly fit the blank. Keep at most one near-synonym distractor "
+                            f"and refill from a cleared candidate pool."
+                        )
+                except Exception:
+                    pass  # Deterministic gate must never crash the pipeline
 
         return sorted(list(flagged_indices)), defect_messages
 
@@ -2018,6 +2086,9 @@ class WikiProcessor:
 
         if template_name == "vocabulary":
             raw_vocab = data.get("content", "")
+            # Extract authorized unit headwords and banned authentic sentences for L1/L2 code gates
+            _, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_vocab)
+
             # Achievement MCQ vs Proficiency MCQ Switch:
             # - Mode 'cloze' or enable_authentic_cloze: True -> Achievement MCQ (学业测试 / 0-token 真实原句完形)
             # - Mode 'generative' or enable_authentic_cloze: False -> Proficiency MCQ (能力测试 / LLM 语境迁移单选题)
@@ -2025,12 +2096,12 @@ class WikiProcessor:
             enable_cloze = (vocab_mode == "cloze") if isinstance(vocab_mode, str) else bool(vocab_mode)
             if enable_cloze:
                 # Track 1: Authentic Passage Cloze (Achievement MCQ Mode)
-                raw_cloze_items = LinguisticEngine.extract_authentic_cloze_items(raw_vocab, target_count=count)
+                raw_cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
                 if raw_cloze_items:
                     logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode).")
                     cloze_bullets = []
                     for idx, c in enumerate(raw_cloze_items, 1):
-                        opts_str = ", ".join(c.get("precomputed_options", []))
+                        opts_str = ", ".join(c.get("precomputed_distractors", []) or c.get("precomputed_options", []))
                         cloze_bullets.append(
                             f"### Item {idx} ###\n"
                             f"- Target Word: {c['target_word']}\n"
@@ -2057,6 +2128,7 @@ class WikiProcessor:
                         opts_str = ", ".join(s.get("prescribed_options", []))
                         anchor_hint = s.get("context_anchor") or "general context"
                         infl_hint = s.get("inflection", "base form")
+                        micro_task_str = s.get("micro_task", "Compose an academic sentence fitting the target.")
                         skeleton_bullets.append(
                             f"### Item {idx} ###\n"
                             f"- Target Word: {s['target_word']}\n"
@@ -2064,16 +2136,13 @@ class WikiProcessor:
                             f"- Inflectional Form: {infl_hint}\n"
                             f"- Collocational Anchor: {anchor_hint}\n"
                             f"- Prescribed Options: [{opts_str}]\n"
-                            f"- Contextual Definition: {s['definition']}"
+                            f"- Correct Answer Index: {s.get('correct_answer_index', 0)}\n"
+                            f"- Contextual Definition: {s['definition']}\n"
+                            f"- 🎯 Micro-Task for LLM: {micro_task_str}"
                         )
                     kwargs["vocabulary_content"] = (
-                        "### TARGET SPECIFICATIONS (PROFICIENCY MCQ MODE) ###\n"
-                        f"The following {len(skeletons)} items specify the authoritative target words, collocational anchors, and prescribed options.\n"
-                        "For EACH item below, you MUST:\n"
-                        "1. Use the EXACT Target Word and align the question stem with its required Part of Speech and Collocational Anchor.\n"
-                        "2. Use the EXACT 4 Prescribed Options for that item's `options` array.\n"
-                        "3. Compose an original CEFR-aligned academic sentence contextualizing the anchor with exactly one blank `____`.\n"
-                        "4. Provide targeted, objective explanations explicitly analyzing why the target fits and why each prescribed distractor fails:\n\n"
+                        f"### TARGET SPECIFICATIONS ({len(skeletons)} ITEMS) ###\n"
+                        "Execute each item's '🎯 Micro-Task for LLM' to construct the sentence stem, preserve the prescribed options and answer index exactly, and provide distractor discrimination quoting each choice's exact wording:\n\n"
                         + "\n\n".join(skeleton_bullets)
                     )
                 else:

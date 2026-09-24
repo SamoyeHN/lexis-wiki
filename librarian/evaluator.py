@@ -61,6 +61,9 @@ FATAL_QA_FLAGS = (
     "pure fabrication",
     "Incomplete target coverage",
     "ungrounded in quote",
+    "Multiple blanks",
+    "Target word leaks",
+    "missing fill-in-the-blank slot",
 )
 
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
@@ -967,8 +970,12 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         )
                     )
 
-            # 4. Blank verification for fill-in-the-blank questions
+            # 4. Blank verification for fill-in-the-blank questions (Strict Single Blank Gate)
             has_blank_when_expected = True
+            is_single_blank = True
+            no_stem_leak = True
+            is_adequate_complexity = True
+
             if is_comparative_translation:
                 # Comparative translation does not require blanks
                 has_blank_when_expected = True
@@ -976,9 +983,40 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if skeleton:
                     has_blank_when_expected = bool(re.search(r"\[\s*_{2,}\s*\]|_{2,}", skeleton))
             elif target and question:
-                # If target is specified in a standard quiz, it's a lexical/fill-in-the-blank item.
-                # Must contain at least two consecutive underscores (____)
-                has_blank_when_expected = bool(re.search(r"_{2,}", question))
+                # Lexical multiple-choice fill-in-the-blank items MUST contain EXACTLY ONE blank '____'
+                blanks = re.findall(r"_{2,}", question)
+                if len(blanks) == 0:
+                    has_blank_when_expected = False
+                elif len(blanks) > 1:
+                    is_single_blank = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Multiple blanks ({len(blanks)}) detected in question stem (only exactly ONE blank permitted)"
+                    )
+
+                # Target Stem Leakage Gate: target word/stem cannot leak into question outside the blank
+                clean_target = _clean_core(target)
+                target_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', clean_target)
+                stem_no_blank = re.sub(r'_{2,}', ' ', question)
+                stem_words = re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)
+                leaked_words = [
+                    w for w in stem_words
+                    if w.lower() == clean_target or (len(target_stem) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_stem)
+                ]
+                if leaked_words:
+                    no_stem_leak = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Target word leaks verbatim into question stem outside blank: {leaked_words}"
+                    )
+
+                # Syntax Complexity Check (CEFR Level & Clause Check - Soft Warning)
+                # Stems should ideally have >= 9 words, or contain a subordinate/coordinate clause marker or comma
+                if len(stem_words) < 9:
+                    clause_markers = ('although', 'though', 'while', 'whereas', 'because', 'since', 'if', 'unless', 'which', 'that', 'who', 'whom', 'whose', 'where', 'when', 'after', 'before', 'until', 'so that')
+                    has_clause = any(re.search(rf'\b{re.escape(cm)}\b', question, flags=re.IGNORECASE) for cm in clause_markers)
+                    has_comma = (',' in question or ';' in question)
+                    if not (has_clause or has_comma):
+                        is_adequate_complexity = False
+                        flags.append(f"⚠️ Quiz item '{target}': Trivial short stem (< 9 words without subordinate/coordinate clause)")
 
             # 5. In-List Distractor Recycling check (Zero-Tolerance Level 1 Gate)
             recycled_in_distractors = []
@@ -1020,7 +1058,20 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
             no_in_list_recycling = len(recycled_in_distractors) == 0
 
-            if is_list_valid and has_no_duplicates and valid_idx and target_in_options and explanation and question and has_blank_when_expected and no_in_list_recycling:
+            item_passed = (
+                is_list_valid and
+                has_no_duplicates and
+                valid_idx and
+                target_in_options and
+                explanation and
+                question and
+                has_blank_when_expected and
+                is_single_blank and
+                no_stem_leak and
+                no_in_list_recycling
+            )
+
+            if item_passed:
                 passes += 1
             else:
                 reasons = []
@@ -1031,6 +1082,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not explanation: reasons.append("missing explanation")
                 if not question: reasons.append("missing question text")
                 if not has_blank_when_expected: reasons.append("missing fill-in-the-blank slot (____)")
+                if not is_single_blank: reasons.append("multiple blanks detected in stem")
+                if not no_stem_leak: reasons.append("target word leaks into question stem")
                 if not no_in_list_recycling:
                     reasons.append(f"recycles study list headwords in distractors {recycled_in_distractors}")
                     flags.append(f"❌ Quiz item '{target or question[:25]}' in-list distractor recycling: {recycled_in_distractors}")
@@ -1572,6 +1625,19 @@ class LogEvaluator:
                     flags.insert(0, f"✅ [SURGICAL CURE] In-place healed from {pre_cure_score}% to Final {post_cure_score}%")
             except Exception as err:
                 composite_score = round(float(parsed.get("overall_quality_score", composite_score)), 1)
+
+        # Fatal QA Flag Gate: If fatal pedagogical flags are detected, composite score cannot claim passing (>=80%)
+        # Automatically cap composite score below 60.0 to reflect failed/review status
+        has_fatal_flags = any(
+            any(fatal in f for fatal in FATAL_QA_FLAGS)
+            for f in flags
+        )
+        if has_fatal_flags:
+            composite_score = min(composite_score, 59.0)
+            if status == "SUCCESS":
+                status = "REVIEW_NEEDED"
+                if not failure_category:
+                    failure_category = "QA_FATAL_FLAG"
 
         # Sort flags: critical errors (❌) first, then warnings (⚠️)
         flags.sort(key=lambda x: (0 if x.startswith("❌") else (1 if x.startswith("⚠️") else 2)))

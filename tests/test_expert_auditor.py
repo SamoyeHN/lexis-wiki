@@ -267,7 +267,7 @@ class TestIntegrityGate(unittest.TestCase):
                 {
                     "target_word": "beneficial",
                     "question": "The new environmental legislation will yield ____ outcomes for future generations.",
-                    "options": ["advantageous", "beneficial", "detrimental", "negligible"],
+                    "options": ["immediate", "beneficial", "detrimental", "negligible"],
                     "correct_answer_index": 1
                 }
             ]

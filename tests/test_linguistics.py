@@ -420,3 +420,291 @@ class TestLinguisticEngine:
         # Options must be strictly unique
         assert len(set(s2["prescribed_options"])) == 4
 
+    def test_sense_locked_antonym_extraction(self):
+        """LinguisticEngine must prioritize genuine sense-locked antonyms for verbs."""
+        # 'increase' with academic growth definition must produce 'decrease' as an antonym
+        distractors, meta = LinguisticEngine.generate_vocab_distractors(
+            target_word="increase",
+            pos="verb",
+            definition="become bigger or greater in amount or volume",
+            return_metadata=True
+        )
+        assert len(distractors) == 3
+        assert "decrease" in distractors
+        assert meta["decrease"] == "antonym"
+
+        # 'expand' with extension definition must produce 'contract'
+        d_expand, meta_expand = LinguisticEngine.generate_vocab_distractors(
+            target_word="expand",
+            pos="verb",
+            definition="extend in one or more directions",
+            return_metadata=True
+        )
+        assert len(d_expand) == 3
+        assert "contract" in d_expand
+        assert meta_expand["contract"] == "antonym"
+
+    def test_select_sense_aligned_anchor(self):
+        """LinguisticEngine must select anchors aligned with authentic quote and curriculum definition."""
+        candidates = ["envelope", "letter", "rally", "crisis", "challenge"]
+        quote = "The committee convened urgently to address the financial crisis."
+        definition = "to direct efforts towards dealing with a problem or challenge"
+
+        # Level 1: Must pick 'crisis' directly from the quote
+        best_anchor = LinguisticEngine._select_sense_aligned_anchor(candidates, definition=definition, quote=quote)
+        assert best_anchor == "crisis"
+
+        # Level 2: If quote does not contain any candidate, must pick 'challenge' matching definition tokens
+        unrelated_quote = "The scholar was unable to resolve the matter."
+        best_anchor_def = LinguisticEngine._select_sense_aligned_anchor(candidates, definition=definition, quote=unrelated_quote)
+        assert best_anchor_def == "challenge"
+
+        # Level 3 (Strict None Semantics): no quote/definition evidence at all ->
+        # refuse the old "first clean token" lottery instead of forcing a fake anchor.
+        unrelated_def = "the act of pressing a button repeatedly without purpose"
+        assert LinguisticEngine._select_sense_aligned_anchor(candidates, definition=unrelated_def, quote=unrelated_quote) is None
+
+    def test_preposition_bound_verb_skeleton(self):
+        """LinguisticEngine must bind dependent prepositions in quote for verbs and craft targeted micro-tasks."""
+        sample_vocab = """
+## [[rely]]
+- **Part Of Speech**: verb
+- **Definition**: To depend on with full trust or confidence.
+- **Quoted Sentence**: "Scholars frequently rely on empirical evidence to validate their scientific theories."
+"""
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(sample_vocab, target_count=1)
+        assert len(skeletons) == 1
+        s = skeletons[0]
+        assert s["target_word"] == "rely"
+        assert s["part_of_speech"] == "verb"
+        assert s["context_anchor"] == "on"
+        assert s["anchor_type"] == "prep"
+        assert "bound preposition 'on'" in s["micro_task"]
+        assert len(s["prescribed_options"]) == 4
+        assert "rely" in s["prescribed_options"]
+
+    def test_adjective_satellite_and_bipolar_harvesting(self):
+        """LinguisticEngine must harvest WordNet satellite synsets and attribute coordinates for adjectives."""
+        # 'comprehensive' with anchor 'service'
+        distractors, meta = LinguisticEngine.generate_vocab_distractors(
+            target_word="comprehensive",
+            pos="adj",
+            context_anchor="service",
+            anchor_type="modified_noun",
+            return_metadata=True
+        )
+        assert len(distractors) == 3
+        assert "comprehensive" not in distractors
+        # Must NOT fall back to generic corpus fallback (e.g. crucial/primary)
+        # Should contain authentic satellite adjectives like extensive, broad, wide
+        has_satellite = any(meta[d] == "satellite_synonym" for d in distractors)
+        assert has_satellite
+        assert any(d in ("extensive", "broad", "all-inclusive", "wide", "universal", "general") for d in distractors)
+
+        # 'available' with anchor 'alternative'
+        d_avail, meta_avail = LinguisticEngine.generate_vocab_distractors(
+            target_word="available",
+            pos="adj",
+            context_anchor="alternative",
+            anchor_type="modified_noun",
+            return_metadata=True
+        )
+        assert len(d_avail) == 3
+        assert "available" not in d_avail
+        assert any(meta_avail[d] == "satellite_synonym" for d in d_avail)
+        assert any(d in ("accessible", "easy", "forthcoming", "obtainable", "ready", "open") for d in d_avail)
+
+    def test_adjective_predicative_only_exclusion(self):
+        """LinguisticEngine must reject predicative-only adjectives (asleep, aware, afraid) when modifying a noun."""
+        for pred_adj in LinguisticEngine._PREDICATIVE_ONLY_ADJS:
+            distractors = LinguisticEngine.generate_vocab_distractors(
+                target_word="comprehensive",
+                pos="adj",
+                context_anchor="service",
+                anchor_type="modified_noun"
+            )
+            assert pred_adj not in distractors
+
+    def test_adjective_preposition_valency_binding(self):
+        """LinguisticEngine must bind dependent prepositions in quote for predicative adjectives."""
+        sample_vocab = """
+## [[vulnerable]]
+- **Part Of Speech**: adj
+- **Definition**: Susceptible to physical or emotional harm or attack.
+- **Quoted Sentence**: "Developing nations are particularly vulnerable to climate disruptions and global inflation."
+"""
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(sample_vocab, target_count=1)
+        assert len(skeletons) == 1
+        s = skeletons[0]
+        assert s["target_word"] == "vulnerable"
+        assert s["part_of_speech"] == "adj"
+        assert s["context_anchor"] == "to"
+        assert s["anchor_type"] == "prep"
+        assert "bound preposition 'to'" in s["micro_task"]
+        assert len(s["prescribed_options"]) == 4
+        assert "vulnerable" in s["prescribed_options"]
+
+    def test_adjective_scheme1_satellite_harvester_pos_s(self):
+        """Scheme 1: Words with pos='s' (e.g. fragile, apparent) must harvest satellite synsets without falling back to corpus_fallback."""
+        d_fragile, meta_fragile = LinguisticEngine.generate_vocab_distractors(
+            target_word="fragile",
+            pos="adj",
+            context_anchor="ecosystem",
+            anchor_type="modified_noun",
+            return_metadata=True
+        )
+        assert len(d_fragile) == 3
+        assert "fragile" not in d_fragile
+        # Must not be hardcoded fallback
+        assert not all(meta_fragile[d] == "corpus_fallback" for d in d_fragile)
+        # Should contain authentic satellite/antonym adjectives
+        assert any(meta_fragile[d] in ("satellite_synonym", "antonym", "attribute_coordinate") for d in d_fragile)
+
+    def test_adjective_scheme2_opposite_cluster_antonym(self):
+        """Scheme 2: Adjectives must extract sense antonyms or opposite cluster satellites."""
+        # Test stable
+        d_stable, meta_stable = LinguisticEngine.generate_vocab_distractors(
+            target_word="stable",
+            pos="adj",
+            context_anchor="growth",
+            anchor_type="modified_noun",
+            return_metadata=True
+        )
+        assert len(d_stable) == 3
+        assert "stable" not in d_stable
+        assert any(meta_stable[d] == "antonym" for d in d_stable)
+        assert any(d in ("unstable", "volatile", "reactive", "changeable") for d in d_stable)
+
+    def test_adjective_scheme3_modified_noun_collocation_clash(self):
+        """Scheme 3: Adjectives modifying a noun must exclude legal adjectives of that noun to prevent double keys."""
+        ocd = LinguisticEngine.get_oxford_collocations()
+        service_legal_adjs = {a.split()[0].lower() for a in ocd.get("service", {}).get("adj", [])}
+
+        distractors, meta = LinguisticEngine.generate_vocab_distractors(
+            target_word="comprehensive",
+            pos="adj",
+            context_anchor="service",
+            anchor_type="modified_noun",
+            return_metadata=True
+        )
+        assert len(distractors) == 3
+        for d in distractors:
+            # If d is in service legal adjs, it must only be an antonym (whitelisted for contrast)
+            if d in service_legal_adjs:
+                assert meta[d] == "antonym"
+
+    def test_adjective_scheme4_preposition_valency_gate(self):
+        """Scheme 4: Preposition valency cloze must prioritize contrasting prepositions and rule out same-prep distractors."""
+        distractors, meta = LinguisticEngine.generate_vocab_distractors(
+            target_word="vulnerable",
+            pos="adj",
+            context_anchor="to",
+            anchor_type="prep",
+            return_metadata=True
+        )
+        assert len(distractors) == 3
+        assert "vulnerable" not in distractors
+        # Should contain preposition_valency or antonym
+        assert any(meta[d] in ("preposition_valency", "antonym") for d in distractors)
+
+    def test_adjective_authentic_quote_amod_anchor_binding(self):
+        """Adjective Step A2: spaCy amod dependency in quote must bind modified head noun."""
+        sample_vocab = """
+## [[comprehensive]]
+- **Part Of Speech**: adj
+- **Definition**: Including or dealing with all or nearly all elements or aspects of something.
+- **Quoted Sentence**: "The agency published a comprehensive overview of public health policies."
+"""
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(sample_vocab, target_count=1)
+        assert len(skeletons) == 1
+        s = skeletons[0]
+        assert s["target_word"] == "comprehensive"
+        assert s["part_of_speech"] == "adj"
+        assert s["context_anchor"] == "overview"
+        assert s["anchor_type"] == "modified_noun"
+        assert "modifying noun 'overview'" in s["micro_task"]
+
+
+class TestAnchorFourDimensionRepair:
+    """Regression tests for the four-dimension closed-loop anchor repair (Pillars 1-4):
+    post-head linear constraint + adjunct blacklist + OCD consensus gate (verbs),
+    spaCy dependency walker (nouns), strict-None selector, and contract-tiered
+    micro-task blueprints. Each case mirrors a historically fabricated anchor."""
+
+    @staticmethod
+    def _single_skeleton(vocab_block):
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(vocab_block, target_count=1)
+        assert len(skeletons) == 1
+        return skeletons[0]
+
+    def test_verb_adjunct_for_example_must_yield_ocd_complement(self):
+        """'for example' (interjection) must be skipped; OCD consensus picks 'correlate with'."""
+        sample_vocab = """
+## [[correlate]]
+- **Part Of Speech**: verb
+- **Definition**: To show or be a subject of a mutual relation.
+- **Quoted Sentence**: "The findings do not, for example, correlate with a difference in average salary."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "correlate"
+        assert s["part_of_speech"] == "verb"
+        assert s["context_anchor"] == "with"
+        assert s["anchor_type"] == "prep"
+        assert "bound preposition 'with'" in s["micro_task"]
+        assert "example" not in s["prescribed_options"]
+        assert len(s["prescribed_options"]) == 4
+
+    def test_verb_fronted_adjunct_must_yield_right_side_complement(self):
+        """Fronted adjunct 'In a society' must be physically excluded; 'degrade into' is trusted
+        via the typical-complement rule even though 'degrade' has no OCD valency record."""
+        sample_vocab = """
+## [[degrade]]
+- **Part Of Speech**: verb
+- **Definition**: To reduce something in quality, value, or status.
+- **Quoted Sentence**: "In a society where they are given more hours, workers may have degraded into modern slaves."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "degrade"
+        assert s["context_anchor"] == "into"
+        assert s["anchor_type"] == "prep"
+        assert "bound preposition 'into'" in s["micro_task"]
+        assert "society" not in s["micro_task"]
+
+    def test_noun_prep_complement_walker_beats_degree_adverb(self):
+        """Degree adverb 'more' (modifier of 'hours') must never attach to 'autonomy';
+        the dependency walker extracts the true complement 'autonomy from compulsion'."""
+        sample_vocab = """
+## [[autonomy]]
+- **Part Of Speech**: noun
+- **Definition**: The state of being free to rule oneself; self-government.
+- **Quoted Sentence**: "The means of production were owned collectively, and autonomy from compulsion was the guiding principle of the movement."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "autonomy"
+        assert s["part_of_speech"] == "noun"
+        assert s["context_anchor"] == "from"
+        assert s["anchor_type"] == "prep"
+        assert "bound preposition 'from'" in s["micro_task"]
+        assert "more" not in s["micro_task"]
+
+    def test_noun_zero_evidence_must_not_draw_dictionary_lottery(self):
+        """With no syntactic link and no quote/definition evidence, the selector must
+        return None (or a real governing verb) instead of lottery-drawing 'strange'."""
+        sample_vocab = """
+## [[compulsion]]
+- **Part Of Speech**: noun
+- **Definition**: An urge that forces a person to do something, often against their will.
+- **Quoted Sentence**: "The compulsion to check emails made it hard for workers to enjoy their leisure hours."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "compulsion"
+        assert s["part_of_speech"] == "noun"
+        # The fabricated anchor 'strange' must be impossible under the strict-None selector
+        assert "strange" not in s["micro_task"]
+        assert s["context_anchor"] is None or s["context_anchor"] != "strange"
+        assert len(s["prescribed_options"]) == 4
+        assert "compulsion" in s["prescribed_options"]
+
+
+
+
