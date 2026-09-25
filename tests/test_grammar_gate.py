@@ -385,6 +385,54 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
         self.assertTrue(has_fatal)
 
+    def test_non_word_headword_triggers_fatal_flag(self):
+        """P0 fix: a headword that is a non-word (e.g. 'embe' from 'embed' corruption)
+        must trip the wordness fatal flag, even though Check 2's prefix matching
+        ('embe' is a prefix of 'embedded') passes it through."""
+        from librarian.evaluator import _score_verbatim, FATAL_QA_FLAGS
+        self.assertIn("not a recognized English word", FATAL_QA_FLAGS)
+
+        source = "CONTENT:\nThe platform embed the core library into the firmware image."
+        corrupted_item = {
+            "word": "embe",
+            "part_of_speech": "verb",
+            "definition": "To include something as part of a larger whole.",
+            "example_usage": "The tool embed the library directly into the binary.",
+            "quoted_sentence": "The platform embed the core library into the firmware image.",
+        }
+        score, flags = _score_verbatim([corrupted_item], "vocabulary", source)
+        self.assertTrue(any("not a recognized English word" in f for f in flags))
+        # Ensure that any flag in flags matches FATAL_QA_FLAGS
+        has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
+        self.assertTrue(has_fatal)
+        self.assertLess(score, 30.0)
+
+    def test_real_headwords_pass_wordness_check(self):
+        """Real single-token headwords — including ones WordNet lacks that appear
+        verbatim in the quote ('ice-cream') — must not trip the wordness fatal flag."""
+        from librarian.evaluator import _score_verbatim, FATAL_QA_FLAGS
+        source = "CONTENT:\nCliff Young hopped over the fence to reach the start line. He ate ice-cream to celebrate."
+        items = [
+            {
+                "word": "hop",
+                "part_of_speech": "verb",
+                "definition": "To move by jumping on one or both feet.",
+                "example_usage": "He hop over the puddle before the race.",
+                "quoted_sentence": "Cliff Young hopped over the fence to reach the start line.",
+            },
+            {
+                "word": "ice-cream",
+                "part_of_speech": "noun",
+                "definition": "A sweet frozen dessert flavored with fruit or chocolate.",
+                "example_usage": "We ate ice-cream after the finish line.",
+                "quoted_sentence": "He ate ice-cream to celebrate.",
+            },
+        ]
+        score, flags = _score_verbatim(items, "vocabulary", source)
+        self.assertFalse(any("not a recognized English word" in f for f in flags))
+        has_fatal = any(any(fatal in f for fatal in FATAL_QA_FLAGS) for f in flags)
+        self.assertFalse(has_fatal)
+
 
     def test_trivial_anchor_fails_pedagogy_check(self):
         """Verify that trivial formulas anchored only by 'But', 'And', 'Of course', etc. fail pedagogy check."""
@@ -463,9 +511,62 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         self.assertTrue(any("Antithesis" in f or "not... but..." in f for f in flags))
         self.assertTrue(any("which + [interpretive verb] + that" in f for f in flags))
 
+    def test_adaptive_grammar_gate_book_1_structures(self):
+        """P1 Adaptive Gate must accurately recognize foundational/textbook syntactic structures."""
+        from librarian.linguistics import LinguisticEngine
+
+        # 1. Cleft Focus (where spaCy tags 'it' as nsubj)
+        s1 = "In the past, it was a small stamp that helped family members and friends to keep in touch with each other."
+        cat1 = LinguisticEngine.classify_grammar_dependency(s1)
+        form1 = LinguisticEngine.generate_cobuild_formula(s1, category=cat1)
+        self.assertEqual(cat1, "Rhetoric & Emphasis")
+        self.assertIn("Focal Element", form1)
+
+        # 2. Relative Clause (Information Packaging)
+        s3 = "Later, the rise of the Internet joins people in different places with instant communication software which gives people even more ways to communicate."
+        cat3 = LinguisticEngine.classify_grammar_dependency(s3)
+        form3 = LinguisticEngine.generate_cobuild_formula(s3, category=cat3)
+        self.assertEqual(cat3, "Information Packaging")
+        self.assertIn("which", form3)
+
+        # 3. Dense Object Complement / Causative (make + Object + Adj)
+        s6 = "The new ways of communication make this possible."
+        cat6 = LinguisticEngine.classify_grammar_dependency(s6)
+        form6 = LinguisticEngine.generate_cobuild_formula(s6, category=cat6)
+        self.assertEqual(cat6, "Information Packaging")
+        self.assertIn("make", form6)
+        self.assertIn("[Adj]", form6)
+
+        # 4. Adversative Stance Transition (However, ...)
+        s12 = "However, the new ways of communication could give them freedom and chance to make smart choices."
+        cat12 = LinguisticEngine.classify_grammar_dependency(s12)
+        form12 = LinguisticEngine.generate_cobuild_formula(s12, category=cat12)
+        self.assertEqual(cat12, "Logic & Stance")
+        self.assertTrue(form12.startswith("However,"))
+
+    def test_mine_grammar_skeletons_adaptive_yield(self):
+        """Mining on Book 1 Unit 1 must yield 5 diverse skeletons across multiple macro domains."""
+        from librarian.linguistics import LinguisticEngine
+        from pathlib import Path
+
+        b1_file = Path("wiki/Book_1_Unit_1_Passage_A/sources/Book_1_Unit_1_Passage_A.md")
+        if not b1_file.exists():
+            self.skipTest("Book 1 Unit 1 Passage A not found")
+
+        _, pool = LinguisticEngine.tokenize_and_index_sentences(b1_file.read_text(encoding="utf-8"))
+        skels = LinguisticEngine.mine_grammar_skeletons(pool, target_count=5)
+
+        self.assertGreaterEqual(len(skels), 4)
+        categories = {s["category"] for s in skels}
+        self.assertGreaterEqual(len(categories), 2)
+        # Should include Rhetoric & Emphasis and Information Packaging
+        self.assertIn("Rhetoric & Emphasis", categories)
+        self.assertIn("Information Packaging", categories)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

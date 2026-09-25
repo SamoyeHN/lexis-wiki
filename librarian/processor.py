@@ -1041,16 +1041,19 @@ class WikiProcessor:
     def audit_reading_integrity(
         cls,
         quiz_obj: Any,
-        passage_text: str = ""
+        passage_text: str = "",
+        cefr_level: str = "B2"
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Reading Comprehension Quiz.
-        Enforces 5 physical ground-truth invariants:
+        Enforces physical ground-truth invariants:
         1. Skill Diversity: Balanced mix of Main Idea, Detail/Recall, Inference, Author's Tone/Purpose.
         2. Structural Option Bounds: Exactly 4 distinct, parallel, non-empty options.
-        3. Answer Index Integrity: Bound [0, 3] check.
-        4. Verbatim Text Anchoring & Anti-Hallucination: context_sentence must physically exist in passage.
-        5. Trivia / Option Echo Filter: Prevent trivially verbatim options or stem-option duplication.
+        3. Option Length & Complexity Bounds: Calibrated to CEFR level (A1/A2 <= 16 words, B1 <= 20 words).
+        4. CEFR Difficulty Ceiling Filter: For A1/A2 foundational texts, options/stems cannot contain C1/C2 words not in passage.
+        5. Answer Index Integrity: Bound [0, 3] check.
+        6. Verbatim Text Anchoring & Anti-Hallucination: context_sentence must physically exist in passage.
+        7. Trivia / Option Echo Filter: Prevent trivially verbatim options or stem-option duplication.
         Returns:
             (flagged_indices, defect_messages)
         """
@@ -1064,6 +1067,13 @@ class WikiProcessor:
         flagged_indices = set()
         defect_messages = []
         passage_norm = re.sub(r'\s+', ' ', passage_text.lower()) if passage_text else ""
+        clean_passage_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", passage_text.lower())) if passage_text else set()
+        cefr_upper = str(cefr_level or "B2").upper()
+        meta_whitelist = {
+            "according", "paragraph", "passage", "infer", "inferred", "inference",
+            "author", "statement", "summarize", "suggests", "purpose", "following",
+            "attitude", "tone", "mainly", "primary", "central", "illustrate", "express"
+        }
 
         # 1. Inspect questions
         categories_seen = set()
@@ -1096,15 +1106,53 @@ class WikiProcessor:
                         defect_messages.append(f"Reading Item #{idx + 1}: Option is an echo of the question stem: \"{opt[:40]}\"")
                         break
 
-            # 1.4 Check Key Index Bounds
+                # 1.4 Check Option Complexity & Length based on CEFR
+                max_opt_len = 16 if cefr_upper in ("A1", "A2") else (20 if cefr_upper == "B1" else 32)
+                for opt in options:
+                    opt_words = str(opt).split()
+                    if len(opt_words) > max_opt_len:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Reading Item #{idx + 1}: Option is overly long for CEFR {cefr_upper} ({len(opt_words)} words > {max_opt_len}): \"{opt[:40]}...\""
+                        )
+                        break
+
+                # 1.5 Check Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
+                if cefr_upper in ("A1", "A2"):
+                    for opt in options:
+                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
+                        for tok in opt_toks:
+                            if tok in clean_passage_words or tok in meta_whitelist:
+                                continue
+                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                            if tok_lvl in ("C1", "C2"):
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Reading Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                                )
+                                break
+
+            # 1.6 Check Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
                 flagged_indices.add(idx)
                 defect_messages.append(f"Reading Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
 
-            # 1.5 Check Stem Quality
+            # 1.7 Check Stem Quality & CEFR Ceiling
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Reading Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+            elif cefr_upper in ("A1", "A2"):
+                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
+                for tok in stem_toks:
+                    if tok in clean_passage_words or tok in meta_whitelist:
+                        continue
+                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                    if tok_lvl in ("C1", "C2"):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Reading Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                        )
+                        break
 
         # 2. Skill Diversity Gate
         if len(questions) >= 4 and len(categories_seen) < 2:
@@ -2152,7 +2200,57 @@ class WikiProcessor:
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
             kwargs["passage_content"] = data["passage"]
-            kwargs["cefr_level"] = data.get("cefr_level", "B2")
+            cefr = str(data.get("cefr_level", "B2")).upper()
+            kwargs["cefr_level"] = cefr
+            is_foundational = cefr in ("A1", "A2", "B1")
+            kwargs["is_foundational"] = is_foundational
+            if cefr in ("A1", "A2"):
+                kwargs["cefr_descriptor"] = f"Foundational English (CEFR {cefr})"
+                kwargs["question_stem_guidance"] = (
+                    "Use clear, direct, and accessible question stems (e.g., 'What did people use...', 'Why does the author mention...', 'According to paragraph 1...'). "
+                    "Avoid dense academic vocabulary, complex passive inversions, or convoluted hypothetical framing in the question stems."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep each option concise (ideally 4 to 12 words) and structurally simple. "
+                    "Options MUST NOT introduce obscure, advanced words (C1/C2) not found in the passage."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail/Recall`: 2 to 3 questions assessing key facts, explicit statements, or simple causes.\n"
+                    "     * `Main Idea`: 1 to 2 questions assessing the overall topic or central message.\n"
+                    "     * `Inference`: 0 to 1 question assessing a straightforward, obvious conclusion directly supported by the text."
+                )
+                kwargs["vocab_target_guidance"] = "5 to 8 key functional or topical vocabulary items essential for understanding the passage (e.g. core verbs, key nouns, useful everyday expressions)"
+            elif cefr == "B1":
+                kwargs["cefr_descriptor"] = "Intermediate English (CEFR B1)"
+                kwargs["question_stem_guidance"] = (
+                    "Use standard, clear question stems assessing paragraph connections, cause-and-effect, and key claims. "
+                    "Maintain natural, accessible syntax."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options standard and clear (ideally 6 to 15 words). Do not use hyper-academic GRE vocabulary in options."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail/Recall`: 2 questions targeting key factual statements or causal links.\n"
+                    "     * `Main Idea`: 1 to 2 questions assessing paragraph or text-level main ideas.\n"
+                    "     * `Inference`: 1 question assessing logical deductions warranted by the text.\n"
+                    "     * `Author's Tone/Purpose`: 0 to 1 question assessing speaker attitude or purpose."
+                )
+                kwargs["vocab_target_guidance"] = "5 to 8 intermediate vocabulary items from the passage that expand students' communicative competence"
+            else:
+                kwargs["cefr_descriptor"] = f"Advanced Academic English (CEFR {cefr})"
+                kwargs["question_stem_guidance"] = (
+                    "Use rigorous TOEFL/academic reading assessment stems assessing synthesis, global discourse organization, and implicit logic."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Craft intellectually mature options with accurate paraphrasing, precise lexical substitutions, and nuanced distractors."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Main Idea`: 1 to 2 questions assessing global gist, central thesis, or primary communicative purpose.\n"
+                    "     * `Detail/Recall`: 2 to 4 questions targeting key factual statements, causal links, or explicit mechanisms.\n"
+                    "     * `Inference`: 1 to 3 questions assessing logical implications, unstated assumptions, or deductions fully warranted by the text.\n"
+                    "     * `Author's Tone/Purpose`: 1 question assessing stance, attitude, rhetorical strategy, or underlying perspective."
+                )
+                kwargs["vocab_target_guidance"] = "5 to 8 challenging academic vocabulary items directly from the passage"
         elif template_name == "translation":
             raw_v = data.get("vocab_list", "")
             sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
@@ -2245,20 +2343,23 @@ class WikiProcessor:
                 expected_count = kwargs.get("count", 5)
                 # Turn 1: Standard natural language assessment generation
                 if template_name == "reading":
+                    vocab_heading_guide = kwargs.get("vocab_target_guidance", "5 to 8 key vocabulary items directly from the passage")
+                    question_heading_guide = "clear, accessible reading question stem" if kwargs.get("is_foundational") else "clear, intellectually mature reading question stem"
+                    example_heading_guide = "illustrative example matching student proficiency level" if kwargs.get("is_foundational") else "original academic illustrative example"
                     prose_instructions = (
                         f"{prompt}\n\n"
                         "### GENERATION FORMAT MANDATE:\n"
                         "Write out the reading assessment strictly using this clean, structured text format:\n\n"
-                        "VOCABULARY LIST (5 to 8 challenging academic words directly from the passage):\n"
+                        f"VOCABULARY LIST ({vocab_heading_guide}):\n"
                         "- Word: [target headword]\n"
                         "- Context Sentence: \"[exact verbatim sentence from the passage]\"\n"
                         "- Part of Speech: [noun/verb/adjective/adverb/preposition/conjunction/interjection]\n"
                         "- Definition: [concise contextual meaning]\n"
-                        "- Example Usage: [original academic illustrative example]\n\n"
+                        f"- Example Usage: [{example_heading_guide}]\n\n"
                         "COMPREHENSION QUESTIONS:\n"
                         "Item 1:\n"
                         "- Category: [Main Idea | Detail/Recall | Inference | Author's Tone/Purpose]\n"
-                        "- Question: [clear, intellectually mature reading question stem]\n"
+                        f"- Question: [{question_heading_guide}]\n"
                         "- Options:\n"
                         "  A. option text\n"
                         "  B. option text\n"
@@ -2485,7 +2586,8 @@ class WikiProcessor:
                     if template_name == "reading":
                         l1_defective, l1_defects = self.audit_reading_integrity(
                             quiz_dict_eval,
-                            passage_text=source_context
+                            passage_text=source_context,
+                            cefr_level=kwargs.get("cefr_level", "B2")
                         )
                     elif template_name == "video":
                         l1_defective, l1_defects = self.audit_video_integrity(
@@ -2680,7 +2782,8 @@ class WikiProcessor:
                                 if template_name == "reading":
                                     cure_l1_flagged, cure_l1_defects = self.audit_reading_integrity(
                                         {"questions": [healed_item]},
-                                        passage_text=source_context
+                                        passage_text=source_context,
+                                        cefr_level=kwargs.get("cefr_level", "B2")
                                     )
                                 elif template_name == "video":
                                     cure_l1_flagged, cure_l1_defects = self.audit_video_integrity(

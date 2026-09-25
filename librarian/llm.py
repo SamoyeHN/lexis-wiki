@@ -989,7 +989,11 @@ class LLMClient:
                                 elif "quiz" in t_name_lower:
                                     critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
                                 elif any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
-                                    critical_invariant = "Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`. Headwords must be strictly single words."
+                                    critical_invariant = (
+                                        "Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`, "
+                                        "and the `quoted_sentence` MUST itself contain the headword — if your cited sentence lacks it, "
+                                        "find and cite the correct sentence that does. Headwords must be strictly single words."
+                                    )
                                 else:
                                     critical_invariant = "Every cited element and sentence must physically exist verbatim in `### SOURCE TEXT ###`."
 
@@ -1567,7 +1571,7 @@ class LLMClient:
         elif (json_format or schema) and enforce_json:
             payload["format"] = "json"
             
-        timeout_val = (5, self.timeout) if not stream else (5, None)
+        timeout_val = (15, self.timeout) if not stream else (15, None)
         try:
             response = requests.post(url, json=payload, timeout=timeout_val, stream=stream)
             response.raise_for_status()
@@ -1670,7 +1674,7 @@ class LLMClient:
         elif json_format or schema:
             payload["response_format"] = {"type": "json_object"}
         try:
-            timeout_val = (5, self.timeout) if not stream else (5, None)
+            timeout_val = (15, self.timeout) if not stream else (15, None)
             response = requests.post(url, json=payload, headers=headers, timeout=timeout_val, stream=stream)
             
             # Robust self-healing for LM Studio / local servers that do not accept {"type": "json_object"}

@@ -363,7 +363,7 @@ def _map_value(t: Any, val: Any) -> Any:
 # --- Schema Definitions ---
 
 CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
-VOCAB_CEFR_LEVELS = Literal["B1", "B2", "C1", "C2"]
+VOCAB_CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
 PARTS_OF_SPEECH = Literal["noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection"]
 EXPRESSION_TYPES = Literal["phrasal verb", "idiom", "collocation", "set phrase"]
 

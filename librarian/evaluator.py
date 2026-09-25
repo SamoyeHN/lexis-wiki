@@ -34,11 +34,11 @@ STOP_SLOTS = frozenset({
 ALLOWED_GRAMMAR_SLOTS = frozenset({
     "s", "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "adj", "adv",
     "det", "prep", "conj", "clause", "noun phrase", "verb phrase", "predicate", "subject",
-    "object", "complement", "adverbial", "focus element", "subordinate clause",
-    "main clause", "dependent clause", "modal", "copula", "past participle",
+    "object", "complement", "adverbial", "focus element", "focal element", "subordinate clause",
+    "main clause", "dependent clause", "modal", "modal/vp", "copula", "past participle",
     "present participle", "infinitive", "gerund", "adjective phrase", "adverb phrase",
     "prepositional phrase", "quotation", "wh-word", "wh-clause", "head noun",
-    "verb-ing", "verb-ed"
+    "verb-ing", "verb-ed", "prepp/np", "adj/np", "comparative", "proposition clause", "also"
 })
 
 # Standard COBUILD bare POS tokens for unbracketed pattern formulas
@@ -61,6 +61,7 @@ FATAL_QA_FLAGS = (
     "pure fabrication",
     "Incomplete target coverage",
     "ungrounded in quote",
+    "not a recognized English word",
     "Multiple blanks",
     "Target word leaks",
     "missing fill-in-the-blank slot",
@@ -656,6 +657,22 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 # Severe deduction: directly penalize verbatim score rather than neutral skip
                 matches = max(0, matches - 1)
                 continue
+
+            # Check 2.5: The headword itself must be a real standalone unit —
+            # a recognized English word, or a standalone token in the quoted
+            # sentence. Catches lemmatizer corruption (e.g. 'embe') that Check 2's
+            # substring matching lets through ('embe' is a prefix of 'embedded'),
+            # without false-flagging legitimate words WordNet lacks ('ice-cream',
+            # "don't") or text-specific terms that appear verbatim in the quote.
+            if " " not in clean_word and clean_word.isalpha():
+                if LinguisticEngine.is_known_english_word(clean_word) is not True:
+                    if clean_word not in clean_quote.split():
+                        flags.append(
+                            f"❌ Headword '{word}' is not a recognized English word and does not appear "
+                            f"as a standalone token in the quoted sentence (suspect lemmatization artifact)"
+                        )
+                        matches = max(0, matches - 1)
+                        continue
 
 
         # Check 3: Cleaned quote in source or high n-gram coverage
@@ -1288,6 +1305,50 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 cleaned_q = cleaned_q.strip("\"'“”‘’").strip()
                 item[quote_field] = cleaned_q
 
+        # In-Place Quote Repair: the quoted sentence MUST contain the headword.
+        # If the model cited the wrong sentence (headword physically present in the
+        # source text but absent from the quote), deterministically swap in the
+        # shortest authentic source sentence containing it — instead of burning LLM
+        # retries that cannot reliably self-correct this failure mode.
+        if task_type in ("vocabulary", "expressions"):
+            headword = str(item.get("word") or item.get("pattern_formula") or item.get("target_word") or "").strip()
+            if headword and quote_field and sentence_pool:
+                rw_clean_word = _clean_core(re.sub(r"\[.*?\]|\(.*?\)", " ", headword))
+                rw_tokens = [w for w in rw_clean_word.split() if w and w not in STOP_SLOTS]
+                if rw_tokens:
+                    def _rw_tok_in(text_core: str, tok: str) -> bool:
+                        if tok in text_core or (len(tok) >= 4 and tok[:4] in text_core):
+                            return True
+                        if tok in COMMON_IRREGULARS and any(ir in text_core for ir in COMMON_IRREGULARS[tok]):
+                            return True
+                        return False
+
+                    rw_current_core = _clean_core(str(item.get(quote_field) or ""))
+                    if rw_current_core:
+                        rw_matched = sum(1 for t in rw_tokens if _rw_tok_in(rw_current_core, t))
+                        rw_min_needed = max(1, len(rw_tokens) // 2 + (1 if len(rw_tokens) % 2 == 1 else 0))
+                        rw_needs_repair = rw_matched < rw_min_needed
+                    else:
+                        rw_needs_repair = True
+
+                    # Only repair when the headword physically exists in the source;
+                    # otherwise it is a pure hallucination and the prune gate handles it.
+                    if rw_needs_repair and all(_rw_tok_in(core_src, t) for t in rw_tokens):
+                        rw_best, rw_best_len = None, None
+                        for _sid, _sent in sentence_pool.items():
+                            _sent_clean = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", _sent, flags=re.IGNORECASE).strip()
+                            _sc = _clean_core(_sent_clean)
+                            if not _sc or not all(_rw_tok_in(_sc, t) for t in rw_tokens):
+                                continue
+                            if rw_best_len is None or len(_sent_clean) < rw_best_len:
+                                rw_best, rw_best_len = _sent_clean, len(_sent_clean)
+                        if rw_best:
+                            item[quote_field] = rw_best
+                            pruned_flags.append(
+                                f"🩹 In-Place Quote Repair: headword '{headword}' was absent from the quoted sentence; "
+                                f"swapped in authentic source sentence: '{rw_best[:60]}...'"
+                            )
+
         # Deterministic deduplication check
         if task_type == "grammar":
             raw_quote = str(item.get("quote", "")).strip()
@@ -1583,8 +1644,21 @@ class LogEvaluator:
                 delivered_count = len(items)
                 if delivered_count < expected_count:
                     coverage_ratio = delivered_count / expected_count
+                    # Name the missing targets so the retry critique can target them specifically
+                    name_key = "word" if task_type == "vocabulary" else "formula"
+                    missing_names: List[str] = []
+                    if name_key:
+                        delivered_names = {
+                            _clean_core(str(it.get(name_key) or it.get("word") or it.get("pattern_formula") or "")).lower()
+                            for it in items
+                        }
+                        for sk in skeletons:
+                            sk_name = str(sk.get(name_key) or "").strip()
+                            if sk_name and _clean_core(sk_name).lower() not in delivered_names:
+                                missing_names.append(sk_name)
+                    missing_txt = f" — missing: {', '.join(missing_names[:12])}" if missing_names else ""
                     flags.append(
-                        f"❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only {delivered_count}/{expected_count} targets"
+                        f"❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only {delivered_count}/{expected_count} targets{missing_txt}"
                     )
                     # Proportionately scale composite score so that 1/5 outputs score ~20%, NOT 100%!
                     composite_score = round(composite_score * coverage_ratio, 1)

@@ -48,6 +48,21 @@
   - Every strict negative constraint provides an explicit permissible outlet (traffic routing to legal categories, graceful skip, or surgical rewrite).
   - Quotas are evidence-driven: models never force artificial category distributions. Items cluster naturally based on source text evidence.
 
+### 1.4 Unified CEFR Difficulty Calibration Architecture (`cefrpy` Integration)
+- **Curricular Alignment Mandate**: Eliminates the systemic defect where foundational curriculum texts (e.g. CEFR A1/A2/B1 introductory units) generated assessments harder than the text itself (e.g., college-level distractors, academic TOEFL question stems, or zero grammar yield).
+- **Extraction Layer (Vocabulary & Grammar)**:
+  - `schemas.py`: Standardized `VOCAB_CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]`.
+  - `extract_grammar.md`: Mined pattern formulas and imitation examples dynamically align with the curriculum level (`cefr_level`), banning impenetrable academic jargon on foundational texts.
+- **Assessment Layer (Completed: Vocabulary & Reading)**:
+  - **Vocabulary Quiz (`vocabulary_quiz`)**:
+    - Pre-computed WordNet distractors pass through an offline `cefrpy` + Zipf frequency ceiling gate ($Zipf \ge 3.2$ for A1/A2, $3.0$ for B1), physically eliminating obscure or super-advanced distractors (e.g., `conceivableness` on basic words).
+  - **Reading Quiz (`reading_quiz`)**:
+    - **Dynamic Prompt Interpolation**: Injects `{cefr_descriptor}`, `{question_stem_guidance}`, `{option_complexity_guidance}`, `{skill_distribution_guidance}`, and `{vocab_target_guidance}`. For A1/A2, question stems are direct, options are concise (4–12 words), and skills focus on Detail/Recall & Main Idea.
+    - **Level 1 Deterministic Code Gate (`audit_reading_integrity`)**: Enforces option length bounds ($\le 16$ words for A1/A2, $\le 20$ words for B1) and uses `cefrpy` to audit that non-passage option/stem vocabulary never exceeds the passage CEFR ceiling (intercepts C1/C2 words).
+- **Assessment Layer (Pending: Translation, Listening, Video)**:
+  - **Translation Quiz (`translation_quiz`)**: Currently retains strict CEFR B2–C1 / TEM-8 / TOEFL comparative translation appraisal standards; pending future adaptation to scale down to A1–B1 foundational curriculum sentences.
+  - **Listening & Video Quizzes**: Standardized on intermediate/advanced levels, pending CEFR difficulty calibration.
+
 ---
 
 ## 2. Stateless Storage & Decoupled Display Architecture
@@ -195,6 +210,9 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
 - [x] Oxford Collocations Dictionary 2nd Edition integration (20,791 headwords, ~4.9MB clean JSON, `LinguisticEngine.get_rich_collocations`)
 - [x] Adjective Distractor Quadruple Transformation (WordNet bipolar cluster harvesting, opposite satellite antonym tracing, modified noun collocation clash, preposition valency gate, and academic adjective families)
+- [x] CEFR Distractor Difficulty Ceiling & Offline Frequency Gate (P0: eliminated super-advanced/obscure distractors on foundational texts via `cefrpy` + Zipf frequency filtering)
+- [x] Grammar Extraction Adaptive Gate & Multi-Level Coverage (P1: solved clefts `nsubj/expl`, relative clauses, causative complements, stance transitions, and curriculum register calibration)
+- [x] Reading Assessment CEFR Difficulty Adaptation & L1 Code Gate (P2 Step 1 & 2: dynamic prompt interpolation of difficulty matrix, option length limit, and C1/C2 difficulty ceiling gate)
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:
@@ -205,6 +223,9 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
   - **Grammar**: Strengthen sentence selection criteria for authentic pedagogical/discourse value, and enrich `explanation` with functional linguistic stance (nominalization, discourse framing, hedging).
 - **Deterministic CEFR Labelling (Offline Dictionary Integration)**:
   - Integrate offline frequency/proficiency lexicons (CEFR-J, Oxford 3000/5000, AWL) to objectively label CEFR levels across words, sentences, and passages without relying on LLM estimation.
+- **CEFR Difficulty Alignment for Remaining Assessment Modalities**:
+  - **Translation Assessment (`translation_quiz`)**: Currently locked at B2–C1 / CET-6 / TEM-8 / TOEFL comparative appraisal standards; adapt source sentence complexity, target grammar pattern difficulty, and flaw taxonomy to scale smoothly down to foundational levels (A1–B1) when processing introductory textbooks.
+  - **Listening & Video Assessments (`listening_quiz`, `video_quiz`)**: Calibrate comprehension question stems, option length limits, and distractor vocabulary ceilings based on the passage/transcript CEFR level.
 - **WordNet & Pre-Computed Distractor Assembly**:
   - Implement offline synthesis of 3 collision-free, distinct-taxonomy distractors (<1ms, 0 tokens) and pair with One-Shot question stem generation to physically eliminate double keys.
 - **Common Mistakes Curated Template Injection**:

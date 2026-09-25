@@ -19,6 +19,97 @@ class LinguisticEngine:
     _acl_data = None
     _awl_data = None
     _ocd_data = None
+    _cefr_analyzer = None
+
+    CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
+
+    @classmethod
+    def get_cefr_analyzer(cls):
+        """Lazy-loads the offline CEFRAnalyzer (CEFR-J + Google N-Gram, <10ms lookup)."""
+        if cls._cefr_analyzer is None:
+            try:
+                from cefrpy import CEFRAnalyzer
+                cls._cefr_analyzer = CEFRAnalyzer()
+            except Exception:
+                pass
+        return cls._cefr_analyzer
+
+    @classmethod
+    def get_word_cefr(cls, word: str) -> Optional[str]:
+        """Returns the CEFR level string ('A1', 'A2', 'B1', 'B2', 'C1', 'C2') for a word or None."""
+        if not word:
+            return None
+        analyzer = cls.get_cefr_analyzer()
+        if not analyzer:
+            return None
+        try:
+            res = analyzer.get_average_word_level_CEFR(word.lower().strip())
+            return str(res).upper() if res else None
+        except Exception:
+            return None
+
+    @classmethod
+    def is_cefr_compliant_distractor(cls, candidate: str, target_word: str) -> bool:
+        """
+        Enforces the Psychometric Distractor Ceiling Principle:
+        1. Distractor must NOT be significantly harder than the target word.
+        2. Specifically, candidate CEFR rank <= target CEFR rank + 1, with a hard ceiling:
+           - For A1/A2 target: distractor must be <= B1 (never B2, C1, C2, or obscure unlisted).
+           - For B1 target: distractor must be <= B2 (never C1, C2, or obscure unlisted).
+           - For B2 target: distractor must be <= C1.
+        3. Lexicon Filter: candidate must exist in Oxford Collocations Dictionary or CEFR database.
+        4. Morphological Anomaly Gate:
+           - Max length <= max(11, len(target) + 4) (rejects 14+ letter monsters like 'conceivableness').
+           - Rejects obscure multi-affix formations ('-ableness', '-lessness', '-icalness', '-fulness').
+        """
+        c_clean = candidate.lower().strip()
+        t_clean = target_word.lower().strip()
+        if not c_clean or c_clean == t_clean:
+            return False
+
+        # Physical / Morphological Anomaly Filter
+        if len(c_clean) > max(11, len(t_clean) + 4):
+            return False
+        for bad_suffix in ("ableness", "lessness", "icalness", "fulness"):
+            if c_clean.endswith(bad_suffix):
+                return False
+
+        # Lexicon Filter: must be recognized in OCD or AWL
+        ocd = cls.get_oxford_collocations()
+        in_ocd = c_clean in ocd
+        in_awl = c_clean in cls.get_awl_words()
+
+        analyzer = cls.get_cefr_analyzer()
+        if not analyzer:
+            return in_ocd or in_awl
+
+        t_lvl_str = cls.get_word_cefr(t_clean) or "B2"
+        c_lvl_str = cls.get_word_cefr(c_clean)
+
+        t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
+
+        if not c_lvl_str:
+            # Candidate is unlisted in CEFR database!
+            # If target is A1, A2, or B1, completely reject unlisted candidates (e.g. 'conceivableness')
+            if t_rank <= 3:
+                return False
+            # For B2/C1 targets, only allow if verified in OCD
+            return in_ocd
+
+        c_rank = cls.CEFR_ORDER.get(c_lvl_str, 4)
+
+        # Distractor Ceiling Gates:
+        # A1 / A2 target: distractor must be <= B1 (rank <= 3)
+        if t_rank <= 2 and c_rank > 3:
+            return False
+        # B1 target: distractor must be <= B2 (rank <= 4)
+        if t_rank == 3 and c_rank > 4:
+            return False
+        # B2 target: distractor must be <= C1 (rank <= 5)
+        if t_rank == 4 and c_rank > 5:
+            return False
+
+        return in_ocd or in_awl or analyzer.is_word_in_database(c_clean)
 
     @classmethod
     def get_spacy(cls):
@@ -143,7 +234,16 @@ class LinguisticEngine:
         ocd = cls.get_oxford_collocations()
 
         # Map POS to WordNet tag ('n', 'v', 'a', 'r')
-        wn_pos = "v" if pos.startswith("v") else ("n" if pos.startswith("n") else ("a" if pos.startswith("adj") or pos.startswith("a") else None))
+        if pos.startswith("adv") or pos == "r":
+            wn_pos = "r"
+        elif pos.startswith("v"):
+            wn_pos = "v"
+        elif pos.startswith("n"):
+            wn_pos = "n"
+        elif pos.startswith("adj") or pos == "a":
+            wn_pos = "a"
+        else:
+            wn_pos = None
         if wn_pos == "a":
             # In WordNet, adjectives are split into head adjectives ('a') and satellite adjectives ('s')
             words = wn.words(clean_target, pos="a") + wn.words(clean_target, pos="s")
@@ -277,7 +377,14 @@ class LinguisticEngine:
             if wn_pos != "v":
                 for sw in s.words():
                     lemma = sw.lemma().lower()
-                    if lemma not in seen and " " not in lemma and "_" not in lemma and "-" not in lemma and (lemma in ocd or lemma in cls.get_awl_words()):
+                    if (
+                        lemma not in seen
+                        and " " not in lemma
+                        and "_" not in lemma
+                        and "-" not in lemma
+                        and (lemma in ocd or lemma in cls.get_awl_words())
+                        and cls.is_cefr_compliant_distractor(lemma, clean_target)
+                    ):
                         if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
                             continue
                         seen.add(lemma)
@@ -299,6 +406,7 @@ class LinguisticEngine:
                                 and " " not in hl and "_" not in hl and "-" not in hl
                                 and (hl in ocd or hl in cls.get_awl_words())
                                 and _pos_ok(hl)
+                                and cls.is_cefr_compliant_distractor(hl, clean_target)
                             ):
                                 seen.add(hl)
                                 tier2_satellites.append(hl)
@@ -315,6 +423,7 @@ class LinguisticEngine:
                             and "-" not in lemma
                             and (lemma in ocd or lemma in cls.get_awl_words())
                             and _pos_ok(lemma)
+                            and cls.is_cefr_compliant_distractor(lemma, clean_target)
                         ):
                             seen.add(lemma)
                             tier2_satellites.append(lemma)
@@ -336,6 +445,7 @@ class LinguisticEngine:
                                 and "-" not in lemma
                                 and (lemma in ocd or lemma in cls.get_awl_words())
                                 and _pos_ok(lemma)
+                                and cls.is_cefr_compliant_distractor(lemma, clean_target)
                             ):
                                 seen.add(lemma)
                                 tier3_attributes.append(lemma)
@@ -350,6 +460,7 @@ class LinguisticEngine:
                                     and "-" not in lemma
                                     and (lemma in ocd or lemma in cls.get_awl_words())
                                     and _pos_ok(lemma)
+                                    and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                 ):
                                     seen.add(lemma)
                                     tier3_attributes.append(lemma)
@@ -358,7 +469,16 @@ class LinguisticEngine:
                 for hypo in s.hyponyms():
                     for hw in hypo.words():
                         lemma = hw.lemma().lower()
-                        if lemma not in seen and lemma not in global_synonyms and " " not in lemma and "_" not in lemma and "-" not in lemma and (lemma in ocd or lemma in cls.get_awl_words()) and _pos_ok(lemma):
+                        if (
+                            lemma not in seen
+                            and lemma not in global_synonyms
+                            and " " not in lemma
+                            and "_" not in lemma
+                            and "-" not in lemma
+                            and (lemma in ocd or lemma in cls.get_awl_words())
+                            and _pos_ok(lemma)
+                            and cls.is_cefr_compliant_distractor(lemma, clean_target)
+                        ):
                             if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
                                 continue
                             seen.add(lemma)
@@ -373,7 +493,16 @@ class LinguisticEngine:
                             continue
                         for sw in sis.words():
                             lemma = sw.lemma().lower()
-                            if lemma not in seen and lemma not in global_synonyms and " " not in lemma and "_" not in lemma and "-" not in lemma and (lemma in ocd or lemma in cls.get_awl_words()) and _pos_ok(lemma):
+                            if (
+                                lemma not in seen
+                                and lemma not in global_synonyms
+                                and " " not in lemma
+                                and "_" not in lemma
+                                and "-" not in lemma
+                                and (lemma in ocd or lemma in cls.get_awl_words())
+                                and _pos_ok(lemma)
+                                and cls.is_cefr_compliant_distractor(lemma, clean_target)
+                            ):
                                 if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
                                     continue
                                 seen.add(lemma)
@@ -503,13 +632,30 @@ class LinguisticEngine:
 
         # Universal Fallback if candidates pool is still sparse: select standard homogeneous items from OCD
         if len(safe_distractors) < target_count:
-            fallback_pool = {
-                "v": ["maintain", "establish", "determine", "evaluate", "indicate", "demonstrate", "direct", "guide", "sustain"],
-                "n": ["aspect", "factor", "process", "measure", "element", "context", "matter", "institution", "framework"],
-                "a": ["crucial", "essential", "primary", "initial", "direct", "specific", "constant", "fundamental"]
-            }.get(wn_pos or "n", ["factor", "element", "process"])
+            t_lvl_str = cls.get_word_cefr(clean_target) or "B2"
+            t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
+            if t_rank <= 3:
+                fallback_pool = {
+                    "v": ["choose", "accept", "decide", "expect", "follow", "notice", "explain", "remain", "manage", "allow"],
+                    "n": ["choice", "reason", "matter", "situation", "effort", "problem", "action", "change", "moment", "condition"],
+                    "a": ["simple", "common", "certain", "different", "similar", "natural", "clear", "direct", "actual", "special"],
+                    "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily", "sharply", "directly", "steadily"]
+                }.get(wn_pos or "n", ["choice", "reason", "matter"])
+            else:
+                fallback_pool = {
+                    "v": ["maintain", "establish", "determine", "evaluate", "indicate", "demonstrate", "direct", "guide", "sustain"],
+                    "n": ["aspect", "factor", "process", "measure", "element", "context", "matter", "institution", "framework"],
+                    "a": ["crucial", "essential", "primary", "initial", "direct", "specific", "constant", "fundamental"],
+                    "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily", "sharply", "directly", "steadily"]
+                }.get(wn_pos or "n", ["factor", "element", "process"])
             for fb in fallback_pool:
-                if fb != clean_target and fb not in forbidden_words and fb not in exclude_words and fb not in safe_distractors:
+                if (
+                    fb != clean_target
+                    and fb not in forbidden_words
+                    and fb not in exclude_words
+                    and fb not in safe_distractors
+                    and cls.is_cefr_compliant_distractor(fb, clean_target)
+                ):
                     safe_distractors.append(fb)
                     distractor_metadata[fb] = "corpus_fallback"
                 if len(safe_distractors) >= target_count:
@@ -1056,10 +1202,57 @@ class LinguisticEngine:
 
 
     @classmethod
+    def is_known_english_word(cls, word: str) -> Optional[bool]:
+        """
+        Tri-state lexical validation against the local Open English WordNet client.
+
+        Returns:
+            True  -> recognized English word (e.g. 'embed', 'hop')
+            False -> confirmed non-word, e.g. a lemmatizer fragment like 'embe'
+            None  -> not verifiable (multi-word, non-alphabetic, or WordNet unavailable)
+
+        Backed by the local SQLite WordNet client, so no network access is required.
+        """
+        w = (word or "").strip().lower()
+        if not re.fullmatch(r"[a-z]+(?:['\-][a-z]+)*", w):
+            return None  # multi-word / slots / non-alphabetic: out of scope
+        try:
+            wn_client = cls.get_wordnet()
+            if len(wn_client.lemmas(w)) > 0:
+                return True
+            # Retry with punctuation flattened (e.g. 'ice-cream' -> 'icecream')
+            alt = w.replace("'", "").replace("-", "")
+            if alt != w and len(wn_client.lemmas(alt)) > 0:
+                return True
+            return False
+        except Exception:
+            return None  # WordNet unavailable: let callers decide the safe default
+
+    @classmethod
+    def _guard_lemma(cls, surface: str, lemma: str) -> str:
+        """
+        Accept a spaCy lemma only when it is a recognized English word.
+
+        spaCy's rule-based lemmatizer can emit out-of-vocabulary guesses
+        (e.g. 'embed' -> 'embe') when the tagger mislabels a base form as
+        inflected. In that case the surface form — which comes from the real
+        source text — is the safer headword.
+        """
+        lemma = lemma.lower()
+        if lemma == surface.lower():
+            return lemma
+        if cls.is_known_english_word(lemma) is True:
+            return lemma
+        # Lemma is a non-word (or unverifiable): keep the original surface form.
+        return surface.lower()
+
+    @classmethod
     def lemmatize_headword(cls, word_or_phrase: str, context_sentence: Optional[str] = None) -> str:
         """
         Derives canonical base dictionary headwords from sentence context,
         eliminating inflected headwords (-ed, -ing, 3sg).
+        Lemmas are validated against the dictionary so the lemmatizer's
+        OOV fallback can never corrupt a headword (e.g. 'embed' -> 'embe').
         """
         nlp = cls.get_spacy()
         target = word_or_phrase.strip()
@@ -1068,7 +1261,7 @@ class LinguisticEngine:
         if " " not in target:
             doc = nlp(target)
             if len(doc) > 0 and doc[0].pos_ in ("VERB", "NOUN", "ADJ"):
-                return doc[0].lemma_.lower()
+                return cls._guard_lemma(target, doc[0].lemma_)
             return target.lower()
 
         # If a multi-word expression (e.g. phrasal verb or idiom)
@@ -1076,7 +1269,7 @@ class LinguisticEngine:
         lemmatized_tokens = []
         for token in doc:
             if token.pos_ == "VERB":
-                lemmatized_tokens.append(token.lemma_.lower())
+                lemmatized_tokens.append(cls._guard_lemma(token.text, token.lemma_))
             else:
                 lemmatized_tokens.append(token.text.lower())
         return " ".join(lemmatized_tokens)
@@ -1153,7 +1346,7 @@ class LinguisticEngine:
 
         # Cleft vs Dummy-it check
         for token in doc:
-            if token.dep_ == "expl" and token.text.lower() == "it":
+            if token.text.lower() == "it" and token.dep_ in ("expl", "nsubj"):
                 # Check copula verb
                 head = token.head
                 if head.lemma_ in ("be", "seem"):
@@ -1174,12 +1367,21 @@ class LinguisticEngine:
         # ---------------------------------------------------------------------
         # 2. Logic & Stance:
         #    Conditionals (if/unless) or Concessives (although/even though/while/whereas)
-        #    Checked before Information Packaging to avoid 'promising' being treated as participle
+        #    Adversative transitions (however/nevertheless/nonetheless)
+        #    Dual-stance coordinate contrast (..., but [S] also...)
         # ---------------------------------------------------------------------
         subordinating_conjs = {"although", "though", "while", "whereas", "even though", "if", "unless", "provided", "providing"}
         for token in doc:
             if token.dep_ == "mark" and token.lemma_.lower() in subordinating_conjs:
                 return "Logic & Stance"
+
+        # Stance / Adversative transition (However, / Nevertheless, ...)
+        if re.match(r"^(however|nevertheless|nonetheless|conversely|in contrast)\b", text_lower):
+            return "Logic & Stance"
+
+        # Stance / Contrastive coordinate balance (..., but [S] also...)
+        if re.search(r"\b,\s*but\s+[a-z]+\s+(also|still|yet)\b", text_lower):
+            return "Logic & Stance"
 
         # ---------------------------------------------------------------------
         # 3. Cohesion & Framing:
@@ -1208,8 +1410,10 @@ class LinguisticEngine:
         # ---------------------------------------------------------------------
         # 4. Information Packaging:
         #    a. Evaluative Dummy-It: It is + [adj/noun] + that/to [csubj/ccomp]
-        #    b. Non-finite participial adjuncts: advcl with VerbForm=Part
-        #    c. Elaborative non-restrictive relative clause: , which + VP (without that-clause)
+        #    b. Dense Object Complement: make/find/render/keep + Object + Adj
+        #    c. Non-finite participial adjuncts: advcl with VerbForm=Part
+        #    d. Relative clauses: which/who/whom/whose + VP
+        #    e. Elaborative non-restrictive relative clause: , which + VP
         # ---------------------------------------------------------------------
         # Evaluative Dummy-It (spaCy tags 'It' as nsubj/expl and the complement clause as ccomp/csubj)
         for token in doc:
@@ -1229,12 +1433,25 @@ class LinguisticEngine:
                     if c.pos_ == "ADJ" and any(gc.text.lower() == "it" and gc.dep_ in ("nsubj", "dobj") for gc in c.children):
                         return "Information Packaging"
 
+        # Dense Object Complement / Causative (make/find/render/keep + Object + Adj/Complement)
+        for t in doc:
+            if t.lemma_ in ("make", "find", "render", "keep") and t.pos_ in ("VERB", "AUX"):
+                for c in t.children:
+                    if c.dep_ in ("ccomp", "oprd") and c.pos_ == "ADJ":
+                        return "Information Packaging"
+
         # Non-finite participial adjuncts (advcl with VBG or VBN)
         for token in doc:
             if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
                 # Ensure it has no subject of its own (non-finite) and not a preposition
                 has_subj = any(c.dep_ in ("nsubj", "nsubjpass") for c in token.children)
                 if not has_subj and token.lemma_.lower() not in ("include", "accord", "regard", "concern"):
+                    return "Information Packaging"
+
+        # Relative clauses (which, that, who, whom, whose)
+        for token in doc:
+            if token.dep_ == "relcl":
+                if any(c.text.lower() in ("which", "who", "whom", "whose") for c in token.children):
                     return "Information Packaging"
 
         # Elaborative non-restrictive relative clauses
@@ -1269,15 +1486,15 @@ class LinguisticEngine:
                                 return f"{doc[0].text} + [aux/be] + [Subject] + [VP]"
             # Cleft
             for token in doc:
-                if token.dep_ == "expl" and token.text.lower() == "it" and token.head.lemma_ in ("be", "seem"):
+                if token.text.lower() == "it" and token.dep_ in ("expl", "nsubj") and token.head.lemma_ in ("be", "seem"):
                     if any(c.dep_ == "relcl" or any(gc.dep_ == "relcl" for gc in c.children) for c in token.head.children):
                         return "It + [be] + [Focal Element] + that/who + [Clause]"
-            # Antithesis
-            if re.search(r"\bnot\s+.*?\s*,\s*but\b", text_lower):
-                return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
             # Correlative Parallelism
             if re.search(r"\bnot\s+only\b.*?\bbut\s+also\b", text_lower):
                 return "[Subject] + not only + [VP], but also + [VP]"
+            # Antithesis
+            if re.search(r"\bnot\s+.*?\s*,\s*but\b", text_lower):
+                return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
 
         # 2. Logic & Stance
         if cat == "Logic & Stance" or not cat:
@@ -1285,6 +1502,10 @@ class LinguisticEngine:
                 if token.dep_ == "mark" and token.lemma_.lower() in {"although", "though", "while", "whereas", "even though", "if", "unless", "provided"}:
                     mark_word = token.text.capitalize()
                     return f"{mark_word} + [Clause], [Subject] + [VP]"
+            if re.match(r"^(however|nevertheless|nonetheless|conversely|in contrast)\b", text_lower):
+                return "However, [Subject] + [Modal/VP]"
+            if re.search(r"\b,\s*but\s+[a-z]+\s+(also|still|yet)\b", text_lower):
+                return "[Subject] + [VP], but [Subject] + [also] + [VP]"
 
         # 3. Cohesion & Framing
         if cat == "Cohesion & Framing" or not cat:
@@ -1312,6 +1533,12 @@ class LinguisticEngine:
                     for c in t.children:
                         if c.pos_ == "ADJ" and any(gc.text.lower() == "it" and gc.dep_ in ("nsubj", "dobj") for gc in c.children):
                             return f"[Subject] + {t.lemma_} + it + [{c.lemma_.capitalize()}] + to-V"
+            # Dense Object Complement / Causative (make/find/render/keep + Object + Adj)
+            for t in doc:
+                if t.lemma_ in ("make", "find", "render", "keep") and t.pos_ in ("VERB", "AUX"):
+                    for c in t.children:
+                        if c.dep_ in ("ccomp", "oprd") and c.pos_ == "ADJ":
+                            return f"[Subject] + {t.lemma_} + [Object] + [Adj]"
             # Dummy-It Subject Extraposition
             if any(t.text.lower() == "it" and t.dep_ in ("expl", "nsubj") for t in doc):
                 for t in doc:
@@ -1328,6 +1555,12 @@ class LinguisticEngine:
                             return f"[{v_type} Phrase], [Subject] + [VP]"
                         else:
                             return f"[Subject] + [VP], [{v_type} Phrase]"
+            # Relative clauses (which, that, who, whom, whose)
+            for token in doc:
+                if token.dep_ == "relcl":
+                    rel_pron = next((c.text.lower() for c in token.children if c.text.lower() in ("which", "who", "whom", "whose")), None)
+                    if rel_pron:
+                        return f"[NP] + {rel_pron} + [VP]"
             # Elaborative clause
             if re.search(r",\s*which\s+[a-z]+", text_lower):
                 return "[Subject] + [VP], which + [VP]"
@@ -1720,6 +1953,19 @@ class LinguisticEngine:
             "air", "teacher", "force", "education"
         })
 
+        # Dependent adverbial connectives: these heads are grammatically incomplete
+        # without their obligatory prepositional complement. They are only valid as
+        # the fixed 'head + of' phrase (POS = preposition), never as a bare adverb —
+        # a bare 'regardless' is not a testable single-blank target and, being absent
+        # from the Oxford/ACL collocation model, would yield a broken distractor space.
+        # This is a small, closed, stable set of 'of'-licensing connective heads
+        # (deliberately NOT an open-ended valency map): any connective whose bare
+        # form is incomplete on its own belongs here.
+        DEPENDENT_CONNECTIVES = {
+            "regardless": "of",
+            "irrespective": "of",
+        }
+
         candidates: List[Dict[str, Any]] = []
         seen_lemmas: Set[str] = set()
 
@@ -1740,6 +1986,37 @@ class LinguisticEngine:
 
                 # If not in AWL and is trivial or very short, skip
                 if not is_awl and (lemma in TRIVIAL_WORDS or len(lemma) < 5):
+                    continue
+
+                # Dependent-connective gate (extraction-stage quality, Pillar 0).
+                # A connective head like 'regardless' is only valid as its fixed
+                # 'head + of' form. When the obligatory preposition is present in the
+                # parsed sentence, complete the head to the fixed phrase and re-label
+                # it as a preposition; otherwise drop it — a bare dependent connective
+                # is never a valid single-blank target and must not leak out as an
+                # adverb (which is the root cause of the 'regardless of' double-key).
+                if token.pos_ == "ADV" and lemma in DEPENDENT_CONNECTIVES:
+                    required_prep = DEPENDENT_CONNECTIVES[lemma]
+                    has_prep = (
+                        any(ch.dep_ == "prep" and ch.text.lower() == required_prep for ch in token.children)
+                        or (token.i + 1 < len(doc) and doc[token.i + 1].text.lower() == required_prep)
+                    )
+                    if not has_prep:
+                        seen_lemmas.add(lemma)  # gate: never leak a bare dependent connective
+                        continue
+                    phrase = f"{lemma} {required_prep}"
+                    score = (20 if is_awl else 0) + min(len(phrase), 12)
+                    candidates.append({
+                        "sid": sid,
+                        "quote": sent_clean,
+                        "word": phrase,
+                        "part_of_speech": "preposition",
+                        "is_awl": is_awl,
+                        "is_connective": True,
+                        "score": score
+                    })
+                    seen_lemmas.add(lemma)
+                    seen_lemmas.add(phrase)
                     continue
 
                 # Scoring: AWL headwords get high priority, followed by word length and syllable complexity
@@ -1822,6 +2099,15 @@ class LinguisticEngine:
 
         cloze_items: List[Dict[str, Any]] = []
 
+        # --- Dependent-connective cloze (grammar/collocation axis -> single answer) ---
+        # 'of'-taking connective heads: the obligatory 'of' belongs to the fixed phrase
+        # ('regardless of <NP>'). Against such a target the bare-NP connectives below are
+        # UNgrammatical in the '____ of <NP>' frame, so they can never co-answer. Connectives
+        # are a small closed class, so this is a stable, well-attested functional inventory
+        # (real words), not an open-ended valency guess.
+        connectives_of_taking = frozenset({"regardless", "irrespective"})
+        connectives_bare_np = ("despite", "notwithstanding", "whatever", "barring")
+
         for it in parsed_items:
             w = it["word"]
             q = it["quote"]
@@ -1835,6 +2121,38 @@ class LinguisticEngine:
 
             doc = nlp(q_clean)
             w_lower = w.lower()
+
+            # Dependent connective (e.g. 'regardless of'): keep the obligatory 'of' in the
+            # stem and blank only the head. Only an 'of'-taking head is grammatical in the
+            # '____ of <NP>' frame, so the bare-NP distractors can never co-answer -> single.
+            head_part, _, frame_rest = w_lower.partition(" ")
+            if frame_rest and head_part in connectives_of_taking:
+                frame_prep = frame_rest.strip().lower()
+                head_tok = None
+                for i, t in enumerate(doc):
+                    if (t.lemma_.lower().strip() == head_part and not t.is_punct
+                            and i + 1 < len(doc) and doc[i + 1].text.lower().strip() == frame_prep):
+                        head_tok = t
+                        break
+                if head_tok is not None:
+                    stem = q_clean[:head_tok.idx] + "____" + q_clean[head_tok.idx + len(head_tok.text):]
+                    pre_d = [c for c in connectives_bare_np if c != head_part][:3]
+                    if len(re.findall(r'_{2,}', stem)) == 1 and len(pre_d) >= 2:
+                        cloze_items.append({
+                            "target_word": head_part,
+                            "base_headword": w,
+                            "part_of_speech": it["part_of_speech"],
+                            "definition": it["definition"],
+                            "question": stem,
+                            "source_sentence": q_clean,
+                            "precomputed_distractors": pre_d,
+                            "is_connective": True,
+                        })
+                        if len(cloze_items) >= target_count:
+                            break
+                        continue
+                # Connective entry whose quote lacks a well-formed 'head + of' frame -> skip.
+                continue
 
             # Locate token in sentence that matches the lemma or literal surface form
             target_tok = None
@@ -1935,13 +2253,16 @@ class LinguisticEngine:
             raw_pos = it["part_of_speech"].lower()
             
             # Map POS category
+            # NOTE: "adv" (adverb) MUST be checked before "verb", because the
+            # string "adverb" contains the substring "verb" and would otherwise
+            # be mis-classified as a verb (e.g. 'closely' -> verb bug).
             canonical_pos = "noun"
-            if "verb" in raw_pos:
+            if "adv" in raw_pos:
+                canonical_pos = "adv"
+            elif "verb" in raw_pos:
                 canonical_pos = "verb"
             elif "adj" in raw_pos:
                 canonical_pos = "adj"
-            elif "adv" in raw_pos:
-                canonical_pos = "adv"
 
             # 1. Retrieve Authentic Oxford Collocational Anchor (Sense-Guided)
             anchor = None
@@ -2028,18 +2349,30 @@ class LinguisticEngine:
                     try:
                         doc = nlp(it["quote"])
                         ocd_entry = ocd.get(w_lower, {})
+                        ocd_prep_tokens = set()
+                        for p in ocd_entry.get("prep", []):
+                            cleaned = re.sub(r'[\(\)]', '', p).lower()
+                            for w in cleaned.split():
+                                if w in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "over", "under"):
+                                    ocd_prep_tokens.add(w)
+
                         for tok in doc:
                             if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
                                 for child in tok.children:
-                                    if child.dep_ == "prep" and child.text.lower() in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards"):
+                                    if child.dep_ == "prep" and child.text.lower() in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "over", "under"):
+                                        prep_word = child.text.lower()
+                                        # Noun-preposition consensus gate: if noun has registered prepositions in OCD,
+                                        # the syntactic preposition MUST be verified against OCD to reject casual adjuncts (e.g. 'control from').
+                                        if ocd_prep_tokens and prep_word not in ocd_prep_tokens:
+                                            continue
                                         pobj_tok = None
                                         for pchild in child.children:
                                             if pchild.dep_ == "pobj" and pchild.lemma_.lower() not in cls._ANCHOR_STOPWORDS:
                                                 pobj_tok = pchild.lemma_.lower()
                                                 break
-                                        if pobj_tok is not None and (child.text.lower(), pobj_tok) in cls._ADJUNCT_PREP_PAIRS:
+                                        if pobj_tok is not None and (prep_word, pobj_tok) in cls._ADJUNCT_PREP_PAIRS:
                                             continue
-                                        anchor = child.text.lower()
+                                        anchor = prep_word
                                         anchor_type = "prep"
                                         prep_obj = pobj_tok
                                         break
@@ -2072,7 +2405,7 @@ class LinguisticEngine:
                         candidates = entry.get("adj", []) + entry.get("verb_before", [])
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"))
                         if anchor:
-                            anchor_type = "adj"
+                            anchor_type = "adj" if anchor in entry.get("adj", []) else "verb"
                     elif entry.get("prep"):
                         p_cand = cls._pick_anchor_token(entry["prep"])
                         if p_cand:
@@ -2165,7 +2498,7 @@ class LinguisticEngine:
 
             # Ensure we have valid distractors; fallback to zero_collision if needed
             if len(distractors) < 3:
-                pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else "n")
+                pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
                 distractors = cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3)
 
             # 3a. Double-Key Clearance (deterministic, frame-aware)
@@ -2180,9 +2513,13 @@ class LinguisticEngine:
                 flag, _kind = cls.double_key_collision(w_lower, cand, anchor, anchor_type)
                 return flag
 
-            double_keys = [d for d in distractors if d and _is_double_key(d)]
-            cleared = [d for d in distractors if d and not _is_double_key(d)]
-            if double_keys:
+            def _is_valid_distractor(cand: str) -> bool:
+                if not cand or _is_double_key(cand):
+                    return False
+                return cls.is_cefr_compliant_distractor(cand, w_lower)
+
+            cleared = [d for d in distractors if _is_valid_distractor(d)]
+            if len(cleared) < 3:
                 try:
                     refill_pool, _ = cls.generate_vocab_distractors(
                         target_word=w_lower, pos=canonical_pos,
@@ -2195,30 +2532,47 @@ class LinguisticEngine:
                 for cand in refill_pool:
                     if len(cleared) >= 3:
                         break
-                    if cand and cand not in cleared and not _is_double_key(cand):
+                    if cand and cand not in cleared and _is_valid_distractor(cand):
                         cleared.append(cand)
                 # Secondary refill: the primary semantic-tree pool is saturated
                 # with near-synonyms for synonym-heavy targets (designate,
                 # adverse), so fall back to a semantically distant pool
-                # (antonyms + taxonomy siblings + generic academic words).
+                # (antonyms + taxonomy siblings + generic core/academic words).
                 if len(cleared) < 3:
-                    pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else "n")
+                    pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
                     try:
                         for cand in cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3):
                             if len(cleared) >= 3:
                                 break
-                            if cand and cand not in cleared and cand not in used_distractors and not _is_double_key(cand):
+                            if cand and cand not in cleared and cand not in used_distractors and _is_valid_distractor(cand):
                                 cleared.append(cand)
                     except Exception:
                         pass
-                # Last resort: if the pool is exhausted, keep best-remaining
-                # (frame-only / contrast survivors) rather than degrading the item.
+                # Safe Refill: Never dump rejected double-keys (like 'astute' for 'smart') back into options!
+                # If still under 3, refill from verified, non-colliding words calibrated to target CEFR level.
                 if len(cleared) < 3:
-                    for d in distractors:
+                    pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
+                    t_lvl_str = cls.get_word_cefr(w_lower) or "B2"
+                    t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
+                    if t_rank <= 3:
+                        fallback_pool = {
+                            "v": ["choose", "accept", "decide", "expect", "follow", "notice", "explain", "remain", "manage", "allow"],
+                            "n": ["choice", "reason", "matter", "situation", "effort", "problem", "action", "change", "moment", "condition"],
+                            "a": ["simple", "common", "certain", "different", "similar", "natural", "clear", "direct", "actual", "special"],
+                            "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily", "sharply", "directly", "steadily"]
+                        }
+                    else:
+                        fallback_pool = {
+                            "v": ["indicate", "facilitate", "establish", "evaluate", "demonstrate", "generate", "enhance", "maintain", "assess"],
+                            "n": ["framework", "perspective", "dimension", "mechanism", "principle", "criterion", "strategy", "phenomenon", "capacity"],
+                            "a": ["apparent", "consistent", "distinct", "variable", "significant", "plausible", "rigid", "modest", "tentative"],
+                            "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily", "sharply", "directly", "steadily"]
+                        }
+                    for cand in fallback_pool.get(pos_char, []):
                         if len(cleared) >= 3:
                             break
-                        if d not in cleared:
-                            cleared.append(d)
+                        if cand != w_lower and cand not in cleared and cand not in used_distractors and _is_valid_distractor(cand):
+                            cleared.append(cand)
             distractors = cleared
 
             # Assemble full options (target + 3 distractors). The target is placed at a
@@ -2278,6 +2632,7 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires base-form verb '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
+                        f"Syntactic Frame: The blank '____' MUST be followed directly by preposition '{anchor}' (e.g. '... ____ {anchor} ...'). "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}', "
                         f"{valency_clause}.{ant_clue}"
                     )
@@ -2286,12 +2641,14 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires base-form verb '{final_target}' "
                         f"collocating with object/anchor '{anchor}'. "
+                        f"Syntactic Frame: The sentence MUST explicitly write the direct object '{anchor}' governed by the blank verb (e.g. '... ____ [the/a] {anchor} ...'). "
                         f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}].{ant_clue}"
                     )
                 else:
                     ant_clue = f" Provide clear clues eliminating opposite '{antonym_words[0]}'." if antonym_words else ""
                     micro_task = (
                         f"Construct a natural academic sentence in a formal register requiring base-form verb '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' must function as a main verb. "
                         f"Establish clear contextual contrast that rules out [{dist_str}].{ant_clue}"
                     )
             elif canonical_pos == "noun":
@@ -2306,6 +2663,7 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
+                        f"Syntactic Frame: The blank '____' MUST be immediately followed by preposition '{anchor}' (e.g. '... the/an ____ {anchor} ...'). "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}'{obj_note}, "
                         f"{valency_clause}.{ant_clue}"
                     )
@@ -2313,19 +2671,30 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"serving as the direct object of verb '{anchor}'. "
+                        f"Syntactic Frame: The sentence MUST explicitly write the governing verb '{anchor}' (or its inflected forms like '{anchor}s/{anchor}ed') with the blank as its direct noun object (e.g. '... {anchor} [someone] the/a ____ to [verb] ...' or '... {anchor} the/a ____ ...'). [CRITICAL CONSTRAINT] Do NOT omit '{anchor}' or turn the blank into a verb! "
                         f"Establish semantic clues demanding this classic governing-verb collocation, "
                         f"ruling out [{dist_str}].{ant_clue}"
                     )
-                elif anchor and anchor_type in ("adj", "modified_noun", "object", "collocation"):
+                elif anchor and anchor_type in ("adj", "modified_noun"):
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"directly modified or governed by '{anchor}'. "
+                        f"Syntactic Frame: The blank MUST be directly modified by '{anchor}' (e.g. '... {anchor} ____ ...'). The modifier '{anchor}' MUST appear immediately before the blank. "
+                        f"Establish semantic clues demanding this classic collocation, "
+                        f"ruling out [{dist_str}].{ant_clue}"
+                    )
+                elif anchor and anchor_type in ("object", "collocation"):
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
+                        f"collocating with '{anchor}'. "
+                        f"Syntactic Frame: The blank MUST collocate with '{anchor}' (e.g. '... ____ of/for {anchor} ...'). "
                         f"Establish semantic clues demanding this classic collocation, "
                         f"ruling out [{dist_str}].{ant_clue}"
                     )
                 else:
                     micro_task = (
                         f"Construct a natural academic sentence in a formal register requiring noun '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' must function as a subject or object noun. "
                         f"Establish its conceptual functional features in an academic context, "
                         f"discriminating it from [{dist_str}] through antonymic contrast or precise semantic-field cues.{ant_clue}"
                     )
@@ -2336,6 +2705,7 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
+                        f"Syntactic Frame: The blank '____' MUST be followed by preposition '{anchor}' (e.g. '... is/seems ____ {anchor} ...'). "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}', "
                         f"{valency_clause}.{ant_clue}"
                     )
@@ -2344,21 +2714,54 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' "
                         f"modifying noun '{anchor}'. "
+                        f"Syntactic Frame: The blank MUST directly modify the noun '{anchor}' (e.g. '... a/the ____ {anchor} ...'). The word '{anchor}' MUST appear immediately after the blank. "
                         f"Ensure the sentence context strictly demands '{final_target}' as the precise collocational and semantic fit, "
                         f"while ruling out [{dist_str}].{ant_clue}"
                     )
                 else:
                     ant_clue = f" Contrast with opposite '{antonym_words[0]}'." if antonym_words else ""
                     anchor_note = f"modifying '{anchor}' or similar academic concepts" if anchor else "in an academic evaluation"
+                    if anchor in ("make", "render", "find", "deem", "consider", "keep"):
+                        anchor_clause = (
+                            f"Syntactic Frame: The sentence MUST explicitly write the verb '{anchor}' in an object complement structure "
+                            f"(e.g. '... {anchor} it ____ to [verb] ...' or '... {anchor} [sth] ____ ...'). [CRITICAL CONSTRAINT] Do NOT turn the blank into a verb; the blank is an adjective complement! "
+                        )
+                    elif anchor:
+                        anchor_clause = (
+                            f"Syntactic Frame: The blank '____' must function as an adjective modifying '{anchor}' or in an academic evaluation (e.g. '... a ____ {anchor} ...'). "
+                        )
+                    else:
+                        anchor_clause = "Syntactic Frame: The blank '____' must function as an attributive or predicative adjective in an academic evaluation. "
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' ({anchor_note}). "
+                        f"{anchor_clause}"
                         f"Ensure the sentence context strictly demands '{final_target}' while ruling out [{dist_str}].{ant_clue}"
+                    )
+            elif canonical_pos == "adv":
+                if anchor:
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' must modify the verb '{anchor}' (e.g. '... {anchor} [sth] ____ ...' or '... ____ {anchor} ...'). "
+                        f"The verb '{anchor}' MUST be explicitly written in the sentence; do NOT place the blank in the main verb position! "
+                        f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}]."
+                    )
+                else:
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' must modify an academic verb or adjective. "
+                        f"Establish clear contextual clues that rule out [{dist_str}]."
                     )
             else:
                 micro_task = (
                     f"Compose a CEFR-aligned academic sentence where the blank requires '{final_target}'. "
                     f"Provide clear clues eliminating [{dist_str}]."
                 )
+
+            # High-discrimination semantic feature injection for subtle/high-risk distractors:
+            if final_target == "voice" and "message" in dist_list:
+                micro_task += " Semantic Discriminator: Emphasize physical acoustic vocal quality (e.g. trembling, audible pitch, whispered tone) rather than ideological content, strictly ruling out 'message'."
+            elif final_target == "control" and any(d in dist_list for d in ("strength", "effectiveness")):
+                micro_task += " Semantic Discriminator: Emphasize regulatory authority and restriction of access or behavior, strictly ruling out physical 'strength' and generic 'effectiveness'."
 
             skeletons.append({
                 "target_word": final_target,
@@ -2431,7 +2834,7 @@ class LinguisticEngine:
 
         # 1. Antonyms make outstanding, collision-free distractors
         for ant in antonyms:
-            if ant not in target_synonyms and " " not in ant:
+            if ant not in target_synonyms and " " not in ant and cls.is_cefr_compliant_distractor(ant, target_lower):
                 candidates.append(ant)
 
         # 2. Taxonomy sibling / hypernym search
@@ -2445,7 +2848,12 @@ class LinguisticEngine:
                 for sibling in hyper.get_related("hyponym"):
                     for w in sibling.words():
                         lemma = w.lemma().replace("_", " ").lower()
-                        if lemma not in target_synonyms and " " not in lemma and lemma not in candidates:
+                        if (
+                            lemma not in target_synonyms
+                            and " " not in lemma
+                            and lemma not in candidates
+                            and cls.is_cefr_compliant_distractor(lemma, target_lower)
+                        ):
                             candidates.append(lemma)
 
         # 3. Deduplicate and return requested count
@@ -2453,12 +2861,26 @@ class LinguisticEngine:
 
         # Fallback if synset taxonomy was sparse
         if len(final_distractors) < count:
-            common_fallbacks = {
-                "v": ["assume", "indicate", "require", "maintain", "assess"],
-                "n": ["aspect", "factor", "criterion", "approach", "phenomenon"],
-                "a": ["apparent", "consistent", "variable", "significant", "distinct"]
-            }
-            for fb in common_fallbacks.get(pos, common_fallbacks["v"]):
+            t_lvl_str = cls.get_word_cefr(target_lower) or "B2"
+            t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
+            if t_rank <= 3:
+                # Elementary / Intermediate Fallbacks (A1 - B1 core words)
+                common_fallbacks = {
+                    "v": ["choose", "accept", "decide", "expect", "follow", "notice", "explain", "remain"],
+                    "n": ["choice", "reason", "matter", "situation", "effort", "problem", "action", "change"],
+                    "a": ["simple", "common", "certain", "different", "similar", "natural", "clear", "direct"],
+                    "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily"]
+                }
+            else:
+                # Advanced Fallbacks (B2 - C1 academic words)
+                common_fallbacks = {
+                    "v": ["assume", "indicate", "require", "maintain", "assess"],
+                    "n": ["aspect", "factor", "criterion", "approach", "phenomenon"],
+                    "a": ["apparent", "consistent", "variable", "significant", "distinct"],
+                    "r": ["deeply", "strictly", "tightly", "widely", "carefully", "clearly", "readily"]
+                }
+            default_fb = common_fallbacks.get(pos, common_fallbacks["n" if pos == "n" else ("a" if pos == "a" else ("r" if pos == "r" else "v"))])
+            for fb in default_fb:
                 if fb not in target_synonyms and fb not in final_distractors:
                     final_distractors.append(fb)
                 if len(final_distractors) == count:

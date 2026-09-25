@@ -47,6 +47,18 @@ class TestLinguisticEngine:
         assert LinguisticEngine.lemmatize_headword("stumbled across") == "stumble across"
         assert LinguisticEngine.lemmatize_headword("turning down") == "turn down"
 
+    def test_lemmatizer_oov_guard_prevents_corruption(self):
+        """Regression: spaCy's rule lemmatizer can corrupt 'embed' (tagged VBD)
+        to the non-word 'embe'; the dictionary guard must keep the surface form."""
+        assert LinguisticEngine.lemmatize_headword("embed") == "embed"
+        # Legit lemmas still normalize as before.
+        assert LinguisticEngine.lemmatize_headword("embedded") == "embed"
+        assert LinguisticEngine.lemmatize_headword("hopped") == "hop"
+        # Tri-state dictionary probe.
+        assert LinguisticEngine.is_known_english_word("embed") is True
+        assert LinguisticEngine.is_known_english_word("embe") is False
+        assert LinguisticEngine.is_known_english_word("stumble across") is None
+
     def test_macro_domain_classification_rhetoric_inversion(self):
         inversion_sent = "Only then did the scientist realize the significance of the anomaly."
         cat = LinguisticEngine.classify_grammar_dependency(inversion_sent)
@@ -310,6 +322,36 @@ class TestLinguisticEngine:
         # Headwords must be lemmatized base forms
         assert all(w.islower() and w.isalpha() for w in words)
 
+    def test_mine_vocabulary_connective_gate_regardless_of(self):
+        """Extraction-stage quality (Pillar 0): a dependent connective must be completed
+        to its fixed 'head + of' form and labelled a preposition — never leaked out as a
+        bare adverb. A bare 'regardless' is the root cause of the downstream
+        'regardless of' vs 'in spite of' double-key distractors."""
+        text = (
+            "Regardless of the financial risks, the board proceeded with the merger. "
+            "Scholars must weigh the autonomy of each department against shared governance."
+        )
+        mined = LinguisticEngine.mine_vocabulary_skeletons(text, target_count=15)
+        words = [m["word"] for m in mined]
+        # The connective must be present as the fixed phrase, labelled a preposition...
+        conn = [m for m in mined if m["word"] == "regardless of"]
+        assert conn, "expected 'regardless of' to be mined as a fixed phrase"
+        assert conn[0]["part_of_speech"] == "preposition"
+        assert conn[0].get("is_connective") is True
+        # ...and the bare adverb form must NOT leak out.
+        assert "regardless" not in words
+        # Regression guard: genuine single-word headwords are still extracted.
+        assert "autonomy" in words
+
+    def test_mine_vocabulary_connective_gate_bare_form_dropped(self):
+        """A bare dependent connective without its obligatory 'of' complement is not a
+        valid single-blank target and must be dropped, not emitted as an adverb."""
+        text = "The plan proceeded regardless. The committee reconvened the following week."
+        mined = LinguisticEngine.mine_vocabulary_skeletons(text, target_count=15)
+        words = [m["word"] for m in mined]
+        assert "regardless" not in words
+        assert "regardless of" not in words
+
     def test_build_authentic_cloze_items(self):
         """LinguisticEngine must build authentic cloze items with masked blanks and collision-free distractors."""
         vocab_md = (
@@ -329,6 +371,34 @@ class TestLinguisticEngine:
         assert len(cloze_items[0]["precomputed_distractors"]) == 3
         assert "foundation" not in cloze_items[0]["precomputed_distractors"]
         assert "____" in cloze_items[1]["question"]
+
+    def test_build_authentic_cloze_connective_single_answer(self):
+        """A dependent-connective cloze must keep the obligatory 'of' in the stem and blank
+        only the head, with bare-NP (of-incompatible) connectives as distractors. In the
+        '____ of <NP>' frame only the of-taking head is grammatical, so the item is strictly
+        single-answer — this is the grammar/collocation axis, not semantic overlap."""
+        vocab_md = (
+            "## [[regardless of]]\n"
+            "- **Part Of Speech**: preposition\n"
+            "- **Definition**: no matter what; without being affected by\n"
+            "- **Quoted Sentence**: Regardless of the financial risks, the board proceeded with the merger.\n"
+        )
+        cloze_items = LinguisticEngine.build_authentic_cloze_items(vocab_md, target_count=5)
+        assert len(cloze_items) == 1
+        c = cloze_items[0]
+        # The head is the answer; the 'of' is given in the stem (not part of the answer).
+        assert c["target_word"] == "regardless"
+        assert c["base_headword"] == "regardless of"
+        assert c["is_connective"] is True
+        # The 'of' frame is preserved and there is exactly one blank (the head).
+        assert "____ of the financial risks" in c["question"]
+        assert c["question"].count("____") == 1
+        # Distractors are bare-NP connectives: none is valid after 'of', and the target is
+        # not among them -> exactly one correct answer.
+        allowed = {"despite", "notwithstanding", "whatever", "barring"}
+        assert set(c["precomputed_distractors"]) <= allowed
+        assert len(c["precomputed_distractors"]) == 3
+        assert "regardless" not in c["precomputed_distractors"]
 
     def test_sentence_pointer_hydration(self):
         """LinguisticEngine and evaluator must deterministically hydrate [S-ID] (e.g. S-1, S-126) into authentic sentences."""
@@ -367,6 +437,51 @@ class TestLinguisticEngine:
         }
         hydrated, _ = prune_hallucinated_items(vocab_data, source, task_type="vocabulary")
         assert hydrated["vocabulary"][0]["quoted_sentence"] == "Do you know the fairy tale of Goldilocks and the Three Bears?"
+
+    def test_quote_headword_repair(self):
+        """If the headword is absent from the quoted sentence but present in the source,
+        prune must deterministically swap in the authentic source sentence containing it."""
+        from librarian.evaluator import prune_hallucinated_items
+        source = (
+            "CONTENT:\n"
+            "The new policy has been criticized by many experts in the field. "
+            "Every generation inherits problems left by the last one."
+        )
+        # Positive: wrong sentence cited for 'generation' -> deterministic repair
+        bad_data = {
+            "vocabulary": [
+                {
+                    "word": "generation",
+                    "quoted_sentence": "The new policy has been criticized by many experts in the field.",
+                    "part_of_speech": "noun",
+                    "definition": "A group of people born at about the same time.",
+                    "example_usage": "This generation grew up with smartphones.",
+                    "word_cefr_level": "B2",
+                    "design_audit": "AUDIT: generation -> generation -> noun -> B2 -> VERBATIM_CONFIRMED"
+                }
+            ]
+        }
+        repaired, notices = prune_hallucinated_items(bad_data, source, task_type="vocabulary")
+        assert "Every generation inherits problems left by the last one." in repaired["vocabulary"][0]["quoted_sentence"]
+        assert any("Quote Repair" in n for n in notices)
+
+        # Negative: quote already contains the headword -> must not be modified
+        ok_data = {
+            "vocabulary": [
+                {
+                    "word": "generation",
+                    "quoted_sentence": "Every generation inherits problems left by the last one.",
+                    "part_of_speech": "noun",
+                    "definition": "A group of people born at about the same time.",
+                    "example_usage": "This generation grew up with smartphones.",
+                    "word_cefr_level": "B2",
+                    "design_audit": "AUDIT: generation -> generation -> noun -> B2 -> VERBATIM_CONFIRMED"
+                }
+            ]
+        }
+        unchanged, notices2 = prune_hallucinated_items(ok_data, source, task_type="vocabulary")
+        assert unchanged["vocabulary"][0]["quoted_sentence"] == "Every generation inherits problems left by the last one."
+        assert not any("Quote Repair" in n for n in notices2)
 
     def test_generate_vocab_distractors(self):
         """LinguisticEngine must generate high-discrimination, collision-free distractors using WordNet and OCD."""
@@ -704,6 +819,98 @@ class TestAnchorFourDimensionRepair:
         assert s["context_anchor"] is None or s["context_anchor"] != "strange"
         assert len(s["prescribed_options"]) == 4
         assert "compulsion" in s["prescribed_options"]
+
+    def test_noun_casual_adjunct_prep_rejected_by_ocd_consensus(self):
+        """Casual adjunct preposition 'from' (in 'not too much control from them')
+        must be rejected because OCD does not register 'from' as an inherent valency
+        prep for 'control'. The engine must fall back to authentic adjective 'strict'."""
+        sample_vocab = """
+## [[control]]
+- **Part Of Speech**: noun
+- **Definition**: The power or authority to influence someone's behavior; strict supervision or regulation.
+- **Quoted Sentence**: "Most young people want to enjoy the warm love from their family and friends, but not too much control from them."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "control"
+        assert s["part_of_speech"] == "noun"
+        assert s["context_anchor"] != "from"
+        assert s["context_anchor"] == "strict"
+        assert s["anchor_type"] == "adj"
+        assert "from" not in s["prescribed_options"]
+        assert "Semantic Discriminator" in s["micro_task"]
+        assert "Syntactic Frame" in s["micro_task"]
+
+    def test_adverb_distractor_generation_and_parallelism(self):
+        """Adverb 'closely' must receive adverb distractors (deeply, strictly, tightly)
+        instead of defaulting to nouns or adjectives."""
+        sample_vocab = """
+## [[closely]]
+- **Part Of Speech**: adverb
+- **Definition**: In a manner that is very attentive or precise; with great care and attention to detail.
+- **Quoted Sentence**: "They want to follow the time closely, but they also long for peace of mind."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "closely"
+        assert s["part_of_speech"] == "adv"
+        assert len(s["prescribed_options"]) == 4
+        # All prescribed options must be valid adverbs
+        for opt in s["prescribed_options"]:
+            assert opt.endswith("ly") or opt in ("close", "tight", "deeply", "strictly")
+        assert "Syntactic Frame" in s["micro_task"]
+
+    def test_double_key_refill_does_not_dump_synonyms_back(self):
+        """For target 'smart', near-synonym 'astute' must be safely excluded and
+        refilled from non-colliding academic words."""
+        sample_vocab = """
+## [[smart]]
+- **Part Of Speech**: adjective
+- **Definition**: Characterized by intelligence or good judgment; showing wisdom in decision-making processes.
+- **Quoted Sentence**: "However, the new ways of communication could give them freedom and chance to make smart choices."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "smart"
+        assert "astute" not in s["prescribed_options"]
+        assert len(s["prescribed_options"]) == 4
+        assert len(set(s["prescribed_options"])) == 4
+
+    def test_cefr_difficulty_ceiling_eliminates_obscure_distractors(self):
+        """P0: Distractors must not exceed difficulty ceiling or introduce bizarre obscure derivatives."""
+        # 'chance' is A2; 'conceivableness' is unlisted, 'conceivability' is C2, 'astute' is C2
+        assert LinguisticEngine.is_cefr_compliant_distractor("conceivableness", "chance") is False
+        assert LinguisticEngine.is_cefr_compliant_distractor("conceivability", "chance") is False
+        assert LinguisticEngine.is_cefr_compliant_distractor("attainableness", "chance") is False
+        assert LinguisticEngine.is_cefr_compliant_distractor("astute", "smart") is False
+
+        # Common level-appropriate words should be accepted
+        assert LinguisticEngine.is_cefr_compliant_distractor("choice", "chance") is True
+        assert LinguisticEngine.is_cefr_compliant_distractor("effort", "chance") is True
+        assert LinguisticEngine.is_cefr_compliant_distractor("matter", "chance") is True
+        assert LinguisticEngine.is_cefr_compliant_distractor("stupid", "smart") is True
+
+    def test_elementary_target_distractors_bounded_to_b1(self):
+        """Precomputed skeletons for Book 1 foundational words must strictly eliminate obscure distractors."""
+        sample_vocab = """
+## [[chance]]
+- **Part Of Speech**: noun
+- **Definition**: A possibility of something happening, or an opportunity to do something.
+- **Quoted Sentence**: "However, the new ways of communication could give them freedom and chance to make smart choices."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "chance"
+        assert len(s["prescribed_options"]) == 4
+        assert "conceivableness" not in s["prescribed_options"]
+        assert "conceivability" not in s["prescribed_options"]
+        for opt in s["prescribed_options"]:
+            # Max length cannot exceed 12 chars
+            assert len(opt) <= 12
+            # Must not end in bizarre suffixes
+            assert not opt.endswith("ableness")
+            # Word level if in CEFR database must be <= B1
+            lvl = LinguisticEngine.get_word_cefr(opt)
+            if lvl:
+                assert LinguisticEngine.CEFR_ORDER[lvl] <= 3  # <= B1
+
+
 
 
 
