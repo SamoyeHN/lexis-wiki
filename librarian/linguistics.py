@@ -23,6 +23,125 @@ class LinguisticEngine:
 
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
+    # Authoritative Closed Paradigms for Grammatical / Function Words
+    # Organized by Functional Discourse Family and Syntactic Complement Requirements:
+    # - clausal: Governs finite clause (Subject + Finite Verb)
+    # - prepositional: Governs noun phrase / gerund (NP / V-ing)
+    # - adverbial: Independent discourse adverbial adjunct
+    _FUNCTION_WORD_PARADIGMS = {
+        "concession": {
+            "clausal": ["although", "though", "even though", "while", "whereas"],
+            "prepositional": ["despite", "in spite of", "regardless of", "notwithstanding"],
+            "adverbial": ["however", "nevertheless", "nonetheless"]
+        },
+        "cause": {
+            "clausal": ["because", "since", "as", "now that", "in that"],
+            "prepositional": ["because of", "due to", "owing to", "on account of"],
+            "adverbial": ["therefore", "consequently", "thus"]
+        },
+        "condition": {
+            "clausal": ["if", "unless", "provided that", "providing that", "as long as"],
+            "prepositional": ["without", "but for"],
+            "adverbial": ["otherwise"]
+        },
+        "time": {
+            "clausal": ["while", "when", "as", "until", "before", "after", "since"],
+            "prepositional": ["during", "throughout"],
+            "adverbial": ["meanwhile", "afterwards"]
+        },
+        "scope": {
+            "prepositional": ["beyond", "within", "across", "throughout", "along", "among"]
+        },
+        "noun_clause": {
+            "clausal": ["whether", "that", "what", "whatever", "how", "why"]
+        }
+    }
+
+    _FUNCTION_WORD_INDEX = None
+
+    @classmethod
+    def _get_function_word_index(cls) -> Dict[str, List[Tuple[str, str]]]:
+        if cls._FUNCTION_WORD_INDEX is None:
+            idx: Dict[str, List[Tuple[str, str]]] = {}
+            for fam, types in cls._FUNCTION_WORD_PARADIGMS.items():
+                for stype, words in types.items():
+                    for w in words:
+                        idx.setdefault(w.lower(), []).append((fam, stype))
+            cls._FUNCTION_WORD_INDEX = idx
+        return cls._FUNCTION_WORD_INDEX
+
+    @classmethod
+    def is_function_word(cls, word: str) -> bool:
+        """Returns True if word is an indexed grammatical function word / connective."""
+        if not word:
+            return False
+        return word.strip().lower() in cls._get_function_word_index()
+
+    @classmethod
+    def get_function_word_distractors(
+        cls,
+        target_word: str,
+        target_count: int = 3,
+        exclude_words: Optional[Set[str]] = None
+    ) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Synthesizes high-discrimination closed-class distractors for function words/connectives.
+        Enforces two psychometric distractor models:
+        1. Syntactic Complement Contrast (Gold Standard):
+           For concession/cause/condition, pairs prepositional connectors (e.g. 'despite')
+           with clausal conjunctions ('although', 'though') to test clausal vs nominal government.
+        2. Closed Paradigm Contrast:
+           For scope prepositions ('beyond') and noun clause markers ('whether'),
+           selects peers within the exact same closed functional paradigm.
+        """
+        t_clean = target_word.strip().lower()
+        idx = cls._get_function_word_index()
+        if t_clean not in idx:
+            return [], {}
+
+        exclude = set(exclude_words or set())
+        exclude.add(t_clean)
+
+        fam, stype = idx[t_clean][0]
+        fam_dict = cls._FUNCTION_WORD_PARADIGMS[fam]
+
+        if fam == "scope":
+            pool = [w for w in fam_dict.get("prepositional", []) if w not in exclude]
+            strategy = "scope_preposition_contrast"
+        elif fam == "noun_clause":
+            pool = [w for w in fam_dict.get("clausal", []) if w not in exclude]
+            strategy = "noun_clause_complementizer_contrast"
+        else:
+            opp_candidates = []
+            for other_type, words in fam_dict.items():
+                if other_type != stype:
+                    for w in words:
+                        if w not in exclude and w not in opp_candidates:
+                            opp_candidates.append(w)
+
+            cross_candidates = []
+            for other_fam, other_types in cls._FUNCTION_WORD_PARADIGMS.items():
+                if other_fam != fam and stype in other_types:
+                    for w in other_types[stype]:
+                        if w not in exclude and w not in opp_candidates and w not in cross_candidates:
+                            cross_candidates.append(w)
+
+            same_candidates = [
+                w for w in fam_dict.get(stype, [])
+                if w not in exclude and w not in opp_candidates and w not in cross_candidates
+            ]
+            pool = opp_candidates[:2] + cross_candidates[:2] + same_candidates
+            strategy = "syntactic_complement_contrast"
+
+        distractors = pool[:target_count]
+        meta = {
+            "target_word": t_clean,
+            "paradigm_family": fam,
+            "syntactic_type": stype,
+            "distractor_strategy": strategy
+        }
+        return distractors, meta
+
     @classmethod
     def get_cefr_analyzer(cls):
         """Lazy-loads the offline CEFRAnalyzer (CEFR-J + Google N-Gram, <10ms lookup)."""
@@ -131,29 +250,182 @@ class LinguisticEngine:
         return cls._wn
 
     @classmethod
-    def get_oxford_collocations(cls) -> Dict[str, Dict[str, List[str]]]:
-        """Lazy-loads the Oxford Collocations Dictionary 2nd Edition (20,791 headwords, ~4.9MB)."""
+    def get_oxford_raw(cls) -> Dict[str, Any]:
+        """Lazy-loads the raw hierarchical Oxford Collocations Dictionary 2nd Edition."""
         if cls._ocd_data is None:
             cls._ocd_data = {}
-            ocd_path = Path(__file__).parent / "data" / "oxford_collocations.json"
-            if ocd_path.exists():
+            data_dir = Path(__file__).parent / "data"
+            gz_path = data_dir / "oxford_collocations.json.gz"
+            json_path = data_dir / "oxford_collocations.json"
+
+            if gz_path.exists():
                 try:
-                    with open(ocd_path, "r", encoding="utf-8") as f:
-                        cls._ocd_data = json.load(f)
+                    import gzip
+                    with gzip.open(gz_path, "rt", encoding="utf-8") as f:
+                        raw = json.load(f)
+                        cls._ocd_data = raw.get("entries", raw)
+                except Exception:
+                    pass
+            elif json_path.exists():
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                        cls._ocd_data = raw.get("entries", raw)
                 except Exception:
                     pass
         return cls._ocd_data
 
     @classmethod
-    def get_rich_collocations(cls, word: str, top_k: int = 5) -> List[str]:
+    def get_oxford_collocations(
+        cls,
+        word: Optional[str] = None,
+        pos: Optional[str] = None,
+        context_sentence: Optional[str] = None,
+    ) -> Any:
+        """
+        Retrieves Oxford collocations with strict Part-of-Speech isolation.
+
+        Strict POS-First Principle:
+          - When word is None: returns the headword dict index (for membership checks like `w in ocd`).
+          - When word is provided:
+            1. If pos is given (e.g. 'noun', 'verb', 'adjective', 'adj', 'v', 'n'):
+               Strictly queries the matching POS section, eliminating cross-POS semantic contamination
+               (e.g., control (verb) never gets prepositions, free (verb) gets 'from' while free (adj) gets 'for'/'from').
+            2. If pos is not given, but context_sentence is given:
+               Uses spaCy dependency parsing on context_sentence to automatically infer the target word's POS.
+            3. If neither pos nor context_sentence is given:
+               - If the word has only ONE part-of-speech in the dictionary, returns that section.
+               - If the word is polysemous across multiple parts-of-speech, returns {} to prevent
+                 cross-POS pollution, or callers must explicitly provide the intended POS.
+        """
+        raw_entries = cls.get_oxford_raw()
+        if word is None:
+            return raw_entries
+
+        w_clean = word.strip().lower()
+        ent = raw_entries.get(w_clean)
+        if not ent or not isinstance(ent, dict):
+            return {}
+
+        parts = ent.get("parts")
+        if not parts or not isinstance(parts, dict):
+            # Backward compatibility if data is flat dict
+            return ent
+
+        # Resolve target POS
+        target_pos = None
+        if pos:
+            p_low = pos.strip().lower()
+            if p_low.startswith("n"):
+                target_pos = "noun"
+            elif p_low.startswith("v"):
+                target_pos = "verb"
+            elif p_low.startswith("adj") or p_low == "a":
+                target_pos = "adjective"
+            elif p_low.startswith("adv") or p_low == "r":
+                target_pos = "adverb"
+            elif "phr" in p_low:
+                target_pos = "phrasal verb"
+        elif context_sentence:
+            try:
+                nlp = cls.get_spacy()
+                doc = nlp(context_sentence)
+                for tok in doc:
+                    if tok.text.lower() == w_clean or tok.lemma_.lower() == w_clean:
+                        if tok.pos_ in ("VERB", "AUX"):
+                            target_pos = "verb"
+                        elif tok.pos_ in ("NOUN", "PROPN"):
+                            target_pos = "noun"
+                        elif tok.pos_ == "ADJ":
+                            target_pos = "adjective"
+                        elif tok.pos_ == "ADV":
+                            target_pos = "adverb"
+                        break
+            except Exception:
+                pass
+
+        if not target_pos:
+            if len(parts) == 1:
+                target_pos = list(parts.keys())[0]
+            else:
+                # Ambiguous cross-POS word without POS context: strictly return empty to avoid semantic errors
+                return {}
+
+        pdata = parts.get(target_pos)
+        if not pdata:
+            if target_pos == "verb" and "phrasal verb" in parts:
+                pdata = parts["phrasal verb"]
+            elif target_pos == "phrasal verb" and "verb" in parts:
+                pdata = parts["verb"]
+            else:
+                return {}
+
+        res: Dict[str, List[str]] = {
+            "prep": [],
+            "adj": [],
+            "verb_before": [],
+            "colloc_nouns": [],
+            "verb": [],
+            "noun_after": [],
+            "examples": [],
+        }
+
+        for fr in pdata.get("frames", []):
+            ftype = fr.get("type")
+            lbl = fr.get("label", "").lower()
+            for c in fr.get("clusters", []):
+                words = c.get("words", [])
+                ex = c.get("example")
+                if ex:
+                    res["examples"].append(ex)
+                if ftype == "preposition":
+                    res["prep"].extend(words)
+                elif ftype == "adjective":
+                    res["adj"].extend(words)
+                elif ftype == "verb":
+                    if "verb +" in lbl:
+                        res["verb_before"].extend(words)
+                    else:
+                        res["verb"].extend(words)
+                elif ftype == "noun":
+                    if "object" in lbl:
+                        res["colloc_nouns"].extend(words)
+                    elif "+ noun" in lbl:
+                        res["noun_after"].extend(words)
+                    else:
+                        res["colloc_nouns"].extend(words)
+                elif ftype == "adverb":
+                    res["verb"].extend(words)
+
+        # Order-preserving deduplication
+        for k in res:
+            seen = set()
+            dedup = []
+            for item in res[k]:
+                item_clean = item.strip()
+                if item_clean and item_clean.lower() not in seen:
+                    seen.add(item_clean.lower())
+                    dedup.append(item_clean)
+            res[k] = dedup
+
+        return res
+
+    @classmethod
+    def get_rich_collocations(
+        cls,
+        word: str,
+        pos: Optional[str] = None,
+        context_sentence: Optional[str] = None,
+        top_k: int = 5,
+    ) -> List[str]:
         """
         Retrieves top authoritative, natural collocations for a word from Oxford Collocations Dictionary.
+        Respects target POS to eliminate cross-POS anomalies.
         Synthesizes phrases like 'lay the foundation', 'firm foundation', 'comprehensive guide'.
         """
         if not word:
             return []
-        ocd = cls.get_oxford_collocations()
-        entry = ocd.get(word.lower().strip())
+        entry = cls.get_oxford_collocations(word, pos=pos, context_sentence=context_sentence)
         if not entry:
             return []
 
@@ -230,6 +502,21 @@ class LinguisticEngine:
         6. Syntactic / Morphological Parallelism: Restricts to single words matching the target's POS.
         """
         clean_target = target_word.strip().lower()
+
+        # Closed Grammatical Paradigms Gate:
+        # If target word is an indexed function word (connective, clausal conjunction, preposition),
+        # retrieve psychometrically calibrated distractors directly from closed paradigms.
+        if cls.is_function_word(clean_target):
+            f_dists, f_meta = cls.get_function_word_distractors(
+                clean_target,
+                target_count=target_count,
+                exclude_words=exclude_words
+            )
+            if len(f_dists) >= target_count:
+                if return_metadata:
+                    return f_dists, f_meta
+                return f_dists
+
         wn = cls.get_wordnet()
         ocd = cls.get_oxford_collocations()
 
@@ -732,7 +1019,8 @@ class LinguisticEngine:
     @classmethod
     def double_key_collision(cls, target: str, distractor: str,
                              anchor: Optional[str] = None,
-                             anchor_type: Optional[str] = None) -> Tuple[bool, str]:
+                             anchor_type: Optional[str] = None,
+                             pos: Optional[str] = None) -> Tuple[bool, str]:
         """Deterministic double-key detector. Returns (is_double_key, kind).
 
         kind is one of:
@@ -747,7 +1035,8 @@ class LinguisticEngine:
         if not t or not d or t == d:
             return False, "none"
         near, antonyms = cls.semantic_fields(t)
-        shared = bool(anchor) and anchor.lower() in (cls.get_oxford_collocations().get(t, {}).get("prep") or [])
+        t_preps = cls.get_oxford_collocations(t, pos=pos).get("prep", [])
+        shared = bool(anchor) and anchor.lower() in t_preps
 
         if anchor_type == "prep" and anchor and shared:
             if d in near:
@@ -889,6 +1178,246 @@ class LinguisticEngine:
         # 'compulsion ~ strange'; a missing anchor is a first-class outcome
         # that the micro-task planner degrades to a neutral academic template.
         return None
+
+    @classmethod
+    def find_ocd_zero_collision_anchor(
+        cls,
+        target_word: str,
+        pos: str = "noun",
+        distractors: Optional[List[str]] = None
+    ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+        """
+        Retrieves a high-discrimination, zero-collision collocational anchor and authentic pattern
+        from the Oxford Collocations Dictionary (OCD 2nd Ed.).
+        Guarantees that the chosen anchor collocates with the target word in OCD while having zero
+        collocation overlap with the prescribed distractors.
+        Returns:
+            (anchor_word, anchor_type, frame_description, ocd_example_pattern)
+        """
+        if not target_word:
+            return None, None, None, None
+
+        raw = cls.get_oxford_raw()
+        tw_clean = target_word.strip().lower()
+        entry = raw.get(tw_clean, {})
+        parts = entry.get("parts", {})
+        if not parts:
+            return None, None, None, None
+
+        p_low = pos.strip().lower()
+        if p_low.startswith("n"):
+            target_pos = "noun"
+        elif p_low.startswith("v"):
+            target_pos = "verb"
+        elif p_low.startswith("adj") or p_low == "a":
+            target_pos = "adjective"
+        elif p_low.startswith("adv") or p_low == "r":
+            target_pos = "adverb"
+        else:
+            target_pos = "noun"
+
+        pdata = parts.get(target_pos)
+        if not pdata and len(parts) == 1:
+            target_pos = list(parts.keys())[0]
+            pdata = parts.get(target_pos)
+
+        if not pdata:
+            return None, None, None, None
+
+        frames = pdata.get("frames", [])
+        if not frames:
+            return None, None, None, None
+
+        if target_pos == "noun":
+            # Semantic Ontology Alignment:
+            # Concrete nouns (telephone, machine, bell) have unique physical agentive actions (+ verb: ring, bark).
+            # Abstract nouns (decision, influence, peace, difficulty) naturally function as the goal/patient of
+            # support/light verbs (verb +: make/reach a decision, exert influence, encounter difficulty) or take prepositions.
+            is_abstract = False
+            try:
+                wn = cls.get_wordnet()
+                syns = wn.synsets(tw_clean, pos="n")
+                if syns:
+                    abstract_lexfiles = {
+                        "noun.act", "noun.cognition", "noun.state", "noun.attribute",
+                        "noun.feeling", "noun.motive", "noun.relation", "noun.time",
+                        "noun.event", "noun.process"
+                    }
+                    concrete_lexfiles = {
+                        "noun.artifact", "noun.animal", "noun.body", "noun.food",
+                        "noun.plant", "noun.substance", "noun.object", "noun.person"
+                    }
+                    abs_count = sum(1 for s in syns if s.lexfile() in abstract_lexfiles)
+                    con_count = sum(1 for s in syns if s.lexfile() in concrete_lexfiles)
+                    is_abstract = abs_count > con_count
+            except Exception:
+                pass
+
+            if is_abstract:
+                preferred_order = [
+                    ("verb +", "verb", "direct object of verb"),
+                    ("preposition", "prep", "governed by preposition"),
+                    ("adjective", "adj", "modified by adjective"),
+                    ("+ verb", "verb_subject", "subject of verb")
+                ]
+            else:
+                preferred_order = [
+                    ("+ verb", "verb_subject", "subject of verb"),
+                    ("verb +", "verb", "direct object of verb"),
+                    ("adjective", "adj", "modified by adjective"),
+                    ("preposition", "prep", "governed by preposition")
+                ]
+        elif target_pos == "adjective":
+            # Adjective Cascades:
+            # 1. Prepositional Valency Adjectives (responsible for, aware of, proud of, anxious about):
+            #    Bound preposition provides absolute single-fit discrimination against distractors (prep >> noun >> adv >> copula).
+            # 2. General/Descriptive Adjectives (simple, difficult, economic, legal):
+            #    Attributive collocation with characteristic nouns (modified_noun >> adv >> copula >> prep).
+            has_prep_valency = (
+                tw_clean in cls._ADJ_PREP_VALENCY_MAP
+                or any("prep" in f.get("label", "").lower() or f.get("type") == "preposition" for f in frames)
+            )
+            if has_prep_valency:
+                preferred_order = [
+                    ("preposition", "prep", "followed by preposition"),
+                    ("noun", "modified_noun", "modifying noun"),
+                    ("adverb", "adv_mod", "modified by adverb"),
+                    ("verb", "verb_copula", "predicate of verb")
+                ]
+            else:
+                preferred_order = [
+                    ("noun", "modified_noun", "modifying noun"),
+                    ("adverb", "adv_mod", "modified by adverb"),
+                    ("verb", "verb_copula", "predicate of verb"),
+                    ("preposition", "prep", "followed by preposition")
+                ]
+        elif target_pos == "verb":
+            # Transitive vs Intransitive Cascades:
+            # Transitive verbs (solve, abandon, provide) have core direct object restrictions (solve the problem/crisis).
+            # Intransitive verbs (listen, arrive, depend) rely primarily on bound prepositions (listen to, arrive at) or manner adverbs.
+            has_objects = any("object" in f.get("label", "").lower() for f in frames)
+            if has_objects:
+                preferred_order = [
+                    ("object", "object", "direct object noun"),
+                    ("preposition", "prep", "governing preposition"),
+                    ("adverb", "adv_mod", "modified by adverb")
+                ]
+            else:
+                preferred_order = [
+                    ("preposition", "prep", "governing preposition"),
+                    ("adverb", "adv_mod", "modified by adverb"),
+                    ("subject", "verb_subject", "subject noun")
+                ]
+        elif target_pos in ("adverb", "adv"):
+            # Adverb Cascades:
+            # 1. Degree / Focus / Stance Adverbs (extremely, surprisingly, highly, deeply, completely):
+            #    Frequently modify adjectives (extremely difficult, surprisingly bright, deeply grateful).
+            # 2. Manner / Time / Frequency Adverbs (abruptly, carefully, politely, shortly):
+            #    Modify verbs (abruptly abandon, answer politely).
+            # If adverb can modify both, prioritizing adjective provides tighter, more distinct collocational binding.
+            has_adj = any("adj" in f.get("label", "").lower() or f.get("type") == "adjective" for f in frames)
+            has_verb = any("verb" in f.get("label", "").lower() or f.get("type") == "verb" for f in frames)
+            if has_adj and not has_verb:
+                preferred_order = [("adjective", "modifies_adj", "modified adjective")]
+            elif has_verb and not has_adj:
+                preferred_order = [("verb", "modifies_verb", "modified verb")]
+            else:
+                preferred_order = [
+                    ("adjective", "modifies_adj", "modified adjective"),
+                    ("verb", "modifies_verb", "modified verb")
+                ]
+        else:
+            preferred_order = [("verb", "modifies_verb", "modified verb")]
+
+        dists = [d.strip().lower() for d in (distractors or []) if d.strip()]
+
+        # Pre-build bucketed distractor collocations for high-precision, non-spurious collision checks
+        dist_colls = {}
+        for d in dists:
+            d_entry = raw.get(d, {}).get("parts", {}).get(target_pos, {})
+            b_map = {
+                "prep": set(), "object": set(), "adv_mod": set(), "verb_subject": set(),
+                "modified_noun": set(), "verb_copula": set(), "adj": set(), "verb": set(),
+                "modifies_adj": set(), "modifies_verb": set(), "all": set()
+            }
+            for df in d_entry.get("frames", []):
+                dlbl = df.get("label", "").lower()
+                dftype = df.get("type", "").lower()
+                target_bucket = "all"
+                if "prep" in dlbl or dftype == "preposition":
+                    target_bucket = "prep"
+                elif "object" in dlbl:
+                    target_bucket = "object"
+                elif "noun" in dlbl or dftype == "noun":
+                    target_bucket = "modified_noun"
+                elif "adverb" in dlbl or dftype == "adverb":
+                    target_bucket = "adv_mod"
+                elif "subject" in dlbl:
+                    target_bucket = "verb_subject"
+                elif "adj" in dlbl or dftype == "adjective":
+                    target_bucket = "modifies_adj"
+                elif "verb" in dlbl or dftype == "verb":
+                    target_bucket = "modifies_verb"
+                
+                for dc in df.get("clusters", []):
+                    for dw in dc.get("words", []):
+                        for dtok in dw.replace("(", "").replace(")", "").split():
+                            dtok_clean = dtok.strip().lower()
+                            if dtok_clean:
+                                b_map[target_bucket].add(dtok_clean)
+                                b_map["all"].add(dtok_clean)
+            if target_pos == "adjective" and d in cls._ADJ_PREP_VALENCY_MAP:
+                b_map["prep"].update(cls._ADJ_PREP_VALENCY_MAP[d])
+            dist_colls[d] = b_map
+
+        # Pass 1: Prioritize clusters with authentic examples (gold-standard scaffold)
+        # Pass 2: Fallback to valid clusters without examples
+        for with_example_only in (True, False):
+            for label_sub, atype, frame_desc in preferred_order:
+                # For direct objects, modified nouns, and adverb targets, OCD lists collocations under 'used with...' without separate examples.
+                # Allow them in Pass 1 so words naturally lock onto their authentic collocations.
+                allow_no_ex = (atype in ("object", "modified_noun", "modifies_adj", "modifies_verb"))
+                if with_example_only and not allow_no_ex:
+                    req_example = True
+                elif with_example_only and allow_no_ex:
+                    req_example = False
+                else:
+                    req_example = False
+
+                for f in frames:
+                    lbl = f.get("label", "").lower()
+                    ftype = f.get("type", "").lower()
+                    if label_sub in lbl or label_sub == ftype:
+                        for c in f.get("clusters", []):
+                            ex = c.get("example", "")
+                            if req_example and not ex:
+                                continue
+                            for w in c.get("words", []):
+                                clean_w = w.replace("(", "").replace(")", "").strip().lower()
+                                if atype == "prep":
+                                    # Prepositions are core anchors (to, at, in, on, for, etc.); allow 2+ letter words
+                                    toks = [
+                                        t for t in clean_w.split()
+                                        if t.isalpha() and t not in ("etc", "sth", "sb", "the", "a", "an", "be")
+                                    ]
+                                else:
+                                    toks = [
+                                        t for t in clean_w.split()
+                                        if t.isalpha() and t not in (
+                                            "etc", "sth", "sb", "the", "a", "an", "be", "of", "in", "at", "to", "for"
+                                        ) and len(t) >= 3
+                                    ]
+                                if not toks:
+                                    continue
+                                cand_anchor = toks[0]
+                                if cand_anchor == tw_clean:
+                                    continue
+                                # Precise grammatical bucket collision check against distractors
+                                clash = any(cand_anchor in dist_colls[d].get(atype, set()) for d in dists)
+                                if not clash:
+                                    return cand_anchor, atype, frame_desc, ex
+
+        return None, None, None, None
 
     @classmethod
     def get_acl_collocations(cls) -> Dict[str, str]:
@@ -1645,11 +2174,18 @@ class LinguisticEngine:
     # 3b. Deterministic Multi-Word Expression & Collocation Mining (ACL + spaCy)
     # -------------------------------------------------------------------------
     @classmethod
-    def mine_expression_skeletons(cls, text: str, target_count: int = 8) -> List[Dict[str, str]]:
+    def mine_expression_skeletons(
+        cls,
+        text: str,
+        target_count: int = 8,
+        syllabus_expressions: Optional[List[str]] = None
+    ) -> List[Dict[str, str]]:
         """
         Deterministically extracts high-value multi-word expressions, phrasal verbs,
         and Academic Collocation List (ACL) items from the indexed sentence pool.
         Standardizes slotted formulas (e.g. [sb], [sth], [one's]) at zero token cost.
+        If syllabus_expressions is provided, prioritizes resolving and standardizing
+        those curriculum targets first before filling remaining slots with computational candidates.
 
         Returns list of dicts:
             [{
@@ -1739,33 +2275,64 @@ class LinguisticEngine:
                 if token.pos_ in ("VERB", "AUX"):
                     v_lemma = token.lemma_.lower()
 
-                    # Check particle (e.g. wake up, get by, slave away, carry out)
-                    for c in token.children:
-                        if (c.dep_ == "prt" or (c.dep_ == "advmod" and c.text.lower() in COMMON_PARTICLES)) and c.i > token.i:
-                            p_tok = c.text.lower()
-                            # Check three-part phrasal verb: verb + particle + prep immediately following (distance <= 2)
-                            prep_child = [gc for gc in token.children if gc.dep_ == "prep" and 0 < (gc.i - c.i) <= 2]
-                            if prep_child:
-                                prep_word = prep_child[0].text.lower()
-                                p_verb = f"{v_lemma} {p_tok} {prep_word}"
-                                formula = f"{v_lemma} {p_tok} {prep_word} [sth/sb]"
-                            else:
-                                dobj = [d for d in token.children if d.dep_ == "dobj"]
-                                if dobj:
-                                    p_verb = f"{v_lemma} {p_tok}"
-                                    formula = f"{v_lemma} [sb/sth] {p_tok}"
-                                else:
-                                    p_verb = f"{v_lemma} {p_tok}"
-                                    formula = f"{v_lemma} {p_tok}"
-
+                    # Check high-value idiomatic verbal phrases like 'keep/get/stay in touch (with)'
+                    touch_match = False
+                    if v_lemma in ("keep", "get", "stay", "lose", "be"):
+                        # spaCy parses either prt='in' + dobj='touch' or prep='in' -> pobj='touch'
+                        has_in = any(c.text.lower() == "in" and c.dep_ in ("prt", "prep") for c in token.children)
+                        has_touch = any(c.text.lower() == "touch" and c.dep_ in ("dobj", "pobj") for c in token.children)
+                        if not has_touch and has_in:
+                            for c in token.children:
+                                if c.text.lower() == "in":
+                                    has_touch = any(gc.text.lower() == "touch" for gc in c.children)
+                        if has_in and has_touch:
+                            touch_match = True
+                            # Check if followed by 'with'
+                            has_with = any(c.text.lower() == "with" for c in token.children)
+                            if not has_with:
+                                for c in token.children:
+                                    if any(gc.text.lower() == "with" for gc in c.children):
+                                        has_with = True
+                                        break
+                            phrase_name = f"{v_lemma} in touch with" if has_with else f"{v_lemma} in touch"
+                            formula = f"{v_lemma} in touch with [sb]" if has_with else f"{v_lemma} in touch"
                             raw_candidates.append({
                                 "sid": sid,
                                 "quote": sent_clean,
-                                "phrase": p_verb,
-                                "type": "phrasal verb",
+                                "phrase": phrase_name,
+                                "type": "idiom",
                                 "pattern_formula": formula,
-                                "score": 9,
+                                "score": 10,
                             })
+
+                    # Check particle (e.g. wake up, get by, slave away, carry out)
+                    if not touch_match:
+                        for c in token.children:
+                            if (c.dep_ == "prt" or (c.dep_ == "advmod" and c.text.lower() in COMMON_PARTICLES)) and c.i > token.i:
+                                p_tok = c.text.lower()
+                                # Check three-part phrasal verb: verb + particle + prep immediately following (distance <= 2)
+                                prep_child = [gc for gc in token.children if gc.dep_ == "prep" and 0 < (gc.i - c.i) <= 2]
+                                if prep_child:
+                                    prep_word = prep_child[0].text.lower()
+                                    p_verb = f"{v_lemma} {p_tok} {prep_word}"
+                                    formula = f"{v_lemma} {p_tok} {prep_word} [sth/sb]"
+                                else:
+                                    dobj = [d for d in token.children if d.dep_ == "dobj"]
+                                    if dobj:
+                                        p_verb = f"{v_lemma} {p_tok}"
+                                        formula = f"{v_lemma} [sb/sth] {p_tok}"
+                                    else:
+                                        p_verb = f"{v_lemma} {p_tok}"
+                                        formula = f"{v_lemma} {p_tok}"
+
+                                raw_candidates.append({
+                                    "sid": sid,
+                                    "quote": sent_clean,
+                                    "phrase": p_verb,
+                                    "type": "phrasal verb",
+                                    "pattern_formula": formula,
+                                    "score": 9,
+                                })
 
                     # Check possessive object construction via spaCy 'poss' dependency (e.g. attain [one's] best, make up [one's] mind)
                     # Restrict to genuine idiomatic and academic lexicalized noun heads to avoid trivial 'take his dad'
@@ -1831,18 +2398,27 @@ class LinguisticEngine:
                                 # Intransitive prepositional verb (e.g. rely on, contend with)
                                 p_verb = f"{v_lemma} {p_text}"
                                 formula = f"{v_lemma} {p_text} [sth/sb]"
+                                pobj_lemma = None
+                                pobj_nodes = [p for p in c.children if p.dep_ == "pobj"]
+                                if pobj_nodes:
+                                    pobj_lemma = pobj_nodes[0].lemma_.lower()
                                 raw_candidates.append({
                                     "sid": sid,
                                     "quote": sent_clean,
                                     "phrase": p_verb,
+                                    "pobj": pobj_lemma,
                                     "type": "phrasal verb",
                                     "pattern_formula": formula,
                                     "score": 8,
                                 })
                             elif dobj:
-                                # Fixed verbal idiom/collocation (e.g. take into account, make a difference)
+                                # Fixed verbal idiom/collocation (e.g. take into account, take into consideration)
                                 pobj = [p for p in c.children if p.dep_ == "pobj"]
-                                if pobj and (c.i - token.i <= 2) and pobj[0].lemma_.lower() in ("account", "consideration", "advantage", "part", "effect", "place"):
+                                # Strict syntactic & lexical invariant:
+                                # 1. Verb must be a known idiom head ('take', 'bring', 'put', 'call')
+                                # 2. Preposition must directly govern the noun (distance == 1) to avoid adverbial adjuncts like 'in different places'
+                                # 3. Preposition object must be a recognized idiom target
+                                if pobj and (pobj[0].i - c.i == 1) and v_lemma in ("take", "bring", "put", "call") and pobj[0].lemma_.lower() in ("account", "consideration", "effect", "play", "question"):
                                     prep_phrase = f"{v_lemma} {p_text} {pobj[0].lemma_.lower()}"
                                     formula = f"{v_lemma} {p_text} {pobj[0].lemma_.lower()} [sth]"
                                     raw_candidates.append({
@@ -1857,34 +2433,221 @@ class LinguisticEngine:
         if not raw_candidates:
             return []
 
-        # Sort by score descending and deduplicate phrases
-        raw_candidates.sort(key=lambda x: x["score"], reverse=True)
+        # OCD Physical Gate: verify candidates against Oxford Collocations Dictionary to prevent false positives
+        raw_entries = cls.get_oxford_raw()
+        verified_candidates: List[Dict[str, Any]] = []
+
+        for item in raw_candidates:
+            phrase = item.get("phrase", "").lower().strip()
+            item_type = item.get("type")
+            words = phrase.split()
+            if not words:
+                continue
+
+            # Phrasal verbs (e.g. 'rely on', 'long for', 'worry about', 'keep in touch with')
+            if item_type == "phrasal verb":
+                if len(words) == 2:
+                    v, p = words[0], words[1]
+                    pv_key = f"{v} {p}"
+                    pobj_word = item.get("pobj")
+                    if pv_key in raw_entries:
+                        # If OCD defines specific object nouns for this phrasal verb, audit object
+                        pv_data = raw_entries[pv_key]
+                        pv_str = json.dumps(pv_data).lower()
+                        # If pobj is given, check whether it matches the phrasal verb's object cluster
+                        if pobj_word and "is used with these nouns as the object" in pv_str:
+                            if pobj_word in pv_str:
+                                verified_candidates.append(item)
+                                continue
+                            # Otherwise object does not match the phrasal verb frame (e.g. 'keep in WeChat Moments')
+                        else:
+                            verified_candidates.append(item)
+                            continue
+                    v_data = raw_entries.get(v)
+                    is_valid_pv = False
+                    if v_data:
+                        for p_name in ("verb", "phrasal verb"):
+                            for f in v_data.get("parts", {}).get(p_name, {}).get("frames", []):
+                                if "prep" in f.get("label", "").lower():
+                                    for cl in f.get("clusters", []):
+                                        if p in [w.lower() for w in cl.get("words", [])]:
+                                            is_valid_pv = True
+                                            break
+                    if is_valid_pv:
+                        verified_candidates.append(item)
+                        continue
+                elif "touch" in words and any(v in words for v in ("keep", "get", "stay")):
+                    verified_candidates.append(item)
+                    continue
+
+            # Direct match in OCD headwords (e.g. 'account for', 'participate in')
+            elif phrase in raw_entries:
+                verified_candidates.append(item)
+                continue
+
+            # Verbal Idioms (e.g. 'take into consideration')
+            elif item_type == "idiom":
+                v_lemma = words[0]
+                head_noun = words[-1]
+                n_data = raw_entries.get(head_noun)
+                is_valid_idiom = False
+                if n_data:
+                    n_str = json.dumps(n_data).lower()
+                    if v_lemma in n_str and words[1] in n_str:
+                        is_valid_idiom = True
+                if not is_valid_idiom:
+                    v_data = raw_entries.get(v_lemma)
+                    if v_data:
+                        v_str = json.dumps(v_data).lower()
+                        if head_noun in v_str:
+                            is_valid_idiom = True
+                if is_valid_idiom:
+                    verified_candidates.append(item)
+                    continue
+
+            # Collocations (ACL items, possessive frames like 'hear [one\'s] voice')
+            elif item_type == "collocation":
+                # ACL items or verified possessive collocations
+                verified_candidates.append(item)
+                continue
+
+            # Default: if none of the specific validation branches match, drop unverified candidate
+
+        raw_candidates = verified_candidates
+        if not raw_candidates:
+            return []
 
         selected: List[Dict[str, str]] = []
         seen_phrases: Set[str] = set()
         seen_quotes: Set[str] = set()
 
-        # Balance across types: collocation, phrasal verb, idiom
-        for item in raw_candidates:
-            p_clean = item["phrase"].lower()
-            if p_clean not in seen_phrases and item["quote"] not in seen_quotes:
-                selected.append({
-                    "sid": item["sid"],
-                    "quote": item["quote"],
-                    "phrase": item["phrase"],
-                    "type": item["type"],
-                    "pattern_formula": item["pattern_formula"],
-                })
-                seen_phrases.add(p_clean)
-                seen_quotes.add(item["quote"])
-            if len(selected) >= target_count:
-                break
+        # Phase 1: If syllabus_expressions is provided, prioritize and standardize those curriculum targets
+        if syllabus_expressions:
+            syllabus_candidates: List[Dict[str, Any]] = []
+            for expr in syllabus_expressions:
+                expr_clean = re.sub(r"\s+", " ", expr.strip())
+                words = expr_clean.split()
+                matched_sid = None
+                matched_sent = None
 
-        # If more slots needed, allow reusing quote if phrase is distinct
-        if len(selected) < target_count:
-            for item in raw_candidates:
+                for sid, s in pool.items():
+                    s_lower = s.lower()
+                    e_lower = expr_clean.lower()
+                    if re.search(r"\b" + re.escape(e_lower) + r"\b", s_lower):
+                        matched_sid = sid
+                        matched_sent = s
+                        break
+                    elif all(re.search(r"\b" + re.escape(w.lower()) + r"\b", s_lower) for w in words):
+                        matched_sid = sid
+                        matched_sent = s
+                        break
+                    else:
+                        s_doc = nlp(s)
+                        s_lemmas = [t.lemma_.lower() for t in s_doc]
+                        s_tokens = [t.text.lower() for t in s_doc]
+                        if all(w.lower() in s_lemmas or w.lower() in s_tokens for w in words):
+                            matched_sid = sid
+                            matched_sent = s
+                            break
+
+                if not matched_sid or not matched_sent:
+                    continue
+
+                e_lower = expr_clean.lower()
+                cand_item = None
+
+                # 1. Specialized High-Frequency Idioms (e.g. keep in touch with)
+                if "touch" in e_lower and any(v in e_lower for v in ("keep", "stay", "get", "lose", "be")):
+                    formula = f"{e_lower} [sb]" if "with" in e_lower else f"{e_lower}"
+                    cand_item = {
+                        "sid": matched_sid,
+                        "quote": matched_sent,
+                        "phrase": expr_clean,
+                        "type": "idiom",
+                        "pattern_formula": formula,
+                        "score": 100,
+                    }
+                elif "peace of mind" in e_lower or "pros and cons" in e_lower:
+                    cand_item = {
+                        "sid": matched_sid,
+                        "quote": matched_sent,
+                        "phrase": expr_clean,
+                        "type": "set phrase",
+                        "pattern_formula": expr_clean,
+                        "score": 70,
+                    }
+                elif "make" in words and "possible" in words:
+                    cand_item = {
+                        "sid": matched_sid,
+                        "quote": matched_sent,
+                        "phrase": "make [sth] possible",
+                        "type": "collocation",
+                        "pattern_formula": "make [sth] possible",
+                        "score": 85,
+                    }
+                else:
+                    doc = nlp(matched_sent)
+                    expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
+                    first_tok = expr_tokens[0] if expr_tokens else None
+
+                    if first_tok and first_tok.pos_ in ("VERB", "AUX"):
+                        v_lemma = first_tok.lemma_.lower()
+                        last_tok = expr_tokens[-1]
+                        if last_tok.pos_ == "ADP" or last_tok.dep_ in ("prep", "prt"):
+                            prep_word = last_tok.text.lower()
+                            if len(words) == 2:
+                                formula = f"{v_lemma} {prep_word} [sth/sb]"
+                            else:
+                                core = " ".join(t.lemma_ if t.pos_ == "VERB" else t.text.lower() for t in expr_tokens)
+                                formula = f"{core} [sth/sb]"
+                            cand_item = {
+                                "sid": matched_sid,
+                                "quote": matched_sent,
+                                "phrase": expr_clean,
+                                "type": "phrasal verb",
+                                "pattern_formula": formula,
+                                "score": 90,
+                            }
+                        else:
+                            # Verb + object / adj (e.g. make smart choices, keep silent, have a try)
+                            core = " ".join(t.lemma_ if t.pos_ == "VERB" else t.text.lower() for t in expr_tokens)
+                            cand_item = {
+                                "sid": matched_sid,
+                                "quote": matched_sent,
+                                "phrase": expr_clean,
+                                "type": "collocation",
+                                "pattern_formula": core,
+                                "score": 80,
+                            }
+                    elif words[0].lower() in ("in", "on", "at", "by", "for", "with", "from", "to", "under", "over"):
+                        cand_item = {
+                            "sid": matched_sid,
+                            "quote": matched_sent,
+                            "phrase": expr_clean,
+                            "type": "set phrase",
+                            "pattern_formula": expr_clean,
+                            "score": 50,
+                        }
+                    else:
+                        cand_item = {
+                            "sid": matched_sid,
+                            "quote": matched_sent,
+                            "phrase": expr_clean,
+                            "type": "collocation",
+                            "pattern_formula": expr_clean,
+                            "score": 60,
+                        }
+
+                if cand_item:
+                    syllabus_candidates.append(cand_item)
+
+            # Sort syllabus candidates by pedagogical score (idioms & phrasal verbs first)
+            syllabus_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+            # Pass 1: maximize sentence quote diversity among syllabus expressions
+            for item in syllabus_candidates:
                 p_clean = item["phrase"].lower()
-                if p_clean not in seen_phrases:
+                if p_clean not in seen_phrases and item["quote"] not in seen_quotes:
                     selected.append({
                         "sid": item["sid"],
                         "quote": item["quote"],
@@ -1893,8 +2656,62 @@ class LinguisticEngine:
                         "pattern_formula": item["pattern_formula"],
                     })
                     seen_phrases.add(p_clean)
+                    seen_quotes.add(item["quote"])
                 if len(selected) >= target_count:
                     break
+
+            # Pass 2: if more syllabus slots needed, allow reusing quote for distinct syllabus phrase
+            if len(selected) < target_count:
+                for item in syllabus_candidates:
+                    p_clean = item["phrase"].lower()
+                    if p_clean not in seen_phrases:
+                        selected.append({
+                            "sid": item["sid"],
+                            "quote": item["quote"],
+                            "phrase": item["phrase"],
+                            "type": item["type"],
+                            "pattern_formula": item["pattern_formula"],
+                        })
+                        seen_phrases.add(p_clean)
+                    if len(selected) >= target_count:
+                        break
+
+        # Phase 2: If still under target_count (or no syllabus provided), fill from computational NLP/ACL/OCD candidates
+        if len(selected) < target_count:
+            # Sort raw_candidates by score descending
+            raw_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+            # Pass 3: balance across types with sentence quote diversity
+            for item in raw_candidates:
+                p_clean = item["phrase"].lower()
+                if p_clean not in seen_phrases and item["quote"] not in seen_quotes:
+                    selected.append({
+                        "sid": item["sid"],
+                        "quote": item["quote"],
+                        "phrase": item["phrase"],
+                        "type": item["type"],
+                        "pattern_formula": item["pattern_formula"],
+                    })
+                    seen_phrases.add(p_clean)
+                    seen_quotes.add(item["quote"])
+                if len(selected) >= target_count:
+                    break
+
+            # Pass 4: if still under target_count, allow reusing quote if phrase is distinct
+            if len(selected) < target_count:
+                for item in raw_candidates:
+                    p_clean = item["phrase"].lower()
+                    if p_clean not in seen_phrases:
+                        selected.append({
+                            "sid": item["sid"],
+                            "quote": item["quote"],
+                            "phrase": item["phrase"],
+                            "type": item["type"],
+                            "pattern_formula": item["pattern_formula"],
+                        })
+                        seen_phrases.add(p_clean)
+                    if len(selected) >= target_count:
+                        break
 
         return selected[:target_count]
 
@@ -1976,10 +2793,47 @@ class LinguisticEngine:
 
             doc = nlp(sent_clean)
             for token in doc:
+                lemma = token.lemma_.lower().strip()
+                if len(lemma) < 3 or lemma in seen_lemmas or not lemma.isalpha():
+                    continue
+
+                # 1. Academic Closed-Paradigm Function Word Gate:
+                # If lemma belongs to our curated high-utility closed paradigms (e.g. 'despite', 'whereas',
+                # 'beyond', 'throughout', 'unless', 'nonetheless'), bypass spaCy's stopword filter and POS restriction!
+                if cls.is_function_word(lemma):
+                    # Filter out ultra-basic elementary function words
+                    ULTRA_BASIC_FUNC_WORDS = frozenset({
+                        "in", "at", "on", "to", "for", "with", "from", "by", "of",
+                        "and", "but", "or", "nor", "so", "for", "yet",
+                        "if", "when", "as", "than", "that", "because"
+                    })
+                    if lemma in ULTRA_BASIC_FUNC_WORDS:
+                        continue
+
+                    f_idx = cls._get_function_word_index()
+                    _fam, stype = f_idx[lemma][0]
+                    # Map syntactic complement type to schema-supported POS
+                    assigned_pos = "preposition" if stype == "prepositional" else ("conjunction" if stype == "clausal" else "adverb")
+                    is_awl = lemma in awl_set
+                    # Academic discourse connectors receive high priority
+                    score = (25 if is_awl else 22) + min(len(lemma), 10)
+
+                    candidates.append({
+                        "sid": sid,
+                        "quote": sent_clean,
+                        "word": lemma,
+                        "part_of_speech": assigned_pos,
+                        "is_awl": is_awl,
+                        "is_connective": True,
+                        "score": score
+                    })
+                    seen_lemmas.add(lemma)
+                    continue
+
+                # 2. Open-Class Content Words (Noun, Verb, Adjective, Adverb)
                 if token.pos_ not in VALID_POS_MAP:
                     continue
-                lemma = token.lemma_.lower().strip()
-                if len(lemma) < 3 or lemma in seen_lemmas or token.is_stop or not lemma.isalpha():
+                if token.is_stop:
                     continue
 
                 is_awl = lemma in awl_set
@@ -2257,7 +3111,9 @@ class LinguisticEngine:
             # string "adverb" contains the substring "verb" and would otherwise
             # be mis-classified as a verb (e.g. 'closely' -> verb bug).
             canonical_pos = "noun"
-            if "adv" in raw_pos:
+            if cls.is_function_word(w_lower):
+                canonical_pos = "function_word"
+            elif "adv" in raw_pos:
                 canonical_pos = "adv"
             elif "verb" in raw_pos:
                 canonical_pos = "verb"
@@ -2282,7 +3138,8 @@ class LinguisticEngine:
                 if it["quote"]:
                     try:
                         doc = nlp(it["quote"])
-                        consensus_preps = set(ocd.get(w_lower, {}).get("prep", []))
+                        v_collocs = cls.get_oxford_collocations(w_lower, pos="verb")
+                        consensus_preps = set(v_collocs.get("prep", []))
                         for tok in doc:
                             if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
                                 verified_prep = None   # (token_index, prep, pobj) confirmed by OCD valency
@@ -2329,9 +3186,9 @@ class LinguisticEngine:
                         pass
 
                 # Verb Step B: If no bound preposition found in quote, retrieve sense-aligned direct noun object from OCD
-                if not anchor and w_lower in ocd:
-                    entry = ocd[w_lower]
-                    candidates = entry.get("colloc_nouns", []) + entry.get("noun_after", [])
+                if not anchor:
+                    v_entry = cls.get_oxford_collocations(w_lower, pos="verb")
+                    candidates = v_entry.get("colloc_nouns", []) + v_entry.get("noun_after", [])
                     if candidates:
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"))
                         if anchor:
@@ -2345,12 +3202,12 @@ class LinguisticEngine:
                 # Priority B: true syntactic modifiers (amod/compound), stopword-filtered
                 # Priority C: governing verb (head of dobj/pobj), cross-validated vs OCD verb_before
                 # Priority D: OCD candidates vs quote/definition overlap (strict None on miss)
+                n_entry = cls.get_oxford_collocations(w_lower, pos="noun")
                 if it["quote"]:
                     try:
                         doc = nlp(it["quote"])
-                        ocd_entry = ocd.get(w_lower, {})
                         ocd_prep_tokens = set()
-                        for p in ocd_entry.get("prep", []):
+                        for p in n_entry.get("prep", []):
                             cleaned = re.sub(r'[\(\)]', '', p).lower()
                             for w in cleaned.split():
                                 if w in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "over", "under"):
@@ -2389,7 +3246,7 @@ class LinguisticEngine:
                                     if head_tok.pos_ == "VERB":
                                         head_tok_lemma = head_tok.lemma_.lower()
                                         if head_tok_lemma not in cls._ANCHOR_STOPWORDS:
-                                            verb_before_set = {v.lower().split()[0] for v in ocd_entry.get("verb_before", [])}
+                                            verb_before_set = {v.lower().split()[0] for v in n_entry.get("verb_before", [])}
                                             if not verb_before_set or head_tok_lemma in verb_before_set:
                                                 anchor = head_tok_lemma
                                                 anchor_type = "verb"
@@ -2398,16 +3255,15 @@ class LinguisticEngine:
                         pass
 
                 # Priority D: dictionary candidates, strictly gated by quote/definition evidence
-                if not anchor and w_lower in ocd:
-                    entry = ocd[w_lower]
+                if not anchor and n_entry:
                     # Check modifying adjectives, governing verbs, or single-word bound prepositions
-                    if entry.get("adj") or entry.get("verb_before"):
-                        candidates = entry.get("adj", []) + entry.get("verb_before", [])
+                    if n_entry.get("adj") or n_entry.get("verb_before"):
+                        candidates = n_entry.get("adj", []) + n_entry.get("verb_before", [])
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"))
                         if anchor:
-                            anchor_type = "adj" if anchor in entry.get("adj", []) else "verb"
-                    elif entry.get("prep"):
-                        p_cand = cls._pick_anchor_token(entry["prep"])
+                            anchor_type = "adj" if anchor in n_entry.get("adj", []) else "verb"
+                    elif n_entry.get("prep"):
+                        p_cand = cls._pick_anchor_token(n_entry["prep"])
                         if p_cand:
                             anchor = p_cand
                             anchor_type = "prep"
@@ -2439,16 +3295,16 @@ class LinguisticEngine:
                         pass
 
                 # Adjective Step B: Collocation Lexicon Lookup (OCD) if no anchor found in quote
-                if not anchor and w_lower in ocd:
-                    entry = ocd[w_lower]
-                    candidates = entry.get("noun_after", []) + entry.get("colloc_nouns", [])
+                adj_entry = cls.get_oxford_collocations(w_lower, pos="adj")
+                if not anchor and adj_entry:
+                    candidates = adj_entry.get("noun_after", []) + adj_entry.get("colloc_nouns", [])
                     if candidates:
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"))
                         if anchor:
                             anchor_type = "modified_noun"
                     # If still no anchor, check if the adjective has a bound preposition in OCD
-                    if not anchor and entry.get("prep"):
-                        p_cand = cls._pick_anchor_token(entry["prep"])
+                    if not anchor and adj_entry.get("prep"):
+                        p_cand = cls._pick_anchor_token(adj_entry["prep"])
                         if p_cand:
                             anchor = p_cand
                             anchor_type = "prep"
@@ -2510,12 +3366,16 @@ class LinguisticEngine:
             #     valency). Double-keys are dropped and refilled from an extended
             #     candidate pool so the item never degrades below 3 distractors.
             def _is_double_key(cand: str) -> bool:
-                flag, _kind = cls.double_key_collision(w_lower, cand, anchor, anchor_type)
+                if canonical_pos == "function_word":
+                    return False
+                flag, _kind = cls.double_key_collision(w_lower, cand, anchor, anchor_type, pos=canonical_pos)
                 return flag
 
             def _is_valid_distractor(cand: str) -> bool:
                 if not cand or _is_double_key(cand):
                     return False
+                if canonical_pos == "function_word":
+                    return True
                 return cls.is_cefr_compliant_distractor(cand, w_lower)
 
             cleared = [d for d in distractors if _is_valid_distractor(d)]
@@ -2595,6 +3455,21 @@ class LinguisticEngine:
             dist_str = ", ".join(dist_list)
             antonym_words = [d for d in dist_list if dist_meta.get(d) == "antonym"]
 
+            # Oxford Collocations Scaffold Fallback:
+            # If quote lacked a strong grammatical anchor or yielded generic context,
+            # query OCD for an authoritative zero-collision anchor and authentic sentence pattern.
+            ocd_pattern_example = None
+            if not anchor or anchor_type == "contextual":
+                ocd_anchor, ocd_atype, ocd_fdesc, ocd_ex = cls.find_ocd_zero_collision_anchor(
+                    target_word=final_target,
+                    pos=canonical_pos,
+                    distractors=dist_list
+                )
+                if ocd_anchor:
+                    anchor = ocd_anchor
+                    anchor_type = ocd_atype
+                    ocd_pattern_example = ocd_ex
+
             # Frame-aware micro-task guard (double-key template fix):
             # Only distractors that genuinely LACK the bound frame may be claimed as
             # "strictly ruled out" on valency grounds. Survivors that still share the
@@ -2605,7 +3480,7 @@ class LinguisticEngine:
                 _bound = anchor.lower()
                 shared_frame = [
                     d for d in dist_list
-                    if _bound in (cls.get_oxford_collocations().get(d.lower(), {}).get("prep") or [])
+                    if _bound in cls.get_oxford_collocations(d.lower(), pos=canonical_pos).get("prep", [])
                     or d.lower() in cls._ADJ_PREP_VALENCY_MAP.get(_bound, [])
                 ]
                 non_shared = [d for d in dist_list if d not in shared_frame]
@@ -2670,10 +3545,18 @@ class LinguisticEngine:
                 elif anchor_type == "verb" and anchor:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
-                        f"serving as the direct object of verb '{anchor}'. "
-                        f"Syntactic Frame: The sentence MUST explicitly write the governing verb '{anchor}' (or its inflected forms like '{anchor}s/{anchor}ed') with the blank as its direct noun object (e.g. '... {anchor} [someone] the/a ____ to [verb] ...' or '... {anchor} the/a ____ ...'). [CRITICAL CONSTRAINT] Do NOT omit '{anchor}' or turn the blank into a verb! "
-                        f"Establish semantic clues demanding this classic governing-verb collocation, "
-                        f"ruling out [{dist_str}].{ant_clue}"
+                        f"serving as the direct object of verb '{anchor}' (e.g. '... {anchor} [the/a] ____ ...'). "
+                        f"Syntactic Frame: The governing verb '{anchor}' (or its appropriate tense/form) MUST govern the blank as its direct noun object. "
+                        f"[CRITICAL CONSTRAINT] Do NOT omit '{anchor}' or turn the blank into a verb! "
+                        f"Establish semantic clues demanding this classic collocation, ruling out [{dist_str}].{ant_clue}"
+                    )
+                elif anchor_type == "verb_subject" and anchor:
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
+                        f"functioning as the subject of verb '{anchor}' (e.g. '... the/a ____ was {anchor}ing ...' or '... ____ {anchor}s ...'). "
+                        f"Syntactic Frame: The blank '____' MUST act as the subject of verb '{anchor}'. "
+                        f"[CRITICAL CONSTRAINT] Do NOT omit '{anchor}'! "
+                        f"Establish semantic clues demanding this authoritative collocation, ruling out [{dist_str}].{ant_clue}"
                     )
                 elif anchor and anchor_type in ("adj", "modified_noun"):
                     micro_task = (
@@ -2724,7 +3607,13 @@ class LinguisticEngine:
                     if anchor in ("make", "render", "find", "deem", "consider", "keep"):
                         anchor_clause = (
                             f"Syntactic Frame: The sentence MUST explicitly write the verb '{anchor}' in an object complement structure "
-                            f"(e.g. '... {anchor} it ____ to [verb] ...' or '... {anchor} [sth] ____ ...'). [CRITICAL CONSTRAINT] Do NOT turn the blank into a verb; the blank is an adjective complement! "
+                            f"(e.g. '... {anchor} it ____ to [verb] ...' or '... {anchor} [sth] ____ ...'). "
+                            f"[CRITICAL CONSTRAINT] Do NOT turn the blank into a verb; the blank is an adjective complement! "
+                            f"The target word '{final_target}' MUST ONLY appear in the answer key and inside the blank '____' — NEVER write '{final_target}' or its derivatives anywhere else in the question stem! "
+                        )
+                    elif anchor and anchor_type in ("adv_mod", "adj"):
+                        anchor_clause = (
+                            f"Syntactic Frame: The blank '____' must function as an adjective modified by adverb '{anchor}' (e.g. '... {anchor} ____ ...'). "
                         )
                     elif anchor:
                         anchor_clause = (
@@ -2738,7 +3627,14 @@ class LinguisticEngine:
                         f"Ensure the sentence context strictly demands '{final_target}' while ruling out [{dist_str}].{ant_clue}"
                     )
             elif canonical_pos == "adv":
-                if anchor:
+                if anchor and anchor_type in ("modifies_adj", "adj"):
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' MUST modify the adjective '{anchor}' (e.g. '... [be/seem] ____ {anchor} ...'). "
+                        f"The adjective '{anchor}' MUST be explicitly written immediately after the blank. "
+                        f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}]."
+                    )
+                elif anchor:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
                         f"Syntactic Frame: The blank '____' must modify the verb '{anchor}' (e.g. '... {anchor} [sth] ____ ...' or '... ____ {anchor} ...'). "
@@ -2750,6 +3646,41 @@ class LinguisticEngine:
                         f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
                         f"Syntactic Frame: The blank '____' must modify an academic verb or adjective. "
                         f"Establish clear contextual clues that rule out [{dist_str}]."
+                    )
+            elif cls.is_function_word(final_target):
+                f_idx = cls._get_function_word_index()
+                fam, stype = f_idx[final_target][0]
+                if fam == "scope":
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires preposition '{final_target}' denoting spatial or metaphorical scope. "
+                        f"Syntactic Frame: The blank '____' must govern a noun phrase indicating an abstract or physical limit (e.g. '____ [one's] reach / control / expectations'). "
+                        f"Ensure context clearly demands the precise conceptual boundary of '{final_target}' while ruling out [{dist_str}]."
+                    )
+                elif fam == "noun_clause":
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires complementizer '{final_target}' introducing a noun clause. "
+                        f"Syntactic Frame: The blank '____' must introduce a complement or subject clause (e.g. '... wonder / determine ____ [clause] ...'). "
+                        f"Ensure the epistemic uncertainty or syntactic role strictly requires '{final_target}' while eliminating [{dist_str}]."
+                    )
+                elif stype == "prepositional":
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires prepositional connective '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' MUST be followed directly by a noun phrase or gerund (e.g. '____ [the/a] noun phrase, ...'), NOT a clause with a finite verb! "
+                        f"This syntactic constraint physically eliminates clausal distractors like [{dist_str}]. "
+                        f"Ensure context clearly demands '{final_target}'."
+                    )
+                elif stype == "clausal":
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires clausal conjunction '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' MUST introduce a complete subordinate clause with subject and finite verb (e.g. '____ [subject] [verb] ..., ...'). "
+                        f"This syntactic requirement physically eliminates prepositional distractors like [{dist_str}]. "
+                        f"Ensure context clearly demands '{final_target}'."
+                    )
+                else:
+                    micro_task = (
+                        f"Construct a natural academic sentence where the blank requires discourse connective '{final_target}'. "
+                        f"Syntactic Frame: The blank '____' must logically link two clauses or propositions. "
+                        f"Establish clear logical clues demanding '{final_target}' while ruling out [{dist_str}]."
                     )
             else:
                 micro_task = (

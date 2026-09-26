@@ -998,13 +998,17 @@ class WikiProcessor:
                 try:
                     from .linguistics import LinguisticEngine
                     stem_tokens = {w.lower() for w in re.findall(r"\b[a-zA-Z]+\b", stem or "")}
+                    # Infer target POS from item metadata if present, or fall back to stem context
+                    item_pos = q_dict.get("part_of_speech")
+                    target_collocs = LinguisticEngine.get_oxford_collocations(
+                        target, pos=item_pos, context_sentence=stem
+                    )
                     bound_preps = [
-                        p for p in (LinguisticEngine.get_oxford_collocations().get(target, {}).get("prep") or [])
+                        p for p in (target_collocs.get("prep") or [])
                         if p.lower() in stem_tokens
                     ]
                     anchor = bound_preps[0] if bound_preps else None
                     near, ants = LinguisticEngine.semantic_fields(target)
-                    ocd = LinguisticEngine.get_oxford_collocations()
                     frame_hits, pile = [], []
                     for o_idx, opt in enumerate(options):
                         if o_idx == correct_idx:
@@ -1014,7 +1018,10 @@ class WikiProcessor:
                             continue
                         if d not in near:
                             continue
-                        if anchor and anchor.lower() in (ocd.get(d, {}).get("prep") or []):
+                        d_preps = LinguisticEngine.get_oxford_collocations(
+                            d, pos=item_pos, context_sentence=stem
+                        ).get("prep") or []
+                        if anchor and anchor.lower() in d_preps:
                             frame_hits.append(d)
                         else:
                             pile.append(d)
@@ -1792,8 +1799,15 @@ class WikiProcessor:
                 + "\n".join(skeleton_bullets) + "\n\n"
             )
 
-        # Deterministically mine genuine academic expressions and collocations (ACL + spaCy)
-        expression_skeletons = LinguisticEngine.mine_expression_skeletons(raw_source_text, target_count=e_count)
+        # Deterministically mine genuine academic expressions and collocations (ACL + spaCy + OCD)
+        # Always extract expression skeletons with standardized formulas (e.g. hear [one's] voice, keep in touch with [sb]),
+        # prioritizing syllabus_expressions when provided.
+        target_expr_count = len(syllabus_expressions) if syllabus_expressions else e_count
+        expression_skeletons = LinguisticEngine.mine_expression_skeletons(
+            raw_source_text,
+            target_count=target_expr_count,
+            syllabus_expressions=syllabus_expressions
+        )
         e_skeletons_sec = ""
         if expression_skeletons:
             logger.info(f"💬 Mined {len(expression_skeletons)} deterministic academic expression/collocation skeletons from text.")

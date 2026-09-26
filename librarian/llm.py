@@ -903,6 +903,20 @@ class LLMClient:
                                                 return str(idx)
                                     return "..."
 
+                                # Dynamic source section header discovery for LOOKUP
+                                source_header = "### PASSAGE (WITH NUMBERED SENTENCES) ###"
+                                if user_prompt:
+                                    if "### PASSAGE (WITH NUMBERED SENTENCES) ###" in user_prompt:
+                                        source_header = "### PASSAGE (WITH NUMBERED SENTENCES) ###"
+                                    elif "### SOURCE TEXT ###" in user_prompt:
+                                        source_header = "### SOURCE TEXT ###"
+                                    elif "### PASSAGE" in user_prompt:
+                                        source_header = "### PASSAGE ###"
+                                    elif "PASSAGE:" in user_prompt:
+                                        source_header = "PASSAGE:"
+                                    elif "CONTENT:" in user_prompt:
+                                        source_header = "CONTENT:"
+
                                 def _format_defect_ticket(flag: str) -> str:
                                     clean = flag.lstrip("❌⚠️✂️ ").strip()
                                     clean_lower = clean.lower()
@@ -913,7 +927,7 @@ class LLMClient:
                                         return (
                                             f"- [FIELD]: `grammar_patterns[{idx_str}]`\n"
                                             f"  [ERROR]: {clean}\n"
-                                            f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                            f"  [LOOKUP]: `{source_header}`"
                                         )
 
                                     # Quizzes (Vocabulary / Reading / Translation / General)
@@ -923,7 +937,7 @@ class LLMClient:
                                             return (
                                                 f"- [FIELD]: `questions[{idx_str}].target_word` vs `options[...]`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `### SOURCE TEXT ###`"
+                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `{source_header}`"
                                             )
                                         if "blank" in clean_lower or "____" in clean:
                                             return (
@@ -940,7 +954,7 @@ class LLMClient:
                                         return (
                                             f"- [FIELD]: `questions[{idx_str}]`\n"
                                             f"  [ERROR]: {clean}\n"
-                                            f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                            f"  [LOOKUP]: `{source_header}`"
                                         )
 
                                     # Vocabulary & Expression extractions
@@ -952,19 +966,19 @@ class LLMClient:
                                             return (
                                                 f"- [FIELD]: `{field_prefix}.quoted_sentence`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                                f"  [LOOKUP]: `{source_header}`"
                                             )
                                         if "not found" in clean_lower or "hallucinat" in clean_lower:
                                             return (
                                                 f"- [FIELD]: `{field_prefix}.word`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `### SOURCE TEXT ###`"
+                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `{source_header}`"
                                             )
                                         if "definition" in clean_lower or "duplicate" in clean_lower:
                                             return (
                                                 f"- [FIELD]: `{field_prefix}.definition`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### SOURCE TEXT ###`"
+                                                f"  [LOOKUP]: `{source_header}`"
                                             )
 
                                     # Generic defect ticket fallback
@@ -978,24 +992,24 @@ class LLMClient:
                                 # Single fatal critical invariant per task type
                                 if "grammar" in t_name_lower:
                                     critical_invariant = (
-                                        "Every `quote` MUST be an exact sentence copied verbatim from `### SOURCE TEXT ###`. "
+                                        f"Every `quote` MUST be an exact sentence copied verbatim from `{source_header}`. "
                                         "The `quote`, `category`, `pattern_formula`, and `design_audit` MUST be synchronized together. "
                                         "If the category does not exist in the source text, switch to one that does."
                                     )
                                 elif "translation" in t_name_lower:
                                     critical_invariant = "The source sentence must strictly embody the target formula, and the correct option must be 100% natural English."
                                 elif "reading" in t_name_lower:
-                                    critical_invariant = "Every question stem and correct answer must be uniquely warranted by verbatim evidence from `### SOURCE TEXT ###`."
+                                    critical_invariant = f"Every question stem and correct answer must be uniquely warranted by verbatim evidence from `{source_header}`."
                                 elif "quiz" in t_name_lower:
                                     critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
                                 elif any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
                                     critical_invariant = (
-                                        "Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `### SOURCE TEXT ###`, "
+                                        f"Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `{source_header}`, "
                                         "and the `quoted_sentence` MUST itself contain the headword — if your cited sentence lacks it, "
                                         "find and cite the correct sentence that does. Headwords must be strictly single words."
                                     )
                                 else:
-                                    critical_invariant = "Every cited element and sentence must physically exist verbatim in `### SOURCE TEXT ###`."
+                                    critical_invariant = f"Every cited element and sentence must physically exist verbatim in `{source_header}`."
 
                                 critique_prompt = (
                                     f"\n\n### 🚨 QUALITY AUDIT DEFECT TICKET\n"

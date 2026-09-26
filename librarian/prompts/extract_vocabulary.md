@@ -17,7 +17,8 @@ Extract academic vocabulary from the text.
    
 3. **Register Floor & Passage Coverage**:
    - Prioritize genuine CEFR B1–C2 academic or formal analytical lexis (AWL register).
-   - Skip ultra-basic, general-English function/content words that learners already know (e.g., 'big', 'make', 'people', 'good', 'way').
+   - Skip ultra-basic, general-English function/content words that learners already know (e.g., 'big', 'make', 'people', 'good', 'way', 'in', 'at', 'and', 'but').
+   - **High-Utility Logical Connectives & Discourse Prepositions**: Explicitly permit single-word academic connectors (e.g., 'despite', 'whereas', 'beyond', 'throughout', 'unless', 'nonetheless') that govern critical argumentative logic and clausal relations.
    - **Anti-Clustering**: Distribute picks across different paragraphs; aim for at most ~3 headwords per sentence.
 
 4. **Lexical Form & Part of Speech**:

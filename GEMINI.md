@@ -63,6 +63,77 @@
   - **Translation Quiz (`translation_quiz`)**: Currently retains strict CEFR B2–C1 / TEM-8 / TOEFL comparative translation appraisal standards; pending future adaptation to scale down to A1–B1 foundational curriculum sentences.
   - **Listening & Video Quizzes**: Standardized on intermediate/advanced levels, pending CEFR difficulty calibration.
 
+### 1.5 Noun Semantic Selection & Collocational Cascade (Concrete vs. Abstract Distinction)
+- **Theoretical Basis (Selectional Restrictions & Valency Theory)**:
+  - **Concrete Nouns (具象实体名词，如 `telephone`, `bell`, `machine`, `car`)**:
+    - Act naturally as **physical agents/actors** possessing unique exclusive actions.
+    - **Cascade Priority**: `+ verb` (Verb Subject: *telephone was ringing*) $\gg$ `verb +` (Verb Object: *use telephone*) $\gg$ `adjective` (*cellular telephone*) $\gg$ `preposition` (*over the telephone*).
+    - Physical action exclusivity provides maximum single-fit discrimination against distractors at zero collision.
+  - **Abstract Nouns (抽象概念名词，如 `decision`, `peace`, `influence`, `difficulty`, `freedom`)**:
+    - In authentic usage and systemic functional linguistics, abstract concepts primarily function as the **goal/patient** of light/support verbs or idiomatic frames.
+    - **Cascade Priority**: `verb +` (Light/Support Verb Object: *make/reach a decision*, *exert influence*, *encounter difficulty*, *broker peace*) $\gg$ `preposition` (*in peace*, *under the influence of*) $\gg$ `adjective` (*firm decision*) $\gg$ `+ verb` (Verb Subject: *peace prevailed*, demoted to secondary fallback).
+- **Automated WordNet Ontology Classification (`find_ocd_zero_collision_anchor`)**:
+  - Automatically analyzes WordNet lexicographer files (`lexfile()`). Categorizes items into Abstract (`noun.act`, `noun.cognition`, `noun.state`, `noun.attribute`, `noun.feeling`, `noun.motive`, `noun.relation`, `noun.time`, `noun.event`, `noun.process`) vs. Concrete (`noun.artifact`, `noun.animal`, `noun.body`, `noun.food`, `noun.plant`, `noun.substance`, `noun.object`, `noun.person`), dynamically steering the OCD frame retrieval cascade to eliminate artificial and juvenile question stems.
+
+### 1.6 Verb Collocational Selection & Valency Cascade (Transitive vs. Intransitive Distinction)
+- **Theoretical Basis (Transitivity & Argument Structure)**:
+  - **Transitive Verbs (及物支配动词，如 `solve`, `abandon`, `provide`, `accelerate`)**:
+    - Possess direct semantic selectional restrictions on their **direct object patient/theme**.
+    - **Cascade Priority**: `object` (Direct Object Noun: *solve the puzzle/crisis*, *accelerate decline*) $\gg$ `prep` (Bound Preposition: *provide sb with sth*) $\gg$ `adv_mod` (Manner Adverb: *abandon hastily*).
+    - Prevents degenerative generic adverbial fallbacks (e.g. replacing generic *solve with spending cuts* with essential *solve the puzzle/mystery*).
+  - **Intransitive Verbs (不及物及介词动词，如 `listen`, `arrive`, `depend`, `hesitate`)**:
+    - Incapable of taking direct objects; syntactic interaction relies strictly on **bound prepositions** or **manner adverbial adjuncts**.
+    - **Cascade Priority**: `prep` (Bound Preposition: *listen to*, *arrive at*, *depend on*, *hesitate about*) $\gg$ `adv_mod` (Manner Adverb: *listen attentively*, *arrive safely*) $\gg$ `verb_subject` (Subject Noun).
+- **Bucketed Distractor Collision Enforcement**:
+  - Distractor collocations are pre-indexed into grammatical functional buckets (`prep`, `object`, `adv_mod`, `verb_subject`).
+  - Ensures a candidate preposition for target verb is audited strictly against the `prep` bucket of distractors, preventing spurious clashes while maintaining zero collision.
+
+### 1.7 Adjective Collocational Selection & Valency Cascade (Prepositional vs. Descriptive Distinction)
+- **Theoretical Basis (Adjectival Complementation & Attributive Selection)**:
+  - **Prepositional Valency Adjectives (介词强配价形容词，如 `proud of`, `aware of`, `responsible for/to`, `anxious about`)**:
+    - Possess strict, non-negotiable syntactico-semantic government over specific postpositional prepositions.
+    - **Cascade Priority**: `prep` (Bound Preposition: *proud of*, *clear to*, *anxious about*) $\gg$ `modified_noun` (Attributive Noun: *responsible adult*) $\gg$ `adv_mod` (Degree Adverb: *deeply anxious*) $\gg$ `verb_copula` (Copula: *seem proud*).
+    - Hard-welds the blank to the postpositional frame (`... is ____ of ...`), completely eliminating distractors that require different prepositions or lack prepositional valency.
+  - **General / Descriptive / Relational Adjectives (一般描写与分类形容词，如 `simple`, `difficult`, `economic`, `legal`)**:
+    - Function primarily as nominal modifiers or predicative complements, lacking bound prepositional valency.
+    - **Cascade Priority**: `modified_noun` (Characteristic Modified Noun: *economic crisis*, *legal action*, *simple addition*) $\gg$ `adv_mod` (Collocational Degree Adverb: *devastatingly simple*, *doubly difficult*) $\gg$ `verb_copula` $\gg$ `prep`.
+    - Prevents degenerative generic adverbial fallbacks (e.g. replacing essential *economic crisis* with generic *completely economic*).
+
+### 1.8 Adverb Collocational Selection & Modification Domain Cascade (Adjective vs. Verb Modifiers)
+- **Theoretical Basis (Adverbial Modification Domains & Scope)**:
+  - **Degree / Focus / Stance Adverbs (程度、焦点与立场评注副词，如 `extremely`, `surprisingly`, `highly`, `deeply`, `completely`)**:
+    - Function primarily as intensifiers or evaluative stance markers directly modifying scalar **adjectives** (*extremely able/difficult*, *surprisingly bright*, *deeply grateful*).
+    - OCD holds explicit adjective-cluster frames for 728 adverbs (~50% of adverb headwords).
+    - **Cascade Priority**: `modifies_adj` (Modified Adjective: *extremely able*, *deeply grateful*) $\gg$ `modifies_verb` (Modified Verb: *deeply absorb*).
+    - Completely eliminates the structural failure where adjective-exclusive adverbs (like `extremely`, `surprisingly`) returned `None` due to verb-only scanning.
+  - **Manner / Time / Frequency Adverbs (方式、时间与频度副词，如 `abruptly`, `carefully`, `politely`, `shortly`, `frequently`)**:
+    - Function primarily as circumstantial adjuncts modifying core action **verbs**.
+    - **Cascade Priority**: `modifies_verb` (Modified Verb: *abruptly abandon*, *answer politely*, *appear frequently*) $\gg$ `modifies_adj`.
+### 1.9 Function Word Closed Paradigms & Syntactic Complement Contrast (Closed-Class Connectives)
+- **Theoretical Basis (Open Class vs. Closed Class Grammatical Paradigms)**:
+  - Unlike open-class content words (N, V, Adj, Adv), grammatical function words (subordinating conjunctions, prepositions, discourse connectors, complementizers) constitute a strictly bounded set (~200–300 words in English).
+  - WordNet taxonomy fails on function words (e.g. misclassifying `despite` as a noun or returning empty synsets). Standard collocational lookup (OCD) is unsuited for logical connectors whose core function is relational complementation rather than lexical co-occurrence.
+- **Closed Functional Paradigms (`_FUNCTION_WORD_PARADIGMS`)**:
+  - Organized into definitive functional discourse families: `concession`, `cause`, `condition`, `time`, `scope`, `noun_clause`.
+  - Sub-categorized by strict syntactic complement requirements:
+    - `clausal`: Governs finite clauses ($\text{Subject} + \text{Finite Verb}$, e.g. *although, whereas, because, unless, while*).
+    - `prepositional`: Governs noun phrases or gerunds ($\text{NP} / \text{V-ing}$, e.g. *despite, because of, during, beyond, without*).
+    - `adverbial`: Independent discourse adjuncts (e.g. *however, therefore, otherwise, meanwhile*).
+- **Psychometric Distractor Synthesis Models**:
+  - **Syntactic Complement Contrast (Gold Standard / 单解绝杀门禁)**:
+    - For logical connectors (`concession`, `cause`, `condition`, `time`), pre-selects distractors from the *opposing* syntactic complement class within the same semantic family (e.g. Target `despite` [prepositional] paired with `['although', 'though']` [clausal]).
+    - All options share the identical semantic orientation (concession/contrast), but only the target satisfies the physical complement slot constraint (`____ + NP`), eliminating secondary turn semantic drift and guaranteeing mathematically absolute single-fit validity.
+  - **Closed Scope & Complementizer Contrast**:
+    - For spatial/metaphorical prepositions (`beyond`) and noun-clause markers (`whether`), draws distractors strictly from within their authoritative functional paradigms (`['within', 'across', 'throughout']` and `['that', 'what', 'whatever']`).
+- **Micro-Task Blueprint Hard-Welding**:
+  - Dynamically synthesizes structural stem constraints:
+    - Prepositional target: `Syntactic Frame: The blank '____' MUST be followed directly by a noun phrase or gerund, NOT a clause with a finite verb!`
+    - Clausal target: `Syntactic Frame: The blank '____' MUST introduce a complete subordinate clause with subject and finite verb!`
+- **Extraction Boundary & Tri-Tier Layer Routing**:
+  - **Ultra-Basic Function Words (`in, at, and, but, if, because`)**: ❌ Filtered out from extraction.
+  - **High-Utility Academic Single-Word Connectors (`despite, whereas, beyond, throughout, unless, nonetheless`)**: ✅ Explicitly permitted in `extract_vocabulary.md` (AWL / CEFR B1+). Grounded by closed paradigms in `vocabulary_quiz`.
+  - **Multi-Word Connective Phrases (`in spite of, due to, as long as, provided that`)**: Routed exclusively to expressions extraction (`extract_expressions.md`).
+
 ---
 
 ## 2. Stateless Storage & Decoupled Display Architecture
@@ -213,6 +284,7 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] CEFR Distractor Difficulty Ceiling & Offline Frequency Gate (P0: eliminated super-advanced/obscure distractors on foundational texts via `cefrpy` + Zipf frequency filtering)
 - [x] Grammar Extraction Adaptive Gate & Multi-Level Coverage (P1: solved clefts `nsubj/expl`, relative clauses, causative complements, stance transitions, and curriculum register calibration)
 - [x] Reading Assessment CEFR Difficulty Adaptation & L1 Code Gate (P2 Step 1 & 2: dynamic prompt interpolation of difficulty matrix, option length limit, and C1/C2 difficulty ceiling gate)
+- [x] Oxford Collocations Dictionary (OCD) Zero-Collision Anchor Fallback & Concrete vs. Abstract Noun Semantic Cascade (`find_ocd_zero_collision_anchor`)
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:

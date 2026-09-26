@@ -685,7 +685,7 @@ class ExpertAuditor:
                     feedback_lines.append(f"  [ERROR]: {'; '.join(flaws)}")
                 elif diag:
                     feedback_lines.append(f"  [ERROR]: {diag}")
-                feedback_lines.append("  [LOOKUP]: `### SOURCE TEXT ###`")
+                feedback_lines.append("  [LOOKUP]: `### PASSAGE (WITH NUMBERED SENTENCES) ###` or `PASSAGE:`")
 
         feedback_lines.append("")
         feedback_lines.append("🛑 MANDATE: Ensure strictly ONE defensible key with unambiguous evidence. Align 'correct_answer_index' (0 for A, 1 for B, 2 for C, 3 for D). Return ONLY the complete corrected JSON object.")

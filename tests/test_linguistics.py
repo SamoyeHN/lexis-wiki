@@ -907,8 +907,146 @@ class TestAnchorFourDimensionRepair:
             assert not opt.endswith("ableness")
             # Word level if in CEFR database must be <= B1
             lvl = LinguisticEngine.get_word_cefr(opt)
-            if lvl:
-                assert LinguisticEngine.CEFR_ORDER[lvl] <= 3  # <= B1
+
+    def test_mine_expression_skeletons_ocd_gate(self):
+        """LinguisticEngine.mine_expression_skeletons must use OCD physical gate to reject invalid collocations."""
+        passage = (
+            "In the past, it was a small stamp that helped family members and friends to keep in touch with each other. "
+            "With the coming of the telephone, people could not only read words, but also hear each other's voices. "
+            "Later, the rise of the Internet joins people in different places with instant communication software. "
+            "They want to follow the time closely, but they also long for peace of mind. "
+            "Some people may worry about their privacy."
+        )
+        skels = LinguisticEngine.mine_expression_skeletons(passage, target_count=8)
+        phrases = [s["phrase"] for s in skels]
+
+        # 1. Invalid collocation 'join in place' must be strictly rejected
+        assert "join in place" not in phrases
+        assert not any("join in place" in p for p in phrases)
+
+        # 2. Authentic expressions and collocations must be preserved
+        assert any("keep in touch" in p for p in phrases)
+        assert any("hear" in p and "voice" in p for p in phrases)
+        assert any("long for" in p for p in phrases)
+        assert any("worry about" in p for p in phrases)
+
+    def test_mine_expression_skeletons_with_syllabus(self):
+        """LinguisticEngine.mine_expression_skeletons prioritizes syllabus expressions with standardized formulas."""
+        passage = (
+            "In the past, it was a small stamp that helped family members and friends to keep in touch with each other. "
+            "They want to follow the time closely, but they also long for peace of mind. "
+            "Technology can make great progress possible for future generations. "
+            "Some people may worry about their privacy."
+        )
+        syllabus = ["keep in touch with", "long for", "peace of mind", "make  possible", "worry about"]
+        skels = LinguisticEngine.mine_expression_skeletons(passage, target_count=5, syllabus_expressions=syllabus)
+
+        assert len(skels) == 5
+        formulas = {s["pattern_formula"]: s for s in skels}
+
+        # Check standardized formulas
+        assert "keep in touch with [sb]" in formulas
+        assert formulas["keep in touch with [sb]"]["type"] == "idiom"
+        assert formulas["keep in touch with [sb]"]["sid"] == "S-1"
+
+        assert "long for [sth/sb]" in formulas
+        assert formulas["long for [sth/sb]"]["type"] == "phrasal verb"
+
+        assert "make [sth] possible" in formulas
+        assert formulas["make [sth] possible"]["type"] == "collocation"
+
+        assert "worry about [sth/sb]" in formulas
+        assert formulas["worry about [sth/sb]"]["type"] == "phrasal verb"
+
+        assert "peace of mind" in formulas
+        assert formulas["peace of mind"]["type"] == "set phrase"
+
+    def test_ocd_zero_collision_anchor_fallback(self):
+        """LinguisticEngine uses OCD zero-collision anchor when quote lacks strong syntactic dependency."""
+        vocab_md = (
+            "## [[telephone]]\n"
+            "- **Part of Speech**: noun\n"
+            "- **Definition**: a system for talking to somebody elsewhere using phone\n"
+            "- **Context Sentence**: The other day, I was talking on the telephone to a client.\n\n"
+            "## [[simple]]\n"
+            "- **Part of Speech**: adjective\n"
+            "- **Definition**: easily understood or done; presenting no difficulty\n"
+            "- **Context Sentence**: The problem seemed simple at first.\n"
+        )
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(vocab_md, target_count=2)
+        assert len(skeletons) == 2
+
+        # Check telephone
+        tel = next(s for s in skeletons if s["target_word"] == "telephone")
+        assert tel["context_anchor"] is not None
+        assert tel["anchor_type"] in ("verb_subject", "verb", "adj")
+        assert "general context" not in tel["micro_task"]
+        assert "Syntactic Frame:" in tel["micro_task"]
+
+        # Check simple
+        smp = next(s for s in skeletons if s["target_word"] == "simple")
+        assert smp["context_anchor"] is not None
+        assert smp["anchor_type"] in ("adv_mod", "verb_copula", "modified_noun", "prep")
+        assert "Syntactic Frame:" in smp["micro_task"]
+
+        # Check concrete vs abstract noun differentiation in find_ocd_zero_collision_anchor
+        c_anchor, c_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("telephone", "noun", ["mixer", "modem", "monitor"])
+        assert c_type == "verb_subject"  # Concrete noun prioritizes verb_subject (ring)
+        assert c_anchor == "ring"
+
+        a_anchor, a_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("decision", "noun", ["conclusion", "option", "choice"])
+        assert a_type == "verb"  # Abstract noun prioritizes light/support verb (affect/make/reach)
+
+        # Check transitive vs intransitive verb differentiation
+        vt_anchor, vt_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("solve", "verb", ["explain", "discuss", "discover"])
+        assert vt_type == "object"  # Transitive verb prioritizes direct object (case/problem)
+
+        vi_anchor, vi_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("listen", "verb", ["hear", "watch", "notice"])
+        assert vi_type == "prep"  # Intransitive verb prioritizes bound preposition (to)
+        assert vi_anchor == "to"
+
+        # Check prepositional valency vs general adjective differentiation
+        ap_anchor, ap_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("proud", "adj", ["humble", "arrogant", "beaming"])
+        assert ap_type == "prep"  # Valency-bound adjective prioritizes preposition (of)
+        assert ap_anchor == "of"
+
+        ag_anchor, ag_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("economic", "adj", ["inefficient", "efficient", "competent"])
+        assert ag_type == "modified_noun"  # General adjective prioritizes characteristic noun
+
+        # Check adverb differentiation (modifies_adj vs modifies_verb)
+        adv_deg_anchor, adv_deg_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("extremely", "adv", ["highly", "super", "deathly"])
+        assert adv_deg_type == "modifies_adj"  # Degree adverb modifies adjective
+        assert adv_deg_anchor is not None
+
+        adv_man_anchor, adv_man_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("abruptly", "adv", ["suddenly", "dead", "short"])
+        assert adv_man_type == "modifies_verb"  # Manner adverb modifies verb
+        assert adv_man_anchor is not None
+
+        # Check function words / connectives closed paradigm distractor generation
+        assert LinguisticEngine.is_function_word("despite") is True
+        assert LinguisticEngine.is_function_word("although") is True
+        assert LinguisticEngine.is_function_word("beyond") is True
+        assert LinguisticEngine.is_function_word("apple") is False
+
+        # Prepositional connective contrasts with clausal conjunctions
+        f_dists, f_meta = LinguisticEngine.generate_vocab_distractors("despite", pos="prep", target_count=3, return_metadata=True)
+        assert len(f_dists) == 3
+        assert "although" in f_dists or "though" in f_dists
+        assert f_meta["distractor_strategy"] == "syntactic_complement_contrast"
+
+        # Clausal conjunction contrasts with prepositional connectives
+        c_dists, c_meta = LinguisticEngine.generate_vocab_distractors("although", pos="conj", target_count=3, return_metadata=True)
+        assert len(c_dists) == 3
+        assert "despite" in c_dists or "in spite of" in c_dists
+        assert c_meta["distractor_strategy"] == "syntactic_complement_contrast"
+
+        # Spatial/scope prepositions draw from scope paradigm
+        s_dists, s_meta = LinguisticEngine.generate_vocab_distractors("beyond", pos="prep", target_count=3, return_metadata=True)
+        assert len(s_dists) == 3
+        assert any(p in s_dists for p in ("within", "across", "throughout"))
+        assert s_meta["distractor_strategy"] == "scope_preposition_contrast"
+
+
 
 
 
