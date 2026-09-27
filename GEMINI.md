@@ -290,9 +290,12 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Oxford Collocations Dictionary 2nd Edition integration (20,791 headwords, ~4.9MB clean JSON, `LinguisticEngine.get_rich_collocations`)
 - [x] Adjective Distractor Quadruple Transformation (WordNet bipolar cluster harvesting, opposite satellite antonym tracing, modified noun collocation clash, preposition valency gate, and academic adjective families)
 - [x] CEFR Distractor Difficulty Ceiling & Offline Frequency Gate (P0: eliminated super-advanced/obscure distractors on foundational texts via `cefrpy` + Zipf frequency filtering)
-- [x] Grammar Extraction Adaptive Gate & Multi-Level Coverage (P1: solved clefts `nsubj/expl`, relative clauses, causative complements, stance transitions, and curriculum register calibration)
 - [x] Reading Assessment CEFR Difficulty Adaptation & L1 Code Gate (P2 Step 1 & 2: dynamic prompt interpolation of difficulty matrix, option length limit, and C1/C2 difficulty ceiling gate)
 - [x] Oxford Collocations Dictionary (OCD) Zero-Collision Anchor Fallback & Concrete vs. Abstract Noun Semantic Cascade (`find_ocd_zero_collision_anchor`)
+- [x] CEFR Assessment Difficulty Calibration across All Remaining Modalities (Translation, Listening, Video with CEFR matrices, option length limits, and L1 code gates)
+- [x] Full-Pipeline Cross-Stage Defect Alignment (decoupled comprehension quiz prompts, evaluator retry logic, reading context sentences, and slotted expression cloze cleanup)
+- [x] Fixed Phrase Artificial Decomposition Prevention & Vocabulary Fragmentation Auto-Pruning
+- [x] Markdown Extraction Formatting Standardization (`Part of Speech` & `Word CEFR Level`)
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:

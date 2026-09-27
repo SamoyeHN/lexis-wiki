@@ -3126,7 +3126,7 @@ class LinguisticEngine:
             word = re.sub(r'\[.*?\]|\(.*?\)', '', raw_w).strip()
             if not word:
                 continue
-            m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_pos = re.search(r'-\s*\*\*Part\s+of\s+Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
 
@@ -3274,7 +3274,7 @@ class LinguisticEngine:
             if not word:
                 continue
 
-            m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+            m_pos = re.search(r'-\s*\*\*Part\s+of\s+Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
 

@@ -3795,8 +3795,14 @@ class WikiProcessor:
 
                 sorted_body_entries = sorted(body_entries, key=_field_sort_key)
 
+                LABEL_OVERRIDES = {
+                    "part_of_speech": "Part of Speech",
+                    "word_cefr_level": "Word CEFR Level",
+                    "cefr_level": "CEFR Level",
+                }
+
                 for fname, fval in sorted_body_entries:
-                    label = fname.replace("_", " ").title()
+                    label = LABEL_OVERRIDES.get(fname.lower(), fname.replace("_", " ").title())
                     if fval:
                         if category == "grammar" and fname == "pattern_formula":
                             fval = self.normalize_grammar_formula(str(fval))
