@@ -480,6 +480,30 @@ class LLMClient:
                 
                 if was_healed:
                     import logging
+
+                # Level 1 Code Gate: Auto-heal double-encoded JSON string elements in lists
+                # (e.g. models serializing nested objects into strings inside arrays like branches: ["{\"branch_name\":...}"])
+                def _heal_nested_structures(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            obj[k] = _heal_nested_structures(v)
+                    elif isinstance(obj, list):
+                        new_list = []
+                        for item in obj:
+                            if isinstance(item, str) and item.strip().startswith("{") and item.strip().endswith("}"):
+                                try:
+                                    parsed_item = json.loads(item)
+                                    if isinstance(parsed_item, dict):
+                                        new_list.append(_heal_nested_structures(parsed_item))
+                                        continue
+                                except Exception:
+                                    pass
+                            new_list.append(_heal_nested_structures(item))
+                        return new_list
+                    return obj
+
+                if isinstance(data, (dict, list)):
+                    data = _heal_nested_structures(data)
                 # Auto-sync slotted form from design_audit to word for expressions if needed
                 if isinstance(data, dict) and "expressions" in data and isinstance(data["expressions"], list):
                     # Recognizes genuine syntactic variable slots (e.g. [something], [somebody], [entity], [one's], etc.)
@@ -565,6 +589,12 @@ class LLMClient:
                             if cur_formula:
                                 g_item["pattern_formula"] = WikiProcessor.normalize_grammar_formula(cur_formula)
                             
+                            # Auto-hydrate category if missing from simplified GrammarItem schema
+                            if not g_item.get("category"):
+                                from .linguistics import LinguisticEngine
+                                g_quote = str(g_item.get("quote", "")).strip()
+                                g_item["category"] = LinguisticEngine.classify_grammar_dependency(g_quote) or "Information Packaging"
+
                             # Level 1 Code Gate: Auto-remap explicit category mismatches
                             from .evaluator import auto_remap_grammar_category
                             _, remap_notice = auto_remap_grammar_category(g_item)
@@ -580,7 +610,7 @@ class LLMClient:
                         logging.getLogger("librarian").info("🩹 Model returned empty grammar_patterns; hydrating in-place from deterministic target patterns in prompt.")
                         from .schemas import GrammarItem
                         skel_matches = re.findall(
-                            r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
+                            r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
                             re.sub(r'\r\n|\r', '\n', user_prompt)
                         )
                         from .evaluator import _extract_source_content
@@ -588,7 +618,7 @@ class LLMClient:
                         src_for_heal = _extract_source_content(user_prompt)
                         _, s_pool = LinguisticEngine.tokenize_and_index_sentences(src_for_heal) if src_for_heal else ({}, {})
                         for _, sid, cat, formula, quote in skel_matches:
-                            clean_cat = cat.strip()
+                            clean_cat = cat.strip() if cat and cat.strip() else "Information Packaging"
                             clean_formula = WikiProcessor.normalize_grammar_formula(formula.strip())
                             act_quote = quote.strip() if quote and quote.strip() else s_pool.get(sid, f"Academic text demonstrates {clean_formula}.")
                             item = {
@@ -609,7 +639,7 @@ class LLMClient:
                         import logging
                         logging.getLogger("librarian").info("🩹 Model returned empty expressions; hydrating in-place from deterministic target expressions in prompt.")
                         expr_matches = re.findall(
-                            r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
+                            r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
                             re.sub(r'\r\n|\r', '\n', user_prompt)
                         )
                         from .evaluator import _extract_source_content
@@ -617,7 +647,7 @@ class LLMClient:
                         src_for_heal = _extract_source_content(user_prompt)
                         _, s_pool = LinguisticEngine.tokenize_and_index_sentences(src_for_heal) if src_for_heal else ({}, {})
                         for _, sid, pos_type, formula, quote in expr_matches:
-                            clean_pos = pos_type.strip().lower()
+                            clean_pos = pos_type.strip().lower() if pos_type and pos_type.strip() else "collocation"
                             if clean_pos not in ("phrasal verb", "collocation", "set phrase", "idiom"):
                                 clean_pos = "collocation"
                             clean_word = formula.strip()
@@ -673,10 +703,39 @@ class LLMClient:
                                 "definition": f"Core academic {clean_pos} essential for formal scholastic and technical discourse.",
                                 "example_usage": f"The author employs the term '{clean_word}' to underscore key academic concepts.",
                                 "quoted_sentence": act_quote,
-                                "word_cefr_level": "B2",
-                                "design_audit": f"AUDIT: [{sid}] -> [{clean_word}] -> [{clean_pos}] -> [B2] -> [VERBATIM_CONFIRMED]"
+                                "design_audit": f"AUDIT: [{sid}] -> [{clean_word}] -> [{clean_pos}] -> [VERBATIM_CONFIRMED]"
                             }
-                            data["vocabulary"].append(item)
+                # Level 1 Code Gate: Auto-Snap vocabulary items to authentic syllabus items from prompt
+                # (Anti-truncation: e.g. model outputting 're' instead of 're-schedule')
+                if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list) and "### TARGET VOCABULARY LIST ###" in user_prompt:
+                    syl_match = re.search(r'### TARGET VOCABULARY LIST ###(.*?)(?:###|\Z)', user_prompt, re.DOTALL)
+                    if syl_match:
+                        syl_words = re.findall(r'^[ \t]*-[ \t]*([^\r\n]+)', syl_match.group(1), re.MULTILINE)
+                        syl_targets = [w.strip() for w in syl_words if w.strip()]
+                        for v_item in data["vocabulary"]:
+                            if not isinstance(v_item, dict):
+                                continue
+                            raw_w = str(v_item.get("word", "")).strip()
+                            raw_clean = raw_w.lower()
+                            aud_str = str(v_item.get("design_audit", "")).lower()
+                            sent_str = str(v_item.get("quoted_sentence", "")).lower()
+                            # Try to snap
+                            for tgt in syl_targets:
+                                tgt_lower = tgt.lower()
+                                if raw_clean == tgt_lower:
+                                    break
+                                # If declared in audit
+                                if f"-> {tgt_lower} ->" in aud_str or f"-> {tgt_lower}" in aud_str or f"[{tgt_lower}]" in aud_str:
+                                    v_item["word"] = tgt
+                                    break
+                                # If hyphenated target and raw_w is prefix (e.g. 're' vs 're-schedule')
+                                if tgt_lower.startswith(raw_clean + "-") and (tgt_lower in aud_str or tgt_lower in sent_str):
+                                    v_item["word"] = tgt
+                                    break
+                                # Punctuation mismatch
+                                if re.sub(r'[^a-z0-9]', '', raw_clean) == re.sub(r'[^a-z0-9]', '', tgt_lower):
+                                    v_item["word"] = tgt
+                                    break
 
                 # Level 1 Code Gate: Deterministic Sentence Pointer Hydration ([S-ID] -> authentic sentence)
                 self._hydrate_sentence_pointers(data, user_prompt)
@@ -710,6 +769,14 @@ class LLMClient:
                                 item["example_usage"] = f"Regular reading of high-quality scholarship enables students to {clean_w} in their respective academic fields."
                             else:
                                 item["example_usage"] = f"Scholarly researchers must {clean_w} their empirical findings to support future theoretical developments."
+
+                        # Orthographic Hygiene Gate: Fix concatenated hyphenated compounds (e.g. wellkept -> well-kept, inperson -> in-person)
+                        clean_target_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip()
+                        if "-" in clean_target_w and item.get("example_usage"):
+                            unhyphen = clean_target_w.replace("-", "")
+                            if len(unhyphen) >= 4:
+                                pat = r'\b' + re.escape(unhyphen) + r'\b'
+                                item["example_usage"] = re.sub(pat, clean_target_w, item["example_usage"], flags=re.IGNORECASE)
 
                 # Auto-heal compound/slashed or annotated part_of_speech tags in vocabulary items (e.g. 'adjective/noun', 'verb (phrasal)')
                 if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list):

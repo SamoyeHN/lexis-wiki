@@ -1862,13 +1862,46 @@ class WikiProcessor:
 
         v_syllabus_sec = ""
         if syllabus_vocab:
-            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary/phrase item(s) in source markdown.")
-            vocab_bullets = "\n".join([f"- {w}" for w in syllabus_vocab])
+            # Word-Family Deduplication on Syllabus Items:
+            # If syllabus list has multiple items from the same morphological family (e.g. 'recognize' & 'recognition'),
+            # cluster them and retain the single most pedagogically significant one (higher CEFR or longer headword).
+            clusters: List[List[str]] = []
+            for w in syllabus_vocab:
+                w_clean = w.strip().lower()
+                placed = False
+                for c in clusters:
+                    if any(LinguisticEngine.are_same_word_family(w_clean, cw) for cw in c):
+                        c.append(w_clean)
+                        placed = True
+                        break
+                if not placed:
+                    clusters.append([w_clean])
+
+            cleaned_syllabus_vocab = []
+            cefr_rank_map = {'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6}
+            for c in clusters:
+                if len(c) == 1:
+                    cleaned_syllabus_vocab.append(c[0])
+                else:
+                    # Sort by CEFR level descending, then length descending
+                    scored = []
+                    for item in c:
+                        lvl = LinguisticEngine.get_word_cefr(item)
+                        rank = cefr_rank_map.get(lvl, 3)
+                        scored.append((rank, len(item), item))
+                    scored.sort(reverse=True)
+                    chosen = scored[0][2]
+                    logger.info(f"🧬 Consolidated syllabus word-family cluster {c} -> '{chosen}'")
+                    cleaned_syllabus_vocab.append(chosen)
+
+            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified to {len(cleaned_syllabus_vocab)} unique word families).")
+            vocab_bullets = "\n".join([f"- {w}" for w in cleaned_syllabus_vocab])
+            v_target_num = min(len(cleaned_syllabus_vocab), v_count)
             v_syllabus_sec = (
                 f"\n### TARGET VOCABULARY LIST ###\n"
-                f"The text has {len(syllabus_vocab)} syllabus candidate items:\n"
+                f"The text has {len(cleaned_syllabus_vocab)} syllabus items:\n"
                 f"{vocab_bullets}\n\n"
-                f"From this syllabus list, prioritize and select the most essential, pedagogically significant academic vocabulary (up to {v_count} words total) that appear in the passage below. For each selected word, find its authentic verbatim sentence in the passage.\n\n"
+                f"Extract these exact {v_target_num} syllabus items that appear in the passage below. Do not skip or omit any of them. For each word, adopt the exact canonical lemma into 'word', verify it in 'design_audit', and quote its authentic verbatim sentence from the passage.\n\n"
             )
 
         e_syllabus_sec = ""
@@ -1906,19 +1939,19 @@ class WikiProcessor:
             skeleton_bullets = []
             for idx, s in enumerate(grammar_skeletons, 1):
                 skeleton_bullets.append(
-                    f"{idx}. [{s['sid']}] ({s['category']}) Formula: `{s['pattern_formula']}`"
+                    f"{idx}. [{s['sid']}] Formula: `{s['pattern_formula']}`"
                 )
             g_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
                 f"The following {len(grammar_skeletons)} academic structural patterns have been mathematically identified in the passage.\n"
-                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets at the beginning of that line in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the pedagogical fields (pedagogical_function, imitation_example, common_mistakes):\n\n"
+                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets in the passage above, copy its authentic full sentence into 'quote', adopt its canonical formula into 'pattern_formula', and craft the pedagogical fields (pedagogical_function, imitation_example, common_mistakes):\n\n"
                 + "\n".join(skeleton_bullets) + "\n\n"
             )
 
         # Deterministically mine genuine academic expressions and collocations (ACL + spaCy + OCD)
         # Always extract expression skeletons with standardized formulas (e.g. hear [one's] voice, keep in touch with [sb]),
-        # prioritizing syllabus_expressions when provided.
-        target_expr_count = len(syllabus_expressions) if syllabus_expressions else e_count
+        # prioritizing syllabus_expressions when provided, respecting configured e_count limit.
+        target_expr_count = e_count
         expression_skeletons = LinguisticEngine.mine_expression_skeletons(
             raw_source_text,
             target_count=target_expr_count,
@@ -1930,12 +1963,12 @@ class WikiProcessor:
             expr_skel_bullets = []
             for idx, s in enumerate(expression_skeletons, 1):
                 expr_skel_bullets.append(
-                    f"{idx}. [{s['sid']}] ({s['type']}) Formula: `{s['pattern_formula']}`"
+                    f"{idx}. [{s['sid']}] Formula: `{s['pattern_formula']}`"
                 )
             e_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET EXPRESSIONS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & ACL) ###\n"
                 f"The following {len(expression_skeletons)} high-value academic expressions, collocations, and phrasal units have been mathematically verified in the passage.\n"
-                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt and refine its canonical slotted formula into 'word' (ensuring precise syntactic slots such as 'to do [sth]' for infinitive structures, or '[sth/sb]' for prepositional objects), adopt the classification type, and craft its definition and example_usage:\n\n"
+                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt its formula into 'word', and craft its pedagogical definition and example_usage:\n\n"
                 + "\n".join(expr_skel_bullets) + "\n\n"
             )
 
@@ -1951,19 +1984,20 @@ class WikiProcessor:
                 for idx, s in enumerate(vocab_skeletons, 1):
                     awl_tag = " [AWL]" if s.get("is_awl") else ""
                     v_skel_bullets.append(
-                        f"{idx}. [{s['sid']}] **{s['word']}** ({s['part_of_speech']}){awl_tag}"
+                        f"{idx}. [{s['sid']}] **{s['word']}**{awl_tag}"
                     )
                 v_skeletons_sec = (
                     f"\n### DETERMINISTIC TARGET VOCABULARY (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & AWL) ###\n"
                     f"The following {len(vocab_skeletons)} high-value academic headwords have been mathematically extracted and lemmatized from the passage.\n"
-                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt exact canonical base headword in 'word' and part_of_speech, and craft its pedagogical definition and example_usage:\n\n"
+                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt the base lemma headword into 'word', and craft its pedagogical definition and example_usage:\n\n"
                     + "\n".join(v_skel_bullets) + "\n\n"
                 )
 
         # Prepare kwargs with indexed content for extractions (with pristine fallback)
+        target_vocab_count = v_target_num if syllabus_vocab else (len(vocab_skeletons) if vocab_skeletons else v_count)
         v_kwargs = {
             "content": indexed_content or raw_source_text,
-            "count": len(vocab_skeletons) if vocab_skeletons else v_count,
+            "count": target_vocab_count,
             "syllabus_section": v_syllabus_sec or v_skeletons_sec
         }
         e_kwargs = {
@@ -2081,6 +2115,47 @@ class WikiProcessor:
 
             # Merge expressions into vocabulary if both exist
             if vocab_data:
+                # Level 1 Code Gate: Snap extracted vocabulary items to authentic syllabus items
+                # (Anti-hallucination & anti-truncation: like sentence snapping, truth comes from syllabus_vocab)
+                def snap_to_syllabus_word(raw_word: str, audit_str: str, quoted_sent: str, targets: List[str]) -> str:
+                    if not targets:
+                        return raw_word
+                    raw_clean = raw_word.strip().lower()
+                    # 1. Exact match
+                    for t in targets:
+                        if raw_clean == t.lower():
+                            return t
+                    # 2. Match declared target in design_audit (e.g. "AUDIT: [S-14] -> re-schedule -> VERBATIM_CONFIRMED")
+                    audit_lower = audit_str.lower()
+                    for t in targets:
+                        t_lower = t.lower()
+                        if f"-> {t_lower} ->" in audit_lower or f"-> {t_lower}" in audit_lower or f"[{t_lower}]" in audit_lower:
+                            return t
+                    # 3. Punctuation/hyphen-insensitive match (e.g. "reschedule" or "re" vs "re-schedule")
+                    raw_no_punct = re.sub(r'[^a-z0-9]', '', raw_clean)
+                    for t in targets:
+                        t_no_punct = re.sub(r'[^a-z0-9]', '', t.lower())
+                        if raw_no_punct and raw_no_punct == t_no_punct:
+                            return t
+                        # If raw_word is a prefix of a hyphenated target mentioned in audit or quote (e.g. 're' -> 're-schedule')
+                        if t.lower().startswith(raw_clean + "-") and (t.lower() in audit_lower or t.lower() in quoted_sent.lower()):
+                            return t
+                    return raw_word
+
+                raw_vocab_items = getattr(vocab_data, "vocabulary", []) if dataclasses.is_dataclass(vocab_data) else vocab_data.get("vocabulary", [])
+                if syllabus_vocab:
+                    for it in raw_vocab_items:
+                        cur_w = it.word if dataclasses.is_dataclass(it) else it.get("word", "")
+                        cur_aud = it.design_audit if dataclasses.is_dataclass(it) else it.get("design_audit", "")
+                        cur_quote = it.quoted_sentence if dataclasses.is_dataclass(it) else it.get("quoted_sentence", "")
+                        snapped_w = snap_to_syllabus_word(cur_w, cur_aud, cur_quote, syllabus_vocab)
+                        if snapped_w != cur_w:
+                            logger.info(f"🎯 Level 1 Code Gate: Snapped extracted word '{cur_w}' -> syllabus ground truth '{snapped_w}'")
+                            if dataclasses.is_dataclass(it):
+                                it.word = snapped_w
+                            else:
+                                it["word"] = snapped_w
+
                 merged_vocab = []
                 if dataclasses.is_dataclass(vocab_data):
                     merged_vocab.extend(getattr(vocab_data, "vocabulary", []))
@@ -2091,7 +2166,31 @@ class WikiProcessor:
                     def _resolve_slotted_word(expr_obj):
                         w = expr_obj.get("word", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "word", "")
                         aud = expr_obj.get("design_audit", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "design_audit", "")
+                        quote = expr_obj.get("quoted_sentence", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "quoted_sentence", "")
+
+                        # 1. Direct alignment with deterministic expression_skeletons
+                        if expression_skeletons:
+                            w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                            w_toks = set(re.findall(r'[a-zA-Z]+', w_clean))
+                            # 1.1 Match by token similarity with skeleton phrase
+                            if w_toks:
+                                for skel in expression_skeletons:
+                                    skel_toks = set(re.findall(r'[a-zA-Z]+', skel.get("phrase", "").lower()))
+                                    if w_toks and skel_toks and (w_toks == skel_toks or w_toks.issubset(skel_toks) or skel_toks.issubset(w_toks)):
+                                        return skel.get("pattern_formula", w), skel.get("type", "collocation")
+
+                            # 1.2 Match by sid only if the skeleton phrase actually appears in the quote or audit or word
+                            sid_match = re.search(r'\bS-(\d+)\b', f"{aud} {quote}", re.IGNORECASE)
+                            if sid_match:
+                                target_sid = f"S-{sid_match.group(1)}"
+                                for skel in expression_skeletons:
+                                    if skel.get("sid", "").upper() == target_sid.upper():
+                                        skel_phrase = skel.get("phrase", "").lower()
+                                        if skel_phrase and skel_phrase in f"{w} {aud} {quote}".lower():
+                                            return skel.get("pattern_formula", w), skel.get("type", "collocation")
+
                         valid_slot_pattern = r'\[(something|somebody|someone|one\'s|one|entity|domain|factor|doing something|clause|[a-z_]+)\]|\bone\'s\b'
+                        pos_type = expr_obj.get("part_of_speech", "collocation") if isinstance(expr_obj, dict) else getattr(expr_obj, "part_of_speech", "collocation")
                         if ("[" not in w and "one's" not in w) and ("[" in aud or "one's" in aud):
                             parts = [p.strip() for p in aud.replace("->", "➔").split("➔")]
                             candidate_steps = parts[1:] if len(parts) > 1 else parts
@@ -2108,12 +2207,12 @@ class WikiProcessor:
                                     cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
                                     w_tokens = re.findall(r'[a-zA-Z]+', w)
                                     if cand_tokens and w_tokens and cand_tokens[0].lower() == w_tokens[0].lower():
-                                        return candidate
-                        return w
+                                        return candidate, pos_type
+                        return w, pos_type
 
                     expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                     for expr in expr_list:
-                        resolved_word = _resolve_slotted_word(expr)
+                        resolved_word, resolved_pos = _resolve_slotted_word(expr)
                         while resolved_word.startswith("[") and resolved_word.endswith("]"):
                             depth = 0
                             matched_end = False
@@ -2132,7 +2231,7 @@ class WikiProcessor:
                             mapped_item = {
                                 "design_audit": expr.get("design_audit", ""),
                                 "word": resolved_word,
-                                "part_of_speech": expr.get("part_of_speech", "phrasal verb"),
+                                "part_of_speech": resolved_pos,
                                 "definition": expr.get("definition", ""),
                                 "quoted_sentence": expr.get("quoted_sentence", ""),
                                 "example_usage": expr.get("example_usage", ""),
@@ -2142,11 +2241,12 @@ class WikiProcessor:
                             mapped_item = VocabularyItem(
                                 design_audit=getattr(expr, "design_audit", ""),
                                 word=resolved_word,
-                                part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                                 definition=getattr(expr, "definition", ""),
                                 quoted_sentence=getattr(expr, "quoted_sentence", ""),
                                 example_usage=getattr(expr, "example_usage", ""),
                             )
+                            # Attach part_of_speech dynamically for markdown formatting
+                            setattr(mapped_item, "part_of_speech", resolved_pos)
                         merged_vocab.append(mapped_item)
 
                 # Filter out redundant single words in vocabulary that were extracted solely as
@@ -2199,6 +2299,40 @@ class WikiProcessor:
                             filtered_vocab.append(it)
                         merged_vocab = filtered_vocab
 
+                # Level 1 Deterministic Code Gate: Post-merge Word-Family Deduplication & Anti-Clustering
+                # Guarantees that even if LLM outputted multiple words from the same family (e.g. 'recognize' & 'recognition'),
+                # or crammed multiple words into adjacent sentences, the finalized output remains 100% unique per family.
+                # NOTE: For multi-word expressions, only apply exact duplicate checking so syllabus phrases are never swallowed!
+                deduped_family_vocab = []
+                seen_families: List[str] = []
+                for it in merged_vocab:
+                    w = it.word if dataclasses.is_dataclass(it) else it.get("word", "")
+                    clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', str(w)).strip().lower()
+                    if not clean_w:
+                        continue
+                    # Check against existing items
+                    is_family_duplicate = False
+                    is_multiword = len(clean_w.split()) > 1
+                    for existing_w in seen_families:
+                        existing_is_multi = len(existing_w.split()) > 1
+                        if is_multiword or existing_is_multi:
+                            # Exact string match for multi-word expressions
+                            if clean_w == existing_w:
+                                is_family_duplicate = True
+                                logger.info(f"✂️ Code Gate: Pruning exact duplicate item '{clean_w}'")
+                                break
+                        else:
+                            # Single-word family deduplication
+                            if LinguisticEngine.are_same_word_family(clean_w, existing_w):
+                                is_family_duplicate = True
+                                logger.info(f"✂️ Code Gate: Pruning duplicate word-family item '{clean_w}' (subsumed by '{existing_w}')")
+                                break
+                    if is_family_duplicate:
+                        continue
+                    seen_families.append(clean_w)
+                    deduped_family_vocab.append(it)
+                merged_vocab = deduped_family_vocab
+
                 if dataclasses.is_dataclass(vocab_data):
                     vocab_data.vocabulary = merged_vocab
                 elif isinstance(vocab_data, dict):
@@ -2210,15 +2344,16 @@ class WikiProcessor:
                 vocab_list = []
                 expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                 for expr in expr_list:
-                    resolved_word = _resolve_slotted_word(expr) if '_resolve_slotted_word' in locals() else getattr(expr, "word", "")
-                    vocab_list.append(VocabularyItem(
+                    resolved_word = getattr(expr, "word", "")
+                    item = VocabularyItem(
                         design_audit=getattr(expr, "design_audit", ""),
                         word=resolved_word,
-                        part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                         definition=getattr(expr, "definition", ""),
                         quoted_sentence=getattr(expr, "quoted_sentence", ""),
                         example_usage=getattr(expr, "example_usage", ""),
-                    ))
+                    )
+                    setattr(item, "part_of_speech", getattr(expr, "part_of_speech", "collocation"))
+                    vocab_list.append(item)
                 v_extracted = VocabularyExtraction(
                     title=f"{file_stem.replace('_', ' ')} Vocabulary",
                     vocabulary=vocab_list
@@ -2234,6 +2369,48 @@ class WikiProcessor:
                     returned_quotes = [getattr(p, "quote", "") if dataclasses.is_dataclass(p) else p.get("quote", "") for p in patterns]
                     clean_ret = [re.sub(r'[^a-zA-Z0-9]', '', q).lower() for q in returned_quotes]
                     
+                    # Align returned patterns with skeletons (auto-hydrate category and normalize formula)
+                    for p in patterns:
+                        p_quote = getattr(p, "quote", "") if dataclasses.is_dataclass(p) else p.get("quote", "")
+                        p_audit = getattr(p, "design_audit", "") if dataclasses.is_dataclass(p) else p.get("design_audit", "")
+                        p_formula = getattr(p, "pattern_formula", "") if dataclasses.is_dataclass(p) else p.get("pattern_formula", "")
+
+                        matched_skel = None
+                        # 1. Match by [S-ID] in design_audit or quote
+                        sid_m = re.search(r'\[(S-\d+)\]', f"{p_audit} {p_quote}")
+                        if sid_m:
+                            target_sid = sid_m.group(1).upper()
+                            matched_skel = next((s for s in grammar_skeletons if s.get("sid", "").upper() == target_sid), None)
+
+                        # 2. Match by clean quote similarity
+                        if not matched_skel and p_quote:
+                            clean_pq = re.sub(r'[^a-zA-Z0-9]', '', p_quote).lower()
+                            matched_skel = next((s for s in grammar_skeletons if re.sub(r'[^a-zA-Z0-9]', '', s.get("quote", "")).lower() in clean_pq or clean_pq in re.sub(r'[^a-zA-Z0-9]', '', s.get("quote", "")).lower()), None)
+
+                        # 3. Match by formula similarity
+                        if not matched_skel and p_formula:
+                            clean_pf = re.sub(r'[^a-zA-Z0-9]', '', p_formula).lower()
+                            matched_skel = next((s for s in grammar_skeletons if re.sub(r'[^a-zA-Z0-9]', '', s.get("pattern_formula", "")).lower() == clean_pf), None)
+
+                        if matched_skel:
+                            # Auto-hydrate authoritative category and pattern_formula
+                            resolved_cat = matched_skel.get("category", "Information Packaging")
+                            resolved_formula = matched_skel.get("pattern_formula", p_formula)
+                            if dataclasses.is_dataclass(p):
+                                setattr(p, "category", resolved_cat)
+                                if resolved_formula:
+                                    setattr(p, "pattern_formula", resolved_formula)
+                            elif isinstance(p, dict):
+                                p["category"] = resolved_cat
+                                if resolved_formula:
+                                    p["pattern_formula"] = resolved_formula
+                        else:
+                            # Fallback default category
+                            if dataclasses.is_dataclass(p) and not hasattr(p, "category"):
+                                setattr(p, "category", "Information Packaging")
+                            elif isinstance(p, dict) and "category" not in p:
+                                p["category"] = "Information Packaging"
+
                     # If model truncated and missed skeletons, auto-complete the missing skeletons
                     for skel in grammar_skeletons:
                         skel_clean = re.sub(r'[^a-zA-Z0-9]', '', skel["quote"]).lower()
@@ -2244,15 +2421,17 @@ class WikiProcessor:
                                 quote=skel["quote"],
                                 pattern_formula=skel["pattern_formula"],
                                 pedagogical_function=f"Constructs advanced academic discourse via {skel['category'].lower()} syntax.",
-                                design_audit=f"AUDIT: [{skel['sid']}] -> {skel['category']} -> {skel['pattern_formula']}",
-                                category=skel["category"],
+                                design_audit=f"AUDIT: [{skel['sid']}] -> {skel['pattern_formula']} -> [VERBATIM_CONFIRMED]",
                                 imitation_example=f"The study demonstrates that {skel['pattern_formula']}, establishing empirical validity.",
                                 common_mistakes="ESL learners frequently misapply slot boundary constraints or omit required subordinators.",
                             )
+                            setattr(completed_item, "category", skel["category"])
                             if dataclasses.is_dataclass(data):
                                 data.grammar_patterns.append(completed_item)
                             elif isinstance(data, dict):
-                                data.setdefault("grammar_patterns", []).append(dataclasses.asdict(completed_item))
+                                d_item = dataclasses.asdict(completed_item)
+                                d_item["category"] = skel["category"]
+                                data.setdefault("grammar_patterns", []).append(d_item)
 
                 all_saved.extend(self._save_extraction_results(data, source_path.name, category_override=category))
 
@@ -3632,8 +3811,8 @@ class WikiProcessor:
                 mindmap_dict = dataclasses.asdict(data)
             else:
                 mindmap_dict = data
-            nodes = mindmap_dict.get("nodes", []) if isinstance(mindmap_dict, dict) else []
-            mindmap_dict["item_count"] = len(nodes)
+            branches = mindmap_dict.get("branches", mindmap_dict.get("nodes", [])) if isinstance(mindmap_dict, dict) else []
+            mindmap_dict["item_count"] = len(branches)
             # Physical text CEFR calculation
             if hasattr(self, "_last_source_content") and self._last_source_content:
                 mindmap_dict["overall_cefr_level"] = LinguisticEngine.calculate_text_cefr(self._last_source_content)
@@ -3767,19 +3946,35 @@ class WikiProcessor:
                 if not item_fields:
                     continue
 
-                # Locate canonical primary header field
-                primary_key = None
-                for hk in ["word", "category", "name", "concept_name", "title"]:
-                    if any(k == hk for k, v in item_fields):
-                        primary_key = hk
-                        break
-
-                if primary_key:
-                    header_entry = next((k, v) for k, v in item_fields if k == primary_key)
-                    body_entries = [entry for entry in item_fields if entry[0] != primary_key]
+                # For grammar items, ensure category is attached and used as header
+                if category == "grammar":
+                    cat_val = getattr(item, "category", None) if dataclasses.is_dataclass(item) else item.get("category")
+                    if not cat_val:
+                        # Fallback infer from formula or default
+                        p_formula = getattr(item, "pattern_formula", "") if dataclasses.is_dataclass(item) else item.get("pattern_formula", "")
+                        cat_val = "Information Packaging"
+                    if dataclasses.is_dataclass(item):
+                        item_fields = [(f.name, getattr(item, f.name)) for f in dataclasses.fields(item) if f.name != "design_audit"]
+                    else:
+                        item_fields = [(k, v) for k, v in item.items() if k != "design_audit"]
+                    # Insert category as the primary header entry
+                    header_entry = ("category", cat_val)
+                    body_entries = [entry for entry in item_fields if entry[0] != "category"]
+                    primary_key = "category"
                 else:
-                    header_entry = item_fields[0]
-                    body_entries = item_fields[1:]
+                    # Locate canonical primary header field
+                    primary_key = None
+                    for hk in ["word", "category", "name", "concept_name", "title"]:
+                        if any(k == hk for k, v in item_fields):
+                            primary_key = hk
+                            break
+
+                    if primary_key:
+                        header_entry = next((k, v) for k, v in item_fields if k == primary_key)
+                        body_entries = [entry for entry in item_fields if entry[0] != primary_key]
+                    else:
+                        header_entry = item_fields[0]
+                        body_entries = item_fields[1:]
 
                 header_name, header_val = header_entry
                 if not (str(header_val).startswith("[[") and str(header_val).endswith("]]")):
@@ -3787,7 +3982,7 @@ class WikiProcessor:
                 
                 lines.append(f"## {header_val}")
 
-                # For vocabulary items, deterministically calculate Word CEFR Level if not present
+                # For vocabulary items, deterministically calculate Word CEFR Level and Part of Speech if not present
                 if category == "vocabulary":
                     has_cefr = any(k.lower() == "word_cefr_level" and v for k, v in body_entries)
                     if not has_cefr and primary_key == "word":
@@ -3796,6 +3991,12 @@ class WikiProcessor:
                         lookup_w = clean_target_word.split()[0] if " " in clean_target_word else clean_target_word
                         derived_cefr = LinguisticEngine.get_word_cefr(lookup_w, default="B1")
                         body_entries.append(("word_cefr_level", derived_cefr))
+
+                    has_pos = any(k.lower() == "part_of_speech" and v for k, v in body_entries)
+                    if not has_pos and primary_key == "word":
+                        raw_quote = next((v for k, v in body_entries if k.lower() in ("quoted_sentence", "quote")), "")
+                        derived_pos = LinguisticEngine.determine_contextual_pos(str(header_entry[1]), str(raw_quote))
+                        body_entries.append(("part_of_speech", derived_pos))
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -3838,6 +4039,11 @@ class WikiProcessor:
                     "cefr_level": "CEFR Level",
                 }
 
+                # Pre-fetch sentence pool for deterministic quote snapping if source content is available
+                sent_pool = None
+                if hasattr(self, "_last_source_content") and self._last_source_content:
+                    _, sent_pool = LinguisticEngine.tokenize_and_index_sentences(self._last_source_content)
+
                 for fname, fval in sorted_body_entries:
                     label = LABEL_OVERRIDES.get(fname.lower(), fname.replace("_", " ").title())
                     if fval:
@@ -3845,9 +4051,13 @@ class WikiProcessor:
                             fval = self.normalize_grammar_formula(str(fval))
                         elif fname.lower() in ("quote", "quoted_sentence"):
                             fval_str = str(fval).strip()
-                            # Strip internal sentence pool tokens like [S-26] or S-26: from front of quote
+                            # Deterministically snap to authentic sentence in sentence pool if available
+                            if sent_pool:
+                                snapped = LinguisticEngine.snap_to_sentence_pool(fval_str, sent_pool)
+                                if snapped:
+                                    fval_str = snapped
+                            # Strip internal sentence pool tokens like [S-26] or S-26: from front of quote if still present
                             fval_str = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", fval_str, flags=re.IGNORECASE).strip()
-                            fval_str = fval_str.strip("\"'“”‘’").strip()
                             fval = fval_str
                         lines.append(f"- **{label}**: {fval}")
                 lines.append("")

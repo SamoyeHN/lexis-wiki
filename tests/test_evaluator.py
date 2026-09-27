@@ -619,6 +619,69 @@ open the door to sth.
         self.assertEqual(flags, [])
 
 
+    def test_mindmap_invalid_string_items_penalized(self):
+        # Double-encoded string item inside branches array
+        bad_mindmap = {
+            "title": "Test Map",
+            "root_name": "Root",
+            "branches": [
+                {"branch_name": "Branch 1", "sub_branches": []},
+                '{"branch_name": "Branch 2", "sub_branches": []}',
+                {"branch_name": "Branch 3", "sub_branches": []}
+            ]
+        }
+        score, flags = _score_schema(bad_mindmap, task_type="mindmap")
+        self.assertLess(score, W_SCHEMA)
+        self.assertTrue(any("INVALID_ITEM_TYPE" in f for f in flags))
+
+    def test_mindmap_insufficient_items_penalized(self):
+        # Only 2 branches when schema requires at least 3
+        short_mindmap = {
+            "title": "Test Map",
+            "root_name": "Root",
+            "branches": [
+                {"branch_name": "Branch 1", "sub_branches": []},
+                {"branch_name": "Branch 2", "sub_branches": []}
+            ]
+        }
+        score, flags = _score_schema(short_mindmap, task_type="mindmap")
+        self.assertLess(score, W_SCHEMA)
+        self.assertTrue(any("INSUFFICIENT_ITEMS" in f for f in flags))
+
+    def test_example_usage_orthography_repair(self):
+        import re
+        data = {
+            "title": "Vocab",
+            "vocabulary": [
+                {
+                    "word": "well-kept",
+                    "example_usage": "The laboratory's **wellkept** records proved essential.",
+                    "quoted_sentence": "Authentic quote."
+                },
+                {
+                    "word": "in-person",
+                    "example_usage": "The workshop will be held **inperson** next week.",
+                    "quoted_sentence": "Authentic quote."
+                }
+            ]
+        }
+        # Simulate LLMClient Level 1 Code Gate for orthographic hygiene
+        for item in data["vocabulary"]:
+            w = str(item.get("word", "")).strip()
+            clean_target_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip()
+            if "-" in clean_target_w and item.get("example_usage"):
+                unhyphen = clean_target_w.replace("-", "")
+                if len(unhyphen) >= 4:
+                    pat = r'\b' + re.escape(unhyphen) + r'\b'
+                    item["example_usage"] = re.sub(pat, clean_target_w, item["example_usage"], flags=re.IGNORECASE)
+
+        vocab = data["vocabulary"]
+        self.assertIn("well-kept", vocab[0]["example_usage"])
+        self.assertNotIn("wellkept", vocab[0]["example_usage"])
+        self.assertIn("in-person", vocab[1]["example_usage"])
+        self.assertNotIn("inperson", vocab[1]["example_usage"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

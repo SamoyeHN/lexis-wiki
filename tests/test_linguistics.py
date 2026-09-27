@@ -1046,10 +1046,97 @@ class TestAnchorFourDimensionRepair:
         assert any(p in s_dists for p in ("within", "across", "throughout"))
         assert s_meta["distractor_strategy"] == "scope_preposition_contrast"
 
+    def test_list_sentence_indexing_and_bullet_peeling(self):
+        """tokenize_and_index_sentences separates bullets/numbers cleanly without contaminating S-IDs."""
+        raw_text = (
+            "• Schedule meetings and appointments in advance — a few days, a week, even a month in advance.\n"
+            "• Always make appointments for in-person meetings. Don't just show up and expect people to make time to talk with you."
+        )
+        indexed, pool = LinguisticEngine.tokenize_and_index_sentences(raw_text)
+        assert "S-1" in pool
+        assert "S-2" in pool
+        assert "S-3" in pool
+        # Sentence text inside pool must not contain bullet markers
+        assert not pool["S-1"].startswith("•")
+        assert not pool["S-2"].startswith("•")
+        assert not pool["S-3"].startswith("•")
+        # In indexed text, bullet markers precede [S-xx] rather than interleaving or trailing
+        assert "• [S-1] Schedule" in indexed
+        assert "• [S-2] Always" in indexed
 
+    def test_determine_contextual_pos_hyphen_and_wordnet(self):
+        """determine_contextual_pos correctly identifies verbs split with hyphens and falls back to WordNet."""
+        quote = "They would have left me a message asking to re-schedule the meeting."
+        pos = LinguisticEngine.determine_contextual_pos("reschedule", quote)
+        assert pos == "verb"
 
+    def test_attach_importance_to_slot_formula(self):
+        """mine_expression_skeletons correctly identifies attach importance to as [sth] formula."""
+        passage = (
+            "If you work for a company that attaches great importance to punctuality, here are tips. "
+            "They will never forget to keep in touch with old friends."
+        )
+        skels = LinguisticEngine.mine_expression_skeletons(
+            passage,
+            target_count=2,
+            syllabus_expressions=["attach importance to", "keep in touch with"]
+        )
+        formulas = {s["phrase"]: s["pattern_formula"] for s in skels}
+        assert formulas.get("attach importance to") == "attach importance to [sth]"
+        assert formulas.get("keep in touch with") == "keep in touch with [sb]"
 
+    def test_intransitive_phrasal_verb_valence(self):
+        """mine_expression_skeletons correctly identifies contextual transitivity from dependency parse."""
+        passage = (
+            "Don’t just show up and expect things to happen. "
+            "Always turn off the lights before leaving the room."
+        )
+        skels = LinguisticEngine.mine_expression_skeletons(
+            passage,
+            target_count=2,
+            syllabus_expressions=["show up", "turn off"]
+        )
+        formulas = {s["phrase"]: s["pattern_formula"] for s in skels}
+        assert formulas.get("show up") == "show up"
+        assert "[sth/sb]" in formulas.get("turn off", "") or "[sth]" in formulas.get("turn off", "")
 
+    def test_dialogue_quote_sentence_integrity(self):
+        """tokenize_and_index_sentences preserves exclamation marks inside quotes as a single sentence."""
+        raw_text = 'Their attitude was “Ah! You’re here! We can start now!” And then he smiled.'
+        _, pool = LinguisticEngine.tokenize_and_index_sentences(raw_text)
+        assert len(pool) == 2
+        assert pool["S-1"] == 'Their attitude was “Ah! You’re here! We can start now!”'
+        assert pool["S-2"] == 'And then he smiled.'
 
+    def test_contextual_pos_precision(self):
+        """determine_contextual_pos uses dependency parse for single words and WordNet for compounds."""
+        # 'firm' modifying 'end' is an adjective
+        pos_firm = LinguisticEngine.determine_contextual_pos(
+            "firm", "Because appointments usually have a firm end as well as start time."
+        )
+        assert pos_firm == "adjective"
 
+        # 'log' governing 'it' as complement is a verb
+        pos_log = LinguisticEngine.determine_contextual_pos(
+            "log", "I had forgotten to log it into my agenda."
+        )
+        assert pos_log == "verb"
 
+        # 're-schedule' followed by noun is a verb
+        pos_resched = LinguisticEngine.determine_contextual_pos(
+            "re-schedule", "They would have left me a message asking to re-schedule the meeting."
+        )
+        assert pos_resched == "verb"
+
+        # 'well-kept' modifying 'schedules' is an adjective
+        pos_wellkept = LinguisticEngine.determine_contextual_pos(
+            "well-kept", "The punctual society operates on the basis of well-kept schedules."
+        )
+        assert pos_wellkept == "adjective"
+
+    def test_hyphenated_compound_lemmatization(self):
+        """lemmatize_headword preserves hyphenated compounds and does not truncate to prefix."""
+        assert LinguisticEngine.lemmatize_headword("re-schedule") == "re-schedule"
+        assert LinguisticEngine.lemmatize_headword("re-schedules") == "re-schedule"
+        assert LinguisticEngine.lemmatize_headword("well-kept") == "well-kept"
+        assert LinguisticEngine.lemmatize_headword("in-person") == "in-person"

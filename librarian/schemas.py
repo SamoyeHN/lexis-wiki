@@ -372,7 +372,6 @@ class VocabularyItem:
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
-    part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
@@ -386,7 +385,6 @@ class ExpressionItem:
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     quoted_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
-    part_of_speech: EXPRESSION_TYPES = dataclasses.field(default="phrasal verb")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
@@ -408,7 +406,6 @@ class GrammarItem:
     pattern_formula: str = dataclasses.field(default="", metadata={"minLength": 1})
     pedagogical_function: str = dataclasses.field(default="", metadata={"minLength": 1})
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
-    category: GRAMMAR_CATEGORIES = "Information Packaging"
     imitation_example: str = dataclasses.field(default="", metadata={"minLength": 1})
     common_mistakes: str = dataclasses.field(default="", metadata={"minLength": 1})
 

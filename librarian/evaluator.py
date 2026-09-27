@@ -280,6 +280,8 @@ def _normalize_text(value: Any) -> str:
     text = re.sub(r"(\.{2,}|…)", " ", text)
     # Remove quotes and apostrophes directly to keep words intact
     text = re.sub(r"[“”‘’\"'«»]+", "", text)
+    # Strip injected sentence markers like [S-12] or S-12 to prevent verbatim mismatch
+    text = re.sub(r"\[?\bS-\d+\b\]?[:\-]?", " ", text, flags=re.IGNORECASE)
     # Remove structural brackets/parentheses with whitespace separation
     text = re.sub(r"[\[\]\(\)\{\}\<\>]+", " ", text)
     # Collapse whitespace
@@ -361,7 +363,7 @@ def _extract_source_content(user_prompt: str) -> str:
     if content:
         # Strictly strip any trailing draft blocks or retry critique blocks
         content = re.split(
-            r"\n\s*###+\s*(?:🚨|\[QUALITY AUDIT REVIEW|VOCABULARY DRAFT|GRAMMAR PATTERNS DRAFT|QUIZ DRAFT|DRAFT)",
+            r"\n\s*###+\s*(?:DETERMINISTIC\s+TARGET|🚨|\[QUALITY AUDIT REVIEW|VOCABULARY DRAFT|GRAMMAR PATTERNS DRAFT|QUIZ DRAFT|DRAFT)",
             content,
             flags=re.IGNORECASE
         )[0].strip()
@@ -538,7 +540,7 @@ def _extract_json(text: Any) -> Any:
     return None
 
 
-def _score_schema(parsed: Any, raw_response: str = "") -> Tuple[Optional[float], List[str]]:
+def _score_schema(parsed: Any, raw_response: str = "", task_type: str = "") -> Tuple[Optional[float], List[str]]:
     """Dimension 1 (0–25). Always applicable."""
     if isinstance(parsed, dict):
         if len(parsed) == 0:
@@ -553,6 +555,31 @@ def _score_schema(parsed: Any, raw_response: str = "") -> Tuple[Optional[float],
                 deduction += 5.0
                 flags.append("⚠️ Structural repair: unclosed braces/brackets in raw output")
         
+        # Array element schema & type enforcement
+        ARRAY_SPECS = {
+            "mindmap": ("branches", 3, 5, "branch_name"),
+            "vocabulary": ("vocabulary", 1, 50, "word"),
+            "expressions": ("expressions", 1, 50, "word"),
+            "grammar": ("grammar_patterns", 1, 20, "pattern_formula"),
+            "summary": ("concepts", 1, 10, "concept_name"),
+            "quiz": ("questions", 1, 50, "question"),
+        }
+        if task_type in ARRAY_SPECS:
+            arr_key, min_items, max_items, required_field = ARRAY_SPECS[task_type]
+            arr_val = parsed.get(arr_key)
+            if not isinstance(arr_val, list):
+                deduction += 15.0
+                flags.append(f"❌ [INVALID_SCHEMA] Expected list for '{arr_key}', got {type(arr_val).__name__}")
+            else:
+                non_dict_count = sum(1 for el in arr_val if not isinstance(el, dict))
+                if non_dict_count > 0:
+                    deduction += 15.0
+                    flags.append(f"❌ [INVALID_ITEM_TYPE] {non_dict_count}/{len(arr_val)} elements in '{arr_key}' are not objects (e.g. unparsed JSON strings)")
+                valid_dict_count = len(arr_val) - non_dict_count
+                if valid_dict_count < min_items:
+                    deduction += 10.0
+                    flags.append(f"❌ [INSUFFICIENT_ITEMS] '{arr_key}' contains only {valid_dict_count} valid objects (minimum required: {min_items})")
+
         score = max(0.0, W_SCHEMA - deduction)
         return score, flags
     return 0.0, ["❌ Invalid or missing JSON output"]
@@ -722,9 +749,13 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
         if task_type == "vocabulary":
             word = _safe_str(item.get("word"))
             pos = _safe_str(item.get("part_of_speech")).lower()
+            quote = _safe_str(item.get("quoted_sentence"))
+            if not pos and word:
+                from .linguistics import LinguisticEngine
+                pos = LinguisticEngine.determine_contextual_pos(word, quote)
+                item["part_of_speech"] = pos
             definition = _safe_str(item.get("definition"))
             example = _safe_str(item.get("example_usage"))
-            quote = _safe_str(item.get("quoted_sentence"))
             checks += 1
             
             # Allow words/phrases with slots, hyphens, brackets, parentheses, apostrophes
@@ -775,6 +806,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             audit = _safe_str(item.get("design_audit"))
             quote = _safe_str(item.get("quote"))
             category = _safe_str(item.get("category"))
+            if not category and quote:
+                from .linguistics import LinguisticEngine
+                category = LinguisticEngine.classify_grammar_dependency(quote) or "Information Packaging"
+                item["category"] = category
             checks += 1
             
             reasons = []
@@ -1220,6 +1255,29 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
         earned = 0.0 if ratio < 0.8 else round(ratio * W_UNIQUENESS, 1)
         unique_flags.append(f"❌ Found {dup} duplicate item(s)")
 
+    # For vocabulary: audit morphological word family collisions (e.g. 'recognize' vs 'recognition')
+    if task_type == "vocabulary" and headwords:
+        family_clusters: List[List[str]] = []
+        for hw in headwords:
+            clean_hw = re.sub(r'\[.*?\]|\(.*?\)', '', str(hw)).strip().lower()
+            if not clean_hw:
+                continue
+            placed = False
+            for fc in family_clusters:
+                if any(LinguisticEngine.are_same_word_family(clean_hw, fchw) for fchw in fc):
+                    fc.append(clean_hw)
+                    placed = True
+                    break
+            if not placed:
+                family_clusters.append([clean_hw])
+        
+        mult_clusters = [fc for fc in family_clusters if len(fc) > 1]
+        if mult_clusters:
+            coll_details = ", ".join(f"[{'/'.join(c)}]" for c in mult_clusters[:3])
+            unique_flags.append(f"❌ Morphological word-family collisions detected: {coll_details}")
+            # Penalize uniqueness dimension
+            earned = max(0.0, earned - len(mult_clusters) * 3.0)
+
     # For quizzes: penalize identical distractors recycled repeatedly across different questions
     if task_type == "quiz":
         all_distractors = []
@@ -1303,7 +1361,6 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             else:
                 # Strip internal [S-id] prefix if quote was verbatim with S-id attached
                 cleaned_q = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", raw_q, flags=re.IGNORECASE).strip()
-                cleaned_q = cleaned_q.strip("\"'“”‘’").strip()
                 item[quote_field] = cleaned_q
 
         # In-Place Quote Repair: the quoted sentence MUST contain the headword.
@@ -1363,6 +1420,9 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 seen_dedup_keys.add(sent_dedup_key)
 
             # 2. Dependency Syntax Signature Dedup (Macro domain + Dep type + Core anchor)
+            if not item.get("category"):
+                classified_cat = LinguisticEngine.classify_grammar_dependency(raw_quote)
+                item["category"] = classified_cat or "Information Packaging"
             cat_val = str(item.get("category", "")).strip()
             fp = LinguisticEngine.extract_grammar_fingerprint(raw_quote, category=cat_val)
             if fp[1] != "generic" and fp[2]:
@@ -1377,7 +1437,21 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
             dedup_key = (formula_val, quote_val)
         else:
             word_val = str(item.get("word", "")).strip().lower()
-            dedup_key = (word_val,)
+            clean_word_val = re.sub(r'\[.*?\]|\(.*?\)', '', word_val).strip()
+            dedup_key = (clean_word_val,)
+            
+            # Word-Family Deduplication Gate: reject items belonging to an already seen word family
+            if task_type == "vocabulary" and clean_word_val:
+                is_family_dup = False
+                for seen_k in seen_dedup_keys:
+                    if isinstance(seen_k, tuple) and seen_k and isinstance(seen_k[0], str):
+                        prev_w = seen_k[0]
+                        if prev_w and LinguisticEngine.are_same_word_family(clean_word_val, prev_w):
+                            pruned_flags.append(f"✂️ Pruned duplicate word-family item '{clean_word_val}' (subsumed by '{prev_w}')")
+                            is_family_dup = True
+                            break
+                if is_family_dup:
+                    continue
             
         if any(dedup_key) and dedup_key in seen_dedup_keys:
             pruned_flags.append(f"✂️ Pruned duplicate item: {dedup_key[0]}")
@@ -1394,18 +1468,21 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
         # Specialized pruning for grammar
         if task_type == "grammar":
             core_quote = _clean_core(quote)
-            category = str(item.get("category") or "").strip()
             imitation = str(item.get("imitation_example") or "").strip()
             mistakes = str(item.get("common_mistakes") or "").strip()
 
-            if not (core_quote and category and imitation and mistakes):
+            if not (core_quote and imitation and mistakes):
                 missing_fields = []
                 if not core_quote: missing_fields.append("quote")
-                if not category: missing_fields.append("category")
                 if not imitation: missing_fields.append("imitation_example")
                 if not mistakes: missing_fields.append("common_mistakes")
                 pruned_flags.append(f"✂️ Pruned incomplete grammar pattern '{word[:30]}' (missing required: {', '.join(missing_fields)})")
                 continue
+
+            # Auto-hydrate category if missing from simplified schema
+            if not item.get("category"):
+                classified_cat = LinguisticEngine.classify_grammar_dependency(quote)
+                item["category"] = classified_cat or "Information Packaging"
 
             # Quote must exist in source text (verbatim or high n-gram coverage)
             quote_in_src = (core_quote in core_src or _ngram_coverage(core_quote, core_src, n=3) >= 0.80)
@@ -1614,7 +1691,7 @@ class LogEvaluator:
         items = _extract_items(parsed, task_type)
 
         flags: List[str] = []
-        schema_score, f1 = _score_schema(parsed, raw_response)
+        schema_score, f1 = _score_schema(parsed, raw_response, task_type=task_type)
         verbatim_score, f2 = _score_verbatim(items, task_type, user_prompt, context_prompt=context_prompt)
         effective_prompt = user_prompt if user_prompt.strip() else context_prompt
         pedagogy_score, f3 = _score_pedagogy(items, task_type, user_prompt=effective_prompt)

@@ -23,15 +23,6 @@
             "type": "string",
             "minLength": 1
           },
-          "part_of_speech": {
-            "type": "string",
-            "enum": [
-              "phrasal verb",
-              "idiom",
-              "collocation",
-              "set phrase"
-            ]
-          },
           "definition": {
             "type": "string",
             "minLength": 1
@@ -45,7 +36,6 @@
           "design_audit",
           "quoted_sentence",
           "word",
-          "part_of_speech",
           "definition",
           "example_usage"
         ],

@@ -312,6 +312,49 @@ class LinguisticEngine:
         return cls._wn
 
     @classmethod
+    def get_word_family(cls, word: str) -> Set[str]:
+        """Returns the set of lemmas morphologically and derivationally linked to this word in WordNet."""
+        clean_w = word.lower().strip()
+        if not clean_w:
+            return set()
+        family = {clean_w}
+        try:
+            wn = cls.get_wordnet()
+            for s in wn.synsets(clean_w):
+                for sense in s.senses():
+                    if sense.word().lemma().lower() == clean_w:
+                        for rel in sense.get_related('derivation'):
+                            rel_w = rel.word().lemma().lower()
+                            if rel_w.isalpha() and '_' not in rel_w and ' ' not in rel_w:
+                                family.add(rel_w)
+        except Exception:
+            pass
+        return family
+
+    @classmethod
+    def are_same_word_family(cls, w1: str, w2: str) -> bool:
+        """Determines whether two words belong to the exact same morphological word family."""
+        clean_w1 = w1.lower().strip()
+        clean_w2 = w2.lower().strip()
+        if clean_w1 == clean_w2:
+            return True
+        if not clean_w1 or not clean_w2:
+            return False
+
+        fam1 = cls.get_word_family(clean_w1)
+        if clean_w2 in fam1:
+            return True
+        fam2 = cls.get_word_family(clean_w2)
+        if clean_w1 in fam2 or bool(fam1 & fam2):
+            return True
+
+        # Morphological stem prefix fallback: if both words length >= 6 and share prefix >= 5
+        min_w, max_w = (clean_w1, clean_w2) if len(clean_w1) <= len(clean_w2) else (clean_w2, clean_w1)
+        if len(min_w) >= 5 and max_w.startswith(min_w):
+            return True
+        return False
+
+    @classmethod
     def get_oxford_raw(cls) -> Dict[str, Any]:
         """Lazy-loads the raw hierarchical Oxford Collocations Dictionary 2nd Edition."""
         if cls._ocd_data is None:
@@ -1717,8 +1760,15 @@ class LinguisticEngine:
         indexed_paragraphs: List[str] = []
         counter = 1
 
+        # Normalize single-newline bullet/numbered lists so list items become independent paragraphs
+        body_norm = re.sub(
+            r'\n(?=[\s\u2022\u00b7\u25aa\u25ab\*\-]+|(?:\(?\d+[\.\)]\s+)|(?:\(?[a-zA-Z][\.\)]\s+))',
+            r'\n\n',
+            body
+        )
+
         # Process paragraph-by-paragraph to preserve natural paragraph boundaries while streaming sentences within paragraphs
-        raw_paragraphs = re.split(r'\n{2,}', body.strip())
+        raw_paragraphs = re.split(r'\n{2,}', body_norm.strip())
         for para in raw_paragraphs:
             para = para.strip()
             if not para:
@@ -1740,16 +1790,49 @@ class LinguisticEngine:
                     content_lines.append(l)
 
             prefix_str = "\n\n".join(prefix_lines) + "\n\n" if prefix_lines else ""
-            para_text = " ".join(content_lines).strip()
-            if not para_text:
+            para_raw_text = " ".join(content_lines).strip()
+            if not para_raw_text:
                 if prefix_lines:
                     indexed_paragraphs.append("\n\n".join(prefix_lines))
                 continue
 
-            para_doc = nlp(para_text)
+            # Strip leading bullet/numbered list marker (e.g. '•', '-', '*', '1.', '(1)', 'a.')
+            bullet_match = re.match(
+                r"^([\s\u2022\u00b7\u25aa\u25ab\*\-]+|(?:\(?\d+[\.\)]\s*)|(?:\(?[a-zA-Z][\.\)]\s+))(.*)",
+                para_raw_text
+            )
+            list_marker = bullet_match.group(1).strip() if bullet_match else ""
+            para_text = bullet_match.group(2).strip() if bullet_match else para_raw_text
+
+            # Protect terminal punctuation inside dialogue quotation marks so sentences like
+            # 'Their attitude was “Ah! You’re here! We can start now!”' stay unified as one full authentic sentence
+            def _mask_quoted_punct(m: re.Match) -> str:
+                quote_open = m.group(1)
+                quote_body = m.group(2)
+                quote_close = m.group(3)
+                masked_body = (
+                    quote_body.replace(".", "§DOT§")
+                              .replace("!", "§EXCL§")
+                              .replace("?", "§QUES§")
+                )
+                return f"{quote_open}{masked_body}{quote_close}"
+
+            # Match curly and straight quotes
+            masked_para_text = re.sub(
+                r'([“"«])([^”"»]+?)([”"»])',
+                _mask_quoted_punct,
+                para_text
+            )
+
+            para_doc = nlp(masked_para_text)
             para_sent_parts = []
             for sent in para_doc.sents:
-                sent_str = sent.text.strip()
+                sent_str = (
+                    sent.text.replace("§DOT§", ".")
+                             .replace("§EXCL§", "!")
+                             .replace("§QUES§", "?")
+                             .strip()
+                )
                 if not sent_str:
                     continue
                 words = [t for t in nlp(sent_str) if t.is_alpha]
@@ -1762,7 +1845,8 @@ class LinguisticEngine:
                 para_sent_parts.append(f"[{sid}] {sent_str}")
                 counter += 1
 
-            indexed_para = prefix_str + " ".join(para_sent_parts)
+            marker_str = f"{list_marker} " if list_marker else ""
+            indexed_para = prefix_str + marker_str + " ".join(para_sent_parts)
             indexed_paragraphs.append(indexed_para.strip())
 
         if frontmatter:
@@ -1867,6 +1951,90 @@ class LinguisticEngine:
                 return best_sid
 
         return None
+
+    @classmethod
+    def determine_contextual_pos(cls, word: str, quoted_sentence: str) -> str:
+        """
+        Deterministically infers the contextual part of speech (noun, verb, adjective, adverb,
+        preposition, conjunction, interjection) using spaCy dependency parsing and POS tagging.
+        Runs entirely offline at zero token cost (<1ms).
+        """
+        VALID_POS_MAP = {
+            "NOUN": "noun", "PROPN": "noun",
+            "VERB": "verb",
+            "ADJ": "adjective",
+            "ADV": "adverb",
+            "ADP": "preposition",
+            "CCONJ": "conjunction", "SCONJ": "conjunction",
+            "INTJ": "interjection",
+        }
+        sent_text = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", quoted_sentence or "").strip()
+        if not sent_text or not word:
+            return "noun"
+
+        nlp = cls.get_spacy()
+        doc = nlp(sent_text)
+        clean_w = re.sub(r"\[.*?\]|\(.*?\)", "", word).strip().lower()
+        w_toks = clean_w.split()
+        target_tok = w_toks[0] if w_toks else clean_w
+
+        # 0. High-priority compound WordNet lookup: ONLY for genuine multi-word or hyphenated compounds
+        # (Do NOT run on single words like 'firm' or 'log', where WordNet default sense overrides contextual dependency)
+        wn = cls.get_wordnet()
+        if wn and ("-" in clean_w or " " in clean_w):
+            compound_cands = [clean_w, clean_w.replace(" ", "-"), clean_w.replace("-", " "), clean_w.replace("-", "_")]
+            for c_cand in compound_cands:
+                c_synsets = wn.synsets(c_cand)
+                if c_synsets:
+                    c_pos = c_synsets[0].pos
+                    wn_map = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
+                    if c_pos in wn_map:
+                        return wn_map[c_pos]
+
+        # 1. Exact match on token text or lemma
+        for tok in doc:
+            if tok.text.lower() == target_tok or tok.lemma_.lower() == target_tok:
+                # If modifying a noun as an adjectival modifier (amod, compound)
+                if tok.dep_ in ("amod", "advmod") and tok.head.pos_ in ("NOUN", "PROPN"):
+                    return "adjective"
+                return VALID_POS_MAP.get(tok.pos_, "noun")
+
+        # 2. Hyphen-insensitive phrase span match (e.g. 'reschedule' in sentence with 're-schedule')
+        target_no_hyphen = target_tok.replace("-", "")
+        # Check regex span in sentence allowing hyphens/spaces
+        hyphen_pat = r"\b" + r"[\s\-]*".join(re.escape(c) for c in target_no_hyphen) + r"\b"
+        m_span = re.search(hyphen_pat, sent_text, re.IGNORECASE)
+        if m_span:
+            char_span = doc.char_span(m_span.start(), m_span.end(), alignment_mode="expand")
+            if char_span:
+                # Check if the span functions as an adjectival modifier for following noun
+                if char_span.root.head.pos_ in ("NOUN", "PROPN") and char_span.root.dep_ in ("amod", "nmod", "compound"):
+                    return "adjective"
+                span_root_pos = char_span.root.pos_
+                if span_root_pos in VALID_POS_MAP:
+                    return VALID_POS_MAP[span_root_pos]
+                for st in char_span:
+                    if st.pos_ in VALID_POS_MAP:
+                        return VALID_POS_MAP[st.pos_]
+
+        # 3. Substring match on tokens
+        for tok in doc:
+            if target_tok in tok.text.lower() or target_tok in tok.lemma_.lower():
+                if tok.dep_ in ("amod", "advmod") and tok.head.pos_ in ("NOUN", "PROPN"):
+                    return "adjective"
+                return VALID_POS_MAP.get(tok.pos_, "noun")
+
+        # 4. WordNet dictionary fallback for word/headword POS
+        wn = cls.get_wordnet()
+        if wn:
+            synsets = wn.synsets(target_tok) or (wn.synsets(target_no_hyphen) if target_no_hyphen != target_tok else [])
+            if synsets:
+                wn_pos = synsets[0].pos
+                wn_map = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
+                if wn_pos in wn_map:
+                    return wn_map[wn_pos]
+
+        return "noun"
 
     @classmethod
     def extract_grammar_fingerprint(cls, sentence: str, category: Optional[str] = None) -> Tuple[str, str, str]:
@@ -2027,7 +2195,16 @@ class LinguisticEngine:
         nlp = cls.get_spacy()
         target = word_or_phrase.strip()
 
-        # If a single word
+        # If a single word or hyphenated compound
+        if "-" in target:
+            # Hyphenated compound: do not take doc[0] which chops to prefix!
+            wn = cls.get_wordnet()
+            if wn and (wn.synsets(target) or wn.synsets(target.replace("-", "")) or wn.synsets(target.replace("-", "_"))):
+                return target.lower()
+            parts = target.split("-")
+            last_lemma = cls.lemmatize_headword(parts[-1], context_sentence)
+            return "-".join(parts[:-1] + [last_lemma])
+
         if " " not in target:
             doc = nlp(target)
             if len(doc) > 0 and doc[0].pos_ in ("VERB", "NOUN", "ADJ"):
@@ -2136,10 +2313,14 @@ class LinguisticEngine:
 
         # ---------------------------------------------------------------------
         # 2. Logic & Stance:
-        #    Conditionals (if/unless) or Concessives (although/even though/while/whereas)
+        #    Conditionals (if/unless/as long as/provided that) or Concessives (although/even though/while/whereas/in spite of)
         #    Adversative transitions (however/nevertheless/nonetheless)
         #    Dual-stance coordinate contrast (..., but [S] also...)
         # ---------------------------------------------------------------------
+        # Multi-word subordinating connectives
+        if re.search(r"\b(as long as|so long as|provided that|providing that|in case|on condition that)\b", text_lower):
+            return "Logic & Stance"
+
         subordinating_conjs = {"although", "though", "while", "whereas", "even though", "if", "unless", "provided", "providing"}
         for token in doc:
             if token.dep_ == "mark" and token.lemma_.lower() in subordinating_conjs:
@@ -2182,9 +2363,38 @@ class LinguisticEngine:
         #    a. Evaluative Dummy-It: It is + [adj/noun] + that/to [csubj/ccomp]
         #    b. Dense Object Complement: make/find/render/keep + Object + Adj
         #    c. Non-finite participial adjuncts: advcl with VerbForm=Part
-        #    d. Relative clauses: which/who/whom/whose + VP
-        #    e. Elaborative non-restrictive relative clause: , which + VP
+        #    d. Non-finite subject nominalization (Gerund / Infinitive phrase as Subject)
+        #    e. Correlative comparative: The more..., the more...
+        #    f. Dense Prepositional Frame: Instead of / By / Thanks to + [V-ing/NP]
+        #    g. Relative clauses: which/who/whom/whose + VP
+        #    h. Elaborative non-restrictive relative clause: , which + VP
         # ---------------------------------------------------------------------
+        # Correlative comparative: The more..., the more...
+        COMPARATIVE_WORDS = r"(?:more|less|fewer|better|worse|[a-z]{2,}er)"
+        if re.search(rf"\bthe\s+{COMPARATIVE_WORDS}\b(?!\s+hand\b).*?(?:,\s*|\band\s+the\s+{COMPARATIVE_WORDS}\b.*?,?\s*)\bthe\s+{COMPARATIVE_WORDS}\b", text_lower):
+            return "Information Packaging"
+
+        # Dense Prepositional Frame (Instead of, By doing, Due to, Thanks to + V-ing/NP, [Subject] + [VP])
+        if re.match(r"^(instead of|by|through|despite|in spite of|thanks to|due to|owing to)\s+[a-z0-9\s-]+?,", text_lower):
+            return "Information Packaging"
+
+        # Non-finite subject nominalization (Gerund or Infinitive as subject)
+        # Handles direct sentence subject or embedded clause subject (e.g. That is why [being on wheels] means...)
+        for token in doc:
+            if token.tag_ == "VBG" and token.dep_ in ("nsubj", "nsubjpass", "csubj"):
+                return "Information Packaging"
+            if token.tag_ == "VB" and token.dep_ == "csubj":
+                return "Information Packaging"
+            # Embedded gerund subject in why/that/wh-clauses where spaCy might label it advcl or pobj
+            if token.tag_ == "VBG" and token.dep_ in ("advcl", "csubj") and token.head.pos_ in ("VERB", "AUX"):
+                # Check if this VBG introduces a gerund clause following 'why' or copula
+                has_wh = any(c.dep_ == "advmod" and c.lemma_.lower() in ("why", "how", "what", "where") for c in token.children)
+                if has_wh:
+                    return "Information Packaging"
+                head_subjs = [c for c in token.head.children if c.dep_ in ("nsubj", "nsubjpass")]
+                if not head_subjs and token.i < token.head.i:
+                    return "Information Packaging"
+
         # Evaluative Dummy-It (spaCy tags 'It' as nsubj/expl and the complement clause as ccomp/csubj)
         for token in doc:
             if token.text.lower() == "it" and token.dep_ in ("expl", "nsubj"):
@@ -2268,6 +2478,11 @@ class LinguisticEngine:
 
         # 2. Logic & Stance
         if cat == "Logic & Stance" or not cat:
+            # Multi-word conditional connectives
+            m_conn = re.search(r"\b(as long as|so long as|provided that|providing that|in case|on condition that)\b", text_lower)
+            if m_conn:
+                conn_name = m_conn.group(1).capitalize()
+                return f"{conn_name} + [Clause], [Subject] + [VP]"
             for token in doc:
                 if token.dep_ == "mark" and token.lemma_.lower() in {"although", "though", "while", "whereas", "even though", "if", "unless", "provided"}:
                     mark_word = token.text.capitalize()
@@ -2297,6 +2512,33 @@ class LinguisticEngine:
             COMPARATIVE_WORDS = r"(?:more|less|fewer|better|worse|[a-z]{2,}er)"
             if re.search(rf"\bthe\s+{COMPARATIVE_WORDS}\b(?!\s+hand\b).*?(?:,\s*|\band\s+the\s+{COMPARATIVE_WORDS}\b.*?,?\s*)\bthe\s+{COMPARATIVE_WORDS}\b", text_lower):
                 return "The + [comparative] + [Clause], the + [comparative] + [Clause]"
+            # Dense Prepositional Frame (Instead of, By doing, Thanks to...)
+            m_prep = re.match(r"^(instead of|by|through|despite|in spite of|thanks to|due to|owing to)\b", text_lower)
+            if m_prep:
+                prep_head = m_prep.group(1).capitalize()
+                return f"{prep_head} + [V-ing/NP], [Subject] + [VP]"
+            # Non-finite Subject Nominalization (Gerund / Infinitive phrase as Subject)
+            # Detects direct sentence subject or embedded predicate clause subject (e.g. That is why [being on wheels] means...)
+            for token in doc:
+                is_gerund_subj = (token.tag_ == "VBG" and token.dep_ in ("nsubj", "nsubjpass", "csubj"))
+                is_infinitive_subj = (token.tag_ == "VB" and token.dep_ == "csubj")
+                is_embedded_gerund = (
+                    token.tag_ == "VBG" and token.dep_ in ("advcl", "csubj")
+                    and (
+                        any(c.dep_ == "advmod" and c.lemma_.lower() in ("why", "how", "what", "where") for c in token.children)
+                        or (
+                            token.head.pos_ in ("VERB", "AUX")
+                            and not any(c.dep_ in ("nsubj", "nsubjpass") for c in token.head.children)
+                            and token.i < token.head.i
+                        )
+                    )
+                )
+                if is_gerund_subj or is_embedded_gerund:
+                    if re.search(r"\b(that|this)\s+(?:is|’s|'s)\s+why\b", text_lower):
+                        return "[Subject] + is why + [V-ing / Gerund Phrase] + [VP]"
+                    return "[V-ing / Gerund Phrase] + [Predicate Verb] + [Complement/Object]"
+                if is_infinitive_subj:
+                    return "To + [Infinitive Phrase] + [Predicate Verb] + [Complement/Object]"
             # Dummy-It Object Extraposition (find/make/think it adj to-V)
             for t in doc:
                 if t.lemma_ in ("find", "make", "think", "consider", "deem", "believe") and t.pos_ in ("VERB", "AUX"):
@@ -2315,16 +2557,19 @@ class LinguisticEngine:
                     if t.text.lower() == "it" and t.head.lemma_ in ("be", "seem"):
                         if any(c.dep_ in ("acomp", "attr") for c in t.head.children) and any(c.dep_ in ("ccomp", "csubj", "xcomp") for c in t.head.children):
                             return "It + [be] + [Adj/NP] + to-V/that + [Clause]"
-            # Participial adjunct
+            # Participial adjunct (strictly requiring non-subject participle and actual main subject)
             for token in doc:
                 if token.dep_ == "advcl" and token.tag_ in ("VBG", "VBN"):
                     if not any(c.dep_ in ("nsubj", "nsubjpass") for c in token.children) and token.lemma_.lower() not in ("include", "accord", "regard"):
-                        is_fronted = token.i < token.head.i
-                        v_type = "V-ing" if token.tag_ == "VBG" else "V-ed"
-                        if is_fronted:
-                            return f"[{v_type} Phrase], [Subject] + [VP]"
-                        else:
-                            return f"[Subject] + [VP], [{v_type} Phrase]"
+                        # Ensure main verb actually has a subject, otherwise it might be a gerund subject misclassified as advcl
+                        main_has_subj = any(c.dep_ in ("nsubj", "nsubjpass") for c in token.head.children)
+                        if main_has_subj:
+                            is_fronted = token.i < token.head.i
+                            v_type = "V-ing" if token.tag_ == "VBG" else "V-ed"
+                            if is_fronted:
+                                return f"[{v_type} Phrase], [Subject] + [VP]"
+                            else:
+                                return f"[Subject] + [VP], [{v_type} Phrase]"
             # Relative clauses (which, that, who, whom, whose)
             for token in doc:
                 if token.dep_ == "relcl":
@@ -2797,9 +3042,26 @@ class LinguisticEngine:
                 e_lower = expr_clean.lower()
                 cand_item = None
 
-                # 1. Specialized High-Frequency Idioms (e.g. keep in touch with)
-                if "touch" in e_lower and any(v in e_lower for v in ("keep", "stay", "get", "lose", "be")):
-                    formula = f"{e_lower} [sb]" if "with" in e_lower else f"{e_lower}"
+                # 1. Specialized High-Frequency Idioms (figurative, non-compositional units)
+                KNOWN_IDIOMS = {
+                    "lone ranger", "hats off", "hat off", "pat on the back", 
+                    "spill the beans", "break the ice", "piece of cake", 
+                    "bite the bullet", "call it a day", "under the weather"
+                }
+                # 2. Specialized Closed-Paradigm Set Phrases (discourse connectors, fixed correlatives/framing units)
+                KNOWN_SET_PHRASES = {
+                    "as long as", "as well as", "as soon as", "so far as",
+                    "in order to", "so as to", "in spite of", "due to", "owing to",
+                    "on the other hand", "on the contrary", "in addition to",
+                    "as a result", "for instance", "for example", "at least",
+                    "at most", "at last", "upside down", "side by side",
+                    "peace of mind", "pros and cons"
+                }
+
+                if any(idiom in e_lower for idiom in KNOWN_IDIOMS):
+                    formula = expr_clean
+                    if "lone ranger" in e_lower:
+                        formula = "lone ranger"
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
@@ -2808,14 +3070,24 @@ class LinguisticEngine:
                         "pattern_formula": formula,
                         "score": 100,
                     }
-                elif "peace of mind" in e_lower or "pros and cons" in e_lower:
+                elif any(sp in e_lower for sp in KNOWN_SET_PHRASES):
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
                         "phrase": expr_clean,
                         "type": "set phrase",
                         "pattern_formula": expr_clean,
-                        "score": 70,
+                        "score": 75,
+                    }
+                elif "touch" in e_lower and any(v in e_lower for v in ("keep", "stay", "get", "lose", "be")):
+                    formula = f"{e_lower} [sb]" if "with" in e_lower else f"{e_lower}"
+                    cand_item = {
+                        "sid": matched_sid,
+                        "quote": matched_sent,
+                        "phrase": expr_clean,
+                        "type": "idiom",
+                        "pattern_formula": formula,
+                        "score": 100,
                     }
                 elif "make" in words and "possible" in words:
                     cand_item = {
@@ -2842,7 +3114,27 @@ class LinguisticEngine:
                             expr_tokens = list(sp_span)
 
                     if not expr_tokens:
-                        expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
+                        # Find best ordered token sequence matching words by text or lemma
+                        words_lower = [w.lower() for w in words]
+                        best_tokens = None
+                        min_dist = 9999
+                        for start_t in doc:
+                            if start_t.lemma_.lower() == words_lower[0] or start_t.text.lower() == words_lower[0]:
+                                curr = [start_t]
+                                for w in words_lower[1:]:
+                                    cands = [t for t in doc if t.i > curr[-1].i and (t.lemma_.lower() == w or t.text.lower() == w)]
+                                    if not cands:
+                                        break
+                                    curr.append(cands[0])
+                                if len(curr) == len(words_lower):
+                                    dist = curr[-1].i - curr[0].i
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        best_tokens = curr
+                        if best_tokens:
+                            expr_tokens = best_tokens
+                        else:
+                            expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
 
                     first_tok = expr_tokens[0] if expr_tokens else None
 
@@ -2864,11 +3156,37 @@ class LinguisticEngine:
                             cand_type = "collocation"
                         elif last_tok.pos_ in ("ADP", "PART") or last_tok.dep_ in ("prep", "prt"):
                             prep_word = last_tok.text.lower()
+                            # Dynamic Transitivity Audit via Sentence Dependency Tree & Valence
+                            # Check whether the verb or particle takes an authentic object in the context sentence
+                            verb_tok = expr_tokens[0] if expr_tokens else None
+                            has_contextual_obj = False
+                            if verb_tok is not None:
+                                # 1. Verb direct object (dobj / obj)
+                                verb_objs = [c for c in verb_tok.children if c.dep_ in ("dobj", "obj")]
+                                # 2. Particle / prepositional object (pobj)
+                                prep_objs = [c for c in last_tok.children if c.dep_ == "pobj"]
+                                # 3. Passive voice extraction (e.g. 'the lights were turned off')
+                                is_passive = any(c.dep_ in ("auxpass", "nsubjpass") for c in verb_tok.children)
+                                if verb_objs or prep_objs or is_passive:
+                                    has_contextual_obj = True
+
+                            # If the particle is an adverbial particle (prt) with no object in context (e.g. 'show up'),
+                            # it is an authentic intransitive phrasal verb: generate clean formula without [sth/sb]
+                            is_intransitive = (not has_contextual_obj and last_tok.dep_ == "prt")
+
                             if len(words) == 2:
-                                formula = f"{v_lemma} {prep_word} [sth/sb]"
+                                if is_intransitive:
+                                    formula = f"{v_lemma} {prep_word}"
+                                else:
+                                    formula = f"{v_lemma} {prep_word} [sth/sb]"
                             else:
                                 core = " ".join(t.lemma_ if t.pos_ == "VERB" else t.text.lower() for t in expr_tokens)
-                                formula = f"{core} [sth/sb]"
+                                if "importance to" in core:
+                                    formula = f"{core} [sth]"
+                                elif is_intransitive:
+                                    formula = core
+                                else:
+                                    formula = f"{core} [sth/sb]"
                             cand_type = "phrasal verb"
                         else:
                             # Verb + object / adj (e.g. make smart choices, keep silent, have a try)
@@ -2905,7 +3223,13 @@ class LinguisticEngine:
                         if expr_clean.endswith(" of") or expr_clean.endswith(" for") or expr_clean.endswith(" with"):
                             formula = f"{expr_clean} [sth]"
                         elif expr_clean.endswith(" to"):
-                            formula = f"{expr_clean} [sb]"
+                            # If expression relates to importance, attention, or priority, default to [sth]
+                            if any(k in expr_clean.lower() for k in ("importance", "attention", "priority", "regard")):
+                                formula = f"{expr_clean} [sth]"
+                            elif any(expr_clean.lower().startswith(w) for w in ("show thanks", "give thanks", "hats off", "hat off", "pay tribute")):
+                                formula = f"{expr_clean} [sb]"
+                            else:
+                                formula = f"{expr_clean} [sth/sb]"
                         elif expr_clean.lower() in ("hat off", "hats off"):
                             formula = "hats off to [sb]"
 
@@ -3175,23 +3499,66 @@ class LinguisticEngine:
 
         selected: List[Dict[str, Any]] = []
         selected_words: Set[str] = set()
-        selected_quotes: Set[str] = set()
+        selected_sids: Set[str] = set()
 
-        # Pass 1: select diverse items across different sentences
+        def _get_sid_index(sid_str: str) -> int:
+            m = re.search(r'\d+', sid_str)
+            return int(m.group(0)) if m else -999
+
+        # Pass 1: Select diverse items across different sentences with word-family and sentence stride gating
         for item in candidates:
-            if item["word"] not in selected_words and item["quote"] not in selected_quotes:
-                selected.append(item)
-                selected_words.add(item["word"])
-                selected_quotes.add(item["quote"])
+            w = item["word"]
+            sid = item["sid"]
+            sid_num = _get_sid_index(sid)
+
+            # 1. Morphological Word Family Gate: strictly reject items from an already selected word family
+            if any(cls.are_same_word_family(w, sw) for sw in selected_words):
+                continue
+
+            # 2. Hard Anti-Clustering Gate (Pass 1): prefer 1 target word per sentence
+            if sid in selected_sids:
+                continue
+
+            # 3. Soft Anti-Clustering Stride Gate: avoid immediately adjacent sentences (|sid - selected_sid| <= 1)
+            # if we have enough distinct sentences to reach target_count
+            distinct_available_sids = {c["sid"] for c in candidates if not any(cls.are_same_word_family(c["word"], sw) for sw in selected_words)}
+            has_adjacent_clash = any(
+                abs(sid_num - _get_sid_index(ssid)) <= 1
+                for ssid in selected_sids
+            )
+            if has_adjacent_clash and len(selected) + len(distinct_available_sids - selected_sids) >= target_count:
+                continue
+
+            selected.append(item)
+            selected_words.add(w)
+            selected_sids.add(sid)
             if len(selected) >= target_count:
                 break
 
-        # Pass 2: fill remaining slots allowing multiple words from same sentence if high value
+        # Pass 2: If target_count not reached, fill from remaining distinct sentences (still 1 per sentence)
         if len(selected) < target_count:
             for item in candidates:
-                if item["word"] not in selected_words:
-                    selected.append(item)
-                    selected_words.add(item["word"])
+                w = item["word"]
+                sid = item["sid"]
+                if w in selected_words or any(cls.are_same_word_family(w, sw) for sw in selected_words):
+                    continue
+                if sid in selected_sids:
+                    continue
+                selected.append(item)
+                selected_words.add(w)
+                selected_sids.add(sid)
+                if len(selected) >= target_count:
+                    break
+
+        # Pass 3: If target_count still not reached (short passages with few sentences), fill remaining slots
+        # while strictly maintaining the Morphological Word Family Gate
+        if len(selected) < target_count:
+            for item in candidates:
+                w = item["word"]
+                if w in selected_words or any(cls.are_same_word_family(w, sw) for sw in selected_words):
+                    continue
+                selected.append(item)
+                selected_words.add(w)
                 if len(selected) >= target_count:
                     break
 

@@ -27,15 +27,6 @@
             "type": "string",
             "minLength": 1
           },
-          "category": {
-            "type": "string",
-            "enum": [
-              "Rhetoric & Emphasis",
-              "Cohesion & Framing",
-              "Information Packaging",
-              "Logic & Stance"
-            ]
-          },
           "imitation_example": {
             "type": "string",
             "minLength": 1
@@ -50,7 +41,6 @@
           "pattern_formula",
           "pedagogical_function",
           "design_audit",
-          "category",
           "imitation_example",
           "common_mistakes"
         ],
