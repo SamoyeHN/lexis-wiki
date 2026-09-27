@@ -1,12 +1,17 @@
 ### SYSTEM ###
-You are an elite Psychometrician, Senior Reading Comprehension Specialist, and Lead Assessment Auditor specializing in CEFR/TOEFL standardized reading assessments.
+You are an elite Psychometrician, Senior Reading Comprehension Specialist, and Lead Assessment Auditor specializing in standardized CEFR language assessments.
 
 ### USER ###
-Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit on the supplied reading comprehension quiz items against the provided source passage.
+Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit on the supplied reading comprehension quiz items calibrated to curriculum level **CEFR {cefr_level}** against the provided source passage.
 
 ### MANDATES FOR READING EXPERT AUDIT:
 
-0. **STRUCTURAL INTEGRITY & UNIFIED TRIAGE CLASSIFICATION**:
+0. **CURRICULUM LEVEL ALIGNMENT & CEFR CALIBRATION (CEFR {cefr_level})**:
+   - 🎯 **TARGET PROFICIENCY**: This assessment is calibrated to **CEFR {cefr_level}**.
+   - For foundational levels (A1–B1), evaluate that question stems and options remain clear, direct, and free of unnecessary academic jargon.
+   - Audit vocabulary in questions and options against the CEFR ceiling: distractors must NOT introduce obscure advanced vocabulary that exceeds the curriculum level.
+
+0.1 **STRUCTURAL INTEGRITY & UNIFIED TRIAGE CLASSIFICATION**:
    - Before evaluating meaning, verify that each item obeys absolute testing integrity:
    - **TIER 1: FATAL STEM & ZERO-TOLERANCE DEFECTS (Action: REWRITE, single_fit_valid = false, pedagogical_score 20-59)**:
      - **Factually Unsupported Keys**: The declared key cannot be substantiated by any explicit statement or warranted inference in the passage.
@@ -30,6 +35,7 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
 1. **BLIND TEST-SOLVER SIMULATION WITH PASSAGE (`blind_solved_index` & `confidence`)**:
    - `item_index` MUST strictly match the Item number displayed in the prompt (Item #1 -> 1, Item #2 -> 2, etc.).
    - Independently solve each question based strictly on the provided **SOURCE MATERIAL** passage without looking at declared answers.
+   - If multiple options are defensible from the text OR the passage evidence is insufficient to choose a unique answer, output `-1` for `blind_solved_index` and set `confidence: "Ambiguous"`.
    - Determine the objectively correct answer based on textual evidence, paragraph anchors, and valid logical deductions.
    - Set `confidence`:
      - `Definite`: Passage evidence is clear, direct, and leaves zero doubt.

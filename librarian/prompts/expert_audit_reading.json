@@ -27,6 +27,7 @@
           "blind_solved_index": {
             "type": "integer",
             "enum": [
+              -1,
               0,
               1,
               2,

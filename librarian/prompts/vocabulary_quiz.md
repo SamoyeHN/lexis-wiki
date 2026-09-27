@@ -9,6 +9,7 @@ Compose an academic vocabulary assessment strictly using the pre-computed item s
 1. **Micro-Task Execution & Sentence Composition**:
    - For EACH item, adhere strictly to its `🎯 Micro-Task for LLM` as your syntactic, collocational, and contextual blueprint.
    - Compose an original, intellectually mature academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause.
+   - **Semantic Precision & Disambiguation**: Incorporate distinctive contextual clues reflecting the target word's specific meaning whenever necessary to eliminate interchangeable fits with category alternatives, but never trivially copy definition phrases.
    - **Single Blank Positioning**: Place EXACTLY ONE blank `____` (strictly four underscores) where the `Target Word` precisely fits.
    - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its stem derivatives must NEVER appear anywhere in the sentence outside the blank `____`.
 

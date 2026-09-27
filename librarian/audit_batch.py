@@ -172,8 +172,9 @@ def audit_one(ref: Dict[str, Any], judge_model: Optional[str] = None,
         row["prev_blind_solve_accuracy"] = prev.get("blind_solve_accuracy")
 
     source_text = resolve_source_text(ref["unit"], project_root)
+    unit_cefr = (quiz_data.get("cefr_level") or "B2").upper()
     try:
-        report = ExpertAuditor.audit_quiz(source_text or "", quiz_data, judge_model=judge_model)
+        report = ExpertAuditor.audit_quiz(source_text or "", quiz_data, judge_model=judge_model, cefr_level=unit_cefr)
     except Exception as e:
         logger.exception("Re-audit failed for %s [%s]", ref["unit"], ref["template"])
         row["error"] = f"Audit exception: {e}"

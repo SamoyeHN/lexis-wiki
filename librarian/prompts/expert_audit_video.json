@@ -29,7 +29,7 @@
           },
           "blind_solved_index": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": -1,
             "maximum": 3
           },
           "confidence": {

@@ -599,7 +599,7 @@ class DistractorAuditItem:
 @dataclasses.dataclass
 class QuestionAuditItem:
     item_index: int = dataclasses.field(default=0)
-    blind_solved_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
+    blind_solved_index: int = dataclasses.field(default=0, metadata={"enum": [-1, 0, 1, 2, 3]})
     confidence: Literal["Definite", "Hesitant", "Ambiguous"] = dataclasses.field(default="Definite")
     single_fit_valid: bool = dataclasses.field(default=True)
     distractors: List[DistractorAuditItem] = dataclasses.field(default_factory=list, metadata={"minItems": 1, "maxItems": 4})

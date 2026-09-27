@@ -192,6 +192,9 @@ class LinguisticEngine:
         for bad_suffix in ("ableness", "lessness", "icalness", "fulness"):
             if c_clean.endswith(bad_suffix):
                 return False
+        # Register Gate: Filter out slang, informal, archaic, or fantasy/fairy-tale words
+        if c_clean in cls._REGISTER_BANNED_WORDS:
+            return False
 
         # Lexicon Filter: must be recognized in OCD or AWL
         ocd = cls.get_oxford_collocations()
@@ -478,6 +481,7 @@ class LinguisticEngine:
         target_count: int = 3,
         exclude_words: Optional[Set[str]] = None,
         definition: Optional[str] = None,
+        quote: Optional[str] = None,
         return_metadata: bool = False
     ) -> Union[List[str], Tuple[List[str], Dict[str, str]]]:
         """
@@ -570,17 +574,61 @@ class LinguisticEngine:
                 for sw in s.words():
                     global_synonyms.add(sw.lemma().lower())
 
-        # 1. Definition-Locked WSD: Rank synsets by token overlap with curriculum definition
+        # 1. Definition-Locked WSD: Rank synsets by token overlap with curriculum definition & hypernym chain
         target_synsets = []
         if definition:
-            def_tokens = set(re.findall(r"[a-zA-Z]{3,}", definition.lower())) - cls._ANCHOR_STOPWORDS
+            nlp = cls.get_spacy()
+            def_clean = definition or ""
+            quote_clean = quote or ""
+            def_doc = nlp(def_clean.lower())
+            quote_doc = nlp(quote_clean.lower())
+            def_tokens = {t.lemma_.lower() for t in def_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
+            quote_tokens = ({t.lemma_.lower() for t in quote_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - def_tokens
+
             scored_synsets = []
+            seen_syn_ids = set()
             for w in words:
                 for s in w.synsets():
-                    stext = (s.definition() + " " + " ".join(s.examples())).lower()
-                    stoks = set(re.findall(r"[a-zA-Z]{3,}", stext)) - cls._ANCHOR_STOPWORDS
-                    ov = len(def_tokens.intersection(stoks))
-                    scored_synsets.append((ov, s))
+                    if s.id in seen_syn_ids:
+                        continue
+                    seen_syn_ids.add(s.id)
+
+                    s_direct_doc = nlp((s.definition() + " " + " ".join(s.examples())).lower())
+                    s_direct_lemmas = {t.lemma_.lower() for t in s_direct_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
+
+                    chain_texts = []
+                    cur = s
+                    depth = 0
+                    while cur.hypernyms() and depth < 4:
+                        cur = cur.hypernyms()[0]
+                        chain_texts.append(cur.definition())
+                        for hw in cur.words():
+                            chain_texts.append(hw.lemma())
+                        depth += 1
+                    chain_doc = nlp(" ".join(chain_texts).lower())
+                    chain_lemmas = {t.lemma_.lower() for t in chain_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
+
+                    # Semantic Domain Guardrails:
+                    # Penalize animal group senses if target definition is human/organization
+                    is_human_def = any(h in def_tokens for h in ("people", "person", "organization", "employee", "staff", "student", "worker", "member", "social", "human", "group"))
+                    penalty = 0
+                    if is_human_def and ("animal" in chain_lemmas or "animal group" in " ".join(chain_texts).lower()):
+                        penalty += 15
+
+                    # Penalize military/war senses if definition is not military/war
+                    is_military_def = any(m in def_tokens for m in ("military", "army", "soldier", "war", "battle", "weapon", "navy"))
+                    if not is_military_def and ("military" in s.definition().lower() or "military" in " ".join(chain_texts).lower()):
+                        penalty += 8
+
+                    score = (
+                        len(def_tokens.intersection(s_direct_lemmas)) * 6 +
+                        len(def_tokens.intersection(chain_lemmas)) * 3 +
+                        len(quote_tokens.intersection(s_direct_lemmas)) * 2 +
+                        len(quote_tokens.intersection(chain_lemmas)) * 1 -
+                        penalty
+                    )
+                    scored_synsets.append((score, s))
+
             scored_synsets.sort(key=lambda x: x[0], reverse=True)
             if scored_synsets:
                 best_ov = scored_synsets[0][0]
@@ -792,6 +840,9 @@ class LinguisticEngine:
                             ):
                                 if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
                                     continue
+                                # Verbs: Block speech/reporting verbs with clausal or double-object valency that break transitive substitution
+                                if wn_pos == "v" and lemma in ("say", "tell", "speak", "talk", "whisper", "shout", "reply", "state", "declare"):
+                                    continue
                                 seen.add(lemma)
                                 tier3_coordinates.append(lemma)
 
@@ -811,7 +862,7 @@ class LinguisticEngine:
                                 valency_candidates.append(a)
                 candidates = valency_candidates + candidates
         else:
-            candidates = tier1_synonyms + tier3_coordinates + tier2_hyponyms
+            candidates = tier1_synonyms + tier2_hyponyms + tier3_coordinates
 
         # 3. Oxford Collision Clearance (Anti Double-Key Gate - Schemes 3 & 4)
         forbidden_words = set(global_synonyms) if wn_pos == "v" else {clean_target}
@@ -1074,8 +1125,17 @@ class LinguisticEngine:
         ["explicit", "ambiguous", "apparent", "obscure", "evident", "vague", "distinct"],
         ["substantial", "considerable", "minimal", "negligible", "significant", "modest"],
         ["coherent", "consistent", "incompatible", "contradictory", "harmonious", "conflicting"],
-        ["prevalent", "widespread", "ubiquitous", "scarce", "isolated", "sporadic", "rare"]
     ]
+
+    # Academic Register Gate: Filter out slang, informal, archaic, or fantasy/fairy-tale words
+    # that WordNet taxonomy occasionally harbors (e.g. 'dwarf', 'beast' for 'individual', or 'swell', 'cracking' for 'positive').
+    _REGISTER_BANNED_WORDS = {
+        # Archaic / fantasy / fairy-tale nouns
+        "dwarf", "beast", "fauna", "flora", "benthos", "heterotroph", "amphidiploid", "diploid",
+        "ogre", "giant", "goblin", "witch", "wizard", "fairy", "elf", "gnome", "troll",
+        # Colloquial slang / archaic positive adjectives
+        "swell", "cracking", "bully", "smashing", "peachy", "dandy", "nifty", "corking", "groovy", "slap-up", "bang-up"
+    }
 
     _ANCHOR_STOPWORDS = {
         "a", "an", "the", "of", "to", "in", "on", "for", "with", "and", "or", "at",
@@ -1091,7 +1151,11 @@ class LinguisticEngine:
         "more", "most", "less", "least", "many", "much", "very", "quite",
         "rather", "such", "own", "other", "another", "same", "different",
         "particular", "certain", "various", "several", "enough", "only",
-        "just", "even", "also", "well", "still", "yet", "already"
+        "just", "even", "also", "well", "still", "yet", "already",
+        # Empty / generic head nouns carry virtually zero lexical collocational value
+        # (e.g. 'thing', 'stuff', 'item' in 'positive thing' or 'important matter').
+        # Banning them prevents trivial or unacademic frames like 'positive thing'.
+        "thing", "things", "stuff", "person", "people", "way", "ways", "item", "items"
     }
 
     # Fixed prepositional adjuncts / set phrases that are interjections or
@@ -1103,6 +1167,95 @@ class LinguisticEngine:
         ("at", "first"), ("on", "average"), ("in", "particular"), ("in", "summary"),
         ("in", "total"), ("in", "brief"), ("in", "short"), ("in", "part")
     }
+
+    @classmethod
+    def generate_phrase_distractors(
+        cls,
+        phrase: str,
+        pos: str = "phrasal_verb",
+        count: int = 3,
+        exclude_words: Optional[Set[str]] = None
+    ) -> List[str]:
+        """
+        Synthesizes high-discrimination, authentic distractors for multi-word phrasal verbs and collocations.
+        For 2-word phrasal verbs (e.g. 'send out'):
+          - Pool A (Particle contrast): Same verb, different authentic particles (e.g. 'send in', 'send off')
+          - Pool B (Verb contrast): Same particle, different core verbs (e.g. 'point out', 'carry out')
+        For multi-word frames (3+ words, e.g. 'toward the end of'):
+          - Synthesizes structural sister frames (e.g. 'at the beginning of', 'in the middle of')
+        """
+        phrase_clean = phrase.strip().lower()
+        words = phrase_clean.split()
+        exclude = set(exclude_words or [])
+        distractors: List[str] = []
+        raw = cls.get_oxford_raw()
+
+        # 1. Two-word phrase (e.g. 'send out', 'tend to', 'cut out', 'work for')
+        if len(words) == 2:
+            v, p = words[0], words[1]
+            diff_part: List[str] = []
+            particles = ["in", "off", "up", "down", "away", "back", "over", "into", "through", "on", "to", "for", "out", "with", "from", "around"]
+            for part in particles:
+                if part != p:
+                    cand = f"{v} {part}"
+                    if cand in raw and cand not in exclude and cand != phrase_clean:
+                        diff_part.append(cand)
+
+            same_part: List[str] = []
+            common_verbs = [
+                "point", "carry", "turn", "figure", "bring", "stand", "make", "find",
+                "set", "take", "come", "go", "get", "give", "hold", "look", "run",
+                "keep", "leave", "work", "fall", "call", "pass", "lead", "move", "break"
+            ]
+            for cv in common_verbs:
+                if cv != v:
+                    cand = f"{cv} {p}"
+                    if (cand in raw or cand in ("point to", "turn to", "set to", "refer to", "listen to")) and cand not in exclude and cand != phrase_clean and cand not in diff_part:
+                        same_part.append(cand)
+
+            # Balanced selection: combine particle variation and verb variation
+            if diff_part and same_part:
+                combined = [diff_part[0], same_part[0]]
+                if len(diff_part) > 1:
+                    combined.append(diff_part[1])
+                elif len(same_part) > 1:
+                    combined.append(same_part[1])
+                for item in diff_part[2:] + same_part[2:]:
+                    if len(combined) >= count:
+                        break
+                    if item not in combined:
+                        combined.append(item)
+                distractors = combined
+            elif diff_part:
+                distractors = diff_part
+            elif same_part:
+                distractors = same_part
+
+        # 2. Multi-word collocations (3+ words)
+        elif len(words) >= 3:
+            if "end of" in phrase_clean:
+                candidates = ["at the beginning of", "in the middle of", "for the rest of", "at the start of"]
+                distractors = [c for c in candidates if c != phrase_clean and c not in exclude]
+            elif "piece of" in phrase_clean:
+                candidates = ["a series of", "a range of", "a couple of", "a matter of", "a variety of"]
+                distractors = [c for c in candidates if c != phrase_clean and c not in exclude]
+            elif "thanks to" in phrase_clean:
+                candidates = ["show respect to", "pay tribute to", "give credit to", "express gratitude to"]
+                distractors = [c for c in candidates if c != phrase_clean and c not in exclude]
+            elif "type of" in phrase_clean:
+                candidates = ["any form of", "any sort of", "any kind of", "any part of"]
+                distractors = [c for c in candidates if c != phrase_clean and c not in exclude]
+
+        # General Fallback if pool is sparse
+        if len(distractors) < count:
+            if len(words) == 2:
+                for fallback_cand in ["carry out", "take over", "bring about", "set up", "look into", "come across", "give in"]:
+                    if fallback_cand != phrase_clean and fallback_cand not in distractors and fallback_cand not in exclude:
+                        distractors.append(fallback_cand)
+                    if len(distractors) >= count:
+                        break
+
+        return distractors[:count]
 
     # When a verb has NO Oxford Collocations entry (or an empty 'prep' valency
     # list), only these typical academic complement prepositions may be
@@ -1184,7 +1337,9 @@ class LinguisticEngine:
         cls,
         target_word: str,
         pos: str = "noun",
-        distractors: Optional[List[str]] = None
+        distractors: Optional[List[str]] = None,
+        definition: Optional[str] = None,
+        quote: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
         Retrieves a high-discrimination, zero-collision collocational anchor and authentic pattern
@@ -1224,9 +1379,36 @@ class LinguisticEngine:
         if not pdata:
             return None, None, None, None
 
-        frames = pdata.get("frames", [])
-        if not frames:
+        all_frames = pdata.get("frames", [])
+        if not all_frames:
             return None, None, None, None
+
+        # Sense Alignment Filtering:
+        # If OCD defines multiple numbered senses (e.g. post as job vs internet post; invite as ask sb vs encourage sth),
+        # filter frames strictly to those belonging to the sense matching the curriculum definition/quote.
+        defs = pdata.get("definitions", {})
+        matched_sense = None
+        if defs and (definition or quote):
+            nlp = cls.get_spacy()
+            user_text = ((definition or "") + " " + (quote or "")).lower()
+            user_doc = nlp(user_text)
+            user_tokens = {t.lemma_.lower() for t in user_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3}
+            best_score = -1
+            for s_id, def_text in defs.items():
+                s_doc = nlp(def_text.lower())
+                s_tokens = {t.lemma_.lower() for t in s_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3}
+                ov = len(user_tokens.intersection(s_tokens))
+                if ov > best_score:
+                    best_score = ov
+                    matched_sense = s_id
+            if best_score == 0:
+                matched_sense = None
+
+        if matched_sense:
+            sense_frames = [f for f in all_frames if f.get("sense") == matched_sense]
+            frames = sense_frames if sense_frames else all_frames
+        else:
+            frames = all_frames
 
         if target_pos == "noun":
             # Semantic Ontology Alignment:
@@ -2939,7 +3121,11 @@ class LinguisticEngine:
             m_word = re.search(r'##\s*\[\[(.*?)\]\]', b)
             if not m_word:
                 continue
-            word = m_word.group(1).strip()
+            raw_w = m_word.group(1).strip()
+            # Clean slot placeholders from phrasal headwords, e.g. "tend to [sth/sb]" -> "tend to"
+            word = re.sub(r'\[.*?\]|\(.*?\)', '', raw_w).strip()
+            if not word:
+                continue
             m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
             m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
@@ -3079,12 +3265,13 @@ class LinguisticEngine:
         parsed_items: List[Dict[str, str]] = []
 
         for b in blocks:
-            m_word = re.search(r'##\s*\[\[(.*?)\]\]', b)
+            m_word = re.search(r'##\s*\[\[(.*)\]\]', b)
             if not m_word:
                 continue
-            word = m_word.group(1).strip()
-            # Filter out multi-word idioms or phrases from single-word vocabulary MCQ targets
-            if " " in word or "-" in word:
+            raw_w = m_word.group(1).strip()
+            # Clean slot placeholders from phrasal headwords, e.g. "tend to [sth/sb]" -> "tend to"
+            word = re.sub(r'\[.*?\]|\(.*?\)', '', raw_w).strip()
+            if not word:
                 continue
 
             m_pos = re.search(r'-\s*\*\*Part Of Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
@@ -3111,7 +3298,9 @@ class LinguisticEngine:
             # string "adverb" contains the substring "verb" and would otherwise
             # be mis-classified as a verb (e.g. 'closely' -> verb bug).
             canonical_pos = "noun"
-            if cls.is_function_word(w_lower):
+            if " " in w_lower or "-" in w_lower:
+                canonical_pos = "phrase"
+            elif cls.is_function_word(w_lower):
                 canonical_pos = "function_word"
             elif "adv" in raw_pos:
                 canonical_pos = "adv"
@@ -3341,19 +3530,25 @@ class LinguisticEngine:
                     pass
 
             # 3. Generate 3 Zero-Collision Distractors with Definition-Locked WSD & Sense Antonyms
-            distractors, dist_meta = cls.generate_vocab_distractors(
-                target_word=w_lower,
-                pos=canonical_pos,
-                context_anchor=anchor,
-                anchor_type=anchor_type,
-                target_count=3,
-                exclude_words=used_distractors,
-                definition=it.get("definition"),
-                return_metadata=True
-            )
+            if canonical_pos == "phrase":
+                p_dists = cls.generate_phrase_distractors(w_lower, count=3, exclude_words=used_distractors)
+                distractors = p_dists
+                dist_meta = {d: "phrase_contrast" for d in p_dists}
+            else:
+                distractors, dist_meta = cls.generate_vocab_distractors(
+                    target_word=w_lower,
+                    pos=canonical_pos,
+                    context_anchor=anchor,
+                    anchor_type=anchor_type,
+                    target_count=3,
+                    exclude_words=used_distractors,
+                    definition=it.get("definition"),
+                    quote=it.get("quote"),
+                    return_metadata=True
+                )
 
             # Ensure we have valid distractors; fallback to zero_collision if needed
-            if len(distractors) < 3:
+            if len(distractors) < 3 and canonical_pos != "phrase":
                 pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
                 distractors = cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3)
 
@@ -3366,7 +3561,7 @@ class LinguisticEngine:
             #     valency). Double-keys are dropped and refilled from an extended
             #     candidate pool so the item never degrades below 3 distractors.
             def _is_double_key(cand: str) -> bool:
-                if canonical_pos == "function_word":
+                if canonical_pos in ("function_word", "phrase"):
                     return False
                 flag, _kind = cls.double_key_collision(w_lower, cand, anchor, anchor_type, pos=canonical_pos)
                 return flag
@@ -3374,7 +3569,7 @@ class LinguisticEngine:
             def _is_valid_distractor(cand: str) -> bool:
                 if not cand or _is_double_key(cand):
                     return False
-                if canonical_pos == "function_word":
+                if canonical_pos in ("function_word", "phrase"):
                     return True
                 return cls.is_cefr_compliant_distractor(cand, w_lower)
 
@@ -3463,7 +3658,9 @@ class LinguisticEngine:
                 ocd_anchor, ocd_atype, ocd_fdesc, ocd_ex = cls.find_ocd_zero_collision_anchor(
                     target_word=final_target,
                     pos=canonical_pos,
-                    distractors=dist_list
+                    distractors=dist_list,
+                    definition=it.get("definition"),
+                    quote=it.get("quote")
                 )
                 if ocd_anchor:
                     anchor = ocd_anchor
@@ -3507,7 +3704,7 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires base-form verb '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
-                        f"Syntactic Frame: The blank '____' MUST be followed directly by preposition '{anchor}' (e.g. '... ____ {anchor} ...'). "
+                        f"Syntactic Frame: [Subject] + [Modal/Auxiliary optional] + ____ + {anchor} + [Noun Phrase / Object]. "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}', "
                         f"{valency_clause}.{ant_clue}"
                     )
@@ -3516,14 +3713,14 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires base-form verb '{final_target}' "
                         f"collocating with object/anchor '{anchor}'. "
-                        f"Syntactic Frame: The sentence MUST explicitly write the direct object '{anchor}' governed by the blank verb (e.g. '... ____ [the/a] {anchor} ...'). "
+                        f"Syntactic Frame: [Subject] + [Modal/Auxiliary optional] + ____ + [Determiner/Modifier optional] + {anchor} + [Complement]. "
                         f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}].{ant_clue}"
                     )
                 else:
                     ant_clue = f" Provide clear clues eliminating opposite '{antonym_words[0]}'." if antonym_words else ""
                     micro_task = (
                         f"Construct a natural academic sentence in a formal register requiring base-form verb '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' must function as a main verb. "
+                        f"Syntactic Frame: [Subject] + [Modal/Auxiliary optional] + ____ + [Object/Complement]. "
                         f"Establish clear contextual contrast that rules out [{dist_str}].{ant_clue}"
                     )
             elif canonical_pos == "noun":
@@ -3538,23 +3735,23 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
-                        f"Syntactic Frame: The blank '____' MUST be immediately followed by preposition '{anchor}' (e.g. '... the/an ____ {anchor} ...'). "
+                        f"Syntactic Frame: [Subject/Verb] + [Determiner/Modifier optional] + ____ + {anchor} + [Noun Phrase / Complement]. "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}'{obj_note}, "
                         f"{valency_clause}.{ant_clue}"
                     )
                 elif anchor_type == "verb" and anchor:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
-                        f"serving as the direct object of verb '{anchor}' (e.g. '... {anchor} [the/a] ____ ...'). "
-                        f"Syntactic Frame: The governing verb '{anchor}' (or its appropriate tense/form) MUST govern the blank as its direct noun object. "
+                        f"serving as the direct object of verb '{anchor}'. "
+                        f"Syntactic Frame: [Subject] + [{anchor} in appropriate form] + [Determiner/Modifier optional] + ____ + [Complement]. "
                         f"[CRITICAL CONSTRAINT] Do NOT omit '{anchor}' or turn the blank into a verb! "
                         f"Establish semantic clues demanding this classic collocation, ruling out [{dist_str}].{ant_clue}"
                     )
                 elif anchor_type == "verb_subject" and anchor:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
-                        f"functioning as the subject of verb '{anchor}' (e.g. '... the/a ____ was {anchor}ing ...' or '... ____ {anchor}s ...'). "
-                        f"Syntactic Frame: The blank '____' MUST act as the subject of verb '{anchor}'. "
+                        f"functioning as the subject of verb '{anchor}'. "
+                        f"Syntactic Frame: [Determiner/Modifier optional] + ____ + [{anchor} in appropriate form] + [Object/Complement]. "
                         f"[CRITICAL CONSTRAINT] Do NOT omit '{anchor}'! "
                         f"Establish semantic clues demanding this authoritative collocation, ruling out [{dist_str}].{ant_clue}"
                     )
@@ -3562,7 +3759,7 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"directly modified or governed by '{anchor}'. "
-                        f"Syntactic Frame: The blank MUST be directly modified by '{anchor}' (e.g. '... {anchor} ____ ...'). The modifier '{anchor}' MUST appear immediately before the blank. "
+                        f"Syntactic Frame: [Clause Head] + {anchor} + ____ + [Predicate/Complement]. The modifier '{anchor}' MUST appear immediately before the blank. "
                         f"Establish semantic clues demanding this classic collocation, "
                         f"ruling out [{dist_str}].{ant_clue}"
                     )
@@ -3570,14 +3767,14 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires noun '{final_target}' "
                         f"collocating with '{anchor}'. "
-                        f"Syntactic Frame: The blank MUST collocate with '{anchor}' (e.g. '... ____ of/for {anchor} ...'). "
+                        f"Syntactic Frame: [Clause Head] + ____ + [Preposition/Connector] + {anchor} + [Complement]. "
                         f"Establish semantic clues demanding this classic collocation, "
                         f"ruling out [{dist_str}].{ant_clue}"
                     )
                 else:
                     micro_task = (
                         f"Construct a natural academic sentence in a formal register requiring noun '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' must function as a subject or object noun. "
+                        f"Syntactic Frame: [Subject/Object position] requiring an academic head noun. "
                         f"Establish its conceptual functional features in an academic context, "
                         f"discriminating it from [{dist_str}] through antonymic contrast or precise semantic-field cues.{ant_clue}"
                     )
@@ -3588,16 +3785,16 @@ class LinguisticEngine:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' "
                         f"immediately followed by bound preposition '{anchor}'{obj_note}. "
-                        f"Syntactic Frame: The blank '____' MUST be followed by preposition '{anchor}' (e.g. '... is/seems ____ {anchor} ...'). "
+                        f"Syntactic Frame: [Subject] + [Copula Verb] + ____ + {anchor} + [Noun Phrase / Complement]. "
                         f"Ensure '{final_target}' is the only idiomatic fit governing '{anchor}', "
                         f"{valency_clause}.{ant_clue}"
                     )
                 elif anchor_type == "modified_noun" and anchor:
-                    ant_clue = f" Embed a concessive or contrasting condition (e.g. 'Although initial ... was {antonym_words[0]}...') that logically eliminates opposite '{antonym_words[0]}'." if antonym_words else ""
+                    ant_clue = f" Embed a concessive or contrasting condition that logically eliminates opposite '{antonym_words[0]}'." if antonym_words else ""
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' "
                         f"modifying noun '{anchor}'. "
-                        f"Syntactic Frame: The blank MUST directly modify the noun '{anchor}' (e.g. '... a/the ____ {anchor} ...'). The word '{anchor}' MUST appear immediately after the blank. "
+                        f"Syntactic Frame: [Clause Head] + [Determiner optional] + ____ + {anchor} + [Predicate/Complement]. The noun '{anchor}' MUST appear immediately after the blank. "
                         f"Ensure the sentence context strictly demands '{final_target}' as the precise collocational and semantic fit, "
                         f"while ruling out [{dist_str}].{ant_clue}"
                     )
@@ -3606,21 +3803,20 @@ class LinguisticEngine:
                     anchor_note = f"modifying '{anchor}' or similar academic concepts" if anchor else "in an academic evaluation"
                     if anchor in ("make", "render", "find", "deem", "consider", "keep"):
                         anchor_clause = (
-                            f"Syntactic Frame: The sentence MUST explicitly write the verb '{anchor}' in an object complement structure "
-                            f"(e.g. '... {anchor} it ____ to [verb] ...' or '... {anchor} [sth] ____ ...'). "
+                            f"Syntactic Frame: [Subject] + [{anchor} in appropriate form] + [Object/Dummy-It] + ____ + [Complement/Infinitive]. "
                             f"[CRITICAL CONSTRAINT] Do NOT turn the blank into a verb; the blank is an adjective complement! "
                             f"The target word '{final_target}' MUST ONLY appear in the answer key and inside the blank '____' — NEVER write '{final_target}' or its derivatives anywhere else in the question stem! "
                         )
                     elif anchor and anchor_type in ("adv_mod", "adj"):
                         anchor_clause = (
-                            f"Syntactic Frame: The blank '____' must function as an adjective modified by adverb '{anchor}' (e.g. '... {anchor} ____ ...'). "
+                            f"Syntactic Frame: [Subject] + [Copula] + {anchor} + ____ + [Complement]. "
                         )
                     elif anchor:
                         anchor_clause = (
-                            f"Syntactic Frame: The blank '____' must function as an adjective modifying '{anchor}' or in an academic evaluation (e.g. '... a ____ {anchor} ...'). "
+                            f"Syntactic Frame: [Determiner optional] + ____ + {anchor} + [Predicate/Complement]. "
                         )
                     else:
-                        anchor_clause = "Syntactic Frame: The blank '____' must function as an attributive or predicative adjective in an academic evaluation. "
+                        anchor_clause = "Syntactic Frame: [Subject/Attributive/Predicative position] requiring an academic evaluative adjective. "
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adjective '{final_target}' ({anchor_note}). "
                         f"{anchor_clause}"
@@ -3630,21 +3826,21 @@ class LinguisticEngine:
                 if anchor and anchor_type in ("modifies_adj", "adj"):
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' MUST modify the adjective '{anchor}' (e.g. '... [be/seem] ____ {anchor} ...'). "
+                        f"Syntactic Frame: [Subject] + [Copula/Verb] + ____ + {anchor} + [Noun/Complement]. "
                         f"The adjective '{anchor}' MUST be explicitly written immediately after the blank. "
                         f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}]."
                     )
                 elif anchor:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' must modify the verb '{anchor}' (e.g. '... {anchor} [sth] ____ ...' or '... ____ {anchor} ...'). "
+                        f"Syntactic Frame: [Subject] + ____ + [{anchor} in appropriate form] + [Object/Complement], or [Subject] + [{anchor}] + [Object] + ____. "
                         f"The verb '{anchor}' MUST be explicitly written in the sentence; do NOT place the blank in the main verb position! "
                         f"Establish semantic clues demanding '{final_target}' while ruling out [{dist_str}]."
                     )
                 else:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires adverb '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' must modify an academic verb or adjective. "
+                        f"Syntactic Frame: Adverbial modifier position modifying an academic predicate or clause. "
                         f"Establish clear contextual clues that rule out [{dist_str}]."
                     )
             elif cls.is_function_word(final_target):
@@ -3653,35 +3849,43 @@ class LinguisticEngine:
                 if fam == "scope":
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires preposition '{final_target}' denoting spatial or metaphorical scope. "
-                        f"Syntactic Frame: The blank '____' must govern a noun phrase indicating an abstract or physical limit (e.g. '____ [one's] reach / control / expectations'). "
+                        f"Syntactic Frame: [Clause] + ____ + [Noun Phrase denoting limit/domain]. "
                         f"Ensure context clearly demands the precise conceptual boundary of '{final_target}' while ruling out [{dist_str}]."
                     )
                 elif fam == "noun_clause":
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires complementizer '{final_target}' introducing a noun clause. "
-                        f"Syntactic Frame: The blank '____' must introduce a complement or subject clause (e.g. '... wonder / determine ____ [clause] ...'). "
+                        f"Syntactic Frame: [Main Verb / Proposition] + ____ + [Subject + Verb Subordinate Clause]. "
                         f"Ensure the epistemic uncertainty or syntactic role strictly requires '{final_target}' while eliminating [{dist_str}]."
                     )
                 elif stype == "prepositional":
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires prepositional connective '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' MUST be followed directly by a noun phrase or gerund (e.g. '____ [the/a] noun phrase, ...'), NOT a clause with a finite verb! "
+                        f"Syntactic Frame: ____ + [Noun Phrase / Gerund V-ing], [Independent Main Clause]. "
+                        f"The blank '____' MUST be followed directly by a noun phrase or gerund, NOT a clause with a finite verb! "
                         f"This syntactic constraint physically eliminates clausal distractors like [{dist_str}]. "
                         f"Ensure context clearly demands '{final_target}'."
                     )
                 elif stype == "clausal":
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires clausal conjunction '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' MUST introduce a complete subordinate clause with subject and finite verb (e.g. '____ [subject] [verb] ..., ...'). "
+                        f"Syntactic Frame: ____ + [Subordinate Subject + Finite Verb], [Main Clause]. "
+                        f"The blank '____' MUST introduce a complete subordinate clause with subject and finite verb! "
                         f"This syntactic requirement physically eliminates prepositional distractors like [{dist_str}]. "
                         f"Ensure context clearly demands '{final_target}'."
                     )
                 else:
                     micro_task = (
                         f"Construct a natural academic sentence where the blank requires discourse connective '{final_target}'. "
-                        f"Syntactic Frame: The blank '____' must logically link two clauses or propositions. "
+                        f"Syntactic Frame: [First Proposition]; ____, [Second Proposition]. "
                         f"Establish clear logical clues demanding '{final_target}' while ruling out [{dist_str}]."
                     )
+            elif canonical_pos == "phrase":
+                micro_task = (
+                    f"Construct a natural academic sentence where the blank requires the exact multi-word phrase '{final_target}'. "
+                    f"Syntactic Slot: [Clause Head] + ____ + [Predicate/Complement]. The blank '____' MUST represent the entire phrase. "
+                    f"Establish clear semantic and contextual clues requiring '{final_target}' while ruling out [{dist_str}]."
+                )
             else:
                 micro_task = (
                     f"Compose a CEFR-aligned academic sentence where the blank requires '{final_target}'. "
@@ -3785,6 +3989,8 @@ class LinguisticEngine:
                             and lemma not in candidates
                             and cls.is_cefr_compliant_distractor(lemma, target_lower)
                         ):
+                            if pos == "n" and (cls._is_primarily_adj_or_verb(lemma) if hasattr(cls, "_is_primarily_adj_or_verb") else False):
+                                continue
                             candidates.append(lemma)
 
         # 3. Deduplicate and return requested count

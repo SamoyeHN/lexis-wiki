@@ -53,6 +53,12 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
             }
             audit_res = LogEvaluator.evaluate_log(simulated)
             if audit_res:
+                task_t = audit_res.get("task_type", "")
+                is_audit_task = (task_t == "expert_audit" or "expert_audit" in (task_name or "").lower())
+                stage_label = "L2_EXPERT_AUDIT" if is_audit_task else "L1_DETERMINISTIC_GATE"
+                score_label = "L2_QUALITY_SCORE" if is_audit_task else "L1_STRUCTURAL_SCORE"
+                content.append(f"=== EVALUATION_STAGE: {stage_label} ===")
+                content.append(f"=== {score_label}: {audit_res.get('composite_score')}% ===")
                 content.append(f"=== COMPOSITE_SCORE: {audit_res.get('composite_score')}% ===")
                 scores = audit_res.get("scores", {})
                 content.append("=== DIMENSION_SCORES: " + json.dumps(scores, ensure_ascii=False) + " ===")

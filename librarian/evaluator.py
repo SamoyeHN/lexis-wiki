@@ -617,7 +617,7 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     checks = matches = 0
     
     for item in items:
-        quote = item.get("quoted_sentence") or item.get("quote")
+        quote = item.get("quoted_sentence") or item.get("quote") or item.get("context_sentence")
         word = str(item.get("word") or item.get("pattern_formula") or "").strip()
         checks += 1
 
@@ -943,6 +943,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             is_translation = bool(item.get("translated_sentence") or item.get("source_sentence") or item.get("english_skeleton") or item.get("target_keyword") or item.get("idiomatic_translation"))
             skeleton = _safe_str(item.get("english_skeleton"))
             is_comparative_translation = bool(item.get("idiomatic_translation") and item.get("flawed_translation"))
+            is_comprehension = not target and not is_translation
             expected_opt_count = 2 if is_comparative_translation else 4
             checks += 1
             
@@ -993,8 +994,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             no_stem_leak = True
             is_adequate_complexity = True
 
-            if is_comparative_translation:
-                # Comparative translation does not require blanks
+            if is_comparative_translation or is_comprehension:
+                # Comparative translation and Reading/Listening/Video comprehension questions do not require blanks
                 has_blank_when_expected = True
             elif is_translation:
                 if skeleton:
@@ -1135,7 +1136,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             score = item.get("pedagogical_score", 100)
             single_valid = item.get("single_fit_valid", True)
             is_valid_dist = len(distractors) in (1, 2, 3, 4)
-            is_valid_idx = isinstance(bs_idx, int) and 0 <= bs_idx <= 3
+            is_valid_idx = isinstance(bs_idx, int) and -1 <= bs_idx <= 3
             # Feedback is required only if the item has defects (score < 90 or invalid single fit);
             # for flawless items (score >= 90), empty feedback is valid and expected.
             feedback_ok = bool(feedback) if (score < 90 or not single_valid) else True

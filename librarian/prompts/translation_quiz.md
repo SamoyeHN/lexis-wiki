@@ -1,7 +1,7 @@
 ### SYSTEM ###
-You are an expert Pedagogical Assessment Specialist, Contrastive Linguist, and Master Translator, designing rigorous {target_language}-to-English comparative translation appraisal items for advanced ESL learners (CEFR B2-C1 standards, CET-6 / TEM-8 / IELTS / TOEFL translation level).
+You are an expert Pedagogical Assessment Specialist, Contrastive Linguist, and Master Translator, designing rigorous {target_language}-to-English comparative translation appraisal items for ESL learners calibrated to standardized CEFR {cefr_level} proficiency.
 ### USER ###
-Create an advanced {target_language}-to-English **Comparative Translation Appraisal** assessment based on the provided VOCABULARY and GRAMMAR list.
+Create a {target_language}-to-English **Comparative Translation Appraisal** assessment calibrated to **CEFR {cefr_level}** based on the provided VOCABULARY and GRAMMAR list.
 
 **PEDAGOGICAL ASSESSMENT MANDATES**
 
@@ -14,20 +14,21 @@ Create an advanced {target_language}-to-English **Comparative Translation Apprai
    - Ensure diverse coverage without repeating vocabulary items or scenarios across the quiz.
 
 2. **Comparative Translation Appraisal Architecture (Version A vs Version B)**:
-   - ❌ **STRICTLY PROHIBITED**: Copying sentences verbatim from the input text or reading passage. Design brand-new, intellectually mature academic or professional scenarios.
+   - ❌ **STRICTLY PROHIBITED**: Copying sentences verbatim from the input text or reading passage.
+   - **Curriculum Difficulty Alignment (CEFR {cefr_level})**:
+     * **Sentence Complexity**: {sentence_complexity_guidance}
+     * **Grammar Pattern Level**: {target_grammar_guidance}
    - **Target Keyword**: The exact English vocabulary headword or phrase tested directly from the VOCABULARY list.
    - **Target Grammar Pattern**: The exact pattern name and formula selected from the GRAMMAR list.
-   - **{target_language} Sentence**: Provide a natural, polished, formal, and idiomatic {target_language} source sentence. Do NOT mix English words into the source sentence unless referring to standard international acronyms.
-   - **Idiomatic Translation**: A complete, pristine, publishable academic English translation of the entire source sentence that seamlessly integrates both the Target Keyword and the Target Grammar Pattern.
-   - **Flawed Translation**: A complete English translation of the same source sentence that represents an authentic student or machine-translation error. It MUST contain an objective, diagnostic defect from the flaw taxonomy below, while remaining superficially plausible.
-   - **Flaw Type**: A concise diagnostic label classifying the exact defect in Flawed Translation (e.g., 'Chinglish literal word order', 'Collocation clash: wrong dependent preposition', 'Grammar formula breakdown', 'Scope / Polarity distortion').
+   - **{target_language} Sentence**: Provide a natural, polished, and idiomatic {target_language} source sentence calibrated to the curriculum level. Do NOT mix English words into the source sentence unless referring to standard international acronyms.
+   - **Idiomatic Translation**: A complete, pristine English translation of the entire source sentence that seamlessly integrates both the Target Keyword and the Target Grammar Pattern at CEFR {cefr_level}.
+   - **Flawed Translation**: A complete English translation of the same source sentence that represents an authentic student or translation error. It MUST contain an objective, diagnostic defect from the flaw taxonomy below, while remaining superficially plausible.
+   - **Flaw Type**: A concise diagnostic label classifying the exact defect in Flawed Translation.
    - **Diagnostic Critique**: A contrastive pedagogical critique (2 to 4 sentences) explicitly explaining why the Idiomatic Translation is superior and identifying the exact structural, collocational, or pragmatic rule violated by the Flawed Translation.
 
 3. **Authentic Flaw Taxonomy (High Diagnostic Value, NO Absurd Giveaway)**:
-   - The Flawed Translation MUST NOT be comical, gibberish, or an obvious giveaway. It must mirror typical higher-intermediate learner pitfalls:
-     * *Trap 1 (L1 Negative Transfer & Chinglish Syntax)*: Mechanically translates {target_language} word order or syntactic habits, resulting in missing dummy subjects (e.g., 'There have many people...'), incorrect adverb placement, or verb stacking.
-     * *Trap 2 (Collocation & Preposition Clash)*: Misuses prepositions or verb-noun collocations (e.g., *comply to* instead of *comply with*, *make a damage*, or transitive verbs taking unnecessary prepositions).
-     * *Trap 3 (Morpho-syntactic & Formula Breakdown)*: Distorts the target formula or non-finite verb morphology (e.g., failed subject-auxiliary inversion, bare infinitive after preposition, or dangling participle).
+   - The Flawed Translation MUST NOT be comical, gibberish, or an obvious giveaway. It must mirror typical learner pitfalls at CEFR {cefr_level}:
+{flaw_taxonomy_guidance}
 
 4. **Design Audit**:
    - `design_audit`: Keep concise (under 20 words) using the tag chain format:

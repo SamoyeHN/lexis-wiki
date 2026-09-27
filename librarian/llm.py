@@ -930,7 +930,7 @@ class LLMClient:
                                             f"  [LOOKUP]: `{source_header}`"
                                         )
 
-                                    # Quizzes (Vocabulary / Reading / Translation / General)
+                                    # Quizzes (Vocabulary / Reading / Translation / Listening / Video / General)
                                     if "quiz" in t_name_lower or "question" in clean_lower:
                                         idx_str = _find_item_index(clean, "questions")
                                         if "target_word" in clean_lower or "synchronization" in clean_lower or "key" in clean_lower:
@@ -939,13 +939,13 @@ class LLMClient:
                                                 f"  [ERROR]: {clean}\n"
                                                 f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `{source_header}`"
                                             )
-                                        if "blank" in clean_lower or "____" in clean:
+                                        if ("blank" in clean_lower or "____" in clean) and not any(k in t_name_lower for k in ("reading", "listening", "video")):
                                             return (
                                                 f"- [FIELD]: `questions[{idx_str}].question`\n"
                                                 f"  [ERROR]: {clean}\n"
                                                 f"  [LOOKUP]: `### TASK INSTRUCTIONS ###`"
                                             )
-                                        if "distractor" in clean_lower or "recycl" in clean_lower or "duplicate" in clean_lower:
+                                        if "distractor" in clean_lower or "recycl" in clean_lower or "duplicate" in clean_lower or "option" in clean_lower:
                                             return (
                                                 f"- [FIELD]: `questions[{idx_str}].options`\n"
                                                 f"  [ERROR]: {clean}\n"
@@ -999,8 +999,12 @@ class LLMClient:
                                 elif "translation" in t_name_lower:
                                     critical_invariant = "The source sentence must strictly embody the target formula, and the correct option must be 100% natural English."
                                 elif "reading" in t_name_lower:
-                                    critical_invariant = f"Every question stem and correct answer must be uniquely warranted by verbatim evidence from `{source_header}`."
-                                elif "quiz" in t_name_lower:
+                                    critical_invariant = f"Every question stem and correct answer must be uniquely warranted by verbatim evidence from `{source_header}`, with concise, parallel options matching CEFR complexity limits."
+                                elif "listening" in t_name_lower:
+                                    critical_invariant = "Every dialogue turn and comprehension question must strictly adhere to the target CEFR level, with exactly 4 distinct and plausible options grounded in the script."
+                                elif "video" in t_name_lower:
+                                    critical_invariant = "Every question stem must correlate directly with its segment timestamp and transcript evidence, with exactly 4 distinct options and no duplicate choices."
+                                elif "quiz" in t_name_lower or "vocabulary" in t_name_lower:
                                     critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
                                 elif any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
                                     critical_invariant = (

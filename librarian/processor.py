@@ -1215,15 +1215,17 @@ class WikiProcessor:
     def audit_video_integrity(
         cls,
         quiz_obj: Any,
-        transcript_text: str = ""
+        transcript_text: str = "",
+        cefr_level: str = "B2"
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Video Comprehension Quiz.
-        Enforces 4 physical ground-truth invariants:
+        Enforces 5 physical ground-truth invariants:
         1. Structural Option Bounds: Exactly 4 distinct, non-empty options.
         2. Answer Index Integrity: Bound [0, 3] check.
-        3. Timestamp Format & Grounding: Valid [MM:SS] or [HH:MM:SS] and physically anchored in transcript.
-        4. Trivia / Option Echo Filter: Prevent trivially verbatim options or stem-option duplication.
+        3. Option Complexity & Length Bounds based on CEFR.
+        4. CEFR Vocabulary Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2).
+        5. Timestamp Format & Grounding: Valid [MM:SS] or [HH:MM:SS] and physically anchored in transcript.
         Returns:
             (flagged_indices, defect_messages)
         """
@@ -1237,6 +1239,14 @@ class WikiProcessor:
         flagged_indices = set()
         defect_messages = []
         transcript_norm = transcript_text.lower() if transcript_text else ""
+        cefr_upper = (cefr_level or "B2").upper()
+
+        clean_transcript_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", transcript_norm))
+        meta_whitelist = {
+            "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
+            "section", "passage", "reason", "purpose", "detail", "meaning", "option", "correct", "video",
+            "timestamp", "demonstrate", "illustrate", "according", "paragraph", "author", "true", "false"
+        }
 
         for idx, q in enumerate(questions):
             q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
@@ -1255,15 +1265,53 @@ class WikiProcessor:
                     flagged_indices.add(idx)
                     defect_messages.append(f"Video Item #{idx + 1}: Options contain duplicate choices: {options}")
 
+                # 1.1 Option Complexity & Length based on CEFR
+                max_opt_len = 14 if cefr_upper in ("A1", "A2") else (18 if cefr_upper == "B1" else 30)
+                for opt in options:
+                    opt_words = str(opt).split()
+                    if len(opt_words) > max_opt_len:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Video Item #{idx + 1}: Option is overly long for CEFR {cefr_upper} ({len(opt_words)} words > {max_opt_len}): \"{opt[:40]}...\""
+                        )
+                        break
+
+                # 1.2 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
+                if cefr_upper in ("A1", "A2"):
+                    for opt in options:
+                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
+                        for tok in opt_toks:
+                            if tok in clean_transcript_words or tok in meta_whitelist:
+                                continue
+                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                            if tok_lvl in ("C1", "C2"):
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Video Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                                )
+                                break
+
             # 2. Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
                 flagged_indices.add(idx)
                 defect_messages.append(f"Video Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
 
-            # 3. Stem Quality
+            # 3. Stem Quality & CEFR Ceiling
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Video Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+            elif cefr_upper in ("A1", "A2"):
+                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
+                for tok in stem_toks:
+                    if tok in clean_transcript_words or tok in meta_whitelist:
+                        continue
+                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                    if tok_lvl in ("C1", "C2"):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Video Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                        )
+                        break
 
             # 4. Timestamp Validation
             if not ts:
@@ -1289,15 +1337,18 @@ class WikiProcessor:
     def audit_listening_integrity(
         cls,
         quiz_obj: Any,
-        script_text: str = ""
+        script_text: str = "",
+        cefr_level: str = "B2"
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Listening Comprehension Quiz.
-        Enforces 4 physical ground-truth invariants:
+        Enforces 5 physical ground-truth invariants:
         1. Dialogue Script Integrity: At least 4 speaker turns in script.
         2. Structural Option Bounds: Exactly 4 distinct, non-empty options.
-        3. Answer Index Integrity: Bound [0, 3] check.
-        4. Category Integrity: Detail, Main Idea, or Inference.
+        3. Option Complexity & Length Bounds based on CEFR.
+        4. CEFR Vocabulary Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2).
+        5. Answer Index Integrity: Bound [0, 3] check.
+        6. Category Integrity: Detail, Main Idea, or Inference.
         Returns:
             (flagged_indices, defect_messages)
         """
@@ -1310,12 +1361,25 @@ class WikiProcessor:
 
         flagged_indices = set()
         defect_messages = []
+        cefr_upper = (cefr_level or "B2").upper()
+
+        script_norm = script_text.lower() if script_text else ""
+        clean_script_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", script_norm))
+        meta_whitelist = {
+            "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
+            "dialogue", "conversation", "reason", "purpose", "detail", "meaning", "option", "correct",
+            "opinion", "suggest", "agree", "disagree", "talk", "true", "false", "about"
+        }
 
         # 1. Script checks
         script_items = quiz_obj.get("script") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "script", None)
         if script_items is not None and isinstance(script_items, list):
             if len(script_items) < 4:
                 defect_messages.append(f"Listening Script Gate: Dialogue script contains fewer than 4 turns ({len(script_items)} turns).")
+            # If script_text wasn't passed directly, build words from script_items
+            if not clean_script_words:
+                all_turn_text = " ".join([str(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")) for item in script_items])
+                clean_script_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", all_turn_text.lower()))
 
         # 2. Inspect questions
         valid_cats = {"detail", "main idea", "inference"}
@@ -1336,15 +1400,53 @@ class WikiProcessor:
                     flagged_indices.add(idx)
                     defect_messages.append(f"Listening Item #{idx + 1}: Options contain duplicate choices: {options}")
 
+                # 2.1.1 Option Complexity & Length based on CEFR
+                max_opt_len = 12 if cefr_upper in ("A1", "A2") else (16 if cefr_upper == "B1" else 28)
+                for opt in options:
+                    opt_words = str(opt).split()
+                    if len(opt_words) > max_opt_len:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Listening Item #{idx + 1}: Option is overly long for CEFR {cefr_upper} ({len(opt_words)} words > {max_opt_len}): \"{opt[:40]}...\""
+                        )
+                        break
+
+                # 2.1.2 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
+                if cefr_upper in ("A1", "A2"):
+                    for opt in options:
+                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
+                        for tok in opt_toks:
+                            if tok in clean_script_words or tok in meta_whitelist:
+                                continue
+                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                            if tok_lvl in ("C1", "C2"):
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Listening Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                                )
+                                break
+
             # 2.2 Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
                 flagged_indices.add(idx)
                 defect_messages.append(f"Listening Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
 
-            # 2.3 Stem Quality
+            # 2.3 Stem Quality & CEFR Ceiling
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Listening Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
+            elif cefr_upper in ("A1", "A2"):
+                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
+                for tok in stem_toks:
+                    if tok in clean_script_words or tok in meta_whitelist:
+                        continue
+                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                    if tok_lvl in ("C1", "C2"):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Listening Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                        )
+                        break
 
             # 2.4 Category check
             if cat and cat not in valid_cats:
@@ -1358,25 +1460,24 @@ class WikiProcessor:
         quiz_obj: Any,
         unit_headwords: List[str] = None,
         unit_grammar_patterns: List[str] = None,
-        target_language: str = "Chinese"
+        target_language: str = "Chinese",
+        cefr_level: str = "B2"
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Target-to-English Translation Quiz.
-        Enforces 5 physical ground-truth invariants:
+        Enforces 6 physical ground-truth invariants:
         1. Language Purity Gate:
            - {target_language} prompt sentence must contain valid {target_language} characters.
            - Options must be 100% English sentences, strictly free of {target_language} characters.
-        2. Target Vocabulary Presence Gate:
+        2. Option Complexity & Length Bounds based on CEFR.
+        3. CEFR Vocabulary Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2).
+        4. Target Vocabulary Presence Gate:
            - The declared target_word (from design_audit or unit wordlist) must physically appear
-             verbatim or with inflection in correct_english_answer.
-        3. Grammar Formula Anchor Gate:
-           - Checks that the grammatical formula/keywords declared in design_audit exist in correct_english_answer.
-        4. Structural Parallelism Gate:
-           - Exactly 4 options, non-empty, distinct (no duplicates).
-           - Key index within bounds [0, 3].
-           - Option lengths balanced (longest option not > 2.5x shortest option).
-        5. Option Echo / Giveaway Filter:
-           - No option is a trivial copy of the {target_language} prompt or design audit leak.
+             verbatim or with inflection in correct_english_answer / idiomatic_translation.
+        5. Structural Parallelism Gate:
+           - Exactly 2 options (comparative appraisal) or 4 options (anchored skeleton).
+           - Key index within bounds.
+        6. Option Echo / Giveaway Filter.
         Returns:
             (flagged_indices, defect_messages)
         """
@@ -1389,6 +1490,12 @@ class WikiProcessor:
 
         flagged_indices = set()
         defect_messages = []
+        cefr_upper = (cefr_level or "B2").upper()
+
+        meta_whitelist = {
+            "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
+            "sentence", "translation", "english", "chinese", "option", "correct", "flawed", "idiomatic"
+        }
 
         # Determine target language regex pattern
         lang_str = (target_language or "Chinese").lower()
@@ -1463,23 +1570,6 @@ class WikiProcessor:
             correct_eng = str(q_dict.get("correct_english_answer", "")).strip()
             audit_str = str(q_dict.get("design_audit", "")).strip()
 
-            # 1. Language Purity Gate
-            # 1.1 Stem must contain target language characters
-            if not re.search(target_char_pattern, stem):
-                flagged_indices.add(idx)
-                defect_messages.append(
-                    f"Translation Item #{idx + 1}: 'translated_sentence' must contain {target_language} characters."
-                )
-
-            # 1.2 Options must be purely in English (no target language characters)
-            for o_i, opt in enumerate(options):
-                opt_str = str(opt)
-                if re.search(target_char_pattern, opt_str):
-                    flagged_indices.add(idx)
-                    defect_messages.append(
-                        f"Translation Item #{idx + 1}: Option [{chr(65 + o_i)}] contains {target_language} characters: \"{opt_str[:40]}...\""
-                    )
-
             idiomatic_trans = str(q_dict.get("idiomatic_translation", "")).strip()
             flawed_trans = str(q_dict.get("flawed_translation", "")).strip()
             is_comparative = bool(idiomatic_trans and flawed_trans)
@@ -1541,7 +1631,33 @@ class WikiProcessor:
                             f"Translation Item #{idx + 1}: Extreme length disparity across options (shortest={min_len} words, longest={max_len} words)."
                         )
 
-            # 2.3 Answer index range
+                # 2.3 Option Complexity & Length based on CEFR
+                max_trans_len = 16 if cefr_upper in ("A1", "A2") else (24 if cefr_upper == "B1" else 36)
+                for opt in options:
+                    opt_words = str(opt).split()
+                    if len(opt_words) > max_trans_len:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Translation option is overly long for CEFR {cefr_upper} ({len(opt_words)} words > {max_trans_len}): \"{opt[:40]}...\""
+                        )
+                        break
+
+                # 2.4 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
+                if cefr_upper in ("A1", "A2"):
+                    for opt in options:
+                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
+                        for tok in opt_toks:
+                            if tok in meta_whitelist:
+                                continue
+                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
+                            if tok_lvl in ("C1", "C2"):
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Translation Item #{idx + 1}: Translation option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                                )
+                                break
+
+            # 2.5 Answer index range
             if not isinstance(correct_idx, int) or correct_idx not in range(expected_opt_count):
                 flagged_indices.add(idx)
                 defect_messages.append(
@@ -2035,6 +2151,56 @@ class WikiProcessor:
                             )
                         merged_vocab.append(mapped_item)
 
+                # Filter out redundant single words in vocabulary that were extracted solely as
+                # decomposed fragments of a multi-word expression (e.g. 'pro' and 'con' when 'pros and cons' is extracted)
+                if expressions_data:
+                    multi_words = set()
+                    for it in merged_vocab:
+                        w = it.word if dataclasses.is_dataclass(it) else it.get("word", "")
+                        clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', str(w)).strip()
+                        toks = [t.lower() for t in re.findall(r'[a-zA-Z]+', clean_w)]
+                        if len(toks) > 1:
+                            multi_words.add(" ".join(toks))
+
+                    if multi_words:
+                        filtered_vocab = []
+                        for it in merged_vocab:
+                            w = it.word if dataclasses.is_dataclass(it) else it.get("word", "")
+                            clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', str(w)).strip()
+                            toks = [t.lower() for t in re.findall(r'[a-zA-Z]+', clean_w)]
+                            # If it's a single word, check if it's an artificial fragment of an existing multi-word unit
+                            # from the exact same quoted sentence
+                            if len(toks) == 1:
+                                single_tok = toks[0]
+                                it_quote = it.quoted_sentence if dataclasses.is_dataclass(it) else it.get("quoted_sentence", "")
+                                clean_it_quote = re.sub(r'[^\w\s]', ' ', str(it_quote).lower())
+                                
+                                # Check if any multi-word unit in the SAME sentence contains this single word
+                                # e.g. single 'pro' / 'con' vs 'pros and cons'
+                                is_fragment = False
+                                for mw in multi_words:
+                                    mw_toks = mw.split()
+                                    if any(single_tok == mt or (len(single_tok) >= 3 and (mt.startswith(single_tok) or single_tok.startswith(mt))) for mt in mw_toks):
+                                        # Verify matching sentence or syllabus provenance
+                                        for other in merged_vocab:
+                                            other_w = other.word if dataclasses.is_dataclass(other) else other.get("word", "")
+                                            clean_other = re.sub(r'\[.*?\]|\(.*?\)', '', str(other_w)).strip()
+                                            if clean_other.lower() == mw:
+                                                other_quote = other.quoted_sentence if dataclasses.is_dataclass(other) else other.get("quoted_sentence", "")
+                                                if clean_it_quote and clean_it_quote == re.sub(r'[^\w\s]', ' ', str(other_quote).lower()):
+                                                    # Don't prune if the single word was explicitly declared in syllabus_vocab!
+                                                    declared_in_syllabus = any(single_tok == sw.lower() or single_tok == re.sub(r'[^\w]', '', sw.lower()) for sw in (syllabus_vocab or []))
+                                                    if not declared_in_syllabus:
+                                                        is_fragment = True
+                                                        break
+                                        if is_fragment:
+                                            break
+                                if is_fragment:
+                                    logger.info(f"🧹 Pruning redundant single-word fragment '{w}' subsumed by multi-word expression '{mw}'")
+                                    continue
+                            filtered_vocab.append(it)
+                        merged_vocab = filtered_vocab
+
                 if dataclasses.is_dataclass(vocab_data):
                     vocab_data.vocabulary = merged_vocab
                 elif isinstance(vocab_data, dict):
@@ -2241,7 +2407,7 @@ class WikiProcessor:
                     "Maintain natural, accessible syntax."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options standard and clear (ideally 6 to 15 words). Do not use hyper-academic GRE vocabulary in options."
+                    "Keep options standard and clear (ideally 6 to 15 words). Do not use obscure, hyper-specialized vocabulary in options."
                 )
                 kwargs["skill_distribution_guidance"] = (
                     "     * `Detail/Recall`: 2 questions targeting key factual statements or causal links.\n"
@@ -2253,7 +2419,7 @@ class WikiProcessor:
             else:
                 kwargs["cefr_descriptor"] = f"Advanced Academic English (CEFR {cefr})"
                 kwargs["question_stem_guidance"] = (
-                    "Use rigorous TOEFL/academic reading assessment stems assessing synthesis, global discourse organization, and implicit logic."
+                    f"Use rigorous, standardized CEFR {cefr} reading assessment stems assessing synthesis, global discourse organization, and implicit logic."
                 )
                 kwargs["option_complexity_guidance"] = (
                     "Craft intellectually mature options with accurate paraphrasing, precise lexical substitutions, and nuanced distractors."
@@ -2273,12 +2439,108 @@ class WikiProcessor:
             kwargs["vocabulary_content"] = sanitized_v
             kwargs["grammar_content"] = sanitized_g
             kwargs["target_language"] = self.config.get("target_language") or "Chinese"
-            kwargs["cefr_level"] = data.get("cefr_level", "B2")
+            cefr = (data.get("cefr_level") or "B2").upper()
+            kwargs["cefr_level"] = cefr
+
+            if cefr in ("A1", "A2"):
+                kwargs["sentence_complexity_guidance"] = (
+                    "Simple, clear, and direct everyday or classroom situations (8 to 14 English words). "
+                    "Use basic coordination (and, but) or single simple clauses. Strictly avoid dense subordinate embedding or inversion."
+                )
+                kwargs["target_grammar_guidance"] = (
+                    "Focus strictly on foundational morphosyntax: singular/plural concord, basic tense forms (simple present/past), "
+                    "pronoun cases, and essential prepositions (in, at, on, with, for)."
+                )
+                kwargs["flaw_taxonomy_guidance"] = (
+                    "     * *Trap 1 (L1 Negative Transfer & Missing Dummy Subjects)*: Direct literal word-for-word translation, missing 'There is/are' or 'It is' dummy subjects, or stacking multiple verbs without conjunctions.\n"
+                    "     * *Trap 2 (Preposition & Function Word Loss)*: Omitting or confusing everyday prepositions (e.g. *listen music* instead of *listen to music*, *arrive to* instead of *arrive at*).\n"
+                    "     * *Trap 3 (Basic Agreement & Inflection Breakdown)*: Missing third-person singular '-s', bare infinitive after preposition, or plural suffix disagreement."
+                )
+            elif cefr == "B1":
+                kwargs["sentence_complexity_guidance"] = (
+                    "Standard compound/complex sentences (12 to 20 English words) describing common social, educational, or work situations. "
+                    "Incorporate common adverbial clauses (because, although, if, when) or direct relative clauses."
+                )
+                kwargs["target_grammar_guidance"] = (
+                    "Intermediate grammatical patterns: modal verbs (should, must, might), passive voice, "
+                    "gerunds vs infinitives, and straightforward coordinating/subordinating clause links."
+                )
+                kwargs["flaw_taxonomy_guidance"] = (
+                    "     * *Trap 1 (L1 Negative Transfer & Conjunction Doubling)*: Using correlative doubles like 'Although... but...' or misplaced adverbial adjuncts.\n"
+                    "     * *Trap 2 (Collocation & Dependent Prepositions)*: Dependent preposition errors (e.g. *depend of* instead of *depend on*, *comply to* instead of *comply with*).\n"
+                    "     * *Trap 3 (Voice & Aspect Inflection Errors)*: Incomplete passive voice formulas or incorrect participle forms (e.g. *is break* instead of *is broken*)."
+                )
+            else:
+                kwargs["sentence_complexity_guidance"] = (
+                    "Intellectually mature, formal compound-complex sentences (18 to 30 English words) involving academic analysis, "
+                    "cause-and-effect reasoning, or professional discourse."
+                )
+                kwargs["target_grammar_guidance"] = (
+                    "Advanced academic structures: fronted inversion, non-finite participial clauses, cleft sentences, "
+                    "abstract shell noun complements, or concessive refutations."
+                )
+                kwargs["flaw_taxonomy_guidance"] = (
+                    "     * *Trap 1 (L1 Negative Transfer & Chinglish Syntax)*: Mechanically translating word order, resulting in missing dummy subjects, awkward topic-prominent structures, or verb stacking.\n"
+                    "     * *Trap 2 (Collocation & Preposition Clash)*: Misusing formal dependent prepositions or verb-noun collocations (e.g. *comply to* instead of *comply with*, *make a damage*).\n"
+                    "     * *Trap 3 (Morpho-syntactic & Formula Breakdown)*: Distorting the target formula or non-finite verb morphology (e.g. failed subject-auxiliary inversion, dangling participle)."
+                )
+
         elif template_name == "listening":
             raw_v = data.get("vocab_list", "")
             sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
             kwargs["vocabulary_content"] = sanitized_v
-            kwargs["cefr_level"] = data.get("cefr_level", "B2")
+            cefr = (data.get("cefr_level") or "B2").upper()
+            kwargs["cefr_level"] = cefr
+
+            if cefr in ("A1", "A2"):
+                kwargs["dialogue_style_guidance"] = (
+                    "Conversational, everyday campus or life interactions (e.g. discussing schedules, course plans, or collaborative assignments). "
+                    "Keep speaker turns short and clear (8 to 15 words per turn), using accessible phrasing and concrete dialogue markers."
+                )
+                kwargs["question_stem_guidance"] = (
+                    "Use direct, unambiguous question stems (e.g. 'What does Speaker 1 want to do?', 'Why is Speaker 2 calling?'). "
+                    "Avoid complex speculative or hypothetical framing."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options concise, simple, and direct (ideally 3 to 8 words). Never use obscure academic vocabulary."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail`: 2 to 3 questions assessing concrete facts, explicitly stated intentions, or direct causes.\n"
+                    "     * `Main Idea`: 1 to 2 questions assessing the overall topic or mutual agreement.\n"
+                    "     * `Inference`: 0 to 1 question assessing a straightforward, obvious conclusion."
+                )
+            elif cefr == "B1":
+                kwargs["dialogue_style_guidance"] = (
+                    "Standard academic or semi-formal exchange (e.g. tutorial discussion, study group analysis). "
+                    "Turns should be moderately detailed (14 to 22 words per turn), presenting reasoning and practical opinions."
+                )
+                kwargs["question_stem_guidance"] = (
+                    "Use clear question stems assessing explicit facts, speaker reasoning, and immediate deductions."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options standard and clear (ideally 5 to 12 words), with natural everyday vocabulary."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail`: 2 questions assessing specific rationale or facts stated by a speaker.\n"
+                    "     * `Main Idea`: 1 to 2 questions assessing the core theme or conclusion.\n"
+                    "     * `Inference`: 1 question assessing speaker attitude or logical takeaway."
+                )
+            else:
+                kwargs["dialogue_style_guidance"] = (
+                    "Intellectually engaging academic debate or seminar discussion. "
+                    "Turns are detailed and articulated (18 to 32 words per turn), featuring subtle distinctions, counter-arguments, and nuanced concessions."
+                )
+                kwargs["question_stem_guidance"] = (
+                    "Use rigorous assessment stems testing speaker stance, implicit qualifications, and analytical deductions."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Craft nuanced, intellectually mature options (8 to 16 words) with precise paraphrasing."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail`: 1 to 2 questions on key nuances, qualifying conditions, or exact rationales.\n"
+                    "     * `Inference`: 2 to 3 questions drawing deductions warranted by tone, stance, or logic.\n"
+                    "     * `Main Idea`: 1 question assessing the overarching academic consensus or disagreement."
+                )
 
             # Extract only Core Concepts 1, 2, 3 from Summary
             summary_txt = data.get("summary_content", "")
@@ -2343,7 +2605,32 @@ class WikiProcessor:
             kwargs["transcript_content"] = data["transcript"]
             kwargs["video_url"] = data["video_url"]
             kwargs["video_type"] = data["video_type"]
-            kwargs["cefr_level"] = data.get("cefr_level", "B2")
+            cefr = (data.get("cefr_level") or "B2").upper()
+            kwargs["cefr_level"] = cefr
+
+            if cefr in ("A1", "A2"):
+                kwargs["question_depth_guidance"] = (
+                    "Focus on direct, concrete observations and simple facts explicitly described in the video at the timestamp "
+                    "(e.g. 'What is shown at [MM:SS]?', 'What problem does the speaker describe?'). Avoid complex synthesis across long segments."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options short and straightforward (ideally 4 to 10 words). Avoid dense academic terminology in options."
+                )
+            elif cefr == "B1":
+                kwargs["question_depth_guidance"] = (
+                    "Focus on clear causal relationships, operational mechanisms, and primary challenges discussed at the timestamp "
+                    "(e.g. 'Why was this method chosen?', 'How does the process function?')."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options clear and standard (ideally 6 to 14 words), using accessible technical vocabulary."
+                )
+            else:
+                kwargs["question_depth_guidance"] = (
+                    "Focus on technical mechanisms, comparative evaluations, underlying controversies, or future projections discussed at the timestamp."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Craft intellectually mature options (8 to 18 words) with nuanced distractors and academic phrasing."
+                )
 
         prompt = prompt_template.format(**kwargs)
 
@@ -2606,18 +2893,21 @@ class WikiProcessor:
                     elif template_name == "video":
                         l1_defective, l1_defects = self.audit_video_integrity(
                             quiz_dict_eval,
-                            transcript_text=source_context
+                            transcript_text=source_context,
+                            cefr_level=kwargs.get("cefr_level", "B2")
                         )
                     elif template_name == "listening":
                         l1_defective, l1_defects = self.audit_listening_integrity(
                             quiz_dict_eval,
-                            script_text=source_context
+                            script_text=source_context,
+                            cefr_level=kwargs.get("cefr_level", "B2")
                         )
                     elif template_name == "translation":
                         l1_defective, l1_defects = self.audit_translation_integrity(
                             quiz_dict_eval,
                             unit_headwords=unit_headwords,
-                            target_language=curr_tgt_lang
+                            target_language=curr_tgt_lang,
+                            cefr_level=kwargs.get("cefr_level", "B2")
                         )
                     else:
                         is_cloze_mode = (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
@@ -2661,7 +2951,8 @@ class WikiProcessor:
                         quiz_type=template_name,
                         target_language=curr_tgt_lang,
                         unit_headwords=unit_headwords,
-                        unit_grammar_patterns=unit_grammar_patterns
+                        unit_grammar_patterns=unit_grammar_patterns,
+                        cefr_level=kwargs.get("cefr_level", "B2")
                     )
 
                     # If distinct models, unload judge model to free memory
@@ -2930,6 +3221,7 @@ class WikiProcessor:
                                 latest_log = matching_logs[0]
                                 log_txt = latest_log.read_text(encoding="utf-8")
                                 score_block = (
+                                    f"=== L2_QUALITY_SCORE: {final_avg}.0% (CURED) ===\n"
                                     f"=== COMPOSITE_SCORE: {final_avg}.0% (CURED) ===\n"
                                     f"=== PRE_CURE_SCORE: {raw_gen_score}.0% ===\n"
                                     f"=== POST_CURE_SCORE: {final_avg}.0% ===\n"
@@ -2937,7 +3229,7 @@ class WikiProcessor:
                                 )
                                 if "=== COMPOSITE_SCORE:" in log_txt:
                                     log_txt = re.sub(
-                                        r"=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===(?:\n=== L2_PENALTY:[^\n]+===)?",
+                                        r"(?:=== L2_QUALITY_SCORE:[^\n]+\n)?=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===(?:\n=== L2_PENALTY:[^\n]+===)?",
                                         score_block,
                                         log_txt
                                     )

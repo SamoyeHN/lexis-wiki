@@ -592,6 +592,33 @@ open the door to sth.
         self.assertIn("Valid Pattern", md)
 
 
+    def test_verbatim_reading_vocab_context_sentence(self):
+        source = "CONTENT:\nThe company aims to accelerate its digital transformation across all branches."
+        items = [{
+            "word": "accelerate",
+            "context_sentence": "The company aims to accelerate its digital transformation across all branches."
+        }]
+        score, flags = _score_verbatim(items, "vocabulary", source)
+        self.assertEqual(score, W_VERBATIM)
+        self.assertEqual(flags, [])
+
+    def test_comprehension_quiz_pedagogy_passes_without_blanks(self):
+        items = [{
+            "question": "What is the primary objective of the company's new digital strategy?",
+            "options": [
+                "To accelerate overall transformation",
+                "To reduce operating branches",
+                "To delay technological shifts",
+                "To replace human resources"
+            ],
+            "correct_answer_index": 0,
+            "explanation": "The passage directly confirms the aim is to accelerate transformation."
+        }]
+        score, flags = _score_pedagogy(items, "quiz")
+        self.assertEqual(score, W_PEDAGOGY)
+        self.assertEqual(flags, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

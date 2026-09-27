@@ -1,22 +1,24 @@
 ### SYSTEM ###
-You are an expert ESL Audio Script Writer and Listening Assessment Designer (TOEFL / IELTS / Cambridge English standards).
+You are an expert ESL Audio Script Writer and Listening Assessment Designer specializing in standardized CEFR {cefr_level} language instruction.
 ### USER ###
-Generate a realistic academic dialogue and a rigorous comprehension assessment based on the provided vocabulary items.
+Generate a realistic academic dialogue and a rigorous comprehension assessment calibrated to **CEFR {cefr_level}** based on the provided vocabulary items.
 
 **PEDAGOGICAL ASSESSMENT MANDATES**
 
-1. **Authentic Academic Dialogue Script**:
-   - Create a natural, engaging academic discussion between Speaker 1 and Speaker 2 consisting of 6 to 8 conversational turns.
+1. **Authentic Dialogue Script**:
+   - Create a natural, engaging discussion between Speaker 1 and Speaker 2 consisting of 6 to 8 conversational turns.
+   - **Curriculum Alignment (CEFR {cefr_level})**:
+     * **Dialogue Register & Complexity**: {dialogue_style_guidance}
    - Natural spoken register: realistic conversational flow with authentic discourse markers (e.g., 'Well, look at it this way...', 'That's a valid point, but...', 'Wait, are you saying...?'), gentle counter-arguments, and mutual clarification.
    - Seamlessly embed at least 5 target academic vocabulary items into natural spoken contexts without sounding like textbook recitations.
    - ⚠️ **SPEAKER ATTRIBUTION RIGOR MANDATE**: Clearly distinguish the roles, stances, and insights of Speaker 1 vs Speaker 2. When a question asks about a specific speaker's viewpoint, concern, or proposal (e.g., 'What does Speaker 1 suggest...?'), the correct answer MUST be based exclusively on that speaker's dialogue turns, NOT the conversational partner's statements.
 
 2. **Question & Skill Diversity**:
    - Generate EXACTLY {count} comprehension questions in the 'questions' array.
+   - **Question Stem Guidance**: {question_stem_guidance}
+   - **Option Complexity Guidance**: {option_complexity_guidance}
    - Cover a balanced mix of listening skills across questions:
-     * `Detail`: Specific fact, limitation, or rationale stated by a specific speaker.
-     * `Inference`: Drawing logical conclusions directly implied by the dialogue.
-     * `Main Idea`: Overall core purpose or consensus takeaway of the conversation.
+{skill_distribution_guidance}
 
 3. **Listening Distractor Taxonomy (NO Cartoonish Choices)**:
    - All 4 options must be plausible, concise, grammatically parallel, and closely tied to the discussion.
@@ -24,7 +26,7 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment b
    - ❌ **STRICTLY PROHIBIT**: Childish or absurd choices (e.g., 'machines are too heavy to move', 'destroy all electronics'), trivial common-sense giveaways, and pure polar opposites.
    - Engineer distractors using authentic listening test cognitive traps:
      * *Trap 1 (Speaker Attribution Swap)*: Attributes an opinion, concern, or proposal to Speaker 1 when it was actually expressed or qualified by Speaker 2 (or vice versa).
-     * *Trap 2 (Verbatim Catch Trap)*: Borrows an eye-catching technical term from the script (e.g., 'nuclear fusion', 'semiconductors'), but links it to a false claim or unmentioned context.
+     * *Trap 2 (Verbatim Catch Trap)*: Borrows an eye-catching technical term from the script, but links it to a false claim or unmentioned context.
      * *Trap 3 (Overstated Generalization)*: Uses extreme absolutes (*completely impossible*, *abandon entirely*, *useless*) when the speaker only expressed cautious reservation or conditional qualification.
 
 4. **Design Audit & Explanation**:

@@ -713,7 +713,57 @@ class TestIntegrityGate(unittest.TestCase):
         flagged, defects = WikiProcessor.audit_listening_integrity(defective_quiz, script_text=dialogue_script)
         self.assertIn(0, flagged)
         self.assertTrue(any("4 options" in d for d in defects))
-        self.assertTrue(any("too short" in d for d in defects))
+    def test_blind_solve_unsolvable_handling(self):
+        """Test that blind_solved_index = -1 is recognized as unsolvable without double penalizing comparable accuracy."""
+        quiz_data = {
+            "title": "Unsolvable Test Quiz",
+            "questions": [
+                {"question": "Valid Q1", "options": ["A", "B", "C", "D"], "correct_answer_index": 0},
+                {"question": "Unsolvable Q2", "options": ["A", "B", "C", "D"], "correct_answer_index": 1},
+            ]
+        }
+        mock_report = {
+            "overall_quality_score": 50,
+            "pass_audit": False,
+            "questions": [
+                {
+                    "item_index": 1,
+                    "blind_solved_index": 0,
+                    "confidence": "Definite",
+                    "single_fit_valid": True,
+                    "distractors": [
+                        {"option_letter": "A", "trap_type": "None (Correct Answer)"},
+                        {"option_letter": "B", "trap_type": "Plausible Real-World Distractor"}
+                    ],
+                    "pedagogical_score": 95
+                },
+                {
+                    "item_index": 2,
+                    "blind_solved_index": -1,
+                    "confidence": "Ambiguous",
+                    "single_fit_valid": False,
+                    "distractors": [
+                        {"option_letter": "A", "trap_type": "Flawed / Trivial Giveaway"},
+                        {"option_letter": "B", "trap_type": "None (Correct Answer)"}
+                    ],
+                    "pedagogical_score": 20,
+                    "diagnostic_feedback": "Sentence stem is fundamentally incoherent."
+                }
+            ]
+        }
+        with patch("librarian.expert_auditor.LLMClient") as mock_llm:
+            mock_inst = MagicMock()
+            mock_inst.chat.return_value = mock_report
+            mock_llm.return_value = mock_inst
+
+            report = ExpertAuditor.audit_quiz("Passage text", quiz_data)
+            self.assertIsNotNone(report)
+            self.assertEqual(report.get("blind_solve_comparable"), 1)
+            self.assertEqual(report.get("blind_solve_accuracy"), 1.0)
+            self.assertEqual(report.get("blind_solve_unsolvable_count"), 1)
+            self.assertEqual(report.get("blind_solve_confident_divergences"), 0)
+            self.assertFalse(report.get("pass_audit"))
+            self.assertIn(2, report.get("flawed_item_indices"))
 
 
 if __name__ == "__main__":

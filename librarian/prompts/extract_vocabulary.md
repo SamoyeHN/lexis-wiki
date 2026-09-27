@@ -8,6 +8,7 @@ Extract academic vocabulary from the text.
 1. **Target Scope & Strict Single-Word Discipline**:
    - Extract up to {count} unique vocabulary words. NEVER return an empty list (`[]`).
    - Every headword in `word` MUST be strictly a single lexical word (strictly ONE dictionary lemma, e.g., 'triumph', 'rewarding'). ❌ NO MULTI-WORD PHRASES: Phrasal verbs, idioms, and collocations belong exclusively to expressions extraction.
+   - 🚫 NO ARTIFICIAL DECOMPOSITION: NEVER break down fixed idiomatic phrases, binomials, or multi-word expressions into standalone constituent fragments.
    - Avoid text-specific neologisms or ad-hoc hyphenated compounds (e.g. 'non-statement').
 
 2. **Absolute Verbatim Sourcing (No Hallucination, No Thematic Inferences)**:

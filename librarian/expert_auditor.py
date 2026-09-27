@@ -123,7 +123,8 @@ class ExpertAuditor:
         quiz_type: Optional[str] = None,
         target_language: Optional[str] = None,
         unit_headwords: Optional[List[str]] = None,
-        unit_grammar_patterns: Optional[List[str]] = None
+        unit_grammar_patterns: Optional[List[str]] = None,
+        cefr_level: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Executes Level 2 semantic audit on a quiz payload."""
         questions = quiz_data.get("questions", [])
@@ -181,6 +182,8 @@ class ExpertAuditor:
         else:
             unit_grammar_str = "     (No explicit unit grammar list supplied. Rely on declared target grammar.)"
 
+        resolved_cefr = (cefr_level or quiz_data.get("cefr_level") or "B2").upper()
+
         format_kwargs = {
             "target_language": lang,
             "content": formatted_content,
@@ -190,7 +193,8 @@ class ExpertAuditor:
             "unit_vocabulary_list": unit_vocab_str,
             "vocabulary_list": unit_vocab_str,
             "unit_grammar_list": unit_grammar_str,
-            "grammar_list": unit_grammar_str
+            "grammar_list": unit_grammar_str,
+            "cefr_level": resolved_cefr
         }
 
         try:
@@ -201,11 +205,13 @@ class ExpertAuditor:
             for k, v in format_kwargs.items():
                 full_prompt = full_prompt.replace(f"{{{k}}}", str(v))
 
-        system_content = "You are an elite Psychometrician and Lead Assessment Auditor specializing in CEFR/TOEFL standardized language testing."
+        system_content = f"You are an elite Psychometrician and Lead Assessment Auditor specializing in standardized CEFR {resolved_cefr} language testing."
         user_content = full_prompt
         if "### SYSTEM ###" in full_prompt and "### USER ###" in full_prompt:
             parts = full_prompt.split("### USER ###", 1)
             system_content = parts[0].replace("### SYSTEM ###", "").strip()
+            # If system_content contains {cefr_level}, replace it
+            system_content = system_content.replace("{cefr_level}", resolved_cefr)
             user_content = parts[1].strip()
 
         llm = LLMClient(model=eval_model)
@@ -272,6 +278,7 @@ class ExpertAuditor:
             comparable = 0
             confirmed = 0
             confident_divergences = 0
+            unsolvable_count = 0
             for idx, q in enumerate(questions):
                 declared_raw = q.get("correct_answer_index")
                 # Only trust a declared key that is a valid option index.
@@ -292,7 +299,6 @@ class ExpertAuditor:
                 blind_raw = q_audit.get("blind_solved_index")
                 if not isinstance(blind_raw, int) or isinstance(blind_raw, bool):
                     continue
-                comparable += 1
 
                 # Sanitize distractor trap_type assignments against declared key
                 distractors = q_audit.get("distractors", [])
@@ -305,6 +311,20 @@ class ExpertAuditor:
                             d_item["trap_type"] = "None (Correct Answer)"
                         elif "correct" in t_type.lower():
                             d_item["trap_type"] = "Plausible Real-World Distractor"
+
+                # Check for unsolvable / ambiguous item (-1)
+                if blind_raw == -1:
+                    unsolvable_count += 1
+                    # Ensure single_fit_valid is marked False since no unique answer could be solved
+                    q_audit["single_fit_valid"] = False
+                    feedback = str(q_audit.get("diagnostic_feedback", ""))
+                    ambig_msg = "[UNSOLVABLE: Blind solver found question ambiguous or structurally flawed (-1)]"
+                    if ambig_msg not in feedback:
+                        q_audit["diagnostic_feedback"] = f"{ambig_msg} {feedback}".strip()
+                    logger.warning(f"Item #{idx + 1} blind solver deemed unsolvable (-1, ambiguous/flawed).")
+                    continue
+
+                comparable += 1
 
                 if blind_raw == declared_raw:
                     confirmed += 1
@@ -331,11 +351,12 @@ class ExpertAuditor:
                     f"{'veto signal' if is_confident else 'evidence only'}."
                 )
 
-            # Accuracy is reported over the items we could actually compare.
+            # Accuracy is reported over the items with candidate answers we could actually compare.
             blind_accuracy = round(confirmed / comparable, 3) if comparable > 0 else 1.0
             report_dict["blind_solve_accuracy"] = blind_accuracy
             report_dict["blind_solve_comparable"] = comparable
             report_dict["blind_solve_confident_divergences"] = confident_divergences
+            report_dict["blind_solve_unsolvable_count"] = unsolvable_count
 
             # Run deterministic scoring reconciliation
             cls.reconcile_report_scores(
@@ -359,8 +380,8 @@ class ExpertAuditor:
                     log_txt = latest_log.read_text(encoding="utf-8")
                     if "=== COMPOSITE_SCORE:" in log_txt:
                         log_txt = re.sub(
-                            r"=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===",
-                            f"=== COMPOSITE_SCORE: {penalized_score}.0% ===\n=== L2_PENALTY: Capped from Base {base_avg}% due to {flawed_count} Flaw(s) ===",
+                            r"(?:=== L2_QUALITY_SCORE:\s*[\d\.]+%\s*===\n)?=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===",
+                            f"=== L2_QUALITY_SCORE: {penalized_score}.0% ===\n=== COMPOSITE_SCORE: {penalized_score}.0% ===\n=== L2_PENALTY: Capped from Base {base_avg}% due to {flawed_count} Flaw(s) ===",
                             log_txt
                         )
                         latest_log.write_text(log_txt, encoding="utf-8")
