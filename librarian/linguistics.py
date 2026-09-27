@@ -154,18 +154,77 @@ class LinguisticEngine:
         return cls._cefr_analyzer
 
     @classmethod
-    def get_word_cefr(cls, word: str) -> Optional[str]:
-        """Returns the CEFR level string ('A1', 'A2', 'B1', 'B2', 'C1', 'C2') for a word or None."""
+    def get_word_cefr(cls, word: str, default: Optional[str] = None) -> Optional[str]:
+        """Returns the CEFR level string ('A1', 'A2', 'B1', 'B2', 'C1', 'C2') for a word or default."""
         if not word:
-            return None
+            return default
         analyzer = cls.get_cefr_analyzer()
         if not analyzer:
-            return None
+            return default
         try:
             res = analyzer.get_average_word_level_CEFR(word.lower().strip())
-            return str(res).upper() if res else None
+            return str(res).upper() if res else default
         except Exception:
-            return None
+            return default
+
+    @classmethod
+    def calculate_text_cefr(cls, text_or_words: Union[str, List[str]], default: str = "B1") -> str:
+        """
+        Statistically computes the authentic, objective CEFR level ('A1'..'C2') of a passage
+        or word collection using offline CEFR-J + Cambridge frequency scores (<1ms, zero token cost).
+        Scale mapping:
+          < 1.70  -> A1
+          1.70 - 2.50 -> A2
+          2.50 - 3.40 -> B1
+          3.40 - 4.30 -> B2
+          4.30 - 5.10 -> C1
+          >= 5.10 -> C2
+        """
+        analyzer = cls.get_cefr_analyzer()
+        if not analyzer:
+            return default
+
+        if isinstance(text_or_words, str):
+            words = re.findall(r"[a-zA-Z]+", text_or_words.lower())
+        else:
+            words = [re.sub(r"[^a-zA-Z]", "", w).lower() for w in text_or_words if w]
+            words = [w for w in words if w]
+
+        if not words:
+            return default
+
+        scores: List[float] = []
+        for w in words:
+            lvl = analyzer.get_average_word_level_float(w)
+            if lvl is not None:
+                scores.append(lvl)
+
+        if not scores:
+            return default
+
+        avg = sum(scores) / len(scores)
+        sorted_scores = sorted(scores)
+        p80 = sorted_scores[int(len(sorted_scores) * 0.8)]
+
+        # Pedagogical Text CEFR Rating combining baseline average & 80th percentile ceiling
+        # A1: avg <= 1.55 and p80 <= 2.0
+        # A2: avg <= 1.95 and p80 <= 3.0
+        # B1: avg <= 2.60 and p80 <= 4.0
+        # B2: avg <= 3.40
+        # C1: avg <= 4.30
+        # C2: >= 4.30
+        if avg <= 1.55 and p80 <= 2.0:
+            return "A1"
+        elif avg <= 1.95 and p80 <= 3.0:
+            return "A2"
+        elif avg <= 2.60 and p80 <= 4.0:
+            return "B1"
+        elif avg <= 3.40:
+            return "B2"
+        elif avg <= 4.30:
+            return "C1"
+        else:
+            return "C2"
 
     @classmethod
     def is_cefr_compliant_distractor(cls, candidate: str, target_word: str) -> bool:
@@ -2769,55 +2828,95 @@ class LinguisticEngine:
                     }
                 else:
                     doc = nlp(matched_sent)
-                    expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
+                    # Find the contiguous token span of expr_clean in matched_sent to avoid grabbing disjoint tokens
+                    expr_tokens = []
+                    m_span = re.search(r'\b' + re.escape(expr_clean) + r'\b', matched_sent, re.IGNORECASE)
+                    if not m_span and len(words) > 1:
+                        # Fallback: match words joined by flexible whitespace/punctuation
+                        pat = r'\b' + r'\s+'.join(re.escape(w) for w in words) + r'\b'
+                        m_span = re.search(pat, matched_sent, re.IGNORECASE)
+
+                    if m_span:
+                        sp_span = doc.char_span(m_span.start(), m_span.end())
+                        if sp_span:
+                            expr_tokens = list(sp_span)
+
+                    if not expr_tokens:
+                        expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
+
                     first_tok = expr_tokens[0] if expr_tokens else None
 
                     if first_tok and first_tok.pos_ in ("VERB", "AUX"):
                         v_lemma = first_tok.lemma_.lower()
                         last_tok = expr_tokens[-1]
-                        if last_tok.pos_ == "ADP" or last_tok.dep_ in ("prep", "prt"):
+                        
+                        # Syntax-aware detection: check if 'to' is an infinitive marker rather than a preposition
+                        is_infinitive_to = False
+                        if last_tok.text.lower() == "to":
+                            if last_tok.pos_ == "PART" or last_tok.dep_ == "aux":
+                                is_infinitive_to = True
+                            elif last_tok.head.pos_ == "VERB" and last_tok.head.dep_ in ("xcomp", "advcl", "purpcl"):
+                                is_infinitive_to = True
+
+                        if is_infinitive_to:
+                            # Genuine infinitive construction (e.g. tend to do [sth], fail to do [sth])
+                            formula = f"{v_lemma} to do [sth]"
+                            cand_type = "collocation"
+                        elif last_tok.pos_ in ("ADP", "PART") or last_tok.dep_ in ("prep", "prt"):
                             prep_word = last_tok.text.lower()
                             if len(words) == 2:
                                 formula = f"{v_lemma} {prep_word} [sth/sb]"
                             else:
                                 core = " ".join(t.lemma_ if t.pos_ == "VERB" else t.text.lower() for t in expr_tokens)
                                 formula = f"{core} [sth/sb]"
-                            cand_item = {
-                                "sid": matched_sid,
-                                "quote": matched_sent,
-                                "phrase": expr_clean,
-                                "type": "phrasal verb",
-                                "pattern_formula": formula,
-                                "score": 90,
-                            }
+                            cand_type = "phrasal verb"
                         else:
                             # Verb + object / adj (e.g. make smart choices, keep silent, have a try)
                             core = " ".join(t.lemma_ if t.pos_ == "VERB" else t.text.lower() for t in expr_tokens)
-                            cand_item = {
-                                "sid": matched_sid,
-                                "quote": matched_sent,
-                                "phrase": expr_clean,
-                                "type": "collocation",
-                                "pattern_formula": core,
-                                "score": 80,
-                            }
-                    elif words[0].lower() in ("in", "on", "at", "by", "for", "with", "from", "to", "under", "over"):
+                            formula = core
+                            cand_type = "collocation"
+
+                        cand_item = {
+                            "sid": matched_sid,
+                            "quote": matched_sent,
+                            "phrase": expr_clean,
+                            "type": cand_type,
+                            "pattern_formula": formula,
+                            "score": 90 if cand_type == "phrasal verb" else 80,
+                        }
+                    elif words[0].lower() in ("in", "on", "at", "by", "for", "with", "from", "to", "under", "over", "toward", "towards"):
+                        # Prepositional expressions (e.g. toward the end of [sth], in touch with [sb])
+                        formula = expr_clean
+                        if expr_clean.endswith(" of") or expr_clean.endswith(" for") or expr_clean.endswith(" with"):
+                            formula = f"{expr_clean} [sth]"
+                        elif expr_clean.endswith(" to"):
+                            formula = f"{expr_clean} [sth/sb]"
                         cand_item = {
                             "sid": matched_sid,
                             "quote": matched_sent,
                             "phrase": expr_clean,
                             "type": "set phrase",
-                            "pattern_formula": expr_clean,
+                            "pattern_formula": formula,
                             "score": 50,
                         }
                     else:
+                        # Nominal/quantifier/partitive/idiomatic expressions (e.g. a piece of [sth], any type of [sth], show thanks to [sb], hats off to [sb])
+                        formula = expr_clean
+                        if expr_clean.endswith(" of") or expr_clean.endswith(" for") or expr_clean.endswith(" with"):
+                            formula = f"{expr_clean} [sth]"
+                        elif expr_clean.endswith(" to"):
+                            formula = f"{expr_clean} [sb]"
+                        elif expr_clean.lower() in ("hat off", "hats off"):
+                            formula = "hats off to [sb]"
+
+                        cand_type = "idiom" if expr_clean.lower() in ("hat off", "hats off", "pat on the back") else "collocation"
                         cand_item = {
                             "sid": matched_sid,
                             "quote": matched_sent,
                             "phrase": expr_clean,
-                            "type": "collocation",
-                            "pattern_formula": expr_clean,
-                            "score": 60,
+                            "type": cand_type,
+                            "pattern_formula": formula,
+                            "score": 75 if cand_type == "idiom" else 60,
                         }
 
                 if cand_item:

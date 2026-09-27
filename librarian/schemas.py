@@ -374,13 +374,11 @@ class VocabularyItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: PARTS_OF_SPEECH = dataclasses.field(default="noun")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
-    word_cefr_level: VOCAB_CEFR_LEVELS = dataclasses.field(default="B2")
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class VocabularyExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     vocabulary: List[VocabularyItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 @dataclasses.dataclass
@@ -390,13 +388,11 @@ class ExpressionItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     part_of_speech: EXPRESSION_TYPES = dataclasses.field(default="phrasal verb")
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
-    word_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
 class ExpressionsExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     expressions: List[ExpressionItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 GRAMMAR_CATEGORIES = Literal[
@@ -415,12 +411,10 @@ class GrammarItem:
     category: GRAMMAR_CATEGORIES = "Information Packaging"
     imitation_example: str = dataclasses.field(default="", metadata={"minLength": 1})
     common_mistakes: str = dataclasses.field(default="", metadata={"minLength": 1})
-    cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
 
 @dataclasses.dataclass
 class GrammarExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     grammar_patterns: List[GrammarItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 @dataclasses.dataclass
@@ -437,7 +431,6 @@ class ConceptItem:
 @dataclasses.dataclass
 class SummaryExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     text_summary_or_plot: str = dataclasses.field(default="", metadata={"minLength": 1})
     estimated_reading_time: str = dataclasses.field(default="", metadata={"minLength": 1})
     essential_questions: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 2, "maxItems": 3})
@@ -523,7 +516,6 @@ class ListeningQuizQuestion:
 class ListeningQuiz:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
     topic: str = dataclasses.field(default="", metadata={"minLength": 1})
-    cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     speaker_1: str = dataclasses.field(default="", metadata={"minLength": 1})
     speaker_2: str = dataclasses.field(default="", metadata={"minLength": 1})
     script: List[ListeningQuizTurn] = dataclasses.field(default_factory=list)
@@ -569,7 +561,6 @@ class MindMapBranch:
 @dataclasses.dataclass
 class MindMapExtraction:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_cefr_level: CEFR_LEVELS = dataclasses.field(default="B2")
     root_name: str = dataclasses.field(default="", metadata={"minLength": 1})
     branches: List[MindMapBranch] = dataclasses.field(default_factory=list, metadata={"minItems": 3, "maxItems": 5})
 

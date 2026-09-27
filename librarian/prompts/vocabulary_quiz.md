@@ -1,30 +1,44 @@
 ### SYSTEM ###
-You are an expert Academic English Stylist and Lexicographer. You compose publishable, CEFR-aligned academic assessment items and precise pedagogical lexical explanations.
+You are an expert ESL Lexical Assessment Specialist who designs standardized, fair, and diagnostically rigorous CEFR-aligned vocabulary assessments.
 
 ### USER ###
-Compose an academic vocabulary assessment strictly using the pre-computed item specifications supplied below.
+Create a high-quality multiple-choice vocabulary assessment from the supplied vocabulary list.
 
-**CORE PEDAGOGICAL TASKS**
+**PEDAGOGICAL ASSESSMENT MANDATES**
 
-1. **Micro-Task Execution & Sentence Composition**:
-   - For EACH item, adhere strictly to its `🎯 Micro-Task for LLM` as your syntactic, collocational, and contextual blueprint.
-   - Compose an original, intellectually mature academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause.
-   - **Semantic Precision & Disambiguation**: Incorporate distinctive contextual clues reflecting the target word's specific meaning whenever necessary to eliminate interchangeable fits with category alternatives, but never trivially copy definition phrases.
-   - **Single Blank Positioning**: Place EXACTLY ONE blank `____` (strictly four underscores) where the `Target Word` precisely fits.
-   - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its stem derivatives must NEVER appear anywhere in the sentence outside the blank `____`.
+1. **Count & Coverage**:
+   - Generate EXACTLY {count} questions testing {count} unique single-word vocabulary items exclusively from the supplied list. No duplicates, derivatives, or fabricated targets.
+   - ⚠️ **ACTIVE TARGET USAGE MANDATE**: `target_word` MUST match `options[correct_answer_index]` character-for-character. The word placed into the blank `____` must perfectly agree with the declared target's part of speech and required inflectional form.
 
-2. **Options Binding & Index Fidelity**:
-   - Populate the `options` array with the EXACT 4 words from `Prescribed Options` in their exact given order (do NOT modify, re-inflect, or re-order them).
-   - Set `correct_answer_index` strictly to the provided `Correct Answer Index`.
-   - ⚠️ Verification Invariant: `options[correct_answer_index]` MUST equal `target_word` character-for-character.
+2. **Question (Contextual & Structural Anchoring)**:
+   - Write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (e.g., concession, condition, cause, or contrast).
+   - 🔒 **STRICT SINGLE BLANK MANDATE**: Each question stem MUST contain EXACTLY ONE single continuous blank `____` (strictly four underscores, no quotation marks around question). ❌ MULTIPLE BLANKS ARE ABSOLUTELY PROHIBITED: NEVER include two or more blanks in a single sentence (e.g., no '____ ... ____').
+   - 🚫 **NO COPYING INPUT EXAMPLES**: NEVER copy, adapt, or fill-in-the-blank mask any sentence from the input (neither 'Quoted Sentence' nor 'Example Usage'). Copying examples from the list is strictly prohibited!
+   - 🎯 **Strict Part-of-Speech Slot Matching**: The blank (____) MUST grammatically require the exact part of speech and syntactic role of the target word. If the target is a noun, the blank must strictly require a noun (e.g., 'The ____ of the...'). Do NOT place a noun into a verb or adjective slot.
+   - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its morphological derivatives must NEVER appear anywhere in the stem outside the blank `____`.
+   - ⚓ **MANDATORY CONTEXTUAL & COLLOCATIONAL ANCHORS**:
+     * Every sentence MUST feature clear, objective context clues (e.g., explicit dependent prepositions like *to / on / of / for*, fixed verb-noun collocations, or unmistakable cause-and-effect / contrastive logic).
+     * Single-fit validity is absolute: the sentence context must mathematically rule out all 3 distractors on objective structural or logical grounds, NEVER on subjective 'register' or 'formality' differences.
 
-3. **Explanatory Discrimination**:
-   - `design_audit`: Concise tag chain (under 15 words):
-     `AUDIT: [Target] -> [Anchor/Syntactic Clue] -> [Trap Mechanism]`
-     (e.g. `AUDIT: [revenue] -> from -> Prepositional Constraint (revenue vs gross)`).
-   - `explanation`: Write targeted pedagogical rationale:
-     (1) Why the target word fits the sentence logic and anchor;
-     (2) Explicitly analyze why each distractor fails, quoting its exact wording (e.g., "'gross' requires a noun; 'taxation' denotes the act...").
+3. **Options (Target & 3 Structured Objective Distractors)**:
+   - **Target**: `target_word` must strictly equal `options[correct_answer_index]`. Multi-word units must be tested as indivisible wholes.
+   - **Grammatical Homogeneity & Authenticity**: All 4 options must be grammatically correct, authentic English words or established expressions sharing the identical grammatical category (part of speech) and the EXACT inflection required by the blank (e.g., all past participles `-ed`, all plurals `-s`, all `-ing`).
+   - 🚫 **STRICT BANS (ZERO-TOLERANCE DEFECTS)**:
+     * **NO DUPLICATE OPTIONS**: Every option across A, B, C, D must be 100% unique within each question. Having duplicate options (e.g. A, C, D all 'brochure') is a fatal flaw.
+     * **NO IN-LIST RECYCLING**: NEVER recycle or pull other unrelated vocabulary items from the supplied input list to fill distractor slots. Do NOT use words like 'brochure', 'enclosure', or 'siege' repeatedly across unrelated questions. Distractors must be authentic, independently generated English words tailored strictly to the sentence context.
+     * **NO SYNONYM PILES**: NEVER supply interchangeable synonyms. Distractors cannot merely differ by subtle tone or degree of formality.
+   - 🎯 **MANDATORY 3-VECTOR DISTRACTOR TAXONOMY**:
+     Each question's 3 distractors MUST consist of:
+     1. *Trap 1 (Antonym / Logical Polarity Clash)*: directly contradicts the cause/contrast/concession logic established in the sentence clues.
+     2. *Trap 2 (Collocation / Syntax Clash)*: plausible meaning in the general topic, but violates the blank's dependent preposition, verb valency, or conventional lexical pairing.
+     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.
+
+4. **Design Audit & Explanation**:
+   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
+     `AUDIT: [Target Word] -> [Syntactic Slot Anchor / Clue] -> [Traps: Antonym / Collocation Clash / Domain Mismatch]`
+     (e.g. `AUDIT: [comply] -> with [NP] -> Collocation Clash (to/for)`). DO NOT write paragraphs or quote full sentences here.
+   - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.
+   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.
    - `definition`: Concise dictionary meaning of the target in this context.
 
 CONTENT:

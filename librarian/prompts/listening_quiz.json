@@ -9,17 +9,6 @@
       "type": "string",
       "minLength": 1
     },
-    "cefr_level": {
-      "type": "string",
-      "enum": [
-        "A1",
-        "A2",
-        "B1",
-        "B2",
-        "C1",
-        "C2"
-      ]
-    },
     "speaker_1": {
       "type": "string",
       "minLength": 1
@@ -139,7 +128,6 @@
   "required": [
     "title",
     "topic",
-    "cefr_level",
     "speaker_1",
     "speaker_2",
     "script",

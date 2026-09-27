@@ -5,17 +5,6 @@
       "type": "string",
       "minLength": 1
     },
-    "overall_cefr_level": {
-      "type": "string",
-      "enum": [
-        "A1",
-        "A2",
-        "B1",
-        "B2",
-        "C1",
-        "C2"
-      ]
-    },
     "vocabulary": {
       "type": "array",
       "maxItems": "{count}",
@@ -50,15 +39,6 @@
             "type": "string",
             "minLength": 1
           },
-          "word_cefr_level": {
-            "type": "string",
-            "enum": [
-              "B1",
-              "B2",
-              "C1",
-              "C2"
-            ]
-          },
           "example_usage": {
             "type": "string",
             "minLength": 1
@@ -70,7 +50,6 @@
           "word",
           "part_of_speech",
           "definition",
-          "word_cefr_level",
           "example_usage"
         ],
         "additionalProperties": false
@@ -79,7 +58,6 @@
   },
   "required": [
     "title",
-    "overall_cefr_level",
     "vocabulary"
   ],
   "additionalProperties": false

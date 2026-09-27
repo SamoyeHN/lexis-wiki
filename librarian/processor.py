@@ -1911,7 +1911,7 @@ class WikiProcessor:
             g_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
                 f"The following {len(grammar_skeletons)} academic structural patterns have been mathematically identified in the passage.\n"
-                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets at the beginning of that line in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the high-intelligence pedagogical fields (pedagogical_function, imitation_example, common_mistakes, and cefr_level):\n\n"
+                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets at the beginning of that line in the passage above, copy its authentic full sentence into 'quote', adopt the exact category and canonical formula, and craft the pedagogical fields (pedagogical_function, imitation_example, common_mistakes):\n\n"
                 + "\n".join(skeleton_bullets) + "\n\n"
             )
 
@@ -1935,7 +1935,7 @@ class WikiProcessor:
             e_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET EXPRESSIONS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & ACL) ###\n"
                 f"The following {len(expression_skeletons)} high-value academic expressions, collocations, and phrasal units have been mathematically verified in the passage.\n"
-                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt classification type and canonical slotted formula directly into 'word', and craft its definition and example_usage:\n\n"
+                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt and refine its canonical slotted formula into 'word' (ensuring precise syntactic slots such as 'to do [sth]' for infinitive structures, or '[sth/sb]' for prepositional objects), adopt the classification type, and craft its definition and example_usage:\n\n"
                 + "\n".join(expr_skel_bullets) + "\n\n"
             )
 
@@ -1956,7 +1956,7 @@ class WikiProcessor:
                 v_skeletons_sec = (
                     f"\n### DETERMINISTIC TARGET VOCABULARY (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & AWL) ###\n"
                     f"The following {len(vocab_skeletons)} high-value academic headwords have been mathematically extracted and lemmatized from the passage.\n"
-                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt exact canonical base headword in 'word' and part_of_speech, and craft its pedagogical definition, CEFR level, and example_usage:\n\n"
+                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt exact canonical base headword in 'word' and part_of_speech, and craft its pedagogical definition and example_usage:\n\n"
                     + "\n".join(v_skel_bullets) + "\n\n"
                 )
 
@@ -2134,7 +2134,6 @@ class WikiProcessor:
                                 "word": resolved_word,
                                 "part_of_speech": expr.get("part_of_speech", "phrasal verb"),
                                 "definition": expr.get("definition", ""),
-                                "word_cefr_level": expr.get("word_cefr_level", "B2"),
                                 "quoted_sentence": expr.get("quoted_sentence", ""),
                                 "example_usage": expr.get("example_usage", ""),
                             }
@@ -2145,7 +2144,6 @@ class WikiProcessor:
                                 word=resolved_word,
                                 part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                                 definition=getattr(expr, "definition", ""),
-                                word_cefr_level=getattr(expr, "word_cefr_level", "B2"),
                                 quoted_sentence=getattr(expr, "quoted_sentence", ""),
                                 example_usage=getattr(expr, "example_usage", ""),
                             )
@@ -2218,13 +2216,11 @@ class WikiProcessor:
                         word=resolved_word,
                         part_of_speech=getattr(expr, "part_of_speech", "phrasal verb"),
                         definition=getattr(expr, "definition", ""),
-                        word_cefr_level=getattr(expr, "word_cefr_level", "B2"),
                         quoted_sentence=getattr(expr, "quoted_sentence", ""),
                         example_usage=getattr(expr, "example_usage", ""),
                     ))
                 v_extracted = VocabularyExtraction(
                     title=f"{file_stem.replace('_', ' ')} Vocabulary",
-                    overall_cefr_level="B2",
                     vocabulary=vocab_list
                 )
                 all_saved.extend(self._save_extraction_results(v_extracted, source_path.name, category_override="vocabulary"))
@@ -2252,7 +2248,6 @@ class WikiProcessor:
                                 category=skel["category"],
                                 imitation_example=f"The study demonstrates that {skel['pattern_formula']}, establishing empirical validity.",
                                 common_mistakes="ESL learners frequently misapply slot boundary constraints or omit required subordinators.",
-                                cefr_level="B2"
                             )
                             if dataclasses.is_dataclass(data):
                                 data.grammar_patterns.append(completed_item)
@@ -2830,6 +2825,16 @@ class WikiProcessor:
             # 4.5. Randomize options
             quiz_obj = self._shuffle_quiz_options(quiz_obj)
 
+            # Deterministically attach physical CEFR level to quiz_obj
+            cefr_val = str(data.get("cefr_level") or kwargs.get("cefr_level") or "B2").upper()
+            if isinstance(quiz_obj, dict):
+                quiz_obj["cefr_level"] = cefr_val
+            else:
+                try:
+                    setattr(quiz_obj, "cefr_level", cefr_val)
+                except Exception:
+                    pass
+
             if template_name == "reading":
                 if isinstance(quiz_obj, dict):
                     quiz_obj["passage"] = data["passage"]
@@ -3160,7 +3165,15 @@ class WikiProcessor:
                                 pass
                         quiz_obj = self._shuffle_quiz_options(quiz_obj)
 
-                        # Re-bind modality-specific properties
+                        # Re-bind modality-specific properties and deterministic CEFR level
+                        if isinstance(quiz_obj, dict):
+                            quiz_obj["cefr_level"] = cefr_val
+                        else:
+                            try:
+                                setattr(quiz_obj, "cefr_level", cefr_val)
+                            except Exception:
+                                pass
+
                         if template_name == "reading":
                             if isinstance(quiz_obj, dict): quiz_obj["passage"] = data["passage"]
                             else: quiz_obj.passage = data["passage"]
@@ -3621,6 +3634,11 @@ class WikiProcessor:
                 mindmap_dict = data
             nodes = mindmap_dict.get("nodes", []) if isinstance(mindmap_dict, dict) else []
             mindmap_dict["item_count"] = len(nodes)
+            # Physical text CEFR calculation
+            if hasattr(self, "_last_source_content") and self._last_source_content:
+                mindmap_dict["overall_cefr_level"] = LinguisticEngine.calculate_text_cefr(self._last_source_content)
+            elif "overall_cefr_level" not in mindmap_dict:
+                mindmap_dict["overall_cefr_level"] = "B1"
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(mindmap_dict, f, indent=2, ensure_ascii=False)
             saved_paths.append(str(json_path))
@@ -3685,13 +3703,22 @@ class WikiProcessor:
             items = unique_items
             item_count = len(items)
 
+            # Physical text CEFR calculation for collection extractions
+            calc_overall_cefr = None
+            if hasattr(self, "_last_source_content") and self._last_source_content:
+                calc_overall_cefr = LinguisticEngine.calculate_text_cefr(self._last_source_content)
+            elif category in ["vocabulary", "grammar"]:
+                calc_overall_cefr = "B1"
+
             lines = [
                 "---",
                 f"title: \"{display_title}\"",
                 f"source: \"{source_link}\"",
                 f"category: [\"{category}\", \"extraction\"]",
-                f"item_count: {item_count}"
             ]
+            if calc_overall_cefr:
+                lines.append(f"overall_cefr_level: \"{calc_overall_cefr}\"")
+            lines.append(f"item_count: {item_count}")
 
             # Inject QA Audit Score if available
             qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
@@ -3759,6 +3786,16 @@ class WikiProcessor:
                     header_val = f"[[{header_val}]]"
                 
                 lines.append(f"## {header_val}")
+
+                # For vocabulary items, deterministically calculate Word CEFR Level if not present
+                if category == "vocabulary":
+                    has_cefr = any(k.lower() == "word_cefr_level" and v for k, v in body_entries)
+                    if not has_cefr and primary_key == "word":
+                        clean_target_word = re.sub(r'\[.*?\]|\(.*?\)', '', str(header_entry[1])).strip().lower()
+                        # If multi-word expression, take first core content word
+                        lookup_w = clean_target_word.split()[0] if " " in clean_target_word else clean_target_word
+                        derived_cefr = LinguisticEngine.get_word_cefr(lookup_w, default="B1")
+                        body_entries.append(("word_cefr_level", derived_cefr))
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -3841,6 +3878,12 @@ class WikiProcessor:
                 words = len(re.findall(r'\b\w+\b', self._last_source_content))
                 minutes = max(1, round(words / 180))
                 reading_time = f"{words} words, approx. {minutes} min{'s' if minutes > 1 else ''} reading time"
+
+            # Physical text CEFR calculation
+            if hasattr(self, "_last_source_content") and self._last_source_content:
+                overall_cefr = LinguisticEngine.calculate_text_cefr(self._last_source_content)
+            elif not overall_cefr:
+                overall_cefr = "B1"
 
             item_count = len(concepts)
 
@@ -4261,13 +4304,12 @@ class WikiProcessor:
             "🚫 DO NOT include pre-analysis, stream-of-consciousness deliberations, self-correction monologues, or repetitive drafts. "
             "Begin immediately with 'Item 1:' and write out the items cleanly:\n\n"
             "Item 1:\n"
-            "- Audit: AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [PoS] -> [CEFR] -> [VERBATIM_CONFIRMED]\n"
+            "- Audit: AUDIT: [Surface Word in Text] -> [Base Lemma Headword] -> [PoS] -> [VERBATIM_CONFIRMED]\n"
             "- Context Sentence: \"[exact 100% verbatim sentence copied directly from the passage without ANY alteration or rewriting]\"\n"
             "- Word: [single-word base lemma headword derived from the audit above, strictly ONE word]\n"
             "- Part of Speech: [noun / verb / adjective / adverb / preposition / conjunction / interjection]\n"
             "- Definition: [concise, context-specific English meaning]\n"
-            "- Example Usage: [original, high-quality academic illustrative sentence in a different context]\n"
-            "- CEFR: [B1 / B2 / C1 / C2]\n\n"
+            "- Example Usage: [original, high-quality academic illustrative sentence in a different context]\n\n"
             "Item 2:\n"
             "...\n\n"
             "Ensure all items follow this exact item layout consecutively without extra commentary, markdown tables, or code fences."
@@ -4283,7 +4325,6 @@ class WikiProcessor:
             - Part of Speech: Z
             - Definition: D
             - Example Usage: E
-            - CEFR: L
             - Audit: A
         """
         import re
@@ -4301,10 +4342,8 @@ class WikiProcessor:
             "part_of_speech": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Part[ \t]+of[ \t]+Speech[ \t]*[:：][ \t]*(.*)$"),
             "definition": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Definition[ \t]*[:：][ \t]*(.*)$"),
             "example_usage": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Example[ \t]+Usage[ \t]*[:：][ \t]*(.*)$"),
-            "word_cefr_level": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*CEFR[ \t]*[:：][ \t]*(.*)$"),
             "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*(?:Design[ \t]+Audit|Audit)[ \t]*[:：][ \t]*(.*)$"),
         }
-        valid_cefr = ("B1", "B2", "C1", "C2")
         valid_pos = ("noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection")
 
         def grab(block, key):
@@ -4330,9 +4369,6 @@ class WikiProcessor:
             if len(quote) >= 2 and quote[0] in "\"'" and quote[-1] in "\"'":
                 quote = quote[1:-1].strip()
 
-            cefr = grab(block, "word_cefr_level").upper().strip()
-            if cefr not in valid_cefr:
-                cefr = "B2"
             pos = grab(block, "part_of_speech").lower().strip()
             if pos not in valid_pos:
                 pos = "noun"
@@ -4359,7 +4395,6 @@ class WikiProcessor:
                 "part_of_speech": pos,
                 "definition": grab(block, "definition"),
                 "example_usage": grab(block, "example_usage"),
-                "word_cefr_level": cefr,
                 "design_audit": grab(block, "design_audit"),
             })
         return items
@@ -4396,10 +4431,8 @@ class WikiProcessor:
                 "- Map 'Word' to 'word' (strictly a single dictionary base lemma).\n"
                 "- Map 'Part of Speech' to 'part_of_speech' (strictly one of: noun, verb, adjective, adverb, preposition, conjunction, interjection).\n"
                 "- Map 'Definition' to 'definition'.\n"
-                "- Map 'CEFR' to 'word_cefr_level' (B1, B2, C1, or C2).\n"
                 "- Map 'Example Usage' to 'example_usage'.\n"
                 "- Set 'title' to 'Vocabulary'.\n"
-                "- Derive 'overall_cefr_level' from the most frequent CEFR level of the vocabulary.\n"
                 "- Clean any meta-tokens, code fences, or extraneous remarks.\n\n"
                 f"### VOCABULARY DRAFT ###\n{prose_draft}"
             )
@@ -4430,14 +4463,9 @@ class WikiProcessor:
             # Fallback to deterministic code parsing if Turn 2 call fails
             items = self._parse_vocab_prose(prose_draft, source_text=source_content)
             if items:
-                cefr_counts = {}
-                for it in items:
-                    cefr_counts[it["word_cefr_level"]] = cefr_counts.get(it["word_cefr_level"], 0) + 1
-                overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
                 logger.info(f"✅ Parsed {len(items)} vocabulary items from prose draft via deterministic parser.")
                 return validate_and_map(VocabularyExtraction, {
                     "title": "Vocabulary",
-                    "overall_cefr_level": overall,
                     "vocabulary": items,
                 })
 
@@ -4474,8 +4502,7 @@ class WikiProcessor:
             "- Design Audit: AUDIT: [Physical Anchor in quote] -> [Formula] -> [Syntactic Function] -> [Allocated Category]\n"
             "- Category: [strictly one of: Rhetoric & Emphasis, Cohesion & Framing, Information Packaging, Logic & Stance - aligned with the Audit & Pedagogical Function above]\n"
             "- Imitation Example: [high-quality academic model sentence illustrating this pattern in a different domain]\n"
-            "- Common Mistakes: [typical ESL learner errors with this pattern]\n"
-            "- CEFR: [B1 / B2 / C1 / C2]\n\n"
+            "- Common Mistakes: [typical ESL learner errors with this pattern]\n\n"
             "Item 2:\n"
             "...\n\n"
             f"Ensure all items follow this exact item layout consecutively without extra commentary, markdown tables, or code fences."
@@ -4492,7 +4519,6 @@ class WikiProcessor:
             - Pedagogical Function: P
             - Imitation Example: E
             - Common Mistakes: M
-            - CEFR: L
             - Audit: A
         Deterministic code parsing avoids model token stalls, token truncation, and hallucinated keys.
         If `source_text` is provided, quotes are verified against the source to reject hallucinated or rewritten quotes.
@@ -4517,10 +4543,8 @@ class WikiProcessor:
             "pedagogical_function": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Pedagogical[ \t]+Function[ \t]*[:：][ \t]*(.*)$"),
             "imitation_example": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Imitation[ \t]+Example[ \t]*[:：][ \t]*(.*)$"),
             "common_mistakes": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*Common[ \t]+Mistakes[ \t]*[:：][ \t]*(.*)$"),
-            "cefr_level": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*CEFR[ \t]*[:：][ \t]*(.*)$"),
             "design_audit": re.compile(r"(?im)^[ \t]*[-*]?[ \t]*(?:Design\s+Audit|Audit)[ \t]*[:：][ \t]*(.*)$"),
         }
-        valid_cefr = ("B1", "B2", "C1", "C2")
 
         from .schemas import GRAMMAR_CATEGORIES, normalize_enum_value
         allowed_cats = get_args(GRAMMAR_CATEGORIES) if 'get_args' in globals() else (
@@ -4555,10 +4579,6 @@ class WikiProcessor:
             if formula:
                 formula = cls.normalize_grammar_formula(formula)
 
-            cefr = grab(block, "cefr_level").upper().strip()
-            if cefr not in valid_cefr:
-                cefr = "B2"
-
             if not quote or not formula:
                 continue
 
@@ -4580,7 +4600,6 @@ class WikiProcessor:
                 "pedagogical_function": grab(block, "pedagogical_function"),
                 "imitation_example": grab(block, "imitation_example"),
                 "common_mistakes": grab(block, "common_mistakes"),
-                "cefr_level": cefr,
                 "design_audit": grab(block, "design_audit"),
             })
         return items
@@ -4619,9 +4638,7 @@ class WikiProcessor:
                 "- Map 'Pedagogical Function' to 'pedagogical_function'.\n"
                 "- Map 'Imitation Example' to 'imitation_example'.\n"
                 "- Map 'Common Mistakes' to 'common_mistakes'.\n"
-                "- Map 'CEFR' to 'cefr_level' (B1, B2, C1, or C2).\n"
                 "- Set 'title' to 'Grammar'.\n"
-                "- Derive 'overall_cefr_level' from the most frequent CEFR level of the patterns.\n"
                 "- Clean any meta-tokens, code fences, or extraneous remarks.\n"
                 "- 🛑 VERBATIM FIDELITY CHECK: every 'quote' MUST be copied word-for-word from the SOURCE TEXT at the end of this prompt (no rewording, no reordering, no splicing across sentences, no formula tokens).\n\n"
                 f"### GRAMMAR PATTERNS DRAFT ###\n{prose_draft}"
@@ -4655,14 +4672,9 @@ class WikiProcessor:
             # Fallback to deterministic code parsing if Turn 2 call fails
             items = self._parse_grammar_prose(prose_draft, source_text=source_content)
             if items:
-                cefr_counts = {}
-                for it in items:
-                    cefr_counts[it["cefr_level"]] = cefr_counts.get(it["cefr_level"], 0) + 1
-                overall = max(cefr_counts, key=cefr_counts.get) if cefr_counts else "B2"
                 logger.info(f"✅ Parsed {len(items)} grammar patterns from prose draft via deterministic parser.")
                 return validate_and_map(GrammarExtraction, {
                     "title": "Grammar",
-                    "overall_cefr_level": overall,
                     "grammar_patterns": items,
                 })
 

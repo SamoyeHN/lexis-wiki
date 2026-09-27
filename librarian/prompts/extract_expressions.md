@@ -38,4 +38,3 @@ Extract genuine multi-word expressions from the text.
 {content}
 
 {syllabus_section}
-

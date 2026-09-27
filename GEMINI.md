@@ -48,12 +48,16 @@
   - Every strict negative constraint provides an explicit permissible outlet (traffic routing to legal categories, graceful skip, or surgical rewrite).
   - Quotas are evidence-driven: models never force artificial category distributions. Items cluster naturally based on source text evidence.
 
-### 1.4 Unified CEFR Difficulty Calibration Architecture (`cefrpy` Integration)
-- **Curricular Alignment Mandate**: Eliminates the systemic defect where foundational curriculum texts (e.g. CEFR A1/A2/B1 introductory units) generated assessments harder than the text itself (e.g., college-level distractors, academic TOEFL question stems, or zero grammar yield).
-- **Extraction Layer (Vocabulary & Grammar)**:
-  - `schemas.py`: Standardized `VOCAB_CEFR_LEVELS = Literal["A1", "A2", "B1", "B2", "C1", "C2"]`.
-  - `extract_grammar.md`: Mined pattern formulas and imitation examples dynamically align with the curriculum level (`cefr_level`), banning impenetrable academic jargon on foundational texts.
-- **Assessment Layer (Completed: All Modalities - Vocabulary, Reading, Translation, Listening, Video)**:
+### 1.4 Unified & Deterministic CEFR Calibration Architecture (`cefrpy` Physical Grounding)
+- **Core Philosophy: Separation of Judgement (Code Calculates Semantic Ceiling, LLM Crafts Context)**:
+  - Eliminates the systemic defect where LLMs hallucinate or distort CEFR ratings (e.g. forcing A1/A2 daily words like `print`, `program`, `team` into artificial B1+ labels due to prompt/schema biases, or burning token compute asking LLMs to guess reading levels).
+  - **Zero CEFR Burden on LLM**: All output schemas (`schemas.py`) across both extraction (`VocabularyItem`, `ExpressionItem`, `GrammarItem`, `SummaryExtraction`, `MindMapExtraction`) and assessment generation (`VocabularyQuiz`, `ReadingQuiz`, `TranslationQuiz`, `ListeningQuiz`, `VideoQuiz`) completely strip out `cefr_level`, `word_cefr_level`, and `overall_cefr_level`.
+- **Symbolic Grounding & Physical Computation Layer (`LinguisticEngine` + `cefrpy`)**:
+  - **Text-Level Ceiling (`LinguisticEngine.calculate_text_cefr`)**: Statistically evaluates full-text vocabulary distribution, computing weighted frequencies against Oxford 3000/5000 and the CEFR lexical database to deterministically output the passage's overall level (`A1`–`C2`).
+  - **Word-Level Exact Grounding (`LinguisticEngine.get_word_cefr`)**: Performs offline, zero-token, exact dictionary lookups for mined headwords, accurately tagging basic words (`print` -> `A2`) without prompt distortion.
+  - **Stateless Frontmatter & Metadata Persistence**: Automatically writes `overall_cefr_level: "<level>"` to `extractions/<Unit>_{vocabulary,summary,grammar}.md` and `extractions/<Unit>_mindmap.json`.
+- **Downstream Decoupled Dynamic Injection Pipeline (`processor.py`)**:
+  - `_load_wiki_data` deterministically resolves the stored `overall_cefr_level` and injects it into downstream prompts as an authoritative design constraint `{cefr_level}`, rather than asking models to classify it.
   - **Vocabulary Quiz (`vocabulary_quiz`)**:
     - Pre-computed WordNet distractors pass through an offline `cefrpy` + Zipf frequency ceiling gate ($Zipf \ge 3.2$ for A1/A2, $3.0$ for B1), physically eliminating obscure or super-advanced distractors (e.g., `conceivableness` on basic words).
   - **Reading Quiz (`reading_quiz`)**:
@@ -65,11 +69,12 @@
   - **Listening Quiz (`listening_quiz`)**:
     - **Dynamic Prompt Interpolation**: Injects `{dialogue_style_guidance}`, `{question_stem_guidance}`, `{option_complexity_guidance}`, and `{skill_distribution_guidance}`. Calibrates dialogue registers and comprehension questions to target level.
     - **Level 1 Deterministic Code Gate (`audit_listening_integrity`)**: Enforces option length bounds ($\le 12$ words for A1/A2, $\le 16$ words for B1) and uses `cefrpy` to prevent off-script C1/C2 distractors.
+    - **Post-Processing Invariant Binding**: The deterministically computed `cefr_level` is attached directly onto `quiz_obj` during packaging for display on the interactive handout badge (`CEFR Level ${cefr}`).
   - **Video Quiz (`video_quiz`)**:
     - **Dynamic Prompt Interpolation**: Injects `{question_depth_guidance}` and `{option_complexity_guidance}`.
     - **Level 1 Deterministic Code Gate (`audit_video_integrity`)**: Enforces option length bounds ($\le 14$ words for A1/A2, $\le 18$ words for B1) and checks `cefrpy` difficulty ceilings.
 - **Audit Layer (Expert Auditor LLM-as-a-Judge)**:
-  - All quiz modalities inject curriculum level `{cefr_level}` and alignment guidelines into expert audit prompts (`expert_audit_*.md`), preventing high-tier evaluator models from penalizing foundational curriculum units with irrelevant academic criteria.
+  - All quiz modalities inject curriculum level `{cefr_level}` and alignment guidelines into expert audit prompts (`expert_audit_*.md`), preventing high-tier evaluator models from penalizing foundational curriculum units with irrelevant academic criteria while ensuring evaluation adheres to the deterministically assigned level.
 
 ### 1.5 Noun Semantic Selection & Collocational Cascade (Concrete vs. Abstract Distinction)
 - **Theoretical Basis (Selectional Restrictions & Valency Theory)**:
