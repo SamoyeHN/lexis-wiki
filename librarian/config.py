@@ -45,9 +45,6 @@ DEFAULT_CONFIG = {
     "judge_model": "",
     "num_ctx": 16384,
     "max_tokens": 8192,
-    "enable_prose_pipeline": False,
-    "enable_vocab_prose": False,
-    "enable_grammar_prose": False,
     "enable_authentic_cloze": True
 }
 
@@ -170,7 +167,6 @@ class Config:
         top_level_fallbacks = {
             "mode": "enable_authentic_cloze",
             "enable_authentic_cloze": "enable_authentic_cloze",
-            "enable_prose": "enable_prose_pipeline",
             "cefr_level": "cefr_level",
             "target_language": "target_language"
         }

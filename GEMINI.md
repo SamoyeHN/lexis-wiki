@@ -19,15 +19,11 @@
 - **Schema = Structural Integrity**:
   - `schemas.py` defines output format, required keys, JSON data types, and array constraints via native API structured outputs. Eliminates syntactic drift and structural formatting instructions from system prompts.
 
-### 1.2 Generation Pipeline Modes
-- **Extraction (Vocabulary / Expressions / Grammar)**: Defaults to **One-Shot** (`enable_vocab_prose: false`, `enable_grammar_prose: false`). One-Shot provides 80% faster generation and superior verbatim grounding for text-extraction tasks.
-- **Assessment / Quiz Generation Pipeline**:
-  - **Standard Production Mode: One-Shot Direct JSON (`enable_prose_pipeline: false`)**:
-    - **Empirical Baseline**: Thoroughly validated across 11 benchmark models (8B–27B). One-Shot achieves 100% structural completion, 2.2× faster generation (~30s vs ~78s), and eliminates secondary turn semantic drift, target-word loss, and answer-key misalignment.
-    - **Architecture Strategy**: Paired with deterministic WordNet pre-computed distractors and Python-level key binding, One-Shot serves as the default production configuration.
-  - **Diagnostic / Research Mode: Two-Turn Decoupled Pipeline (Prose-to-JSON)** (`enable_prose_pipeline: true`):
-    - Two stateless, independent HTTP calls ($\text{Call}_1$: Prose Draft $\rightarrow$ $\text{Call}_2$: JSON Packaging).
-    - **Purpose & Scope**: Exclusively retained for **offline debugging, pedagogical prompt inspection, raw response probing, and long-chain reading/translation reasoning analysis**. Not recommended for standard vocabulary assessment delivery due to high variance and packaging fragility in smaller models ($\le 14$B).
+### 1.2 Generation Pipeline Modes (Unified One-Shot Direct Structured Output)
+- **Extraction & Assessment Pipeline (Unified One-Shot Direct JSON)**:
+  - **Empirical Baseline**: Thoroughly validated across 11 benchmark models (8B–27B). One-Shot achieves 100% structural completion, 2.2× faster generation (~30s vs ~78s), and eliminates secondary turn semantic drift, target-word loss, and answer-key misalignment.
+  - **Elimination of Prose-to-JSON**: The historical two-turn Prose-to-JSON mode (`enable_prose_pipeline`) has been completely removed. Generating free prose failed to enhance creativity and instead introduced severe token bloat, structural omissions, and packaging discrepancies.
+  - **Architecture Strategy**: The LLM focuses exclusively on academic sentence crafting and psychometric discrimination in a single turn, while symbolic constraints (WordNet pre-computed distractors, CEFR physical ceilings, spaCy dependency trees) and Python-level key binding enforce structural validity at zero token cost.
 - **Structured Output Strategy**:
   - **Prompt-Guided JSON Mode (`format: "json"`, Default)**: Automatically injects programmatic JSON Schema derived from `schemas.py` into the system prompt. Eliminates GBNF grammar parser stalls, tokenizer conflicts, and CPU-bound token-masking timeouts while maintaining 100% schema fidelity.
   - **Strict Schema Mode (`enforce_gbnf: true`)**: Used for engines with hardware-accelerated grammar transducers. If empty tokens are returned, `llm.py` automatically falls back to `format: "json"`.
@@ -183,9 +179,7 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - `judge_model`: Independent evaluation model (should differ from generation `model`).
 - `num_ctx`: Model context window size in tokens (default: `16384`).
 - `max_tokens`: Maximum generation token budget (default: `8192`).
-- `enable_prose_pipeline`: Multi-turn prose-to-JSON for quizzes (default: `true`).
-- `enable_vocab_prose`: Prose pipeline for vocabulary (default: `false`).
-- `enable_grammar_prose`: Prose pipeline for grammar (default: `false`).
+- `enable_authentic_cloze`: Target cloze assessment mode (default: `true`).
 - **Transparent Delivery (No Quarantine)**:
   - All content delivers directly to `extractions/` or `handouts/` under its canonical unit slug, eliminating isolated quarantine folders (`_quarantine/`).
   - **3-Tier Frontmatter Status**:
