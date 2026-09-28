@@ -1774,9 +1774,9 @@ class LinguisticEngine:
             if not para:
                 continue
 
-            # If the paragraph is a pure markdown header or bold block (e.g. '## Text A', '**Title**')
+            # If the paragraph is a pure markdown header (e.g. '## Text A', '### Section 1')
             lines = [l.strip() for l in para.split("\n") if l.strip()]
-            if all(l.startswith("#") or (l.startswith("**") and l.endswith("**")) for l in lines):
+            if all(l.startswith("#") for l in lines):
                 indexed_paragraphs.append(para)
                 continue
 
@@ -1784,7 +1784,7 @@ class LinguisticEngine:
             prefix_lines = []
             content_lines = []
             for l in lines:
-                if not content_lines and (l.startswith("#") or (l.startswith("**") and l.endswith("**"))):
+                if not content_lines and l.startswith("#"):
                     prefix_lines.append(l)
                 else:
                     content_lines.append(l)
@@ -1827,22 +1827,24 @@ class LinguisticEngine:
             para_doc = nlp(masked_para_text)
             para_sent_parts = []
             for sent in para_doc.sents:
-                sent_str = (
+                raw_sent = (
                     sent.text.replace("§DOT§", ".")
                              .replace("§EXCL§", "!")
                              .replace("§QUES§", "?")
                              .strip()
                 )
-                if not sent_str:
+                if not raw_sent:
                     continue
-                words = [t for t in nlp(sent_str) if t.is_alpha]
-                if len(words) < 2 and not sent_str.endswith((".", "?", "!")):
-                    para_sent_parts.append(sent_str)
+                # Clean enclosing markdown bold/italic formatting from pristine sentence text
+                sent_clean = re.sub(r'^\*+|\*+$', '', raw_sent).strip()
+                words = [t for t in nlp(sent_clean) if t.is_alpha]
+                if len(words) < 2 and not sent_clean.endswith((".", "?", "!")):
+                    para_sent_parts.append(raw_sent)
                     continue
 
                 sid = f"S-{counter}"
-                sentence_pool[sid] = sent_str
-                para_sent_parts.append(f"[{sid}] {sent_str}")
+                sentence_pool[sid] = sent_clean
+                para_sent_parts.append(f"[{sid}] {sent_clean}")
                 counter += 1
 
             marker_str = f"{list_marker} " if list_marker else ""

@@ -361,9 +361,10 @@ def _extract_source_content(user_prompt: str) -> str:
                 content = match_md.group(1).strip()
     
     if content:
-        # Strictly strip any trailing draft blocks or retry critique blocks
+        # Strictly strip any trailing task blocks, target lists, skeletons, draft blocks, or retry critique blocks
+        # This prevents target vocabulary/expression/grammar instruction blocks from contaminating authentic source text.
         content = re.split(
-            r"\n\s*###+\s*(?:DETERMINISTIC\s+TARGET|🚨|\[QUALITY AUDIT REVIEW|VOCABULARY DRAFT|GRAMMAR PATTERNS DRAFT|QUIZ DRAFT|DRAFT)",
+            r"\n\s*###+\s*(?:TARGET\s+VOCABULARY|TARGET\s+EXPRESSIONS|TARGET\s+GRAMMAR|DETERMINISTIC\s+TARGET|🚨|\[QUALITY AUDIT REVIEW|VOCABULARY DRAFT|GRAMMAR PATTERNS DRAFT|QUIZ DRAFT|DRAFT)",
             content,
             flags=re.IGNORECASE
         )[0].strip()
@@ -408,20 +409,39 @@ def _extract_target_skeletons(user_prompt: str, task_type: str) -> List[Dict[str
     skeletons = []
     norm_prompt = re.sub(r'\r\n|\r', '\n', user_prompt)
     if task_type == "grammar":
-        # Matches: 1. [S-8] (Logic & Stance) Formula: `...`
-        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`', norm_prompt)
+        # Matches: 1. [S-8] (Logic & Stance) Formula: `...` or 1. [S-8] Formula: `...`
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`', norm_prompt)
         for num, sid, cat, formula in m:
-            skeletons.append({"sid": sid.strip(), "category": cat.strip(), "formula": formula.strip()})
+            skeletons.append({"sid": sid.strip(), "category": (cat or "Academic Syntax").strip(), "formula": formula.strip()})
     elif task_type == "expressions":
-        # Matches: 1. [S-10] (phrasal verb) Formula: `...`
-        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*Formula:\s*`([^`]+)`', norm_prompt)
+        # Matches: 1. [S-10] (phrasal verb) Formula: `...` or 1. [S-10] Formula: `...`
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`', norm_prompt)
         for num, sid, pos, formula in m:
-            skeletons.append({"sid": sid.strip(), "pos": pos.strip(), "formula": formula.strip()})
+            skeletons.append({"sid": sid.strip(), "pos": (pos or "expression").strip(), "formula": formula.strip()})
+        if not skeletons:
+            # Syllabus list fallback: ### TARGET EXPRESSIONS LIST ### \n - expression
+            syl_m = re.search(r'###\s*TARGET\s+EXPRESSIONS\s+LIST\s*###(.*?)(?:###|\Z)', norm_prompt, re.DOTALL | re.IGNORECASE)
+            if syl_m:
+                bullets = re.findall(r'^[ \t]*-[ \t]*([^\r\n]+)', syl_m.group(1), re.MULTILINE)
+                for b in bullets:
+                    clean_b = re.sub(r'\(.*?\)', '', b).strip()
+                    if clean_b and not clean_b.startswith("The text has"):
+                        skeletons.append({"formula": clean_b, "word": clean_b})
     elif task_type == "vocabulary":
-        # Matches: 1. [S-14] **word** (noun)
-        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\*\*([^*]+)\*\*\s*\(([^)]+)\)', norm_prompt)
+        # Matches: 1. [S-14] **word** (noun) or 1. [S-14] **word** [AWL]
+        m = re.findall(r'(\d+)\.\s*\[([^\]]+)\]\s*\*\*([^*]+)\*\*(?:\s*\(([^)]+)\))?', norm_prompt)
         for num, sid, word, pos in m:
-            skeletons.append({"sid": sid.strip(), "word": word.strip(), "pos": pos.strip()})
+            skeletons.append({"sid": sid.strip(), "word": word.strip(), "pos": (pos or "noun").strip()})
+        if not skeletons:
+            # Syllabus list fallback: ### TARGET VOCABULARY LIST ### \n - word (pos)
+            syl_m = re.search(r'###\s*TARGET\s+VOCABULARY\s+LIST\s*###(.*?)(?:###|\Z)', norm_prompt, re.DOTALL | re.IGNORECASE)
+            if syl_m:
+                bullets = re.findall(r'^[ \t]*-[ \t]*([^\r\n]+)', syl_m.group(1), re.MULTILINE)
+                for b in bullets:
+                    # Remove (pos) like (noun) and sentence anchor like [S-7]
+                    clean_b = re.sub(r'\[S-\d+\]|\(.*?\)', '', b).strip()
+                    if clean_b and not clean_b.startswith("The text has"):
+                        skeletons.append({"word": clean_b})
     return skeletons
 
 
@@ -655,6 +675,12 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
         # Check 1: Explicit hallucination acknowledgment
         if _is_hallucinated_quote(quote):
             flags.append(f"❌ Hallucinated quote (explicitly inferred/absent): '{quote[:50]}...'")
+            continue
+
+        # Check 1.5: Reject prompt instructions / task metadata leakage
+        if re.search(r"###\s*(?:TARGET|DETERMINISTIC|PASSAGE|SYLLABUS|OUTPUT|CORE\s+PEDAGOGICAL|JSON\s+SCHEMA)|Extract these exact|syllabus items|Do not skip or omit", quote, re.IGNORECASE):
+            flags.append(f"❌ Prompt instruction leakage in quote: '{quote[:50]}...'")
+            matches = max(0, matches - 1)
             continue
 
         # Check 2: Target word must be present in the quoted sentence (for vocabulary & expressions)

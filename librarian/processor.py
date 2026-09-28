@@ -245,6 +245,9 @@ class WikiProcessor:
             flags=re.IGNORECASE
         ).strip()
 
+        # Strip YAML frontmatter (metadata) so prompt body receives strictly pristine pedagogical prose
+        clean_body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', clean_body, flags=re.DOTALL).strip()
+
         return clean_body, syllabus_vocab, syllabus_grammar, syllabus_expressions
 
     # Normalization mapping from legacy/verbose grammar slots to standard COBUILD tokens
@@ -1860,7 +1863,13 @@ class WikiProcessor:
         s_prompt_template, s_schema = Prompts.get("extract_summary")
         m_prompt_template, m_schema = Prompts.get("extract_mindmap")
 
+        # Pre-tokenize source text into an indexed sentence pool ([S-1], [S-2]) using spaCy
+        raw_source_text = clean_content or content
+        indexed_content, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(raw_source_text)
+        self._last_sentence_pool = sentence_pool
+
         v_syllabus_sec = ""
+        v_target_num = v_count
         if syllabus_vocab:
             # Word-Family Deduplication on Syllabus Items:
             # If syllabus list has multiple items from the same morphological family (e.g. 'recognize' & 'recognition'),
@@ -1894,14 +1903,33 @@ class WikiProcessor:
                     logger.info(f"🧬 Consolidated syllabus word-family cluster {c} -> '{chosen}'")
                     cleaned_syllabus_vocab.append(chosen)
 
-            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified to {len(cleaned_syllabus_vocab)} unique word families).")
-            vocab_bullets = "\n".join([f"- {w}" for w in cleaned_syllabus_vocab])
             v_target_num = min(len(cleaned_syllabus_vocab), v_count)
+            # Code-Gate: Pre-trim syllabus to target budget so LLM has ZERO choice burden
+            cleaned_syllabus_vocab = cleaned_syllabus_vocab[:v_target_num]
+            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified & pre-trimmed to {len(cleaned_syllabus_vocab)} items).")
+
+            vocab_bullets = []
+            for w in cleaned_syllabus_vocab:
+                clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                target_tok = clean_w.replace('-', '')
+                matching_sent = ""
+                matching_sid = ""
+                if sentence_pool:
+                    for sid, s in sentence_pool.items():
+                        s_lower = s.lower()
+                        if re.search(r'\b' + re.escape(clean_w) + r'\b', s_lower) or (clean_w in s_lower) or (target_tok and target_tok in s_lower.replace('-', '')):
+                            matching_sent = s
+                            matching_sid = sid
+                            break
+                pos = LinguisticEngine.determine_contextual_pos(clean_w, matching_sent) if matching_sent else "noun"
+                sid_tag = f" [{matching_sid}]" if matching_sid else ""
+                vocab_bullets.append(f"- {w} ({pos}){sid_tag}")
+
             v_syllabus_sec = (
                 f"\n### TARGET VOCABULARY LIST ###\n"
                 f"The text has {len(cleaned_syllabus_vocab)} syllabus items:\n"
-                f"{vocab_bullets}\n\n"
-                f"Extract these exact {v_target_num} syllabus items that appear in the passage below. Do not skip or omit any of them. For each word, adopt the exact canonical lemma into 'word', verify it in 'design_audit', and quote its authentic verbatim sentence from the passage.\n\n"
+                + "\n".join(vocab_bullets) + "\n\n"
+                f"Extract all {len(cleaned_syllabus_vocab)} syllabus items listed above. For each word, adopt the exact headword into 'word', copy its authentic sentence into 'quoted_sentence' (using its pre-located sentence anchor), and craft an academic definition and new example_usage.\n\n"
             )
 
         e_syllabus_sec = ""
@@ -1912,7 +1940,7 @@ class WikiProcessor:
                 f"\n### TARGET EXPRESSIONS LIST ###\n"
                 f"The text has {len(syllabus_expressions)} syllabus multi-word candidate items:\n"
                 f"{expr_bullets}\n\n"
-                f"From these syllabus expressions, prioritize and extract genuine expressions (up to {e_count} expressions total) that appear in the passage below. For each selected expression, derive its canonical slotted base form in design_audit and copy it to 'word'.\n\n"
+                f"Extract all designated syllabus expressions present in the passage below. For each expression, adopt its canonical headword into 'word', copy its authentic sentence into 'quoted_sentence', and craft an academic definition and new example_usage.\n\n"
             )
 
         g_syllabus_sec = ""
@@ -1926,11 +1954,6 @@ class WikiProcessor:
                 f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint.\n\n"
             )
 
-        # Pre-tokenize source text into an indexed sentence pool ([S-1], [S-2]) using spaCy
-        raw_source_text = clean_content or content
-        indexed_content, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(raw_source_text)
-        self._last_sentence_pool = sentence_pool
-
         # Deterministically mine genuine academic grammar skeletons from sentence pool via spaCy
         grammar_skeletons = LinguisticEngine.mine_grammar_skeletons(sentence_pool, target_count=g_count, syllabus_grammar=syllabus_grammar)
         g_skeletons_sec = ""
@@ -1938,8 +1961,9 @@ class WikiProcessor:
             logger.info(f"🏛️ Mined {len(grammar_skeletons)} deterministic academic grammar skeletons from text.")
             skeleton_bullets = []
             for idx, s in enumerate(grammar_skeletons, 1):
+                cat = s.get("category") or "Academic Syntax"
                 skeleton_bullets.append(
-                    f"{idx}. [{s['sid']}] Formula: `{s['pattern_formula']}`"
+                    f"{idx}. [{s['sid']}] ({cat}) Formula: `{s['pattern_formula']}`"
                 )
             g_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
@@ -1962,8 +1986,9 @@ class WikiProcessor:
             logger.info(f"💬 Mined {len(expression_skeletons)} deterministic academic expression/collocation skeletons from text.")
             expr_skel_bullets = []
             for idx, s in enumerate(expression_skeletons, 1):
+                pos_type = s.get("type") or s.get("pos") or "collocation"
                 expr_skel_bullets.append(
-                    f"{idx}. [{s['sid']}] Formula: `{s['pattern_formula']}`"
+                    f"{idx}. [{s['sid']}] ({pos_type}) Formula: `{s['pattern_formula']}`"
                 )
             e_skeletons_sec = (
                 f"\n### DETERMINISTIC TARGET EXPRESSIONS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & ACL) ###\n"
@@ -1982,9 +2007,10 @@ class WikiProcessor:
                 logger.info(f"📚 Mined {len(vocab_skeletons)} deterministic academic vocabulary skeletons (AWL) from text.")
                 v_skel_bullets = []
                 for idx, s in enumerate(vocab_skeletons, 1):
+                    pos = s.get("part_of_speech") or "noun"
                     awl_tag = " [AWL]" if s.get("is_awl") else ""
                     v_skel_bullets.append(
-                        f"{idx}. [{s['sid']}] **{s['word']}**{awl_tag}"
+                        f"{idx}. [{s['sid']}] **{s['word']}** ({pos}){awl_tag}"
                     )
                 v_skeletons_sec = (
                     f"\n### DETERMINISTIC TARGET VOCABULARY (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & AWL) ###\n"
@@ -2500,9 +2526,12 @@ class WikiProcessor:
                 # Track 1: Authentic Passage Cloze (Achievement MCQ Mode)
                 raw_cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
                 if raw_cloze_items:
-                    logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode).")
+                    # Dynamically cap quiz count to available items
+                    effective_count = min(count, len(raw_cloze_items))
+                    kwargs["count"] = effective_count
+                    logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode, count capped at {effective_count}).")
                     cloze_bullets = []
-                    for idx, c in enumerate(raw_cloze_items, 1):
+                    for idx, c in enumerate(raw_cloze_items[:effective_count], 1):
                         opts_str = ", ".join(c.get("precomputed_distractors", []) or c.get("precomputed_options", []))
                         cloze_bullets.append(
                             f"### Item {idx} ###\n"
@@ -2519,14 +2548,18 @@ class WikiProcessor:
                     )
                 else:
                     sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
+                    if unit_headwords:
+                        kwargs["count"] = min(count, len(unit_headwords))
                     kwargs["vocabulary_content"] = sanitized_vocab
             else:
                 # Track 2: Pre-Computed Generative Skeletons (Proficiency MCQ Mode)
                 skeletons = LinguisticEngine.build_precomputed_target_skeletons(raw_vocab, target_count=count)
                 if skeletons:
-                    logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode).")
+                    effective_count = min(count, len(skeletons))
+                    kwargs["count"] = effective_count
+                    logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
                     skeleton_bullets = []
-                    for idx, s in enumerate(skeletons, 1):
+                    for idx, s in enumerate(skeletons[:effective_count], 1):
                         opts_str = ", ".join(s.get("prescribed_options", []))
                         anchor_hint = s.get("context_anchor") or "general context"
                         infl_hint = s.get("inflection", "base form")
@@ -2543,12 +2576,14 @@ class WikiProcessor:
                             f"- 🎯 Micro-Task for LLM: {micro_task_str}"
                         )
                     kwargs["vocabulary_content"] = (
-                        f"### TARGET SPECIFICATIONS ({len(skeletons)} ITEMS) ###\n"
+                        f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n"
                         "Execute each item's '🎯 Micro-Task for LLM' to construct the sentence stem, preserve the prescribed options and answer index exactly, and provide distractor discrimination quoting each choice's exact wording:\n\n"
                         + "\n\n".join(skeleton_bullets)
                     )
                 else:
                     sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
+                    if unit_headwords:
+                        kwargs["count"] = min(count, len(unit_headwords))
                     kwargs["vocabulary_content"] = sanitized_vocab
 
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
@@ -2615,6 +2650,12 @@ class WikiProcessor:
             kwargs["target_language"] = self.config.get("target_language") or "Chinese"
             cefr = (data.get("cefr_level") or "B2").upper()
             kwargs["cefr_level"] = cefr
+
+            # Dynamically cap count by available resources if both are present
+            if unit_headwords and unit_grammar_patterns:
+                kwargs["count"] = min(count, len(unit_headwords), len(unit_grammar_patterns))
+            elif unit_headwords:
+                kwargs["count"] = min(count, len(unit_headwords))
 
             if cefr in ("A1", "A2"):
                 kwargs["sentence_complexity_guidance"] = (

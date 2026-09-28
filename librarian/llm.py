@@ -711,7 +711,8 @@ class LLMClient:
                     syl_match = re.search(r'### TARGET VOCABULARY LIST ###(.*?)(?:###|\Z)', user_prompt, re.DOTALL)
                     if syl_match:
                         syl_words = re.findall(r'^[ \t]*-[ \t]*([^\r\n]+)', syl_match.group(1), re.MULTILINE)
-                        syl_targets = [w.strip() for w in syl_words if w.strip()]
+                        syl_targets = [re.sub(r'\[S-\d+\]|\(.*?\)', '', w).strip() for w in syl_words if w.strip()]
+                        syl_targets = [w for w in syl_targets if w and not w.startswith("The text has")]
                         for v_item in data["vocabulary"]:
                             if not isinstance(v_item, dict):
                                 continue
@@ -1004,7 +1005,7 @@ class LLMClient:
                                             return (
                                                 f"- [FIELD]: `questions[{idx_str}].target_word` vs `options[...]`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `{source_header}`"
+                                                f"  [LOOKUP]: TARGET VOCABULARY LIST or `{source_header}`"
                                             )
                                         if ("blank" in clean_lower or "____" in clean) and not any(k in t_name_lower for k in ("reading", "listening", "video")):
                                             return (
@@ -1035,11 +1036,17 @@ class LLMClient:
                                                 f"  [ERROR]: {clean}\n"
                                                 f"  [LOOKUP]: `{source_header}`"
                                             )
+                                        if "incomplete_coverage" in clean_lower or "target coverage" in clean_lower:
+                                            return (
+                                                f"- [FIELD]: `{array_key}` (Array Coverage)\n"
+                                                f"  [ERROR]: {clean}\n"
+                                                f"  [ACTION]: Append all missing syllabus targets to the `{array_key}` array. If multiple targets occur in the same sentence, quote it for each item."
+                                            )
                                         if "not found" in clean_lower or "hallucinat" in clean_lower:
                                             return (
                                                 f"- [FIELD]: `{field_prefix}.word`\n"
                                                 f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TARGET VOCABULARY LIST ###` or `{source_header}`"
+                                                f"  [LOOKUP]: TARGET VOCABULARY LIST or `{source_header}`"
                                             )
                                         if "definition" in clean_lower or "duplicate" in clean_lower:
                                             return (
@@ -1071,9 +1078,9 @@ class LLMClient:
                                     critical_invariant = "Every dialogue turn and comprehension question must strictly adhere to the target CEFR level, with exactly 4 distinct and plausible options grounded in the script."
                                 elif "video" in t_name_lower:
                                     critical_invariant = "Every question stem must correlate directly with its segment timestamp and transcript evidence, with exactly 4 distinct options and no duplicate choices."
-                                elif "quiz" in t_name_lower or "vocabulary" in t_name_lower:
+                                elif "quiz" in t_name_lower:
                                     critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
-                                elif any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
+                                elif any(k in t_name_lower for k in ("vocabulary", "expression")):
                                     critical_invariant = (
                                         f"Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `{source_header}`, "
                                         "and the `quoted_sentence` MUST itself contain the headword — if your cited sentence lacks it, "
@@ -1423,8 +1430,6 @@ class LLMClient:
 
         from .evaluator import _extract_source_content
         source_content = _extract_source_content(user_prompt)
-        if not source_content:
-            source_content = user_prompt
         if not source_content:
             return
 
