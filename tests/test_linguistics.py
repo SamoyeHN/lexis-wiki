@@ -3573,3 +3573,194 @@ class TestCollisionMergeCollocations:
         assert merged["thesaurus"] == [{"word": "tumour"}], merged["thesaurus"]
 
 
+class TestLdocePhraseAttestationGate:
+    """Backlog F7, gate half - a mined phrase ships only when Longman itself states it.
+
+    The gate used to ask the Oxford Collocations Dictionary file whether it had a headword for
+    the string, which is a weaker test than it sounds: 'keep of' is a preposition lifted out of
+    'keep somebody out of something' and no dictionary has it as a unit.  ldoce_phrase_evidence
+    asks the real question - a phrasal-verb block, a PHRASES item, a grammar pattern built on
+    the headword, or a COLLOCATIONS box item - and a sentence that merely contains the words in
+    this order is not evidence.
+
+    The counts match scripts/_probe_expression_yield.py (logs/expression_yield_objectfit.log):
+    78 expressions over the 11 wiki passages against the 76 the OCD gate produced, the two
+    vetoes being 'Longman does not state it' and 'Longman's frame does not put that object after
+    the particle'.
+    """
+
+    # Verb + preposition pairs a dependency parse hands over and the old gate shipped.  Longman
+    # never states any of them: 'havoc for' comes out of 'cause havoc for somebody', 'streak on'
+    # out of 'be on a winning streak', 'alone on' out of 'not alone on the list'.
+    INVENTED = [
+        "keep of", "havoc for", "account on", "accounts on", "streak on",
+        "accord in", "admit in", "depend for", "join in place",
+        "keep in WeChat", "above from", "alone on", "plain on", "alliance into",
+    ]
+
+    # ...and these are stated.  'base in' and 'accept into' used to sit in the list above,
+    # which was wrong: Longman's own grammar patterns are 'be based in something' and 'accept
+    # somebody into something', so the preposition belongs to the headword there exactly as it
+    # does in 'saturate something with something'.
+    STATED = [
+        "account for", "depend on", "depend upon", "keep in touch", "stay in touch",
+        "bring to account", "call to account", "by all accounts", "from all accounts",
+        "give up", "belong to", "send out", "tap into", "happen to", "based on",
+        "base in", "accept into", "saturate with", "embed in", "obsess with",
+        "profit from", "include in", "measure in", "announce to", "accord to",
+        "spend on", "cover in", "trade for", "get from", "derive from",
+    ]
+
+    def test_invented_pairs_are_rejected(self):
+        for phrase in self.INVENTED:
+            assert not LinguisticEngine.is_attested_phrase(phrase), (
+                phrase, LinguisticEngine.ldoce_phrase_evidence(phrase, include_examples=True))
+
+    def test_longman_stated_phrases_are_accepted(self):
+        for phrase in self.STATED:
+            assert LinguisticEngine.is_attested_phrase(phrase), (
+                phrase, LinguisticEngine.ldoce_phrase_evidence(phrase))
+
+    def test_a_pattern_that_writes_the_object_inside_it_states_the_pairing(self):
+        """Longman's grammar frames put the object between the verb and its preposition -
+        'saturate something with something', 'spend something on something', 'include
+        something in/on something', 'measure something in something', 'announce something to
+        somebody', 'trade somebody something for something'.  A gate that demands the two
+        tokens be adjacent reads 'saturate with' out of a dictionary that states it and hands
+        it back as an invention."""
+        for phrase in ["saturate with", "spend on", "include in", "measure in",
+                       "announce to", "accord to", "trade for", "accept into"]:
+            assert LinguisticEngine.is_attested_phrase(phrase), (
+                phrase, LinguisticEngine.ldoce_phrase_evidence(phrase))
+        # What may sit between them is an object slot, not any word.  'depend on somebody /
+        # something for something' has a complement of its own in the way, so 'depend for'
+        # is still nothing Longman states.
+        assert not LinguisticEngine.is_attested_phrase("depend for"), "depend for"
+
+    def test_a_passive_frame_is_the_headword_s_own_frame(self):
+        """'be embedded in something', 'be obsessed by/with something', 'be derived from
+        something', 'be based in something' are the headword's own patterns, written with a
+        copula because that is how a passive is written.  The headword inside them still
+        governs the preposition, so 'embed in' is as stated as 'remind of'."""
+        for phrase in ["embed in", "obsess with", "derived from", "based in", "base in"]:
+            assert LinguisticEngine.is_attested_phrase(phrase), (
+                phrase, LinguisticEngine.ldoce_phrase_evidence(phrase))
+        # A content word in front is somebody else's construction.  'croatia became an
+        # independent state in 1991' is a noun phrase, not a frame for 'state in'.
+        assert not LinguisticEngine.is_attested_phrase("state in"), "state in"
+
+    def test_a_slash_particle_alternative_is_one_slot(self):
+        """'profit by/from' and 'cover something with/in something' list two alternatives for
+        one slot, so the second alternative is stated too.  A preposition that is not followed
+        by a slash is a complement, not an alternative - that is the difference between
+        'profit by/from' and 'depend on somebody/something for something'."""
+        assert LinguisticEngine.is_attested_phrase("profit from"), "profit from"
+        assert LinguisticEngine.is_attested_phrase("cover in"), "cover in"
+        # A slot may carry the slash itself, since an object slot is legal in the gap anyway:
+        # 'regard somebody / something as something' is one frame and it states 'regard as'.
+        assert LinguisticEngine.is_attested_phrase("regard as"), "regard as"
+        assert not LinguisticEngine.is_attested_phrase("keep of"), "keep of"
+        assert not LinguisticEngine.is_attested_phrase("depend for"), "depend for"
+
+    def test_a_stressed_final_consonant_doubles_inside_the_frame(self):
+        """Longman's pattern is 'be embedded in something', which 'embed' can only reach if
+        the inflector knows emBED -> embedded.  The monosyllable shape test alone produces the
+        non-word 'embeded', which matches nothing in the dictionary."""
+        assert "embedded" in LinguisticEngine.inflected_forms("embed")
+        assert "embeded" not in LinguisticEngine.inflected_forms("embed")
+        assert "referred" in LinguisticEngine.inflected_forms("refer")
+        assert "differed" in LinguisticEngine.inflected_forms("differ")
+        assert LinguisticEngine.is_attested_phrase("embed in"), "embed in"
+
+    def test_a_slash_is_a_boundary_not_a_space(self):
+        """'on no account/not on any account' is two units.  Flattening the slash into a space
+        reads across the boundary and is what gave the invented 'account on' its evidence."""
+        flat = LinguisticEngine._entry_text_normalizer("on no account/not on any account")
+        assert flat == "on no account / not on any account", flat
+        assert not LinguisticEngine.is_attested_phrase("account on"), "account on"
+        # A slash deeper inside a string separates alternatives inside it; it is not a list of
+        # alternative headwords, so nothing is expanded across it.
+        assert LinguisticEngine._slash_variants("on no account/not on any account") == \
+               ["on no account/not on any account"]
+
+    def test_leading_slash_alternatives_each_attest_their_own_phrase(self):
+        """Longman writes 'stay/keep in touch', 'bring/call somebody to account' and
+        'by/from all accounts' on one line.  Each alternative heads the same tail, so each one
+        is a phrase of its own even though it shares a line with another."""
+        assert LinguisticEngine._slash_variants("stay/keep in touch") == \
+               ["stay in touch", "keep in touch"]
+        assert LinguisticEngine._slash_variants("bring/call somebody to account") == \
+               ["bring somebody to account", "call somebody to account"]
+        assert LinguisticEngine._phrase_tokens("bring/call somebody to account") == \
+               ["bring", "call", "to", "account"]
+        for phrase in ["stay in touch", "keep in touch", "bring to account", "call to account",
+                       "by all accounts", "from all accounts"]:
+            assert LinguisticEngine.is_attested_phrase(phrase), phrase
+
+    def test_surface_inflection_reaches_the_stated_lemma(self):
+        """The passage writes 'kept in touch'; the entry states 'keep in touch'.  A token that
+        is a real word gets its own lemma inflected, which is what closes that distance."""
+        for phrase in ["kept in touch", "keeping in touch", "keeps in touch", "depended on",
+                       "depends on", "accounts for", "happened to", "based on"]:
+            assert LinguisticEngine.is_attested_phrase(phrase), phrase
+        pattern = LinguisticEngine._phrase_regex(
+            LinguisticEngine._phrase_tokens("keep in touch"), 1)
+        assert "kept" in pattern and "keeping" in pattern, pattern
+
+    def test_a_typo_cannot_lemmatize_into_a_frame(self):
+        """Only an attested form is allowed the lemma bridge, so a misspelling cannot reach a
+        frame it was never part of."""
+        for phrase in ["depand on", "depond on", "kepp in touch", "keeps in tuch",
+                       "account forr", "dependin on"]:
+            assert not LinguisticEngine.is_attested_phrase(phrase), phrase
+        pattern = LinguisticEngine._phrase_regex(["depand", "on"], 1)
+        assert "depend" not in pattern, pattern
+
+    def test_object_fit_follows_the_frame_not_the_parse(self):
+        """'keep in' is a real phrasal verb, but Longman's frame is 'keep somebody in' - the
+        object comes before the particle - so a parse that puts something after 'in' has read a
+        locative or a noun of its own as the particle.  'depend on Mary' fits, because Longman's
+        frame is 'depend on / upon somebody / something'."""
+        fit = LinguisticEngine.ldoce_phrase_object_fit
+        assert not fit("keep in", "moments"), "keep in moments"
+        # 'keep in' + 'touch' fails the same frame test, but it is a different mistake: 'keep
+        # in touch' is a stated unit and the parse cut it in half.  The miner drops the
+        # fragment and ships the longer phrase - see
+        # test_miner_drops_the_locative_particle_parse.
+        assert not fit("keep in", "touch"), "keep in touch"
+        for phrase, obj in [("depend on", "Mary"), ("depend on", "report"),
+                            ("send in", "application"), ("wait for", "answer"),
+                            ("worry about", "privacy"), ("long for", "peace")]:
+            assert fit(phrase, obj), (phrase, obj)
+        # The veto needs positive evidence: no frame, no claim, no veto - and an object that was
+        # never claimed for the phrase is a fit by definition.
+        assert fit("break away", "result"), "break away result"
+        assert fit("keep in", ""), "keep in with no object"
+
+    def test_miner_drops_the_locative_particle_parse(self):
+        """The sentence that started this: 'keep silent in WeChat Moments' is not 'keep in'."""
+        text = ("And they can also keep silent in WeChat Moments. They worry about their privacy "
+                "and long for peace of mind, so they keep in touch with old friends.")
+        shipped = [s["phrase"] for s in LinguisticEngine.mine_expression_skeletons(
+            text, target_count=8)]
+        assert "keep in touch with" in shipped, shipped
+        assert "keep in" not in shipped, shipped
+        assert "keep of" not in shipped, shipped
+
+    def test_miner_still_ships_the_passage_set(self):
+        """F7 acceptance (d) in miniature: the gate removes the inventions, not the yield."""
+        from pathlib import Path
+        path = Path("wiki/Book_1_Unit_1_Passage_A/sources/Book_1_Unit_1_Passage_A.md")
+        text = path.read_text(encoding="utf-8")
+        shipped = [s["phrase"] for s in LinguisticEngine.mine_expression_skeletons(
+            text, target_count=8)]
+        assert "keep in touch with" in shipped, shipped
+        assert "keep in" not in shipped, shipped
+        assert len(shipped) >= 4, shipped
+
+    def test_the_raw_oxford_accessor_is_gone(self):
+        """F7 acceptance (e): nothing under librarian/ reads oxford_collocations.json.gz any
+        more, so the accessor and its lazy-loaded cache are gone with it."""
+        assert not hasattr(LinguisticEngine, "get_oxford_raw"), "get_oxford_raw"
+        assert not hasattr(LinguisticEngine, "_ocd_data"), "_ocd_data"
+

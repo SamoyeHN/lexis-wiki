@@ -20,7 +20,6 @@ class LinguisticEngine:
     _wn = None
     _acl_data = None
     _awl_data = None
-    _ocd_data = None
     _cefr_analyzer = None
     _ldoce_conn = None
     _ldoce_cache: Dict[str, Any] = {}
@@ -33,6 +32,8 @@ class LinguisticEngine:
     _ldoce_kind_ok: Optional[bool] = None
     _derived_qa_in_progress: Set[str] = set()
     _ocd_lexfile_cache: Dict[str, List[str]] = {}
+    _phrase_text_cache: Dict[str, List[Tuple[str, str]]] = {}
+    _phrase_evidence_cache: Dict[Tuple[str, str], List[str]] = {}
 
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
@@ -579,31 +580,10 @@ class LinguisticEngine:
             return True
         return False
 
-    @classmethod
-    def get_oxford_raw(cls) -> Dict[str, Any]:
-        """Lazy-loads the raw hierarchical Oxford Collocations Dictionary 2nd Edition."""
-        if cls._ocd_data is None:
-            cls._ocd_data = {}
-            data_dir = Path(__file__).parent / "data"
-            gz_path = data_dir / "oxford_collocations.json.gz"
-            json_path = data_dir / "oxford_collocations.json"
-
-            if gz_path.exists():
-                try:
-                    import gzip
-                    with gzip.open(gz_path, "rt", encoding="utf-8") as f:
-                        raw = json.load(f)
-                        cls._ocd_data = raw.get("entries", raw)
-                except Exception:
-                    pass
-            elif json_path.exists():
-                try:
-                    with open(json_path, "r", encoding="utf-8") as f:
-                        raw = json.load(f)
-                        cls._ocd_data = raw.get("entries", raw)
-                except Exception:
-                    pass
-        return cls._ocd_data
+    # The raw Oxford Collocations Dictionary file (`data/oxford_collocations.json.gz`)
+    # used to be lazy-loaded here and consulted by generate_phrase_distractors and by
+    # mine_expression_skeletons.  Both now ask LDOCE instead - see ldoce_phrase_evidence -
+    # so nothing reads that file any more and the accessor is gone.
 
     # LDOCE stores lemmas and open compounds only, but the pipeline asks for whatever
     # surface form the passage happened to contain ('posts', 'luxuries', 'potluck').
@@ -1103,6 +1083,454 @@ class LinguisticEngine:
             for m in head_prep_re.finditer(p_text):
                 preps.add(m.group(1))
         return preps
+
+    # The tokens Longman uses as the second word of a phrasal verb.
+    _PHRASAL_PARTICLES = frozenset({
+        "in", "off", "up", "down", "away", "back", "over", "into", "through", "on", "to",
+        "for", "out", "with", "from", "around", "at", "by", "upon", "of", "about",
+        "against", "along", "ahead", "across", "aside", "forth", "together", "off",
+    })
+
+    @classmethod
+    def get_ldoce_phrasal_verbs(cls, word: str) -> List[str]:
+        """The phrasal verbs Longman declares inside `word`'s own entry, as 'verb particle'
+        pairs. Longman writes them with object slots and separable arrows ('send somebody
+        <-> off'), so the pair is read off the leading tokens of each phrasal-verb block.
+        This is the dictionary's list, not a guess from a preposition that appeared somewhere
+        in a grammar pattern."""
+        head = (word or "").strip().lower()
+        entry = cls.get_ldoce_entry(head)
+        if not entry:
+            return []
+        out: List[str] = []
+        for tier, text in cls._entry_phrase_texts(head, entry):
+            if tier != "phrasal_verb":
+                continue
+            tokens = cls._phrase_tokens(text)
+            if len(tokens) < 2:
+                continue
+            first = cls._surface_lemma(tokens[0]) or tokens[0]
+            if first != head and not (tokens[0].startswith(head) or head.startswith(tokens[0])):
+                continue
+            particle = tokens[1]
+            if particle not in cls._PHRASAL_PARTICLES:
+                continue
+            candidate = f"{head} {particle}"
+            if candidate not in out:
+                out.append(candidate)
+        return out
+
+    # ------------------------------------------------------------------
+    # LDOCE phrase attestation (backlog F7 修法 2)
+    # ------------------------------------------------------------------
+    # 'keep of', 'havoc for', 'streak on' and 'depend for' are not phrases. Each one is a
+    # preposition lifted out of somebody else's frame and glued onto the headword:
+    #
+    #   'keep of'     <- 'keep (somebody) out of something'      ('of' belongs to 'out of')
+    #   'havoc for'   <- 'cause/create havoc ... for commuters'  ('for' belongs to 'cause')
+    #   'streak on'   <- 'be on a winning/losing streak'         ('on' belongs to 'be')
+    #   'depend for'  <- 'depend on somebody/something for something' (second complement)
+    #
+    # and these are phrases because Longman itself states them:
+    #
+    #   'remind of'   - a phrasal verb block, headword 'remind somebody of somebody/something'
+    #   'depend on'   - a phrasal verb block 'depend on/upon somebody/something'
+    #   'streak of'   - a PHRASES block 'streak of lightning/fire/light etc' + pattern 'streak of'
+    #   'director of' - a grammar pattern 'director of'
+    #
+    # Two conditions do the separating, and both are structural rather than lexical:
+    #   1. contiguity - the headword and the particle sit next to each other in the entry's
+    #      own text with at most one object slot between them ('remind somebody of',
+    #      'saturate something with something'), matched through the A1 legal forms so
+    #      'happened to' still counts for 'happen to' and 'embedded' for 'embed';
+    #   2. frame head - the pattern or block the match was found in begins with the headword,
+    #      or with nothing but Longman's own placeholders and a copula ('be embedded in
+    #      something'), so a preposition governed by a different verb in the same pattern
+    #      cannot be borrowed.  Sense examples are exempt from (2) - a sentence has no frame
+    #      head - which is exactly why example-only evidence is the weakest tier and is not
+    #      enough to ship a phrase to a learner.
+    _PHRASE_SLOT_WORDS = frozenset({
+        "somebody", "something", "sb", "sth", "one's", "oneself", "myself", "yourself",
+        "himself", "herself", "his", "her", "their", "its", "my", "your", "our", "it",
+        "this", "that", "these", "those", "some", "any", "etc",
+    })
+    # What may stand in front of a frame's head: Longman's own placeholders, bare articles,
+    # and the copula or auxiliary of a passive frame.  Longman spells a passive out with the
+    # copula in front - 'be embedded in something', 'be obsessed by/with something', 'be
+    # derived from something', 'be based in something' - and the headword inside it is still
+    # the word that governs the preposition, so 'embed in' and 'base in' are stated frames.
+    # A *content* word in front is somebody else's construction: 'cause havoc for' is 'cause'
+    # 's frame, 'cloud cover in' is a noun phrase, and neither licenses the pairing.
+    _PHRASE_LEAD_WORDS = _PHRASE_SLOT_WORDS | frozenset({
+        "a", "an", "the", "one", "ones",
+        "be", "am", "is", "are", "was", "were", "been", "being",
+        "get", "gets", "getting", "got", "gotten",
+        "become", "becomes", "became",
+        "have", "has", "had", "having",
+        "can", "could", "will", "would", "may", "might", "must", "shall", "should",
+        "to",
+    })
+    # The closed class of prepositions and particles.  This is *not* what the gate accepts as
+    # evidence - Longman's own frames are - it is only what may sit inside a frame's gap as
+    # one alternative of a slash group: 'profit by/from' states 'profit from' and 'cover
+    # something with/in something' states 'cover in', because the word before the slash is an
+    # alternative of the same slot.  A preposition that is not followed by a slash is a
+    # complement of its own, so 'depend on somebody/something for something' still does not
+    # state 'depend for'.
+    _PHRASE_PARTICLE_WORDS = _PHRASAL_PARTICLES | frozenset({
+        "above", "among", "beneath", "below", "beside", "besides", "between", "beyond",
+        "during", "except", "near", "onto", "past", "since", "toward", "towards",
+        "under", "underneath", "until", "upon", "within", "without", "as", "than",
+    })
+    # Strongest first. 'phrasal_verb' is Longman declaring a phrasal verb; 'phrase' is its
+    # PHRASES block; 'pattern' is a grammar pattern built on the headword; 'collocation' is
+    # a COLLOCATIONS box item; 'example' is a sentence that merely contains the string.
+    _PHRASE_TIERS = ("phrasal_verb", "phrase", "pattern", "collocation",
+                     "cross_collocation", "example")
+    _PHRASE_STRONG_TIERS = frozenset({"phrasal_verb", "phrase", "pattern", "collocation"})
+
+    @classmethod
+    def _entry_text_normalizer(cls, text: Any) -> str:
+        """Longman's own strings, flattened so a frame can be matched as a token sequence:
+        brackets, the separable-particle arrow, alternative slashes and '...' holes all
+        become spaces ('keep something <-> up' -> 'keep something up')."""
+        if not isinstance(text, str):
+            return ""
+        flat = re.sub(r"[()\[\]{}|]+", " ", text.lower())
+        flat = re.sub(r"\u2194|\.{2,3}|\u2026", " ", flat)
+        # A slash is where one way of writing something ends and the next begins.  Keep it
+        # as a visible boundary instead of flattening it into a space: 'on no account/not on
+        # any account' is two units, and reading it as '...account on any account' is how
+        # the invented 'account on' got its evidence.
+        flat = re.sub(r"\s*/\s*", " / ", flat)
+        return re.sub(r"\s+", " ", flat).strip()
+
+    @classmethod
+    def _phrase_tokens(cls, phrase: str) -> List[str]:
+        """'make [sth] possible' -> ['make', 'possible']. Slots are gaps, not words to find."""
+        return [t for t in cls._entry_text_normalizer(phrase).split()
+                if t and t not in cls._PHRASE_SLOT_WORDS and t != "/"]
+
+    @classmethod
+    def _phrase_regex(cls, tokens: List[str], max_gap: int) -> str:
+        """Match the tokens in order, allowing up to max_gap object slots between neighbours.
+        Whitespace is always required between tokens; a slot run ('somebody something')
+        counts as one gap, so 'keep somebody something warm' is one gap, not two."""
+        parts: List[str] = []
+        for token in tokens:
+            forms = {f for f in cls.inflected_forms(token) if f}
+            if not forms:
+                return ""
+            # A mined surface form has to reach the form Longman wrote: 'kept in touch' is
+            # stated by the entry as 'keep in touch', so the token's own lemma is inflected
+            # too.  Only a real word gets that treatment, so a typo cannot lemmatize its way
+            # into a frame it was never part of.
+            lemma = cls._surface_lemma(token) if cls.is_attested_form(token) else None
+            # spaCy reads 'embed' as the past tense of a non-word 'embe'.  A lemma that is
+            # not itself an English word form may not widen the token's legal forms.
+            if lemma and lemma != token and cls.is_attested_form(lemma):
+                forms |= {f for f in cls.inflected_forms(lemma) if f}
+            parts.append("(?:%s)" % "|".join(re.escape(f) for f in
+                                             sorted(forms, key=len, reverse=True)))
+        slots = "|".join(sorted((re.escape(w) for w in cls._PHRASE_SLOT_WORDS),
+                                key=len, reverse=True))
+        particles = "|".join(sorted((re.escape(w) for w in cls._PHRASE_PARTICLE_WORDS),
+                                    key=len, reverse=True))
+        # A gap is a run of object slots, and it may also hold one alternative of a slash
+        # group - 'profit by / from', 'cover something with / in something', 'be obsessed
+        # by / with something' - because the word before the slash is an alternative of the
+        # same slot rather than a complement of its own.  The alternative has to be followed
+        # by a slash, which is what keeps 'depend on somebody / something for something'
+        # from licensing 'depend for': there 'on' governs, it does not alternate.  A slot may
+        # carry the slash itself, since slots are already legal here - 'regard somebody /
+        # something as something' states 'regard as' just as plainly.
+        slot_elem = rf"(?:{slots})(?:\s*/\s*)?"
+        particle_elem = rf"(?:{particles})\s*/\s*"
+        elem = rf"(?:{slot_elem}|{particle_elem})"
+        gap_run = rf"{elem}(?:\s+{elem})*\s*"
+        gap = rf"\s+(?:{gap_run}){{0,{max_gap}}}"
+        return r"(?<!\w)" + gap.join(parts) + r"(?!\w)"
+
+    @classmethod
+    def _frame_initial(cls, text: str, start: int) -> bool:
+        """Is the match at the head of the frame, or preceded only by function words?
+        'depend on somebody/something for' is not a frame for 'depend for', neither is
+        'cause havoc for', and 'be on a winning streak' is not a frame for 'streak on'."""
+        return all(t in cls._PHRASE_LEAD_WORDS for t in text[:start].split())
+
+    # A phrase's alternative headwords are listed on one line with a slash: 'stay/keep in
+    # touch', 'bring/call somebody to account', 'by/from all accounts'.  Each alternative
+    # heads the same tail, so 'keep in touch' is stated by Longman even though it shares a
+    # line with 'stay'.  Only a group at the head of the string is expanded - a slash deeper
+    # inside a frame separates alternatives inside it, and the normalizer keeps those as the
+    # boundaries they are.
+    _LEADING_ALT_RE = re.compile(
+        r"^\s*([A-Za-z][A-Za-z'’\-]*(?:/[A-Za-z][A-Za-z'’\-]*)+)(?=\s|$)")
+
+    @classmethod
+    def _slash_variants(cls, text: str) -> List[str]:
+        """'stay/keep in touch' -> ['stay in touch', 'keep in touch']."""
+        if not isinstance(text, str):
+            return []
+        match = cls._LEADING_ALT_RE.match(text)
+        if not match:
+            return [text]
+        tail = text[match.end():]
+        return [f"{alt}{tail}" for alt in match.group(1).split("/") if alt]
+
+    @classmethod
+    def _entry_phrase_texts(cls, word: str, entry: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """(tier, text) for every string the entry itself states, strongest tier first."""
+        cached = cls._phrase_text_cache.get(word)
+        if cached is not None:
+            return cached
+        out: List[Tuple[str, str]] = []
+        seen: Set[Tuple[str, str]] = set()
+
+        def add(tier: str, value: Any) -> None:
+            if isinstance(value, str):
+                # Longman's slash-listed alternatives each stand on their own, so a frame is
+                # never matched across the boundary between two of them.
+                for unit in cls._slash_variants(value):
+                    flat = cls._entry_text_normalizer(unit)
+                    if flat and (tier, flat) not in seen:
+                        seen.add((tier, flat))
+                        out.append((tier, flat))
+            elif isinstance(value, dict):
+                for key in ("phrase", "headword", "collocation", "example", "text", "content"):
+                    add(tier, value.get(key))
+
+        for block in entry.get("phrasal_verbs") or []:
+            if isinstance(block, dict):
+                for key in ("phrase", "headword"):
+                    add("phrasal_verb", block.get(key))
+                for key in ("variants", "alternates"):
+                    for value in block.get(key) or []:
+                        add("phrasal_verb", value)
+                for sense in block.get("senses") or []:
+                    for value in (sense.get("patterns") or []) + (sense.get("examples") or []):
+                        add("phrasal_verb", value)
+            else:
+                add("phrasal_verb", block)
+        for item in entry.get("phrases") or []:
+            add("phrase", item)
+        for sense in entry.get("senses") or []:
+            for value in sense.get("patterns") or []:
+                add("pattern", value)
+        for bucket in (entry.get("collocations") or {}).values():
+            for item in bucket or []:
+                add("collocation", item)
+        for item in entry.get("cross_collocations") or []:
+            add("cross_collocation", item)
+        for sense in entry.get("senses") or []:
+            for value in sense.get("examples") or []:
+                add("example", value)
+
+        cls._phrase_text_cache[word] = out
+        return out
+
+    @classmethod
+    def _phrase_headwords(cls, phrase: str, headword: Optional[str]) -> List[str]:
+        """Which LDOCE entries to look in. A mined surface form ('attaches', 'happened')
+        has to be resolved back to the headword Longman filed it under, and a verbal idiom
+        ('take into consideration') is filed under its head noun, so every content word is
+        tried."""
+        cands: List[str] = []
+        if headword:
+            cands.append(headword.strip().lower())
+        for token in cls._phrase_tokens(phrase):
+            cands.append(token)
+            lemma = cls._surface_lemma(token)
+            if lemma and lemma != token:
+                cands.append(lemma)
+        seen: Set[str] = set()
+        return [c for c in cands if c and not (c in seen or seen.add(c))]
+
+    @classmethod
+    def ldoce_phrase_hits(
+        cls,
+        phrase: str,
+        headword: Optional[str] = None,
+        include_examples: bool = False,
+    ) -> List[Tuple[str, str]]:
+        """The (tier, evidence text) pairs that license `phrase`; empty means nothing does.
+        Kept apart from ldoce_phrase_evidence because the object-fit audit in
+        mine_expression_skeletons needs the sentence the pairing was found in, not a yes/no."""
+        tokens = cls._phrase_tokens(phrase)
+        if len(tokens) < 2:
+            return []
+        # Longman's declared units *and* its grammar patterns both write the object inside
+        # the frame - 'remind somebody of', 'take something into consideration', 'saturate
+        # something with something', 'be embedded in something' - so one object slot is
+        # allowed between the two tokens wherever a frame is stated.  A collocation box item
+        # is a sentence rather than a frame, so there the two tokens must be adjacent.
+        loose_gap = 1 if len(tokens) == 2 else 2
+        rx_declared = re.compile(cls._phrase_regex(tokens, loose_gap))
+        rx_contiguous = re.compile(cls._phrase_regex(tokens, 0))
+        hits: List[Tuple[str, str]] = []
+        for head in cls._phrase_headwords(phrase, headword):
+            entry = cls.get_ldoce_entry(head)
+            if not entry:
+                continue
+            base_forms = cls.inflected_forms(head)
+            for tier, text in cls._entry_phrase_texts(head, entry):
+                if tier == "example" and not include_examples:
+                    continue
+                regex = rx_declared if tier in ("phrasal_verb", "phrase", "pattern",
+                                                "example") else rx_contiguous
+                for match in regex.finditer(text):
+                    # A grammar pattern licenses the pairing only for the headword it is
+                    # built on, so a preposition governed by a different word inside the
+                    # same pattern cannot be borrowed ('cause havoc for commuters' is not a
+                    # frame for 'havoc for', 'cloud cover in the morning' is not a frame for
+                    # 'cover in').  A copula in front is part of the frame, not another
+                    # word's construction - 'be embedded in something' is 'embed's own
+                    # pattern.  A phrasal verb block or a PHRASES item is already a declared
+                    # unit - its head is itself, and Longman writes alternatives with a
+                    # slash ('stay/keep in touch', 'whatever happened to somebody'), so
+                    # the frame-head test does not apply to those two tiers.
+                    if tier not in ("phrasal_verb", "phrase", "example") and \
+                            not cls._frame_initial(text, match.start()):
+                        continue
+                    if headword and tier != "example":
+                        if match.group(0).split()[0] not in base_forms:
+                            continue
+                    hits.append((tier, text))
+                    break
+        return hits
+
+    @classmethod
+    def ldoce_phrase_evidence(
+        cls,
+        phrase: str,
+        headword: Optional[str] = None,
+        include_examples: bool = False,
+    ) -> List[str]:
+        """Is `phrase` a unit LDOCE6 states, or a string assembled out of tokens scraped
+        from a pattern? Returns the tiers found, strongest first; [] means drop it."""
+        key = ((phrase or "").strip().lower(), (headword or "").strip().lower(),
+               bool(include_examples))
+        cached = cls._phrase_evidence_cache.get(key)
+        if cached is not None:
+            return list(cached)
+        tiers: List[str] = []
+        for tier, _text in cls.ldoce_phrase_hits(phrase, headword, include_examples):
+            if tier not in tiers:
+                tiers.append(tier)
+        tiers.sort(key=cls._PHRASE_TIERS.index)
+        cls._phrase_evidence_cache[key] = list(tiers)
+        return tiers
+
+    @classmethod
+    def is_attested_phrase(cls, phrase: str, headword: Optional[str] = None) -> bool:
+        """Ship a multi-word item to a learner only if Longman states it at a tier stronger
+        than 'some example sentence happens to contain these words in this order'."""
+        return any(tier in cls._PHRASE_STRONG_TIERS
+                   for tier in cls.ldoce_phrase_evidence(phrase, headword))
+
+    @classmethod
+    def _phrasal_verb_blocks(cls, phrase: str,
+                             headword: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The phrasal-verb blocks Longman states for `phrase`, with each block's own frame
+        still attached.
+
+        `ldoce_phrase_hits` flattens every block into tiered strings, which is what the
+        attestation gate needs.  The object-fit audit needs the block's headword instead,
+        because that is where Longman says whether the object comes before the particle
+        ('keep somebody in', 'work somebody / something in') or after it
+        ('depend on / upon somebody / something')."""
+        tokens = cls._phrase_tokens(phrase)
+        if len(tokens) < 2:
+            return []
+        verb, particle = tokens[0], tokens[-1]
+        out: List[Dict[str, Any]] = []
+        for head in cls._phrase_headwords(phrase, headword):
+            entry = cls.get_ldoce_entry(head)
+            if not entry:
+                continue
+            for block in entry.get("phrasal_verbs") or []:
+                if not isinstance(block, dict):
+                    continue
+                names = [block.get("phrase")] + list(block.get("variants") or []) \
+                    + list(block.get("alternates") or [])
+                for name in names:
+                    named = cls._phrase_tokens(name or "")
+                    if verb in named and particle in named:
+                        out.append(block)
+                        break
+        return out
+
+    @classmethod
+    def _phrasal_block_frames(cls, block: Dict[str, Any]) -> List[str]:
+        """The strings that state a block's frame: its headword and its grammar patterns.
+        Sense examples are sentences, and a noun after a preposition in a sentence says
+        nothing about the frame's valency."""
+        frames: List[str] = []
+        headword = block.get("headword")
+        if isinstance(headword, str) and headword.strip():
+            frames.append(headword)
+        for sense in block.get("senses") or []:
+            for pattern in sense.get("patterns") or []:
+                if isinstance(pattern, str) and pattern.strip():
+                    frames.append(pattern)
+        return frames
+
+    @classmethod
+    def _frame_object_position(cls, frame: str, particle: str) -> str:
+        """Where this frame puts its object relative to the particle: 'before', 'after' or
+        'unknown'.
+
+        Longman writes a frame as a token sequence with slots.  'depend on / upon somebody /
+        something' puts the object after the particle; 'keep somebody in' and 'work somebody /
+        something in' put it before.  '↔' marks the pair as separable, which means Longman
+        allows both orders, so it counts as 'after'.  A slash group is one slot holding several
+        alternatives ('on/upon', 'somebody/something'), so it is read as a unit rather than as
+        a space.  A frame with no slot at all ('break away') makes no claim either way."""
+        if not isinstance(frame, str) or not frame.strip():
+            return "unknown"
+        chunks = [c for c in re.split(r"\s+", frame.strip().lower()) if c]
+        slots = [any(alt in cls._PHRASE_SLOT_WORDS for alt in c.split("/")) for c in chunks]
+        for index, chunk in enumerate(chunks):
+            if particle not in [a for a in chunk.split("/") if a]:
+                continue
+            if "\u2194" in frame or "<->" in frame:
+                return "after"
+            if index + 1 < len(chunks) and slots[index + 1]:
+                return "after"
+            if index and slots[index - 1]:
+                return "before"
+        return "unknown"
+
+    @classmethod
+    def ldoce_phrase_object_fit(
+        cls,
+        phrase: str,
+        obj: Optional[str],
+        headword: Optional[str] = None,
+    ) -> bool:
+        """Is the object the passage put after this phrase one Longman's frame allows there?
+
+        'keep in' is a real phrasal verb, but Longman's frame for it is 'keep somebody in' -
+        the object comes before the particle - so a parse that reads 'keep in WeChat Moments'
+        as that frame has mistaken a locative 'in ...' for the particle.  'depend on Mary' is
+        a fit, because Longman's frame is 'depend on / upon somebody / something'.
+
+        The veto needs positive evidence: it fires only when some frame puts the object before
+        the particle and no frame puts it after.  An empty object is always a fit - nothing has
+        been claimed about it - and so is a phrase Longman gives no frame for ('break away',
+        'listen to'), because there is nothing in the entry to contradict the parse."""
+        target = (obj or "").strip().lower()
+        if not target:
+            return True
+        tokens = cls._phrase_tokens(phrase)
+        if len(tokens) < 2:
+            return True
+        positions = [cls._frame_object_position(frame, tokens[-1])
+                     for block in cls._phrasal_verb_blocks(phrase, headword)
+                     for frame in cls._phrasal_block_frames(block)]
+        if "after" in positions:
+            return True
+        return "before" not in positions
 
     @classmethod
     def _adverb_frame_from_quote(cls, word: str, quote: Optional[str]) -> Optional[str]:
@@ -3317,7 +3745,22 @@ class LinguisticEngine:
         words = phrase_clean.split()
         exclude = set(exclude_words or [])
         distractors: List[str] = []
-        raw = cls.get_oxford_raw()
+
+        # Membership is Longman's, not a string table.  A candidate qualifies only when the
+        # dictionary states it - as a phrasal-verb block, a PHRASES item, a grammar pattern
+        # built on the headword, or a COLLOCATIONS box item.  'keep of' fails because no entry
+        # states it: the 'of' was lifted out of 'keep somebody out of something'.
+        def ships(cand: str) -> bool:
+            return (cand != phrase_clean and cand not in exclude
+                    and cls.is_attested_phrase(cand))
+
+        tier_rank = {tier: index for index, tier in enumerate(cls._PHRASE_TIERS)}
+
+        def strength(cand: str) -> int:
+            """Longman's own phrasal-verb block beats a PHRASES item, which beats a pattern."""
+            hits = cls.ldoce_phrase_hits(cand)
+            return min((tier_rank.get(tier, len(tier_rank)) for tier, _text in hits),
+                       default=len(tier_rank))
 
         # 1. Two-word phrase (e.g. 'send out', 'tend to', 'cut out', 'work for')
         if len(words) == 2:
@@ -3327,8 +3770,14 @@ class LinguisticEngine:
             for part in particles:
                 if part != p:
                     cand = f"{v} {part}"
-                    if cand in raw and cand not in exclude and cand != phrase_clean:
+                    if ships(cand) and cand not in diff_part:
                         diff_part.append(cand)
+
+            # Longman's own phrasal-verb list for this verb is the strongest pool there is
+            for cand in cls.get_ldoce_phrasal_verbs(v):
+                parts = cand.split()
+                if len(parts) == 2 and parts[1] != p and ships(cand) and cand not in diff_part:
+                    diff_part.insert(0, cand)
 
             same_part: List[str] = []
             common_verbs = [
@@ -3339,8 +3788,11 @@ class LinguisticEngine:
             for cv in common_verbs:
                 if cv != v:
                     cand = f"{cv} {p}"
-                    if (cand in raw or cand in ("point to", "turn to", "set to", "refer to", "listen to")) and cand not in exclude and cand != phrase_clean and cand not in diff_part:
+                    if ships(cand) and cand not in diff_part and cand not in same_part:
                         same_part.append(cand)
+
+            diff_part.sort(key=lambda c: (strength(c), c))
+            same_part.sort(key=lambda c: (strength(c), c))
 
             # Balanced selection: combine particle variation and verb variation
             if diff_part and same_part:
@@ -3375,11 +3827,12 @@ class LinguisticEngine:
                 candidates = ["any form of", "any sort of", "any kind of", "any part of"]
                 distractors = [c for c in candidates if c != phrase_clean and c not in exclude]
 
-        # General Fallback if pool is sparse
+        # General Fallback if pool is sparse - still filtered through the dictionary, because
+        # an invented distractor is the same invention this gate exists to stop.
         if len(distractors) < count:
             if len(words) == 2:
                 for fallback_cand in ["carry out", "take over", "bring about", "set up", "look into", "come across", "give in"]:
-                    if fallback_cand != phrase_clean and fallback_cand not in distractors and fallback_cand not in exclude:
+                    if ships(fallback_cand) and fallback_cand not in distractors:
                         distractors.append(fallback_cand)
                     if len(distractors) >= count:
                         break
@@ -4235,10 +4688,26 @@ class LinguisticEngine:
         "VB": "they {form} it",
     }
 
+    # Verbs that double the final consonant in the past and the progressive even though they
+    # have two syllables, because the stress falls on the last one: emBED -> embedded, reFER
+    # -> referred, conTROL -> controlled, ocCUR -> occurred.  The shape test below only
+    # recognises monosyllables, so without this list Longman's pattern 'be embedded in
+    # something' can never be reached from 'embed'.  Verbs that end in -er or -or but stress
+    # the first syllable ('differ', 'offer', 'visit', 'profit') are correctly left out.
+    _DOUBLING_VERBS = frozenset({
+        "embed", "refer", "prefer", "transfer", "confer", "defer", "concur", "demur",
+        "occur", "recur", "abhor", "control", "patrol", "regret", "offset", "upset",
+        "submit", "admit", "omit", "commit", "permit", "transmit", "remit", "repel",
+        "expel", "compel", "dispel", "recap",
+    })
+
     @classmethod
     def _doubles_final_consonant(cls, verb: str) -> bool:
-        """Monosyllabic CVC doubling test ('stop'->'stopped', 'prefer'->handled separately)."""
+        """CVC doubling test - monosyllables by shape ('stop'->'stopped'), stressed-final
+        disyllables by list ('embed'->'embedded')."""
         w = (verb or "").strip().lower()
+        if w in cls._DOUBLING_VERBS:
+            return True
         if len(w) < 3:
             return False
         if w[-1] in "aeiouwxy":
@@ -6713,14 +7182,21 @@ class LinguisticEngine:
                                 p_verb = f"{v_lemma} {p_text}"
                                 formula = f"{v_lemma} {p_text} [sth/sb]"
                                 pobj_lemma = None
+                                pobj_proper = False
                                 pobj_nodes = [p for p in c.children if p.dep_ == "pobj"]
                                 if pobj_nodes:
-                                    pobj_lemma = pobj_nodes[0].lemma_.lower()
+                                    pobj_tok = pobj_nodes[0]
+                                    pobj_lemma = pobj_tok.lemma_.lower()
+                                    # A capitalised object mid-sentence is a name, not the
+                                    # dictionary's frame ('keep in WeChat Moments').
+                                    pobj_proper = pobj_tok.pos_ == "PROPN" or bool(
+                                        pobj_tok.text[:1].isupper() and not pobj_tok.is_sent_start)
                                 raw_candidates.append({
                                     "sid": sid,
                                     "quote": sent_clean,
                                     "phrase": p_verb,
                                     "pobj": pobj_lemma,
+                                    "pobj_proper": pobj_proper,
                                     "type": "phrasal verb",
                                     "pattern_formula": formula,
                                     "score": 8,
@@ -6747,8 +7223,14 @@ class LinguisticEngine:
         if not raw_candidates:
             return []
 
-        # OCD Physical Gate: verify candidates against Oxford Collocations Dictionary to prevent false positives
-        raw_entries = cls.get_oxford_raw()
+        # LDOCE attestation gate: a candidate ships only when Longman itself states the unit.
+        # The old gate asked the Oxford Collocations file whether it had a headword for the
+        # phrase, which is a weaker test than it sounds - 'keep of' is a preposition lifted out
+        # of 'keep somebody out of something' and no dictionary has it as a unit.
+        # ldoce_phrase_evidence asks the real question: is this a phrasal-verb block, a PHRASES
+        # item, a grammar pattern built on the headword, or a COLLOCATIONS box item?  Evidence
+        # that amounts to 'some example sentence contains these words in this order' does not
+        # ship, because an example is exactly where a stray preposition looks most like a phrase.
         verified_candidates: List[Dict[str, Any]] = []
 
         for item in raw_candidates:
@@ -6758,66 +7240,42 @@ class LinguisticEngine:
             if not words:
                 continue
 
-            # Phrasal verbs (e.g. 'rely on', 'long for', 'worry about', 'keep in touch with')
+            # Phrasal verbs and prepositional verbs (e.g. 'rely on', 'long for', 'worry about')
             if item_type == "phrasal verb":
-                if len(words) == 2:
-                    v, p = words[0], words[1]
-                    pv_key = f"{v} {p}"
+                attested = cls.is_attested_phrase(phrase)
+                if not attested and "touch" in words and any(v in words for v in ("keep", "get", "stay", "lose")):
+                    # Longman states it as 'be/keep/stay etc in touch (with something)'
+                    attested = cls.is_attested_phrase(" ".join(w for w in words if w != "with"))
+                if attested:
+                    # 'keep in' is a real phrasal verb, but Longman's frame for it is 'keep
+                    # somebody in', so a parse of 'keep in WeChat Moments' - or of 'keep in
+                    # touch' - has read a locative 'in ...' as the particle and is not that
+                    # frame.  The check runs for any object, not only a proper noun, because
+                    # the frame says where the object sits regardless of what it is.
                     pobj_word = item.get("pobj")
-                    if pv_key in raw_entries:
-                        # If OCD defines specific object nouns for this phrasal verb, audit object
-                        pv_data = raw_entries[pv_key]
-                        pv_str = json.dumps(pv_data).lower()
-                        # If pobj is given, check whether it matches the phrasal verb's object cluster
-                        if pobj_word and "is used with these nouns as the object" in pv_str:
-                            if pobj_word in pv_str:
-                                verified_candidates.append(item)
-                                continue
-                            # Otherwise object does not match the phrasal verb frame (e.g. 'keep in WeChat Moments')
-                        else:
-                            verified_candidates.append(item)
-                            continue
-                    v_data = raw_entries.get(v)
-                    is_valid_pv = False
-                    if v_data:
-                        for p_name in ("verb", "phrasal verb"):
-                            for f in v_data.get("parts", {}).get(p_name, {}).get("frames", []):
-                                if "prep" in f.get("label", "").lower():
-                                    for cl in f.get("clusters", []):
-                                        if p in [w.lower() for w in cl.get("words", [])]:
-                                            is_valid_pv = True
-                                            break
-                    if is_valid_pv:
-                        verified_candidates.append(item)
+                    if pobj_word and not cls.ldoce_phrase_object_fit(phrase, pobj_word):
                         continue
-                elif "touch" in words and any(v in words for v in ("keep", "get", "stay")):
                     verified_candidates.append(item)
-                    continue
+                continue
 
-            # Direct match in OCD headwords (e.g. 'account for', 'participate in')
-            elif phrase in raw_entries:
+            # Anything else the dictionary states as a unit (e.g. 'account for', 'participate in')
+            if cls.is_attested_phrase(phrase):
                 verified_candidates.append(item)
                 continue
 
-            # Verbal Idioms (e.g. 'take into consideration')
-            elif item_type == "idiom":
-                v_lemma = words[0]
-                head_noun = words[-1]
-                n_data = raw_entries.get(head_noun)
-                is_valid_idiom = False
-                if n_data:
-                    n_str = json.dumps(n_data).lower()
-                    if v_lemma in n_str and words[1] in n_str:
-                        is_valid_idiom = True
-                if not is_valid_idiom:
-                    v_data = raw_entries.get(v_lemma)
-                    if v_data:
-                        v_str = json.dumps(v_data).lower()
-                        if head_noun in v_str:
-                            is_valid_idiom = True
-                if is_valid_idiom:
-                    verified_candidates.append(item)
-                    continue
+            # Verbal idioms (e.g. 'take into consideration') that Longman does not list as a
+            # PHRASES item: the head noun's own grammar patterns must show the verb governing it.
+            if item_type == "idiom":
+                v_lemma, head_noun = words[0], words[-1]
+                n_entry = cls.get_ldoce_entry(head_noun)
+                if n_entry:
+                    idiom_rx = re.compile(
+                        r"(?<!\w)" + re.escape(v_lemma) + r"\w*(?:\s+\w+){0,4}\s"
+                        + re.escape(head_noun) + r"(?!\w)", re.IGNORECASE)
+                    if any(idiom_rx.search(cls._entry_text_normalizer(pat))
+                           for pat in (n_entry.get("patterns") or [])):
+                        verified_candidates.append(item)
+                        continue
 
             # Collocations (ACL items, possessive frames like 'hear [one\'s] voice')
             elif item_type == "collocation":
