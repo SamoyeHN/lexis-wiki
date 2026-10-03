@@ -7,6 +7,7 @@ from librarian.evaluator import (
     _score_pedagogy,
     _score_uniqueness,
     prune_hallucinated_items,
+    degenerate_grammar_slots,
 )
 
 SAMPLE_SOURCE = """CONTENT:
@@ -87,7 +88,7 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
                 "pattern_formula": "Although + [Clause], [Main Clause]",
                 "quote": "Although he was still far behind the world-class athletes, he kept at it.",
                 "design_audit": "AUDIT: Although + Clause",
-                "imitation_example": "Although empirical anomalies surfaced, findings remained valid.",
+                "imitation_example": "Although the first tests were unclear, the results remained valid.",
                 "common_mistakes": "Incorrect coordination.",
             },
             {
@@ -104,13 +105,43 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
                 "pattern_formula": "although NP V, NP V",
                 "quote": "Although he was still far behind the world-class athletes, he kept at it.",
                 "design_audit": "AUDIT: although NP V, NP V",
-                "imitation_example": "Although researchers tested the hypothesis, conclusive proof remained elusive.",
+                "imitation_example": "Although researchers tested the theory, clear proof was hard to find.",
                 "common_mistakes": "Punctuation comma splice.",
             }
         ]
         score, flags = _score_pedagogy(items, "grammar", SAMPLE_SOURCE)
         self.assertEqual(score, 25.0)
         self.assertEqual(flags, [])
+
+    def test_imitation_example_ceiling(self):
+        """Backlog C1: an imitation example may not be harder than the passage it models.
+
+        SAMPLE_SOURCE rates A2, so the shared ceiling for a sentence the student reads
+        is B2: 'estimated' is licensed, 'hypothesis' / 'conclusive' / 'elusive' are not.
+        """
+        compliant = {
+            "category": "Concessive clauses",
+            "pattern_formula": "Although + [Clause], [Main Clause]",
+            "quote": "Although he was still far behind the world-class athletes, he kept at it.",
+            "design_audit": "AUDIT: Although + Clause",
+            "imitation_example": "It is estimated that global temperatures will rise.",
+            "common_mistakes": "Incorrect coordination.",
+        }
+        score, flags = _score_pedagogy([compliant], "grammar", SAMPLE_SOURCE)
+        self.assertEqual(score, 25.0)
+        self.assertFalse(any("ceiling" in f for f in flags))
+
+        over = dict(compliant)
+        over["imitation_example"] = (
+            "Although researchers tested the hypothesis, conclusive proof remained elusive."
+        )
+        score2, flags2 = _score_pedagogy([over], "grammar", SAMPLE_SOURCE)
+        self.assertEqual(score2, 0.0)
+        self.assertTrue(
+            any("imitation_example exceeds the CEFR B2 ceiling of the CEFR A2 source passage" in f
+                and "elusive" in f for f in flags2),
+            flags2,
+        )
 
     def test_pedagogy_any_macro_domain_tolerance(self):
         """Boundary patterns (chosen category fails the strict check but the quote fits
@@ -562,6 +593,145 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         # Should include Rhetoric & Emphasis and Information Packaging
         self.assertIn("Rhetoric & Emphasis", categories)
         self.assertIn("Information Packaging", categories)
+
+
+class TestD1SkeletonAlignmentGate(unittest.TestCase):
+    """Backlog D1: what the lexicon hands the model is what the extraction must ship.
+
+    The skeleton is computed by computational linguistics; the model only authors the
+    pedagogical fields. A formula that was rewritten instead of copied — or a slot that
+    offers one constituent to itself — is a fatal alignment defect, not a style note.
+    """
+
+    SKELETON_PROMPT = (
+        "### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
+        "The following 2 academic structural patterns have been mathematically identified in the passage.\n\n"
+        "1. [S-8] (Logic & Stance) Formula: `while [Clause], [Main Clause]`\n"
+        "2. [S-28] (Rhetoric & Emphasis) Formula: `not only [VP], but [VP]`\n\n"
+        "### PASSAGE ###\n"
+        "[S-8] While the results were preliminary, they offered promise.\n"
+        "[S-28] They not only investigated the cause, but solved the issue.\n"
+    )
+
+    def _item(self, formula, category, quote, imitation):
+        return {
+            "category": category,
+            "pattern_formula": formula,
+            "quote": quote,
+            "design_audit": f"AUDIT: {formula}",
+            "pedagogical_function": "Contrast packaged inside one clause complex.",
+            "imitation_example": imitation,
+            "common_mistakes": "Do not coordinate the main clause with 'but' after 'while'.",
+        }
+
+    def test_copied_formula_is_aligned(self):
+        item = self._item(
+            "while [Clause], [Main Clause]", "Logic & Stance",
+            "While the results were preliminary, they offered promise.",
+            "While the evidence was thin, the conclusion held.",
+        )
+        score, flags = _score_pedagogy([item], "grammar", self.SKELETON_PROMPT)
+        self.assertEqual(score, 25.0)
+        self.assertEqual([f for f in flags if "deviates" in f or "matches none" in f], [])
+
+    def test_casing_and_slot_synonyms_are_not_deviations(self):
+        """'[clause]' / '[main clause]' are the same formula as '[Clause]' / '[Main Clause]'."""
+        item = self._item(
+            "While [clause], [main clause]", "Logic & Stance",
+            "While the results were preliminary, they offered promise.",
+            "While the sample was small, the effect was stable.",
+        )
+        _, flags = _score_pedagogy([item], "grammar", self.SKELETON_PROMPT)
+        self.assertFalse(any("deviates" in f for f in flags), flags)
+
+    def test_rewritten_formula_is_fatal(self):
+        item = self._item(
+            "not only [VP], but also [VP]", "Rhetoric & Emphasis",
+            "They not only investigated the cause, but solved the issue.",
+            "The team not only mapped the fault, but repaired it.",
+        )
+        score, flags = _score_pedagogy([item], "grammar", self.SKELETON_PROMPT)
+        self.assertEqual(score, 0.0)
+        self.assertTrue(
+            any("deviates from the pre-extracted skeleton" in f and "not only [VP], but [VP]" in f
+                for f in flags),
+            flags,
+        )
+        res = LogEvaluator.evaluate_log({
+            "task": "extract_grammar_Book_1_Unit_1_Passage_A",
+            "model": "test-model",
+            "user_prompt": self.SKELETON_PROMPT,
+            "raw_response": json.dumps({"grammar_patterns": [item]}),
+            "parsed_json": {"grammar_patterns": [item]},
+        })
+        self.assertLess(res["composite_score"], 60.0)
+        self.assertEqual(res["status"], "REVIEW_NEEDED")
+
+
+    def test_degenerate_slot_is_rejected(self):
+        """'[NP/NP]' offers one constituent to itself and is never a mined formula."""
+        item = self._item(
+            "[S] + [NP/NP] + which + [VP]", "Information Packaging",
+            "The rate increased, which suggests that demand grew.",
+            "The rate climbed, which widened the debate.",
+        )
+        score, flags = _score_pedagogy([item], "grammar", self.SKELETON_PROMPT)
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("degenerate formula slot" in f and "NP/NP" in f for f in flags), flags)
+
+        legit = self._item(
+            "[S] + [NP] + which + [VP]", "Information Packaging",
+            "The rate increased, which suggests that demand grew.",
+            "The rate climbed, which widened the debate.",
+        )
+        _, legit_flags = _score_pedagogy([legit], "grammar", self.SKELETON_PROMPT)
+        self.assertFalse(any("degenerate" in f for f in legit_flags), legit_flags)
+
+    def test_degenerate_slot_is_not_whitelisted_by_the_normalizer(self):
+        """The renderer must not polish 'X/X' into a legal-looking slot."""
+        from librarian.processor import WikiProcessor
+        self.assertEqual(
+            WikiProcessor.unwrap_literal_brackets("[S] + [NP/NP] + which + [VP]"),
+            "[S] + [NP/NP] + which + [VP]",
+        )
+        self.assertEqual(
+            degenerate_grammar_slots(
+                WikiProcessor.unwrap_literal_brackets("[S] + [noun phrase/noun phrase] + which + [VP]")
+            ),
+            ["noun phrase/noun phrase"],
+        )
+        # A genuine alternation stays legal.
+        self.assertEqual(degenerate_grammar_slots("[S] + [prepp/np] + [NP]"), [])
+        self.assertEqual(degenerate_grammar_slots("It + [be] + [NP] + that/who + [S]"), [])
+
+    def test_imitation_example_equal_to_quote_is_fatal(self):
+        quote = "Although he was still far behind the world-class athletes, he kept at it."
+        item = {
+            "category": "Concessive clauses",
+            "pattern_formula": "Although + [Clause], [Main Clause]",
+            "quote": quote,
+            "design_audit": "AUDIT: Although + Clause",
+            "pedagogical_function": "Concessive framing of a contrary expectation.",
+            "imitation_example": quote,
+            "common_mistakes": "Do not add 'but' in the main clause after 'although'.",
+        }
+        score, flags = _score_pedagogy([item], "grammar", SAMPLE_SOURCE)
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("imitation_example duplicates the source quote" in f for f in flags), flags)
+        res = LogEvaluator.evaluate_log({
+            "task": "extract_grammar_Book_1_Unit_1_Passage_A",
+            "model": "test-model",
+            "user_prompt": SAMPLE_SOURCE,
+            "raw_response": json.dumps({"grammar_patterns": [item]}),
+            "parsed_json": {"grammar_patterns": [item]},
+        })
+        self.assertLess(res["composite_score"], 60.0)
+
+    def test_alignment_gates_are_registered_as_fatal(self):
+        from librarian.evaluator import FATAL_QA_FLAGS
+        self.assertIn("degenerate formula slot", FATAL_QA_FLAGS)
+        self.assertIn("deviates from the pre-extracted skeleton", FATAL_QA_FLAGS)
+        self.assertIn("duplicates the source quote", FATAL_QA_FLAGS)
 
 
 if __name__ == "__main__":

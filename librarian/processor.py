@@ -322,6 +322,13 @@ class WikiProcessor:
                 return cls.GRAMMAR_SLOT_NORMALIZATION[slot_lower]
             if "/" in slot_lower:
                 sub_parts = [p.strip() for p in slot_lower.split("/") if p.strip()]
+                from .evaluator import degenerate_grammar_slots
+                if degenerate_grammar_slots(f"[{raw_slot}]"):
+                    # Backlog D1: '[NP/NP]' is not a legal alternation — it is one
+                    # constituent offered to itself. Never whitelist it: keep the bracket so
+                    # the QA gate rejects the item instead of shipping a slot that teaches nothing.
+                    return f"[{raw_slot}]"
+
                 if all(p in ALLOWED_GRAMMAR_SLOTS or p in cls.GRAMMAR_SLOT_NORMALIZATION for p in sub_parts):
                     norm_parts = [
                         cls.GRAMMAR_SLOT_NORMALIZATION.get(p, cls.CANONICAL_SLOT_CASING.get(p, f"[{p}]")).strip("[]")
@@ -437,6 +444,9 @@ class WikiProcessor:
             if m_mistakes:
                 curr_mistakes = m_mistakes.group(1).strip()
                 continue
+            elif curr_mistakes and (line.startswith("  ") or line.startswith("\t")):
+                curr_mistakes += " " + line.strip()
+                continue
 
         flush_pattern()
 
@@ -494,7 +504,7 @@ class WikiProcessor:
                             flattened_questions.append(nq)
                 else:
                     flattened_questions.append(q_item)
-            elif dataclasses.is_dataclass(q_item):
+            else:
                 flattened_questions.append(q_item)
         questions = flattened_questions
 
@@ -506,7 +516,7 @@ class WikiProcessor:
                 has_stem = q.get("question") or q.get("translated_sentence")
                 if isinstance(opts, list) and len(opts) > 0 and has_stem:
                     valid_questions.append(q)
-            elif dataclasses.is_dataclass(q):
+            else:
                 opts = getattr(q, "options", None)
                 has_stem = getattr(q, "question", None) or getattr(q, "translated_sentence", None)
                 if isinstance(opts, list) and len(opts) > 0 and has_stem:
@@ -548,8 +558,15 @@ class WikiProcessor:
                     is_biased = True
 
         for q in questions:
-            # Handle both dict and dataclass
-            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            # Handle dict, dataclass, and generic object
+            if isinstance(q, dict):
+                q_dict = q
+            elif dataclasses.is_dataclass(q):
+                q_dict = dataclasses.asdict(q)
+            elif hasattr(q, "__dict__"):
+                q_dict = q.__dict__
+            else:
+                q_dict = {}
             
             # Sanitize string fields (options, target_word, word, correct_english_answer)
             quote_strip_pattern = r'^[«»"\'\u201c\u201d\u2018\u2019\s]+|[«»"\'\u201c\u201d\u2018\u2019\s]+$'
@@ -655,6 +672,35 @@ class WikiProcessor:
                                 q["translated_sentence"] = new_stem
                             else:
                                 setattr(q, "translated_sentence", new_stem)
+                        q_stem = new_stem
+
+            # 3. Indefinite Article Leakage Auto-Healing:
+            # If the stem has 'a ____' or 'an ____' immediately before the blank,
+            # and the options have mixed vowel/consonant onsets (or would reveal/leak the answer),
+            # auto-heal to neutral 'a(n) ____'.
+            if q_stem and options and re.search(r"\b(?:a|an)\s+_{2,}\b", q_stem, flags=re.IGNORECASE):
+                initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
+                has_vowel_init = any(init in 'aeiou' for init in initials)
+                has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
+                if has_vowel_init and has_cons_init:
+                    # Auto-heal 'a ____' or 'an ____' to 'a(n) ____'
+                    def _heal_art(m: re.Match) -> str:
+                        prefix = m.group(1)
+                        blank = m.group(2)
+                        return f"A(n) {blank}" if prefix[0].isupper() else f"a(n) {blank}"
+
+                    healed_stem = re.sub(r"\b(a|an)\s+(_{2,})\b", _heal_art, q_stem, flags=re.IGNORECASE)
+                    if "question" in q_dict:
+                        if isinstance(q, dict):
+                            q["question"] = healed_stem
+                        else:
+                            setattr(q, "question", healed_stem)
+                    elif "translated_sentence" in q_dict:
+                        if isinstance(q, dict):
+                            q["translated_sentence"] = healed_stem
+                        else:
+                            setattr(q, "translated_sentence", healed_stem)
+                    q_stem = healed_stem
 
             declared_idx = q_dict.get("correct_answer_index")
             try:
@@ -886,6 +932,24 @@ class WikiProcessor:
                             if hasattr(q, "question"): setattr(q, "question", stem)
                             elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
 
+                # Auto-heal article leakage: "a ____" / "an ____" -> "a(n) ____"
+                # If options mix vowel and consonant initials, an unhedged "a" or "an" directly before
+                # the blank leaks the answer or renders distractors grammatically impossible.
+                if options and re.search(r"\b(?:a|an)\s+_{2,}\b", stem, flags=re.IGNORECASE):
+                    initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
+                    has_vowel_init = any(init in 'aeiou' for init in initials)
+                    has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
+                    if has_vowel_init and has_cons_init:
+                        healed_stem = re.sub(r"\b(?:a|an)\s+(_{2,}\b)", r"a(n) \1", stem, flags=re.IGNORECASE)
+                        if healed_stem != stem:
+                            stem = healed_stem
+                            if isinstance(q, dict):
+                                if "question" in q: q["question"] = stem
+                                elif "translated_sentence" in q: q["translated_sentence"] = stem
+                            elif dataclasses.is_dataclass(q):
+                                if hasattr(q, "question"): setattr(q, "question", stem)
+                                elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
+
                 blank_matches = re.findall(r'_{2,}', stem)
                 if len(blank_matches) > 1:
                     flagged_indices.add(idx)
@@ -1042,6 +1106,44 @@ class WikiProcessor:
                             f"{pile} all plausibly fit the blank. Keep at most one near-synonym distractor "
                             f"and refill from a cleared candidate pool."
                         )
+
+                    # Collocational Double-Key Check
+                    for o_idx, opt in enumerate(options):
+                        if o_idx == correct_idx:
+                            continue
+                        d = str(opt).strip().lower()
+                        if not d or " " in d or len(d) < 2:
+                            continue
+                        is_dk, dk_type = LinguisticEngine.double_key_collision(
+                            target, d, anchor=anchor, anchor_type="object" if (item_pos and "verb" in item_pos) else None, pos=item_pos
+                        )
+                        if is_dk and dk_type == "double_key_collocation":
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Item #{idx + 1} ('{target}'): Distractor '{d}' forms an authentic collocation with anchor '{anchor}', creating a double-key conflict."
+                            )
+
+                    # Anchor Preservation Invariant Check
+                    prescribed_anchor = q_dict.get("context_anchor") or q_dict.get("anchor")
+                    if prescribed_anchor:
+                        p_anchor_clean = str(prescribed_anchor).strip().lower()
+                        if p_anchor_clean and p_anchor_clean not in ("general context", "none"):
+                            # A partitive compound anchor ('baskets of') is a phrase, not a
+                            # token, so token membership can never satisfy it: the phrase has
+                            # to appear in the stem the way the student will read it.
+                            if " " in p_anchor_clean:
+                                phrase = re.sub(r"\s+", " ", p_anchor_clean).strip()
+                                anchor_present = re.search(
+                                    rf"\b{re.escape(phrase)}\b",
+                                    re.sub(r"\s+", " ", (stem or "").lower())
+                                ) is not None
+                            else:
+                                anchor_present = p_anchor_clean in stem_tokens
+                            if not anchor_present:
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Item #{idx + 1} ('{target}'): Pre-computed anchor '{p_anchor_clean}' was missing or substituted in the generated stem."
+                                )
                 except Exception:
                     pass  # Deterministic gate must never crash the pipeline
 
@@ -1127,20 +1229,19 @@ class WikiProcessor:
                         )
                         break
 
-                # 1.5 Check Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
-                if cefr_upper in ("A1", "A2"):
-                    for opt in options:
-                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
-                        for tok in opt_toks:
-                            if tok in clean_passage_words or tok in meta_whitelist:
-                                continue
-                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                            if tok_lvl in ("C1", "C2"):
-                                flagged_indices.add(idx)
-                                defect_messages.append(
-                                    f"Reading Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
-                                )
-                                break
+                # 1.5 Check Difficulty Ceiling (shared C1 helper: over_ceiling_tokens)
+                for opt in options:
+                    over = LinguisticEngine.over_ceiling_tokens(
+                        str(opt), cefr_upper, mode="text",
+                        allow=clean_passage_words | meta_whitelist,
+                    )
+                    if over:
+                        flagged_indices.add(idx)
+                        tok, tok_lvl = over[0]
+                        defect_messages.append(
+                            f"Reading Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                        )
+                        break
 
             # 1.6 Check Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
@@ -1151,18 +1252,17 @@ class WikiProcessor:
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Reading Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
-            elif cefr_upper in ("A1", "A2"):
-                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
-                for tok in stem_toks:
-                    if tok in clean_passage_words or tok in meta_whitelist:
-                        continue
-                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                    if tok_lvl in ("C1", "C2"):
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Reading Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
-                        )
-                        break
+            else:
+                over = LinguisticEngine.over_ceiling_tokens(
+                    stem, cefr_upper, mode="text",
+                    allow=clean_passage_words | meta_whitelist,
+                )
+                if over:
+                    flagged_indices.add(idx)
+                    tok, tok_lvl = over[0]
+                    defect_messages.append(
+                        f"Reading Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                    )
 
         # 2. Skill Diversity Gate
         if len(questions) >= 4 and len(categories_seen) < 2:
@@ -1279,20 +1379,19 @@ class WikiProcessor:
                         )
                         break
 
-                # 1.2 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
-                if cefr_upper in ("A1", "A2"):
-                    for opt in options:
-                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
-                        for tok in opt_toks:
-                            if tok in clean_transcript_words or tok in meta_whitelist:
-                                continue
-                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                            if tok_lvl in ("C1", "C2"):
-                                flagged_indices.add(idx)
-                                defect_messages.append(
-                                    f"Video Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
-                                )
-                                break
+                # 1.2 Difficulty Ceiling (shared C1 helper: over_ceiling_tokens)
+                for opt in options:
+                    over = LinguisticEngine.over_ceiling_tokens(
+                        str(opt), cefr_upper, mode="text",
+                        allow=clean_transcript_words | meta_whitelist,
+                    )
+                    if over:
+                        flagged_indices.add(idx)
+                        tok, tok_lvl = over[0]
+                        defect_messages.append(
+                            f"Video Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                        )
+                        break
 
             # 2. Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
@@ -1303,18 +1402,17 @@ class WikiProcessor:
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Video Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
-            elif cefr_upper in ("A1", "A2"):
-                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
-                for tok in stem_toks:
-                    if tok in clean_transcript_words or tok in meta_whitelist:
-                        continue
-                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                    if tok_lvl in ("C1", "C2"):
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Video Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
-                        )
-                        break
+            else:
+                over = LinguisticEngine.over_ceiling_tokens(
+                    stem, cefr_upper, mode="text",
+                    allow=clean_transcript_words | meta_whitelist,
+                )
+                if over:
+                    flagged_indices.add(idx)
+                    tok, tok_lvl = over[0]
+                    defect_messages.append(
+                        f"Video Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                    )
 
             # 4. Timestamp Validation
             if not ts:
@@ -1414,20 +1512,19 @@ class WikiProcessor:
                         )
                         break
 
-                # 2.1.2 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
-                if cefr_upper in ("A1", "A2"):
-                    for opt in options:
-                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
-                        for tok in opt_toks:
-                            if tok in clean_script_words or tok in meta_whitelist:
-                                continue
-                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                            if tok_lvl in ("C1", "C2"):
-                                flagged_indices.add(idx)
-                                defect_messages.append(
-                                    f"Listening Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
-                                )
-                                break
+                # 2.1.2 Difficulty Ceiling (shared C1 helper: over_ceiling_tokens)
+                for opt in options:
+                    over = LinguisticEngine.over_ceiling_tokens(
+                        str(opt), cefr_upper, mode="text",
+                        allow=clean_script_words | meta_whitelist,
+                    )
+                    if over:
+                        flagged_indices.add(idx)
+                        tok, tok_lvl = over[0]
+                        defect_messages.append(
+                            f"Listening Item #{idx + 1}: Option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                        )
+                        break
 
             # 2.2 Key Index Bounds
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
@@ -1438,18 +1535,17 @@ class WikiProcessor:
             if len(stem.split()) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Listening Item #{idx + 1}: Question stem is too short or empty: \"{stem}\"")
-            elif cefr_upper in ("A1", "A2"):
-                stem_toks = re.findall(r"\b[a-zA-Z]{4,}\b", stem.lower())
-                for tok in stem_toks:
-                    if tok in clean_script_words or tok in meta_whitelist:
-                        continue
-                    tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                    if tok_lvl in ("C1", "C2"):
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Listening Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
-                        )
-                        break
+            else:
+                over = LinguisticEngine.over_ceiling_tokens(
+                    stem, cefr_upper, mode="text",
+                    allow=clean_script_words | meta_whitelist,
+                )
+                if over:
+                    flagged_indices.add(idx)
+                    tok, tok_lvl = over[0]
+                    defect_messages.append(
+                        f"Listening Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
+                    )
 
             # 2.4 Category check
             if cat and cat not in valid_cats:
@@ -1645,20 +1741,18 @@ class WikiProcessor:
                         )
                         break
 
-                # 2.4 Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2)
-                if cefr_upper in ("A1", "A2"):
-                    for opt in options:
-                        opt_toks = re.findall(r"\b[a-zA-Z]{4,}\b", str(opt).lower())
-                        for tok in opt_toks:
-                            if tok in meta_whitelist:
-                                continue
-                            tok_lvl = LinguisticEngine.get_word_cefr(tok)
-                            if tok_lvl in ("C1", "C2"):
-                                flagged_indices.add(idx)
-                                defect_messages.append(
-                                    f"Translation Item #{idx + 1}: Translation option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
-                                )
-                                break
+                # 2.4 Difficulty Ceiling (shared C1 helper: over_ceiling_tokens)
+                for opt in options:
+                    over = LinguisticEngine.over_ceiling_tokens(
+                        str(opt), cefr_upper, mode="text", allow=meta_whitelist,
+                    )
+                    if over:
+                        flagged_indices.add(idx)
+                        tok, tok_lvl = over[0]
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Translation option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
+                        )
+                        break
 
             # 2.5 Answer index range
             if not isinstance(correct_idx, int) or correct_idx not in range(expected_opt_count):
@@ -2045,25 +2139,138 @@ class WikiProcessor:
         g_prompt_formatted = g_prompt_template.format(**g_kwargs)
 
         tasks = [
-            ("vocabulary", v_prompt_formatted, self._interpolate_schema(v_schema, v_kwargs)),
-            ("expressions", e_prompt_formatted, self._interpolate_schema(e_schema, e_kwargs)),
-            ("grammar", g_prompt_formatted, self._interpolate_schema(g_schema, g_kwargs)),
             ("summary", s_prompt_template.format(**s_kwargs), self._interpolate_schema(s_schema, s_kwargs)),
             ("mindmap", m_prompt_template.format(**m_kwargs), self._interpolate_schema(m_schema, m_kwargs))
         ]
 
+        run_vocab = False
+        run_expressions = False
+        run_grammar = False
         if categories:
             normalized_cats = [c.lower() for c in categories]
             task_names_to_run = []
             for cat in normalized_cats:
                 if cat == "vocabulary":
-                    task_names_to_run.extend(["vocabulary", "expressions"])
+                    run_vocab = True
+                    run_expressions = True
+                elif cat == "expressions":
+                    run_expressions = True
+                elif cat == "grammar":
+                    run_grammar = True
                 else:
                     task_names_to_run.append(cat)
             tasks = [t for t in tasks if t[0] in task_names_to_run]
+        else:
+            run_vocab = True
+            run_expressions = True
+            run_grammar = True
 
-        # 2. Run extractions in parallel (Direct One-Shot JSON Structured Output)
+        # Deterministic Vocabulary Extraction (0 Tokens, Pure Computational Linguistic & LDOCE Lookup)
+        det_vocab_data = None
+        if run_vocab:
+            logger.info(f"⚡ Deterministic Vocabulary Extraction executing locally via spaCy & LDOCE 6 (0 tokens)...")
+            from .schemas import VocabularyExtraction, VocabularyItem
+            raw_v_items = LinguisticEngine.extract_deterministic_vocabulary(
+                raw_source_text,
+                syllabus_vocab=cleaned_syllabus_vocab if syllabus_vocab else None,
+                target_count=target_vocab_count
+            )
+            v_items_list = []
+            for it in raw_v_items:
+                v_item = VocabularyItem(
+                    design_audit=it.get("design_audit", ""),
+                    word=it["word"],
+                    definition=it["definition"],
+                    quoted_sentence=it["quoted_sentence"],
+                    example_usage=it["example_usage"],
+                    part_of_speech=it.get("part_of_speech", "noun")
+                )
+                v_items_list.append(v_item)
+            det_vocab_data = VocabularyExtraction(
+                title=f"{file_stem.replace('_', ' ')} Vocabulary",
+                vocabulary=v_items_list
+            )
+
+        # Deterministic Expressions Extraction (0 Tokens, Pure ACL + spaCy + LDOCE + WordNet)
+        det_expressions_data = None
+        if run_expressions:
+            logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & LDOCE/WordNet (0 tokens)...")
+            from .schemas import ExpressionsExtraction, ExpressionItem
+            raw_e_items = LinguisticEngine.extract_deterministic_expressions(
+                raw_source_text,
+                target_count=target_expr_count,
+                syllabus_expressions=syllabus_expressions
+            )
+            e_items_list = []
+            for it in raw_e_items:
+                # F2: no Longman block, phrase row or sense defines this unit, so the cascade
+                # returned nothing. Ship no expression rather than the invented
+                # 'A core idiomatic ... functioning in ...' filler.
+                if not str(it.get("definition", "")).strip():
+                    logger.warning(
+                        f"🚫 F2 gate: no lexicon host defines '{it.get('word', '')}' "
+                        f"(source tier: '{it.get('definition_source', '')}') - expression dropped"
+                    )
+                    continue
+                audit = it.get("design_audit", "")
+                if it.get("definition_source"):
+                    # The tier the definition was built on travels with the row so the audit
+                    # shows which Longman host - block, phrase row, sense pattern - owns it.
+                    audit = f"{audit} -> [DEF: {it['definition_source']}]"
+                e_item = ExpressionItem(
+                    design_audit=audit,
+                    word=it["word"],
+                    definition=it["definition"],
+                    quoted_sentence=it["quoted_sentence"],
+                    example_usage=it["example_usage"],
+                    part_of_speech=it.get("part_of_speech", "collocation")
+                )
+                e_items_list.append(e_item)
+            det_expressions_data = ExpressionsExtraction(
+                title=f"{file_stem.replace('_', ' ')} Expressions",
+                expressions=e_items_list
+            )
+
+        # Deterministic Grammar Extraction (0 Tokens, Pure Computational Syntax + COBUILD Common Learner Pitfalls)
+        det_grammar_data = None
+        if run_grammar:
+            logger.info(f"⚡ Deterministic Grammar Extraction executing locally via spaCy & COBUILD Grammar Profiles (0 tokens)...")
+            from .schemas import GrammarExtraction, GrammarItem
+            target_g_count = len(grammar_skeletons) if grammar_skeletons else g_count
+            raw_g_items = LinguisticEngine.extract_deterministic_grammar(
+                raw_source_text,
+                sentence_pool=sentence_pool,
+                target_count=target_g_count,
+                syllabus_grammar=syllabus_grammar
+            )
+            g_items_list = []
+            for it in raw_g_items:
+                g_item = GrammarItem(
+                    quote=it["quote"],
+                    pattern_formula=it["pattern_formula"],
+                    pedagogical_function=it["pedagogical_function"],
+                    design_audit=it["design_audit"],
+                    imitation_example=it["imitation_example"],
+                    common_mistakes=it["common_mistakes"]
+                )
+                setattr(g_item, "category", it.get("category", "Information Packaging"))
+                if "syntax_topic" in it:
+                    setattr(g_item, "syntax_topic", it["syntax_topic"])
+                g_items_list.append(g_item)
+            det_grammar_data = GrammarExtraction(
+                title=f"{file_stem.replace('_', ' ')} Grammar",
+                grammar_patterns=g_items_list
+            )
+
+        # 2. Run remaining extractions in parallel (Direct One-Shot JSON Structured Output)
         results = []
+        if det_vocab_data:
+            results.append(("vocabulary", det_vocab_data))
+        if det_expressions_data:
+            results.append(("expressions", det_expressions_data))
+        if det_grammar_data:
+            results.append(("grammar", det_grammar_data))
+
         try:
             with ThreadPoolExecutor(max_workers=max_p) as executor:
                 futures = {
@@ -2225,9 +2432,10 @@ class WikiProcessor:
                                 definition=getattr(expr, "definition", ""),
                                 quoted_sentence=getattr(expr, "quoted_sentence", ""),
                                 example_usage=getattr(expr, "example_usage", ""),
+                                # The expression type mined from the skeleton is the label
+                                # this row carries; it is not re-derived from the headword.
+                                part_of_speech=resolved_pos
                             )
-                            # Attach part_of_speech dynamically for markdown formatting
-                            setattr(mapped_item, "part_of_speech", resolved_pos)
                         merged_vocab.append(mapped_item)
 
                 # Filter out redundant single words in vocabulary that were extracted solely as
@@ -2332,8 +2540,8 @@ class WikiProcessor:
                         definition=getattr(expr, "definition", ""),
                         quoted_sentence=getattr(expr, "quoted_sentence", ""),
                         example_usage=getattr(expr, "example_usage", ""),
+                        part_of_speech=getattr(expr, "part_of_speech", "collocation")
                     )
-                    setattr(item, "part_of_speech", getattr(expr, "part_of_speech", "collocation"))
                     vocab_list.append(item)
                 v_extracted = VocabularyExtraction(
                     title=f"{file_stem.replace('_', ' ')} Vocabulary",
@@ -2519,13 +2727,56 @@ class WikiProcessor:
                         anchor_hint = s.get("context_anchor") or "general context"
                         infl_hint = s.get("inflection", "base form")
                         micro_task_str = s.get("micro_task", "Compose an academic sentence fitting the target.")
+                        anc = s.get("context_anchor")
+                        atype = s.get("anchor_type")
+                        if anc and atype and atype != "contextual":
+                            anchor_line = f"- Collocational Anchor: {anc} ({atype})"
+                        elif s.get("authentic_example"):
+                            anchor_line = f"- Structural Model: LDOCE Authentic Pattern"
+                        else:
+                            anchor_line = f"- Structural Model: Semantic Context Clues"
+
+                        # Evidence tiering: only a licensed quote was strong enough to lock the
+                        # sense or define the anchor; a weak quote stays visible but is labelled
+                        # display-only so the writer does not treat it as a structural model.
+                        licensed_quote = str(s.get("licensed_quote") or "").strip()
+                        candidate_quote = str(s.get("candidate_quote") or "").strip()
+                        corpus_example = str(s.get("authentic_example") or "").strip()
+                        evidence_lines = []
+                        if corpus_example:
+                            evidence_lines.append(f"- Authentic Corpus Blueprint: '{corpus_example}'")
+                        if licensed_quote and licensed_quote != corpus_example:
+                            evidence_lines.append(f"- Curriculum Quote (licensed): '{licensed_quote}'")
+                        elif candidate_quote and candidate_quote != corpus_example:
+                            evidence_lines.append(
+                                f"- Curriculum Quote (display-only, {s.get('quote_wordcount', 0)} words "
+                                f"— too short to license the anchor or the sense, do not model the stem on it): "
+                                f"'{candidate_quote}'"
+                            )
+                        # B2: an item with no surviving frame is declared as such, so the writer
+                        # discriminates by meaning instead of inventing a collocation to defend.
+                        if s.get("anchor_downgrade") == "sense_recognition":
+                            evidence_lines.append(
+                                "- Item Type: sense recognition — no collocation frame survived the gates, "
+                                "so the definition alone must decide the answer. Do not invent a bound "
+                                "preposition or a fixed modifier."
+                            )
+                        valency_line = ""
+                        if s.get("verb_requires_object") is True:
+                            valency_line = (
+                                "- Verb Valency: transitive — the blank must still take its own "
+                                "direct object after the verb\n"
+                            )
+
                         skeleton_bullets.append(
                             f"### Item {idx} ###\n"
                             f"- Target Word: {s['target_word']}\n"
                             f"- Part of Speech: {s['part_of_speech']}\n"
                             f"- Inflectional Form: {infl_hint}\n"
-                            f"- Collocational Anchor: {anchor_hint}\n"
-                            f"- Prescribed Options: [{opts_str}]\n"
+                            f"{anchor_line}\n"
+                            + (f"{valency_line}" if valency_line else "")
+                            + ("\n".join(evidence_lines) + "\n" if evidence_lines else "")
+                            + f"- Prescribed Options: [{opts_str}]\n"
                             f"- Correct Answer Index: {s.get('correct_answer_index', 0)}\n"
                             f"- Contextual Definition: {s['definition']}\n"
                             f"- 🎯 Micro-Task for LLM: {micro_task_str}"
@@ -3736,7 +3987,7 @@ class WikiProcessor:
                     lines.append(f"qa_status: \"{qa_status}\"")
 
             for name, val in fields:
-                if name not in ["title", "grammar_patterns", "vocabulary", "concepts", "_category", "_qa_audit"]:
+                if name not in ["title", "grammar", "grammar_patterns", "vocabulary", "concepts", "_category", "_qa_audit"]:
                     if val: lines.append(f"{name}: \"{val}\"")
             
             lines.extend(["---", "", f"# {category.title()}: {display_title}", ""])
@@ -3761,21 +4012,26 @@ class WikiProcessor:
                 if not item_fields:
                     continue
 
-                # For grammar items, ensure category is attached and used as header
+                # For grammar items, prefer syntax_topic as header, fallback to category
                 if category == "grammar":
-                    cat_val = getattr(item, "category", None) if dataclasses.is_dataclass(item) else item.get("category")
+                    topic_val = getattr(item, "syntax_topic", None) if dataclasses.is_dataclass(item) else (item.get("syntax_topic") if isinstance(item, dict) else None)
+                    cat_val = getattr(item, "category", None) if dataclasses.is_dataclass(item) else (item.get("category") if isinstance(item, dict) else None)
                     if not cat_val:
-                        # Fallback infer from formula or default
-                        p_formula = getattr(item, "pattern_formula", "") if dataclasses.is_dataclass(item) else item.get("pattern_formula", "")
                         cat_val = "Information Packaging"
+                    header_val = topic_val if topic_val else cat_val
+                    header_entry = ("syntax_topic" if topic_val else "category", header_val)
+                    
                     if dataclasses.is_dataclass(item):
-                        item_fields = [(f.name, getattr(item, f.name)) for f in dataclasses.fields(item) if f.name != "design_audit"]
+                        item_fields = [(f.name, getattr(item, f.name)) for f in dataclasses.fields(item) if f.name not in ("design_audit", "syntax_topic")]
                     else:
-                        item_fields = [(k, v) for k, v in item.items() if k != "design_audit"]
-                    # Insert category as the primary header entry
-                    header_entry = ("category", cat_val)
-                    body_entries = [entry for entry in item_fields if entry[0] != "category"]
-                    primary_key = "category"
+                        item_fields = [(k, v) for k, v in item.items() if k not in ("design_audit", "syntax_topic")]
+                    
+                    # Ensure Category is visible in item fields
+                    body_entries = []
+                    if topic_val and cat_val:
+                        body_entries.append(("Category", cat_val))
+                    body_entries.extend([entry for entry in item_fields if entry[0].lower() != "category"])
+                    primary_key = header_entry[0]
                 else:
                     # Locate canonical primary header field
                     primary_key = None
@@ -3808,10 +4064,33 @@ class WikiProcessor:
                         body_entries.append(("word_cefr_level", derived_cefr))
 
                     has_pos = any(k.lower() == "part_of_speech" and v for k, v in body_entries)
-                    if not has_pos and primary_key == "word":
+                    if primary_key == "word":
                         raw_quote = next((v for k, v in body_entries if k.lower() in ("quoted_sentence", "quote")), "")
-                        derived_pos = LinguisticEngine.determine_contextual_pos(str(header_entry[1]), str(raw_quote))
-                        body_entries.append(("part_of_speech", derived_pos))
+                        headword = str(header_entry[1])
+                        if not has_pos:
+                            # A multi-word unit is never a bare noun or verb: its label is the
+                            # expression type the engine mined it as. Only a single headword may
+                            # be typed by spaCy, which reads the part of speech of its first token.
+                            if LinguisticEngine.is_multiword_expression(headword):
+                                derived_pos = LinguisticEngine.classify_expression_type(headword, str(raw_quote)) or "collocation"
+                            else:
+                                derived_pos = LinguisticEngine.determine_contextual_pos(headword, str(raw_quote))
+                            body_entries.append(("part_of_speech", derived_pos))
+                        else:
+                            # A multi-word unit that arrived labelled as the part of speech of
+                            # one of its tokens ('as a whole' -> 'conjunction', 'tap into' ->
+                            # 'verb') is re-typed: a unit a learner must hold together is a
+                            # phrasal verb, a collocation, a set phrase or an idiom.
+                            for j, (field_key, field_val) in enumerate(body_entries):
+                                if field_key.lower() != "part_of_speech":
+                                    continue
+                                if str(field_val).strip().lower() in LinguisticEngine.EXPRESSION_TYPE_LABELS \
+                                        or not LinguisticEngine.is_multiword_expression(headword):
+                                    break
+                                retyped = LinguisticEngine.classify_expression_type(headword, str(raw_quote))
+                                if retyped:
+                                    body_entries[j] = (field_key, retyped)
+                                break
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -3861,6 +4140,16 @@ class WikiProcessor:
 
                 for fname, fval in sorted_body_entries:
                     label = LABEL_OVERRIDES.get(fname.lower(), fname.replace("_", " ").title())
+                    # F2: an invented fallback definition never reaches the page. The cascade
+                    # writes '' when no lexicon host grounds a unit, and a boilerplate that
+                    # arrived by another path is dropped here instead of printed as fact.
+                    if fname.lower() == "definition" and fval and \
+                            LinguisticEngine.is_boilerplate_definition(str(fval)):
+                        logger.warning(
+                            f"🚫 F2 gate: invented definition blocked for "
+                            f"{header_val}: {str(fval).strip()[:70]}"
+                        )
+                        continue
                     if fval:
                         if category == "grammar" and fname == "pattern_formula":
                             fval = self.normalize_grammar_formula(str(fval))
@@ -3874,6 +4163,58 @@ class WikiProcessor:
                             # Strip internal sentence pool tokens like [S-26] or S-26: from front of quote if still present
                             fval_str = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", fval_str, flags=re.IGNORECASE).strip()
                             fval = fval_str
+                        elif category == "grammar" and fname.lower() == "common_mistakes":
+                            fval_str = str(fval).strip()
+                            # Convert to Simplified Plan B layout if not already multiline
+                            if "\n" not in fval_str:
+                                # Strip prefix like 'LDOCE Grammar Alert (TAG): ' or 'COBUILD Warning (TAG): '
+                                m_tag = re.match(r'^(?:LDOCE\s+Grammar\s+Alert|COBUILD\s+Warning)\s*\(([^)]+)\)\s*:\s*(.*)', fval_str, re.DOTALL | re.IGNORECASE)
+                                if m_tag:
+                                    tag = m_tag.group(1).strip()
+                                    body = m_tag.group(2).strip()
+                                else:
+                                    m_tag2 = re.match(r'^\(([^)]+)\)\s*(.*)', fval_str, re.DOTALL)
+                                    if m_tag2:
+                                        tag = m_tag2.group(1).strip()
+                                        body = m_tag2.group(2).strip()
+                                    else:
+                                        tag = ""
+                                        body = fval_str
+
+                                tag_str = f"({tag}) " if tag else ""
+
+                                # Pattern A: contains [INCORRECT: ... -> CORRECT: ...]
+                                m_inc = re.search(r'^(.*?)\s*["“](.*?)\[INCORRECT:\s*(.*?)\s*->\s*CORRECT:\s*(.*?)\](.*?)["”](.*)$', body, re.DOTALL)
+                                if m_inc:
+                                    intro = m_inc.group(1).strip().rstrip(':').strip()
+                                    pre = m_inc.group(2)
+                                    wrong = m_inc.group(3).strip()
+                                    right = m_inc.group(4).strip()
+                                    post = m_inc.group(5)
+                                    note = m_inc.group(6).strip()
+                                    
+                                    wrong_sent = f"{pre}*{wrong}*{post}".strip()
+                                    right_sent = f"{pre}{right}{post}".strip()
+
+                                    sub_lines = [f"{tag_str}{intro}:"]
+                                    sub_lines.append(f"  ✗ {wrong_sent}")
+                                    if right:
+                                        sub_lines.append(f"  ✓ {right_sent}")
+                                    if note:
+                                        sub_lines.append(f"  {note}")
+                                    fval = "\n".join(sub_lines)
+                                # Pattern B: contains Don't say or ✗
+                                elif "Don't say" in body or "✗" in body:
+                                    parts = re.split(r"(?:✗\s*Don't say:\s*|✗Don't say:\s*|Don't say:\s*|✗\s*)", body)
+                                    rule = parts[0].strip().rstrip(':').strip()
+                                    err = parts[1].strip() if len(parts) > 1 else ""
+                                    sub_lines = [f"{tag_str}{rule}"]
+                                    if err:
+                                        sub_lines.append(f"  ✗ {err}")
+                                    fval = "\n".join(sub_lines)
+                                else:
+                                    fval = f"{tag_str}{body}"
+
                         lines.append(f"- **{label}**: {fval}")
                 lines.append("")
 

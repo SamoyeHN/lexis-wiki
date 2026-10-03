@@ -3764,3 +3764,285 @@ class TestLdocePhraseAttestationGate:
         assert not hasattr(LinguisticEngine, "get_oxford_raw"), "get_oxford_raw"
         assert not hasattr(LinguisticEngine, "_ocd_data"), "_ocd_data"
 
+
+class TestMultiwordExpressionTypes:
+    """A multi-word headword is a lexical unit, not a word. Its 'Part of Speech' line must
+    carry the Longman expression type ('phrasal verb', 'collocation', 'set phrase',
+    'idiom'), never the part of speech of whichever token happens to lead it: 'tap into'
+    is not a noun because a spaCy parse reads the object of its quote."""
+
+    def test_only_multiword_headwords_are_typed_as_expressions(self):
+        for word in ("tap into [sth]", "keep silent", "as long as", "make [sth] possible"):
+            assert LinguisticEngine.is_multiword_expression(word), word
+        for word in ("silence", "possible", "regardless", ""):
+            assert not LinguisticEngine.is_multiword_expression(word), word
+        # A single headword keeps a part of speech, so it gets no expression type.
+        assert LinguisticEngine.classify_expression_type(
+            "silence", "The room fell into silence.") == ""
+
+    def test_ldoce_phrasal_verb_blocks(self):
+        for phrase in ("tap into", "belong to", "send out", "show up", "come up with",
+                       "look forward to", "put off", "take in", "cut out", "stay on"):
+            assert LinguisticEngine.classify_expression_type(phrase) == "phrasal verb", phrase
+
+    def test_ldoce_declared_phrases_are_set_phrases(self):
+        for phrase in ("keep in touch with", "as long as", "as a whole", "get rid of",
+                       "have to do with"):
+            assert LinguisticEngine.classify_expression_type(phrase) == "set phrase", phrase
+
+    def test_a_fixed_frame_opens_with_a_closed_class_word(self):
+        """'regardless of' is listed as a conjunction, so it is a frame, not a collocation."""
+        assert LinguisticEngine.classify_expression_type("regardless of") == "set phrase"
+
+    def test_frame_collocations(self):
+        for phrase in ("keep silent", "make possible", "take into account", "lone ranger",
+                       "fly carpets", "feel surprised"):
+            assert LinguisticEngine.classify_expression_type(phrase) == "collocation", phrase
+
+    def test_a_unit_inside_a_longer_declared_phrase_is_not_that_phrase(self):
+        """'worry about' is not the idiom 'nothing to worry about', and 'hat off' is only a
+        noun inside 'take your hat off'. Neither may inherit the type of the longer unit
+        that happens to contain its words."""
+        assert LinguisticEngine.ldoce_declared_unit("worry about") == ""
+        assert LinguisticEngine.ldoce_declared_unit("hat off") == ""
+        assert LinguisticEngine.classify_expression_type("worry about") == "phrasal verb"
+        assert LinguisticEngine.classify_expression_type("hat off") == "collocation"
+
+    def test_declared_unit_names_are_read_through_slots_and_slashes(self):
+        """Longman writes a frame with slots and slash groups; the unit is what remains."""
+        assert "keep in touch with" in LinguisticEngine._declared_unit_spellings(
+            "be/keep/stay etc in touch (with something)")
+        assert "tap into" in LinguisticEngine._declared_unit_spellings("tap into something")
+        assert "put off" in LinguisticEngine._declared_unit_spellings("put somebody/something off")
+        assert LinguisticEngine._unit_tokens("keep [sb] off something") == ["keep", "off"]
+
+    def test_generated_vocabulary_pages_keep_expression_labels(self):
+        """Data invariant: no multi-word headword in a generated vocabulary page may carry
+        an ordinary single-word part of speech."""
+        from pathlib import Path
+
+        bad = []
+        for path in Path("wiki").rglob("*_vocabulary.md"):
+            headword = None
+            for line in path.read_text(encoding="utf-8").splitlines():
+                head = re.match(r"^## \[\[(.+?)\]\]", line.strip())
+                if head:
+                    headword = head.group(1)
+                    continue
+                pos = re.match(r"^- \*\*Part of Speech\*\*:\s*(.+?)\s*$", line.strip(), re.I)
+                if pos and headword and LinguisticEngine.is_multiword_expression(headword):
+                    label = pos.group(1).strip().lower()
+                    if label not in LinguisticEngine.EXPRESSION_TYPE_LABELS:
+                        bad.append(f"{path}: {headword} -> {label}")
+        assert not bad, bad
+
+
+class TestExpressionDefinitionHost:
+    """Backlog F7 后续④ and F2 - a definition must come from the host that owns the unit.
+
+    `expression_definition_evidence` is the cascade; `get_expression_definition_and_example`
+    is the same walk with the invented filler bolted back on, which is why the extractor reads
+    the cascade and not the wrapper.  Every tier below is a place Longman itself prints the
+    definition: a phrasal-verb block under the verb, a PHRASES row under a noun or adjective,
+    or the sense a grammar pattern of the headword was filed under.  A unit none of them
+    defines has no definition, and F2 is the rule that says so out loud instead of writing
+    'A core academic term functioning as a noun.' into a page.
+
+    The tier and the wording of each fixture below are what the cascade returns from
+    data/ldoce_entries.json.gz today (scratch/expr_def_tier_dump.py).
+    """
+
+    # unit -> (the tier that defines it, how Longman itself opens that definition)
+    GROUNDED = {
+        "give up": ("phrasal_verb_block", "to stop doing something"),
+        "depend on something": ("phrasal_verb_block", "if something depends on something else"),
+        "belong to something": ("phrasal_verb_block", "if something belongs to someone"),
+        "think of something": ("phrasal_verb_block", "to produce an idea, name, suggestion etc"),
+        "tap into something": ("phrasal_verb_block", "to put information, numbers etc into a computer"),
+        "keep in touch with somebody": ("phrase_row", "talking or writing to someone"),
+        "take into consideration": ("phrase_row", "careful thought and attention"),
+        "as a whole": ("phrase_row", "used to say that all the parts of something"),
+        "keep silent": ("sense_pattern", "not saying anything"),
+        "long for something": ("sense_pattern", "to want something very much"),
+        "worry about something": ("sense_pattern", "to be anxious or unhappy about"),
+        "make something possible": ("sense_pattern", "if something is possible"),
+    }
+
+    # Verb + preposition pairs the dependency parse mines and Longman never states.  They are
+    # the units the old cascade invented a definition for.
+    UNSTATED = ["havoc for", "keep of", "streak on", "alone on", "plain on", "accord in"]
+
+    # The first sense of each bare token inside the units above.  A cascade that reads the unit
+    # as a sequence of words returns one of these instead of the unit's own definition.
+    WRONG_SENSES = [
+        "to stay in a particular state, condition, or position",      # keep
+        "used to say that two or more people or things are together",  # with
+        "to the inside or inner part of a container",                  # into
+        "used after a verb, noun, or adjective when an infinitive",    # to
+        "used to show what a part belongs to or comes from",           # of
+        "a piece of equipment for controlling the flow of water",      # tap
+        "continuing for a large amount of time",                       # long (adjective)
+    ]
+
+    def test_every_grounded_unit_reports_the_host_that_defines_it(self):
+        for unit, (tier, opening) in self.GROUNDED.items():
+            definition, example, source = LinguisticEngine.expression_definition_evidence(unit)
+            assert source == tier, (unit, source, definition)
+            assert definition.startswith(opening), (unit, definition)
+
+    def test_all_three_tiers_are_reached(self):
+        """A cascade that collapses onto one tier has silently lost the other lookups."""
+        tiers = {tier for tier, _ in self.GROUNDED.values()}
+        assert tiers == {"phrasal_verb_block", "phrase_row", "sense_pattern"}, tiers
+
+    def test_a_phrasal_verb_block_beats_the_headwords_own_first_sense(self):
+        """'give up' is defined by its block, not by 'give'; 'belong to something' is defined by
+        its block, not by the preposition 'to'."""
+        for unit in ("give up", "belong to something", "tap into something"):
+            definition, _, _ = LinguisticEngine.expression_definition_evidence(unit)
+            assert definition, unit
+            for wrong in self.WRONG_SENSES:
+                assert not definition.startswith(wrong), (unit, definition)
+
+    def test_a_phrase_row_is_read_under_the_host_it_was_filed_in(self):
+        """'take into consideration' sits under the noun 'consideration', so its definition is
+        the noun's.  Reading the unit as 'take' + words would return a verb sense instead."""
+        definition, _, source = LinguisticEngine.expression_definition_evidence(
+            "take into consideration")
+        assert source == "phrase_row", definition
+        assert definition.startswith("careful thought and attention"), definition
+        host, _, _ = LinguisticEngine._unit_owning_sense("take into consideration")
+        assert host == "consideration", host
+
+    def test_a_grammar_pattern_sense_defines_the_unit(self):
+        """Longman files 'long for something' as a pattern of the verb 'long', so the definition
+        is that sense - not the adjective 'long' the same headword also carries."""
+        definition, _, source = LinguisticEngine.expression_definition_evidence(
+            "long for something")
+        assert source == "sense_pattern", definition
+        assert "want something very much" in definition, definition
+        assert not definition.startswith("continuing for a large amount of time"), definition
+
+    def test_function_words_are_never_hosts(self):
+        """The host is the content word the unit is filed under.  'with', 'to', 'into' and 'of'
+        head no unit that any of these phrases belongs to."""
+        for unit, expected in [("take into consideration", "consideration"),
+                               ("long for something", "long"),
+                               ("keep silent", "silent"),
+                               ("worry about something", "worry")]:
+            owner = LinguisticEngine._unit_owning_sense(unit)
+            assert owner and owner[0] == expected, (unit, owner)
+        # 'keep silent' is filed under the adjective, whose sense carries the signpost 'not
+        # speaking' and the pattern 'keep silent' - the verb's own senses say nothing about it.
+        # A unit a phrasal-verb block defines never reaches this walk at all; the ones that do
+        # are not filed under the preposition inside them.
+        for unit in ("keep in touch with somebody", "belong to something", "depend on something"):
+            owner = LinguisticEngine._unit_owning_sense(unit)
+            if owner:
+                assert owner[0] not in ("with", "to", "on", "of", "into", "for"), (unit, owner[0])
+
+    def test_an_unstated_unit_returns_no_definition(self):
+        """The cascade's answer for a unit no dictionary defines is the empty string, which is
+        the signal F2 needs.  The filler is what the wrapper adds on top of it."""
+        for unit in self.UNSTATED:
+            definition, example, source = LinguisticEngine.expression_definition_evidence(unit)
+            assert (definition, example, source) == ("", "", ""), (unit, definition, source)
+
+    def test_the_invented_filler_is_recognised_as_such(self):
+        """Each string below is one the engine writes itself, from the line that writes it."""
+        for filler in [
+            "A core academic term functioning as a noun.",
+            "A core academic term functioning as a conjunction.",
+            "A core idiomatic collocation functioning in academic and communicative discourse.",
+            "A core idiomatic phrasal verb functioning in academic and communicative discourse.",
+            "A core idiomatic set phrase functioning in academic and communicative discourse.",
+            "A core idiomatic idiom functioning in academic and communicative discourse.",
+            "A core idiomatic multi-word expression functioning in academic and communicative discourse.",
+            "Academic noun functioning as a key cohesive phrase in discourse.",
+            "Core academic verb essential for formal scholastic and technical discourse.",
+        ]:
+            assert LinguisticEngine.is_boilerplate_definition(filler), filler
+        for real in [
+            "to stop doing something, especially something that you do regularly",
+            "talking or writing to someone",
+            "careful thought and attention, especially before making an official or important decision",
+            "not saying anything",
+            "used to say that all the parts of something are being considered together",
+            "a piece of equipment for controlling the flow of water, gas etc from a pipe or tap",
+        ]:
+            assert not LinguisticEngine.is_boilerplate_definition(real), real
+        assert not LinguisticEngine.is_boilerplate_definition(""), "empty is not invented"
+        assert not LinguisticEngine.is_boilerplate_definition(None), "None is not invented"
+
+    def test_the_wrapper_still_invents_and_the_cascade_does_not(self):
+        """The two accessors differ by exactly the filler, and the extractor reads the one that
+        cannot invent."""
+        wrapper_def, _ = LinguisticEngine.get_expression_definition_and_example("havoc for")
+        assert wrapper_def, "the wrapper keeps its fallback for callers that need a string"
+        assert LinguisticEngine.is_boilerplate_definition(wrapper_def), wrapper_def
+        assert LinguisticEngine.expression_definition_evidence("havoc for") == ("", "", "")
+
+    def test_the_deterministic_extractor_never_invents_a_definition(self):
+        """The extractor is the caller that used to be able to invent.  A row it cannot ground
+        now carries an empty definition plus the low_confidence flag the F2 gate reads, and the
+        tier it was built on travels with every row it can ground."""
+        from pathlib import Path
+
+        text = Path("wiki/Book_1_Unit_1_Passage_A/sources/Book_1_Unit_1_Passage_A.md").read_text(
+            encoding="utf-8")
+        items = LinguisticEngine.extract_deterministic_expressions(text, target_count=12)
+        assert items, "the passage yields expressions"
+        for item in items:
+            assert not LinguisticEngine.is_boilerplate_definition(item["definition"]), item
+            assert item["definition_source"] in LinguisticEngine.EXPRESSION_SOURCE_TIERS, item
+            if item["definition"]:
+                assert item["definition_source"], item
+                assert not item["low_confidence"], item
+            else:
+                assert item["low_confidence"] and not item["definition_source"], item
+        grounded = [item["word"] for item in items if item["definition"]]
+        assert len(grounded) >= 3, items
+        assert len(grounded) < len(items), \
+            "this passage has a unit no lexicon host defines, and it must arrive flagged"
+
+    def test_the_markdown_writer_blocks_an_invented_definition(self):
+        """F2 at the page: a definition the lexicon does not ground never reaches the body, and
+        the row that is grounded keeps its definition."""
+        from librarian.processor import WikiProcessor
+
+        grounded = "to stop doing something, especially something that you do regularly"
+        invented = "A core idiomatic collocation functioning in academic and communicative discourse."
+        data = {"vocabulary": [
+            {"word": "give up", "part_of_speech": "phrasal verb", "definition": grounded,
+             "example_usage": "Darren has decided to give up football at the end of this season.",
+             "quoted_sentence": "He decided to give up football.",
+             "definition_source": "phrasal_verb_block"},
+            {"word": "havoc for", "part_of_speech": "collocation", "definition": invented,
+             "example_usage": "The storm caused havoc for the coastal villages.",
+             "quoted_sentence": "The storm caused havoc for the coastal villages.",
+             "definition_source": ""},
+        ]}
+        markdown = WikiProcessor()._format_as_markdown(data, "vocabulary", "TestUnit.md")
+        assert grounded in markdown, markdown
+        assert invented not in markdown, markdown
+        assert "A core" not in markdown, markdown
+
+    def test_the_evaluator_flags_an_invented_definition(self):
+        """F2 at the gate: the filler fails the pedagogy check the same way a missing definition
+        does, so the page reports it instead of shipping it."""
+        from librarian.evaluator import _score_pedagogy
+
+        grounded = [{"word": "give up", "part_of_speech": "phrasal verb",
+                     "definition": "to stop doing something, especially something that you do regularly",
+                     "example_usage": "Darren has decided to give up football.",
+                     "quoted_sentence": "He decided to give up football."}]
+        _, grounded_flags = _score_pedagogy(grounded, "vocabulary")
+        assert not [f for f in grounded_flags if "invented fallback" in f], grounded_flags
+
+        invented = [{"word": "havoc for", "part_of_speech": "collocation",
+                     "definition": "A core idiomatic collocation functioning in academic and communicative discourse.",
+                     "example_usage": "The storm caused havoc for the coastal villages.",
+                     "quoted_sentence": "The storm caused havoc for the coastal villages."}]
+        _, invented_flags = _score_pedagogy(invented, "vocabulary")
+        assert [f for f in invented_flags if "invented fallback" in f], invented_flags
+

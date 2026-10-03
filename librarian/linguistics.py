@@ -2078,6 +2078,280 @@ class LinguisticEngine:
 
         return (definition, example)
 
+    # =========================================================================
+    # EXPRESSION DEFINITION CASCADE (backlog F7 后续 ④)
+    #
+    # Longman files a multi-word unit under the word that carries its meaning, not under its
+    # first token: 'keep in touch' under the noun 'touch' ('be/keep/stay etc in touch (with
+    # something)'), 'keep silent' under the adjective 'silent' (pattern 'remain/stay/keep
+    # silent'), 'long for' under the verb 'long' written 'long for somebody/something'.  The
+    # cascade therefore asks every content word's row, and reads the definition from the
+    # block or the sense that owns the unit - never from whichever sense the entry happens to
+    # print first, which is how 'give up' shipped 'give''s "make a movement with your hand"
+    # and 'long for' shipped the adjective's "continuing for a large amount of time".
+    # =========================================================================
+    # '' means nothing in Longman grounds the unit: the caller must not invent a definition.
+    EXPRESSION_SOURCE_TIERS = ("ldoce_entry", "phrasal_verb_block", "sense_pattern",
+                               "phrase_row", "wordnet", "")
+
+    # The engine's own invented definitions (backlog F2).  No authoritative definition has this
+    # shape, so a page can be gated on it without rejecting a real one.  Each pattern names the
+    # line that produces it.
+    _BOILERPLATE_DEFINITION_PATTERNS = (
+        # linguistics.py - 'A core academic term functioning as a noun.'
+        r"^a core academic \w[\w -]{0,40} functioning as a \w+",
+        # linguistics.py - 'A core idiomatic collocation functioning in academic and
+        # communicative discourse.'  The type slot carries 'collocation', 'phrasal verb',
+        # 'set phrase', 'idiom' or 'multi-word expression'.
+        r"^a core idiomatic [\w -]{0,40} functioning in academic and communicative discourse",
+        # llm.py - 'Academic noun functioning as a key cohesive phrase in discourse.'
+        r"^academic [\w -]{0,30} functioning as a key cohesive phrase in discourse",
+        # llm.py - 'Core academic noun essential for formal scholastic and technical discourse.'
+        r"^core academic [\w -]{0,30} essential for formal scholastic and technical discourse",
+    )
+
+    @classmethod
+    def is_boilerplate_definition(cls, definition: Any) -> bool:
+        """True for an invented fallback definition instead of an authoritative one."""
+        text = str(definition or "").strip()
+        if not text:
+            return False
+        return any(re.match(pattern, text, re.IGNORECASE)
+                   for pattern in cls._BOILERPLATE_DEFINITION_PATTERNS)
+
+    @classmethod
+    def _unit_key(cls, phrase: Any) -> str:
+        """'tap into [sth]' and 'tap into something' both compare as 'tap into'."""
+        return " ".join(cls._unit_tokens(phrase))
+
+    @classmethod
+    def _unit_example(cls, key: str, candidates: List[Any]) -> str:
+        """The first candidate that actually shows this unit. An example written for the
+        headword alone ('She picked up the envelope and gave it a shake.') says nothing about
+        how 'give up' is used, so it is not an example for this row."""
+        tokens = cls._phrase_tokens(key)
+        pattern = cls._phrase_regex(tokens, 2) if len(tokens) >= 2 else ""
+        if not pattern:
+            return ""
+        rx = re.compile(pattern)
+        for cand in candidates:
+            text = str(cand or "").strip()
+            if text and rx.search(cls._entry_text_normalizer(text)):
+                return text
+        return ""
+
+
+    @classmethod
+    def _unit_blocks(cls, key: str, headword: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every phrasal-verb block Longman names exactly `key`, in every row the unit can
+        live in. Slot stripping and slash expansion belong to `_declared_unit_spellings`, so
+        'keep somebody in' answers 'keep in' and 'stay/keep in touch' answers 'keep in
+        touch'. A block that merely contains the words ('give up on' for 'give up') names a
+        different unit and is not consulted."""
+        out: List[Dict[str, Any]] = []
+        seen: Set[Tuple[str, str]] = set()
+        for host in cls._phrase_headwords(key, headword):
+            entry = cls.get_ldoce_entry(host)
+            if not entry:
+                continue
+            for block in entry.get("phrasal_verbs") or []:
+                if not isinstance(block, dict):
+                    continue
+                names = [block.get("phrase"), block.get("headword")] \
+                    + list(block.get("variants") or []) + list(block.get("alternates") or [])
+                if not any(key in cls._declared_unit_spellings(name) for name in names):
+                    continue
+                marker = (host, str(block.get("phrase")), str(block.get("headword")))
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                out.append(block)
+        return out
+
+    @classmethod
+    def _unit_senses(cls, block: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+        """The senses of a block that can define `key`, best first: a sense whose own grammar
+        pattern states this unit outright defines it; the block's other senses follow in the
+        order Longman printed them."""
+        senses = [s for s in (block.get("senses") or [])
+                  if isinstance(s, dict) and str(s.get("definition") or "").strip()]
+        owned = [s for s in senses
+                 if any(cls._unit_key(unit) == key
+                        for pattern in (s.get("patterns") or [])
+                        for unit in cls._slash_variants(pattern))]
+        return owned + [s for s in senses if s not in owned]
+
+    @classmethod
+    def _unit_phrase_rows(cls, key: str,
+                          headword: Optional[str] = None) -> List[Tuple[str, Dict[str, Any]]]:
+        """(host, row) for every PHRASES row Longman names exactly `key`."""
+        out: List[Tuple[str, Dict[str, Any]]] = []
+        for host in cls._phrase_headwords(key, headword):
+            entry = cls.get_ldoce_entry(host)
+            if not entry:
+                continue
+            for row in entry.get("phrases") or []:
+                if isinstance(row, dict) and key in cls._declared_unit_spellings(row):
+                    out.append((host, row))
+        return out
+
+
+    @classmethod
+    def _unit_owning_sense(cls, key: str,
+                           headword: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any], str]]:
+        """(host, sense, source) for the sense Longman files `key` under.
+
+        First the sense whose own grammar pattern reads as this unit: 'long for
+        somebody/something' is a pattern of the verb 'long', and the definition that belongs
+        to it is 'to want something very much', not the adjective's 'continuing for a large
+        amount of time'.  Failing that, a PHRASES row named for the unit carries an example
+        but no definition of its own, so its meaning is the sense that row was filed under -
+        the sense whose examples actually show the unit.  Function words are not hosts here:
+        'with' has 460 PHRASES rows and none of them is about 'keep in touch'."""
+        hosts = [h for h in cls._phrase_headwords(key, headword)
+                 if h not in cls._PHRASE_SLOT_WORDS and h not in cls._PHRASE_PARTICLE_WORDS]
+        if not hosts:
+            hosts = cls._phrase_headwords(key, headword)
+
+        licensed = {text for tier, text in cls.ldoce_phrase_hits(key, headword)
+                    if tier in ("phrase", "pattern")}
+        for host in hosts:
+            entry = cls.get_ldoce_entry(host)
+            if not entry:
+                continue
+            for sense in entry.get("senses") or []:
+                if not isinstance(sense, dict) or not str(sense.get("definition") or "").strip():
+                    continue
+                for pattern in sense.get("patterns") or []:
+                    for unit in cls._slash_variants(pattern):
+                        if cls._entry_text_normalizer(unit) in licensed:
+                            return (host, sense, "sense_pattern")
+
+        rows = cls._unit_phrase_rows(key, headword)
+        if not rows:
+            return None
+        # A PHRASES row names the unit but not the sense it was filed under.  Three
+        # readings recover that sense, strongest first: a sense whose own pattern states the
+        # same frame under a different head ('get in touch with' files 'keep in touch with');
+        # a sense whose examples actually show the unit; and last the host entry's own first
+        # sense, which is the word Longman filed the row under.  The host that is not the
+        # unit's own head word is tried first - 'take into consideration' is filed under
+        # 'consideration', and 'take''s 92 senses have nothing to say about it.
+        tokens = key.split()
+        tail = tokens[1:]
+        filed = [h for h in hosts if any(h == row_host for row_host, _row in rows)]
+        ordered = [h for h in filed if h != tokens[0]] + [h for h in filed if h == tokens[0]]
+        for host in ordered:
+            entry = cls.get_ldoce_entry(host)
+            if not entry:
+                continue
+            senses = [s for s in (entry.get("senses") or [])
+                      if isinstance(s, dict) and str(s.get("definition") or "").strip()]
+            for sense in senses:
+                for pattern in sense.get("patterns") or []:
+                    for unit in cls._slash_variants(pattern):
+                        frame = cls._phrase_tokens(unit)
+                        if len(frame) > 1 and frame[1:] == tail:
+                            return (host, sense, "phrase_row")
+            for sense in senses:
+                if cls._unit_example(key, list(sense.get("examples") or [])):
+                    return (host, sense, "phrase_row")
+        for host in ordered:
+            entry = cls.get_ldoce_entry(host)
+            if not entry:
+                continue
+            senses = [s for s in (entry.get("senses") or [])
+                      if isinstance(s, dict) and str(s.get("definition") or "").strip()]
+            if senses:
+                return (host, senses[0], "phrase_row")
+        return None
+
+
+    @classmethod
+    def expression_definition_evidence(
+        cls,
+        phrase: str,
+        expr_type: Optional[str] = None,
+        context_sentence: Optional[str] = None
+    ) -> Tuple[str, str, str]:
+        """(definition, example, source) for a multi-word unit, each tier grounded in the row
+        that hosts it. `source` is one of EXPRESSION_SOURCE_TIERS; '' means Longman states
+        nothing about this unit and the caller must not invent a definition (F2)."""
+        clean_phrase = re.sub(r'\[.*?\]|\(.*?\)', '', str(phrase or ''),
+                              flags=re.IGNORECASE).strip().lower()
+        if not clean_phrase:
+            return ("", "", "")
+
+        # Tier 1: the unit is a headword row of its own ('climate change').
+        defn, ex = cls.get_ldoce_definition_and_example(
+            clean_phrase, target_pos=expr_type, context_sentence=context_sentence)
+        if defn and not cls.is_boilerplate_definition(defn):
+            return (defn, ex, "ldoce_entry")
+
+        key = cls._unit_key(clean_phrase)
+        if len(key.split()) < 2:
+            return ("", "", "")
+
+        # Tier 2a: Longman's own phrasal-verb block. When a block names this unit its
+        # definition is final - the entry's base senses describe the verb, not the unit.
+        for block in cls._unit_blocks(key):
+            for sense in cls._unit_senses(block, key):
+                definition = str(sense.get("definition") or "").strip()
+                if not definition:
+                    continue
+                example = cls._unit_example(key, list(sense.get("examples") or []))
+                return (definition, example, "phrasal_verb_block")
+
+        # Tier 2b: the sense that owns the unit - as its own grammar pattern, or as the
+        # sense a PHRASES row named for it was filed under.
+        owner = cls._unit_owning_sense(key)
+        if owner:
+            _host, sense, source = owner
+            definition = str(sense.get("definition") or "").strip()
+            if definition:
+                pool: List[str] = [str(e) for e in (sense.get("examples") or []) if e]
+                pool += [str(e) for _h, row in cls._unit_phrase_rows(key)
+                         for e in (row.get("examples") or []) if e]
+                try:
+                    pool += [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
+                except Exception:
+                    pass
+                return (definition, cls._unit_example(key, pool), source)
+
+
+        # Tier 3: WordNet, and only for the unit as a whole.
+        try:
+            wn = cls.get_wordnet()
+            for q in (clean_phrase, clean_phrase.replace(" ", "_"), clean_phrase.replace(" ", "")):
+                synsets: List[Any] = []
+                wn_words = wn.words(q) if hasattr(wn, "words") else []
+                if wn_words:
+                    synsets = list(wn_words[0].synsets())
+                synsets += wn.synsets(q)
+                if not synsets:
+                    continue
+                best_syn = synsets[0]
+                if len(synsets) > 1 and context_sentence:
+                    c_toks = set(re.findall(r'[a-zA-Z]{3,}', context_sentence.lower()))
+                    best_overlap = -1
+                    for syn in synsets:
+                        s_toks = set(re.findall(
+                            r'[a-zA-Z]{3,}', f"{syn.definition()} {' '.join(syn.examples())}".lower()))
+                        overlap = len(c_toks & s_toks)
+                        if overlap > best_overlap:
+                            best_overlap = overlap
+                            best_syn = syn
+                d = str(best_syn.definition() or "").strip()
+                if d:
+                    egs = best_syn.examples()
+                    e = egs[0].strip('"\'; ') if egs else ""
+                    return (d, e, "wordnet")
+        except Exception:
+            pass
+
+        return ("", "", "")
+
+
     @classmethod
     def get_expression_definition_and_example(
         cls,
@@ -2086,83 +2360,23 @@ class LinguisticEngine:
         context_sentence: Optional[str] = None
     ) -> Tuple[str, str]:
         """
-        Three-tier authoritative cascade for multi-word expressions, collocations, and phrasal verbs:
-        Tier 1: LDOCE 6th Edition direct multi-word entry (e.g. 'climate change', 'natural resources').
-        Tier 2: LDOCE root verb entry scanning patterns and examples (e.g. 'turn' -> 'turn off').
-        Tier 3: WordNet multi-word synsets (e.g. 'shut down', 'turn off').
-        Tier 4: Graceful pedagogical fallback.
+        Authoritative definition and authentic example for a multi-word unit.
+        The cascade itself lives in `expression_definition_evidence`; this wrapper adds the
+        Tier 4 invented fallback for callers that want a definition at any cost. A caller
+        that must not ship a fallback (the deterministic extractor, the markdown writer)
+        reads the evidence version and checks its source instead.
         """
-        clean_phrase = re.sub(r'\[.*?\]|\(.*?\)', '', phrase).strip().lower()
-        if not clean_phrase:
-            return ("", "")
+        definition, example, source = cls.expression_definition_evidence(
+            phrase,
+            expr_type=expr_type,
+            context_sentence=context_sentence
+        )
+        if definition:
+            return (definition, example)
 
-        # Tier 1: Check direct LDOCE entry
-        defn, ex = cls.get_ldoce_definition_and_example(clean_phrase, target_pos=expr_type, context_sentence=context_sentence)
-        if defn:
-            return (defn, ex)
-
-        # Tier 2: Check root headword in LDOCE for phrasal combinations (e.g. 'turn off' -> head 'turn')
-        words = clean_phrase.split()
-        if len(words) >= 2:
-            head_word = words[0]
-            tail = " ".join(words[1:])
-            tail_pat = r'\b' + re.escape(tail) + r'\b'
-            head_entry = cls.get_ldoce_entry(head_word)
-            if head_entry:
-                for s in head_entry.get("senses", []):
-                    # Check patterns
-                    for pat in s.get("patterns", []):
-                        if re.search(tail_pat, pat.lower()):
-                            d = s.get("definition", "")
-                            e = s.get("examples", [""])[0] if s.get("examples") else ""
-                            if d:
-                                return (d, e)
-                    # Check examples
-                    for eg in s.get("examples", []):
-                        if re.search(tail_pat, eg.lower()):
-                            d = s.get("definition", "")
-                            if d:
-                                return (d, eg)
-
-        # Tier 3: Check WordNet multi-word synset entries
-        try:
-            wn = cls.get_wordnet()
-            # Try variations: 'shut down', 'shut_down', 'shutdown'
-            query_candidates = [clean_phrase, clean_phrase.replace(" ", "_"), clean_phrase.replace(" ", "")]
-            for q in query_candidates:
-                wn_words = wn.words(q) if hasattr(wn, "words") else []
-                if wn_words:
-                    synsets = wn_words[0].synsets()
-                    if synsets:
-                        best_syn = synsets[0]
-                        # If context_sentence given, use Lesk overlap to choose best synset
-                        if len(synsets) > 1 and context_sentence:
-                            c_toks = set(re.findall(r'[a-zA-Z]{3,}', context_sentence.lower()))
-                            best_overlap = -1
-                            for syn in synsets:
-                                s_toks = set(re.findall(r'[a-zA-Z]{3,}', f"{syn.definition()} {' '.join(syn.examples())}".lower()))
-                                overlap = len(c_toks & s_toks)
-                                if overlap > best_overlap:
-                                    best_overlap = overlap
-                                    best_syn = syn
-                        d = best_syn.definition()
-                        egs = best_syn.examples()
-                        e = egs[0].strip('"\'; ') if egs else ""
-                        if d:
-                            return (d, e)
-                # Direct synsets call
-                synsets = wn.synsets(q)
-                if synsets:
-                    best_syn = synsets[0]
-                    d = best_syn.definition()
-                    egs = best_syn.examples()
-                    e = egs[0].strip('"\'; ') if egs else ""
-                    if d:
-                        return (d, e)
-        except Exception:
-            pass
-
-        # Tier 4: Fallback
+        # Tier 4: nothing in Longman grounds this unit. F2 gates this string out of the
+        # pages; it is kept here only so a caller that asked for a definition at any cost
+        # still gets one.
         type_str = expr_type or "multi-word expression"
         return (f"A core idiomatic {type_str} functioning in academic and communicative discourse.", context_sentence or "")
 
@@ -6238,6 +6452,186 @@ class LinguisticEngine:
 
         return "noun"
 
+    # =========================================================================
+    # EXPRESSION TYPE CLASSIFICATION (multi-word units)
+    # A multi-word unit is not a noun or a verb: Longman files it as a phrasal
+    # verb, a collocation, a set phrase or an idiom. The label is read from the
+    # dictionary evidence the entry was built on; syntax is consulted only when
+    # Longman does not state the phrase at all.
+    # =========================================================================
+    EXPRESSION_TYPE_LABELS = ("phrasal verb", "collocation", "set phrase", "idiom")
+
+    # Units opening with a closed-class word are fixed frames ('as long as',
+    # 'in the wake of', 'no exaggeration'), not verb-noun combinations. 'be' is left out:
+    # 'be passionate about something' is Longman's pattern for the adjective, which a
+    # learner holds as a collocation rather than as a fixed frame.
+    _SET_PHRASE_OPENERS = frozenset({
+        "as", "no", "not", "in", "on", "at", "by", "for", "with", "without",
+        "of", "to", "than", "all", "both", "either", "neither", "what", "that",
+        "it", "there", "being", "such", "more", "most",
+        # Connective heads: a frame anchored on a connector is fixed by construction.
+        "regardless", "irrespective", "despite", "instead", "owing", "given",
+        "during", "once", "unless", "whether", "although", "though", "because",
+        "since", "while", "whereas", "inside", "outside", "according",
+    })
+
+    # The tail that turns a verb into a phrasal or prepositional verb
+    # ('tap into', 'belong to', 'turn down'). Same inventory the skeleton miner
+    # uses, kept here so the classifier can run without a parse.
+    _PHRASAL_TAILS = frozenset({
+        "up", "down", "in", "out", "on", "off", "over", "under", "away", "back",
+        "through", "into", "onto", "with", "for", "to", "at", "by", "from", "of",
+        "about", "after", "before", "against", "between", "upon",
+    })
+
+    # Words Longman uses in a unit name to mark a slot or an open list rather than a
+    # word the learner has to say ('tap into something', 'be/keep/stay etc in touch').
+    _SLOT_WORDS = frozenset({
+        "somebody", "someone", "something", "sth", "sb", "oneself", "yourself",
+        "myself", "himself", "herself", "itself", "ourselves", "yourselves",
+        "themselves", "etc",
+    })
+
+    @classmethod
+    def _unit_tokens(cls, text: str, keep_brackets: bool = True) -> List[str]:
+        """The comparison key of a unit: lowercase word tokens with Longman's slots and
+        punctuation removed ('keep [sb] off' and 'keep somebody off' both give
+        ['keep', 'off']).
+        Bracketed material is Longman's way of marking an optional part ('lose touch
+        (with somebody)'), so it is kept unless the caller also wants the shorter
+        reading of the name."""
+        raw = str(text or "").lower().replace("\u2019", "'").replace("\u2018", "'")
+        raw = re.sub(r"'s\b", " ", raw).replace("'", "")
+        raw = raw.replace("\u2194", " ").replace("<->", " ")
+        if not keep_brackets:
+            raw = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", raw)
+        raw = re.sub(r"[\[\]()]", " ", raw)
+        raw = re.sub(r"[^a-z0-9/ ]+", " ", raw)
+        tokens: List[str] = []
+        for token in raw.split():
+            # A slash group is one slot holding several alternatives ('on/upon',
+            # 'somebody/something'), so it is filtered alternative by alternative.
+            alternatives = [alt for alt in token.split("/")
+                            if alt and alt not in cls._SLOT_WORDS]
+            if alternatives:
+                tokens.append("/".join(alternatives))
+        return tokens
+
+    @classmethod
+    def _declared_unit_spellings(cls, name: Any) -> Set[str]:
+        """Every spelling a Longman unit name can be read as: slots stripped, slash
+        groups expanded and optional bracketed parts taken or left
+        ('be/keep/stay etc in touch (with something)' yields 'keep in touch with')."""
+        if isinstance(name, dict):
+            name = name.get("phrase") or name.get("headword") or name.get("text") or ""
+        spellings: Set[str] = set()
+        for keep_brackets in (True, False):
+            chunks = cls._unit_tokens(name, keep_brackets=keep_brackets)
+            variants: List[List[str]] = [[]]
+            for chunk in chunks:
+                variants = [prefix + [alt] for prefix in variants
+                            for alt in chunk.split("/") if alt][:64]
+            spellings.update(" ".join(parts) for parts in variants if parts)
+        return spellings
+
+    @classmethod
+    def ldoce_declared_unit(cls, phrase: str, headword: Optional[str] = None) -> str:
+        """'phrasal_verb' or 'phrase' when Longman lists this exact unit as a headword of
+        its own, '' when it does not.
+        Unlike ldoce_phrase_evidence, a unit that merely appears inside a longer declared
+        phrase does not count: 'worry about' is not the idiom 'nothing to worry about',
+        and 'hat off' is not the phrase 'take your hat off'."""
+        key = " ".join(cls._unit_tokens(phrase))
+        if len(key.split()) < 2:
+            return ""
+        for head in cls._phrase_headwords(key, headword):
+            entry = cls.get_ldoce_entry(head)
+            if not entry:
+                continue
+            for block in entry.get("phrasal_verbs") or []:
+                if not isinstance(block, dict):
+                    if key in cls._declared_unit_spellings(block):
+                        return "phrasal_verb"
+                    continue
+                names = [block.get("phrase"), block.get("headword")] \
+                    + list(block.get("variants") or []) + list(block.get("alternates") or [])
+                if any(key in cls._declared_unit_spellings(name) for name in names):
+                    return "phrasal_verb"
+            for item in entry.get("phrases") or []:
+                if key in cls._declared_unit_spellings(item):
+                    return "phrase"
+        return ""
+
+    @classmethod
+    def is_multiword_expression(cls, word: str) -> bool:
+        """True when a vocabulary headword is a multi-word unit (slot/paren content stripped)."""
+        w = str(word or "")
+        if re.search(r"\[.+?\]", w):
+            return True
+        core = re.sub(r"\[.*?\]|\(.*?\)", " ", w)
+        return len(re.findall(r"[A-Za-z][A-Za-z'\-]*", core)) > 1
+
+    @classmethod
+    def classify_expression_type(cls, phrase: str, context_sentence: str = "") -> str:
+        """
+        Determines the Longman expression type of a multi-word unit: one of
+        EXPRESSION_TYPE_LABELS, or "" when `phrase` is a single headword (a single
+        word keeps a part of speech instead).
+
+        Priority follows the evidence the entry was built from: a Longman phrasal-verb
+        block or PHRASES entry named exactly this unit, then a phrasal-verb block that
+        states it with extra words, then a frame opened by a closed-class word
+        ('as long as', 'regardless of'), then a verb followed directly by its particle or
+        preposition ('tap into', 'belong to'); anything else that a learner must hold
+        together is a collocation.
+        """
+        clean = re.sub(r"\[.*?\]|\(.*?\)", " ", str(phrase or ""), flags=re.IGNORECASE)
+        clean = re.sub(r"\s+", " ", clean).strip().lower()
+        tokens = re.findall(r"[a-z][a-z']*", clean)
+        if len(tokens) < 2:
+            return ""
+
+        # Longman's own headwords decide it first: a phrasal-verb block or a PHRASES entry
+        # named exactly this unit.
+        declared = cls.ldoce_declared_unit(clean)
+        if declared == "phrasal_verb":
+            return "phrasal verb"
+        if declared == "phrase":
+            return "set phrase"
+
+        # Failing that, the strongest tier that merely contains the unit. Only a
+        # phrasal-verb block is trusted here: a PHRASES item that happens to contain the
+        # words ('nothing to worry about' for 'worry about') names a different unit.
+        tiers = cls.ldoce_phrase_evidence(clean)
+        if tiers and tiers[0] == "phrasal_verb":
+            return "phrasal verb"
+
+        head, tail = tokens[0], tokens[-1]
+
+        # A frame that opens with a closed-class word is fixed ('as long as',
+        # 'in the wake of', 'regardless of') — it is never a verb + particle unit.
+        if head in cls._SET_PHRASE_OPENERS:
+            return "set phrase"
+
+        # A verb followed directly by its particle or preposition is a phrasal or
+        # prepositional verb ('tap into', 'belong to', 'let sb down' once the slot is
+        # stripped). Anything with a content word in between, or a tail that is not a
+        # particle, is not one ('keep silent', 'make possible').
+        if tail in cls._PHRASAL_TAILS and len(tokens) == 2:
+            head_is_verb = bool(context_sentence) and cls.determine_contextual_pos(head, context_sentence) == "verb"
+            if not head_is_verb:
+                entry = cls.get_ldoce_entry(head)
+                if entry:
+                    poses = [str(p).lower() for p in (entry.get("all_poses") or [])]
+                    poses += [str(s.get("pos", "")).lower() for s in (entry.get("senses") or []) if isinstance(s, dict)]
+                    head_is_verb = any("verb" in p for p in poses)
+            if head_is_verb:
+                return "phrasal verb"
+
+        # Attested in Longman's collocation / pattern tiers, or simply a verb-noun
+        # pairing that the learner must hold together: both are collocations.
+        return "collocation"
+
     @classmethod
     def extract_grammar_fingerprint(cls, sentence: str, category: Optional[str] = None) -> Tuple[str, str, str]:
         """
@@ -8020,11 +8414,19 @@ class LinguisticEngine:
             quote = s.get("quote", "")
             expr_type = s.get("type", "collocation")
 
-            defn, ex = cls.get_expression_definition_and_example(
+            # F7 后续④: the cascade follows the lexicon host that owns THIS unit - a
+            # phrasal-verb block, a phrase row, the sense a phrase row was filed under -
+            # before it falls back to the headword's first sense or WordNet. 'keep in touch'
+            # must not inherit 'keep' sense 1.
+            defn, ex, def_source = cls.expression_definition_evidence(
                 phrase=phrase,
                 expr_type=expr_type,
                 context_sentence=quote
             )
+            # F2: an ungrounded cascade ships no definition at all rather than the invented
+            # 'A core idiomatic collocation functioning in ...' filler. The row carries the
+            # tier it was built on so the writer and the audit can see it was never grounded.
+            low_confidence = not def_source
             if not ex and quote:
                 ex = quote
 
@@ -8034,6 +8436,8 @@ class LinguisticEngine:
                 "definition": defn,
                 "quoted_sentence": quote,
                 "example_usage": ex,
+                "definition_source": def_source,
+                "low_confidence": low_confidence,
                 "design_audit": f"AUDIT: [{sid}] -> [{formula}] -> [VERBATIM_CONFIRMED]"
             })
 

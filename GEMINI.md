@@ -7,9 +7,11 @@
 
 ### 1.1 Separation of Responsibilities (Neuro-Symbolic Quad-Tier Architecture)
 - **Symbolic Grounding & Lexical Corpus (NLP & Lexicons = Semantic Truth & Constraints)**:
-  - `LinguisticEngine` combines offline computational NLP (spaCy syntactic dependency trees, POS tagging, morphological inflection lemmatization) with authoritative lexical databases (WordNet taxonomy, Oxford Collocations Dictionary 2nd Ed.).
-  - Deterministically pre-computes single-fit collocational anchors (preposition binding, adjective-noun collocations, verb-object valency) and 3 zero-collision, taxonomically distinct distractors at zero token cost (<1ms).
-  - Pre-binds parallel inflectional morphology (e.g. all-VBN past participles) and CRC32 deterministic option positions, generating itemized `🎯 Micro-Task for LLM` constraint blueprints.
+  - `LinguisticEngine` combines offline computational NLP (spaCy syntactic dependency trees, POS tagging, morphological inflection lemmatization) with authoritative lexical databases (WordNet taxonomy, Longman Dictionary of Contemporary English 6th Edition / LDOCE).
+  - **Absolute Grounding in LDOCE 6th Edition (Semantic Truth & Pedagogical Collocation Engine)**:
+    - The engine is 100% grounded in LDOCE 6th Edition (`ldoce6_essential.db`), whose collocation boxes, syntactic patterns, and sense structures are semantically prioritized by authentic pedagogical salience and frequency. Obscure, physiologically biased, or non-pedagogical mechanical collocations are eliminated.
+    - Deterministically pre-computes single-fit collocational anchors (preposition binding, adjective-noun collocations, verb-object valency) and 3 zero-collision, taxonomically distinct distractors at zero token cost (<1ms).
+    - Pre-binds parallel inflectional morphology (e.g. all-VBN past participles, symmetric plural forms `NNS`) and CRC32 deterministic option positions, generating itemized `🎯 Micro-Task for LLM` constraint blueprints.
 - **Code = Invariant Enforcement & Physical Gate**:
   - Deterministic Python logic (`evaluator.py`, `processor.py`) enforces physical invariants, string normalization, blank constraints (`re.findall(r'_{2,}', stem) == 1`), atomic option remapping, and bounds at zero token cost.
   - Acts as the Level 1 Deterministic Code Gate to instantly filter, remap, or self-heal structural defects without burning LLM retry tokens.
@@ -30,7 +32,18 @@
 - **True Multi-Turn Sessions (Self-Correction Retries Only)**:
   - Multi-turn conversational appending (`conversation.append(...)`) is reserved exclusively for the QA Self-Correction Retry Loop in `llm.py` when validation fails or QA score $< 80$.
 
-### 1.3 Linguistic Grounding & Extraction Mandates
+### 1.3 Deterministic Code-Driven Extraction Architecture (Source-to-Wiki Paradigm Shift)
+- **Vocabulary & Expressions: Complete Migration from LLM to Deterministic Code Extraction (已完成代码化提取)**:
+  - **Historical Defect of LLM Extraction**: Prompting LLMs to extract vocabulary and multi-word expressions suffered from severe hallucinations, omission of core curricular headwords, misaligned part-of-speech labeling, and ungrounded CEFR ratings, while consuming thousands of unnecessary generation tokens.
+  - **Deterministic Pipeline (`LinguisticEngine` + `cefrpy` + LDOCE 6th Edition)**:
+    - **Single-Word Vocabulary**: spaCy POS-tagging, lemmatization, and syntax dependency trees extract candidate content headwords directly from the passage text. Headwords are filtered and calibrated against the CEFR lexical database and LDOCE 6th Edition at 0 token cost, guaranteeing 100% lexical fidelity and exact syntactic alignment.
+    - **Multi-Word Expressions & Phrasal Idioms**: Deterministically parsed and mined using dependency trees (verb-particle combinations, prepositional verbs, fixed idioms) and dictionary index lookups, completely eliminating arbitrary or fragmented chunking.
+    - **Expression-Type Labelling**: A multi-word headword is never labelled with the part of speech of one of its tokens ('tap into' is not a 'verb'). `LinguisticEngine.classify_expression_type` reads Longman's own filing first (a phrasal-verb block or a PHRASES entry named exactly that unit, slots and slash groups expanded), then a frame opened by a closed-class word, then verb + particle adjacency, and returns one of `phrasal verb`, `collocation`, `set phrase`, `idiom`. The evaluator, the LLM healing pass and the Markdown writer each re-type any plain part of speech that arrives on a multi-word row.
+- **Grammar Extraction: Transition to Code-Driven Extraction in Active Development (代码化提取完善中)**:
+  - **Current Status**: Structural pattern matching and syntactic formulas (COBUILD formulas, clausal dependency trees, non-finite adjuncts, cleft sentences, inversion, and extraposition) have been partially migrated to deterministic spaCy rule gates.
+  - **Ongoing Refinement**: Further refining fine-grained discourse-level boundaries, rhetorical functional scoping, and deep contextual explanations to finalize full code extraction without relying on subjective LLM parsing.
+
+### 1.4 Linguistic Grounding & Extraction Mandates
 - **Zero Concrete Examples in Definition Prompts (Eliminating Example Contamination)**:
   - Grammatical categories and schema fields are defined purely through abstract linguistic functions without concrete vocabulary examples.
   - Empirical finding: Concrete prompt examples hijack self-attention, prompting models to hallucinate or force-fit non-existent structures.
@@ -44,7 +57,7 @@
   - Every strict negative constraint provides an explicit permissible outlet (traffic routing to legal categories, graceful skip, or surgical rewrite).
   - Quotas are evidence-driven: models never force artificial category distributions. Items cluster naturally based on source text evidence.
 
-### 1.4 Unified & Deterministic CEFR Calibration Architecture (`cefrpy` Physical Grounding)
+### 1.5 Unified & Deterministic CEFR Calibration Architecture (`cefrpy` Physical Grounding)
 - **Core Philosophy: Separation of Judgement (Code Calculates Semantic Ceiling, LLM Crafts Context)**:
   - Eliminates the systemic defect where LLMs hallucinate or distort CEFR ratings (e.g. forcing A1/A2 daily words like `print`, `program`, `team` into artificial B1+ labels due to prompt/schema biases, or burning token compute asking LLMs to guess reading levels).
   - **Zero CEFR Burden on LLM**: All output schemas (`schemas.py`) across both extraction (`VocabularyItem`, `ExpressionItem`, `GrammarItem`, `SummaryExtraction`, `MindMapExtraction`) and assessment generation (`VocabularyQuiz`, `ReadingQuiz`, `TranslationQuiz`, `ListeningQuiz`, `VideoQuiz`) completely strip out `cefr_level`, `word_cefr_level`, and `overall_cefr_level`.
@@ -72,19 +85,37 @@
 - **Audit Layer (Expert Auditor LLM-as-a-Judge)**:
   - All quiz modalities inject curriculum level `{cefr_level}` and alignment guidelines into expert audit prompts (`expert_audit_*.md`), preventing high-tier evaluator models from penalizing foundational curriculum units with irrelevant academic criteria while ensuring evaluation adheres to the deterministically assigned level.
 
-### 1.5 Noun Semantic Selection & Collocational Cascade (Concrete vs. Abstract Distinction)
-- **Theoretical Basis (Selectional Restrictions & Valency Theory)**:
-  - **Concrete Nouns (具象实体名词，如 `telephone`, `bell`, `machine`, `car`)**:
-    - Act naturally as **physical agents/actors** possessing unique exclusive actions.
-    - **Cascade Priority**: `+ verb` (Verb Subject: *telephone was ringing*) $\gg$ `verb +` (Verb Object: *use telephone*) $\gg$ `adjective` (*cellular telephone*) $\gg$ `preposition` (*over the telephone*).
-    - Physical action exclusivity provides maximum single-fit discrimination against distractors at zero collision.
-  - **Abstract Nouns (抽象概念名词，如 `decision`, `peace`, `influence`, `difficulty`, `freedom`)**:
-    - In authentic usage and systemic functional linguistics, abstract concepts primarily function as the **goal/patient** of light/support verbs or idiomatic frames.
-    - **Cascade Priority**: `verb +` (Light/Support Verb Object: *make/reach a decision*, *exert influence*, *encounter difficulty*, *broker peace*) $\gg$ `preposition` (*in peace*, *under the influence of*) $\gg$ `adjective` (*firm decision*) $\gg$ `+ verb` (Verb Subject: *peace prevailed*, demoted to secondary fallback).
-- **Automated WordNet Ontology Classification (`find_ocd_zero_collision_anchor`)**:
-  - Automatically analyzes WordNet lexicographer files (`lexfile()`). Categorizes items into Abstract (`noun.act`, `noun.cognition`, `noun.state`, `noun.attribute`, `noun.feeling`, `noun.motive`, `noun.relation`, `noun.time`, `noun.event`, `noun.process`) vs. Concrete (`noun.artifact`, `noun.animal`, `noun.body`, `noun.food`, `noun.plant`, `noun.substance`, `noun.object`, `noun.person`), dynamically steering the OCD frame retrieval cascade to eliminate artificial and juvenile question stems.
+### 1.6 Noun Semantic Grounding & SLA/Psychometric Context Clues Architecture
+- **Deprecation of Rigid/Rare Collocation Anchors**:
+  - Forcing rare or stiff dictionary collocations (e.g. demanding *extend* for *hospitality*, or *broker* for *peace*) produces unnatural, pedantic stems that deviate from authentic classroom language and real-world communicative usage.
+  - Anchor fallbacks for nouns are decoupled from mechanical verb slot constraints (`[Subject] + [verb] + ____`), relying directly on LDOCE definition features and authentic semantic context clues.
+- **Natural Narrative Context Clues Grounding (Roles, Props, Actions & Definition Grounding)**:
+  - Noun item stems are dynamically guided by the core definition features retrieved from authoritative lexicons (e.g. LDOCE).
+  - Prompts instruct the LLM to construct rich, authentic 1-2 sentence real-life or academic scenarios embedding concrete narrative clues (such as specific **Roles**, **Physical Settings/Props**, or **Characteristic Actions**) that naturally and unambiguously pinpoint the target noun.
+- **Four Classical SLA & Language Testing Psychometric Design Principles (二语教学与测试学高区分度命题法)**:
+  1. **Cognitive Polarity & Contrast Constraints (认知极性与因果转折锁定)**:
+     - Uses concession/contrast structures (`Although / Despite / Even though [hardship/obstacle]... [positive compensatory action: the blank]`) to physically and logically force a unique semantic fit, eliminating subjective register or formality ambiguity.
+  2. **Selectional Restrictions & Feature Clash (语义选择限制与语义元特征冲突)**:
+     - Embeds diagnostic semantic features (`[+Urban/Infrastructure]`, `[+Animate]`, `[+Volition]`) into the subject or predicate to create irreconcilable category clashes with near-synonym distractors (e.g., *civilization* vs *culture/society* via *canal networks and written codes*).
+  3. **Triangulated Context Clues (多重语境线索交叉三角定位 - Paul Nation 范式)**:
+     - Stems provide at least two independent, mutually reinforcing clue dimensions:
+       * *Agent/Role Clue* (e.g. *innkeepers, researchers, villagers*)
+       * *Setting/Prop Clue* (e.g. *hearth/bed, laboratory data, legal tablet*)
+       * *Affective/Reaction Clue* (e.g. *relieved sigh, exhausted travelers*)
+     - Triangulation renders the target mathematically closed and unchallengeable under Expert L2 Auditing.
+  4. **Pragmatic Connotation & Scale Contrast (语用适切度与外延/内涵标尺)**:
+     - Distinguishes subtle near-synonyms by explicit external qualifiers (e.g. separating *vulnerable* from *fragile/weak* by specifying an external threat exposure slot: *dangerously ____ to unauthorized external access*).
+- **Option Morphological Symmetry & Plurale Tantum Invariant (选项形态对称与唯复数名词门禁)**:
+  - Standardized testing psychometrics strictly mandate **zero morphological leakage** across options. An item must NEVER present a solitary plural target among 3 singular distractors (e.g., `[choice, goods, reason, matter]`), which allows trivial test-wiseness guessing without reading comprehension.
+  - When the target noun is plural or *plurale tantum* (`NNS` / `goods, customs, clothes, belongings, surroundings, fireworks, premises`):
+    * `inflection` is formally bound to `plural form (NNS)`.
+    * Computational NLP automatically applies `pluralize_noun` across all 3 distractors (`choice -> choices`, `reason -> reasons`, `matter -> matters`), generating 100% symmetric options `[choices, goods, reasons, matters]`.
+- **Content-Word Lesk Disambiguation with Morphosyntactic Gating (实词语义消歧与语法形态门禁)**:
+  - Prunes high-frequency function words/stopwords (`are, the, of, in...`) and target headword inflections from Lesk token overlap to eliminate false lexical overlap.
+  - Strictly intercepts cross-category misassignments: a sense exclusively marked as `[plural]` (e.g., *customs* as airport border control) is physically forbidden from binding to singular/base-form context sentences.
 
-### 1.6 Verb Collocational Selection & Valency Cascade (Transitive vs. Intransitive Distinction)
+
+### 1.7 Verb Collocational Selection & Valency Cascade (Transitive vs. Intransitive Distinction)
 - **Theoretical Basis (Transitivity & Argument Structure)**:
   - **Transitive Verbs (及物支配动词，如 `solve`, `abandon`, `provide`, `accelerate`)**:
     - Possess direct semantic selectional restrictions on their **direct object patient/theme**.
@@ -96,8 +127,15 @@
 - **Bucketed Distractor Collision Enforcement**:
   - Distractor collocations are pre-indexed into grammatical functional buckets (`prep`, `object`, `adv_mod`, `verb_subject`).
   - Ensures a candidate preposition for target verb is audited strictly against the `prep` bucket of distractors, preventing spurious clashes while maintaining zero collision.
+- **Transitive Prepositional Valency Frames (`analyze_verb_valency_pattern`)**:
+  - Verbs with bound prepositions that govern an intermediate direct object in the active voice (`promote somebody to something`, `provide somebody with something`, `remind somebody of something`, `deprive somebody of something`) MUST NOT degrade to bare intransitive prepositional frames (`____ + to`).
+  - Active syntactic frames explicitly bind the direct patient slot: `[Subject] + ____ + [Person / Direct Object] + [prep] + [Complement]`.
+- **Authentic Quote Direct Object Priority & Subject Binding**:
+  - For transitive verbs with direct object patients evidenced in the passage (e.g. *promote goods/products*), the authentic direct object is prioritized over disconnected prepositional patterns.
+  - For intransitive/voice verbs where the authentic passage evidences an active subject noun (e.g. *as the clock chimes*), `verb_subject` (`clock`) is preserved as the syntactic anchor with a dedicated subject-predicate frame (`[Subject] + [Modal] + ____ + [Complement]`), avoiding misidentifying the subject as a direct object.
 
-### 1.7 Adjective Collocational Selection & Valency Cascade (Prepositional vs. Descriptive Distinction)
+
+### 1.8 Adjective Collocational Selection & Valency Cascade (Prepositional vs. Descriptive Distinction)
 - **Theoretical Basis (Adjectival Complementation & Attributive Selection)**:
   - **Prepositional Valency Adjectives (介词强配价形容词，如 `proud of`, `aware of`, `responsible for/to`, `anxious about`)**:
     - Possess strict, non-negotiable syntactico-semantic government over specific postpositional prepositions.
@@ -108,20 +146,20 @@
     - **Cascade Priority**: `modified_noun` (Characteristic Modified Noun: *economic crisis*, *legal action*, *simple addition*) $\gg$ `adv_mod` (Collocational Degree Adverb: *devastatingly simple*, *doubly difficult*) $\gg$ `verb_copula` $\gg$ `prep`.
     - Prevents degenerative generic adverbial fallbacks (e.g. replacing essential *economic crisis* with generic *completely economic*).
 
-### 1.8 Adverb Collocational Selection & Modification Domain Cascade (Adjective vs. Verb Modifiers)
+### 1.9 Adverb Collocational Selection & Modification Domain Cascade (Adjective vs. Verb Modifiers)
 - **Theoretical Basis (Adverbial Modification Domains & Scope)**:
   - **Degree / Focus / Stance Adverbs (程度、焦点与立场评注副词，如 `extremely`, `surprisingly`, `highly`, `deeply`, `completely`)**:
     - Function primarily as intensifiers or evaluative stance markers directly modifying scalar **adjectives** (*extremely able/difficult*, *surprisingly bright*, *deeply grateful*).
-    - OCD holds explicit adjective-cluster frames for 728 adverbs (~50% of adverb headwords).
+    - LDOCE holds explicit adjective-cluster and verb-collocation frames prioritized by frequency.
     - **Cascade Priority**: `modifies_adj` (Modified Adjective: *extremely able*, *deeply grateful*) $\gg$ `modifies_verb` (Modified Verb: *deeply absorb*).
     - Completely eliminates the structural failure where adjective-exclusive adverbs (like `extremely`, `surprisingly`) returned `None` due to verb-only scanning.
   - **Manner / Time / Frequency Adverbs (方式、时间与频度副词，如 `abruptly`, `carefully`, `politely`, `shortly`, `frequently`)**:
     - Function primarily as circumstantial adjuncts modifying core action **verbs**.
     - **Cascade Priority**: `modifies_verb` (Modified Verb: *abruptly abandon*, *answer politely*, *appear frequently*) $\gg$ `modifies_adj`.
-### 1.9 Function Word Closed Paradigms & Syntactic Complement Contrast (Closed-Class Connectives)
+### 1.10 Function Word Closed Paradigms & Syntactic Complement Contrast (Closed-Class Connectives)
 - **Theoretical Basis (Open Class vs. Closed Class Grammatical Paradigms)**:
   - Unlike open-class content words (N, V, Adj, Adv), grammatical function words (subordinating conjunctions, prepositions, discourse connectors, complementizers) constitute a strictly bounded set (~200–300 words in English).
-  - WordNet taxonomy fails on function words (e.g. misclassifying `despite` as a noun or returning empty synsets). Standard collocational lookup (OCD) is unsuited for logical connectors whose core function is relational complementation rather than lexical co-occurrence.
+  - WordNet taxonomy fails on function words (e.g. misclassifying `despite` as a noun or returning empty synsets). Standard collocational lookup is unsuited for logical connectors whose core function is relational complementation rather than lexical co-occurrence.
 - **Closed Functional Paradigms (`_FUNCTION_WORD_PARADIGMS`)**:
   - Organized into definitive functional discourse families: `concession`, `cause`, `condition`, `time`, `scope`, `noun_clause`.
   - Sub-categorized by strict syntactic complement requirements:
@@ -286,23 +324,29 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Quote boundary magnetic snapping to indexed sentence pool (`snap_to_sentence_pool`)
 - [x] Canonical headword lemmatization & in-place self-healing (`lemmatize_headword`)
 - [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
-- [x] Oxford Collocations Dictionary 2nd Edition integration (20,791 headwords, ~4.9MB clean JSON, `LinguisticEngine.get_rich_collocations`)
+- [x] Full Purge of Oxford Collocations Dictionary (OCD) and complete migration to LDOCE 6th Edition semantic ordering
+- [x] Complete Migration of Vocabulary & Expressions Extraction from LLM to Deterministic Code Extraction (`LinguisticEngine` + `cefrpy` + LDOCE 6th Edition)
 - [x] Adjective Distractor Quadruple Transformation (WordNet bipolar cluster harvesting, opposite satellite antonym tracing, modified noun collocation clash, preposition valency gate, and academic adjective families)
 - [x] CEFR Distractor Difficulty Ceiling & Offline Frequency Gate (P0: eliminated super-advanced/obscure distractors on foundational texts via `cefrpy` + Zipf frequency filtering)
 - [x] Reading Assessment CEFR Difficulty Adaptation & L1 Code Gate (P2 Step 1 & 2: dynamic prompt interpolation of difficulty matrix, option length limit, and C1/C2 difficulty ceiling gate)
-- [x] Oxford Collocations Dictionary (OCD) Zero-Collision Anchor Fallback & Concrete vs. Abstract Noun Semantic Cascade (`find_ocd_zero_collision_anchor`)
+- [x] LDOCE Zero-Collision Anchor Fallback & Semantic Valency Cascade (`find_ldoce_zero_collision_anchor`)
 - [x] CEFR Assessment Difficulty Calibration across All Remaining Modalities (Translation, Listening, Video with CEFR matrices, option length limits, and L1 code gates)
 - [x] Full-Pipeline Cross-Stage Defect Alignment (decoupled comprehension quiz prompts, evaluator retry logic, reading context sentences, and slotted expression cloze cleanup)
 - [x] Fixed Phrase Artificial Decomposition Prevention & Vocabulary Fragmentation Auto-Pruning
 - [x] Markdown Extraction Formatting Standardization (`Part of Speech` & `Word CEFR Level`)
+- [x] Option Morphological Symmetry & Plurale Tantum Invariant (100% symmetric inflections across target and distractors)
+
+### In Progress
+- **Grammar Code-Driven Extraction Optimization (语法代码化提取完善中)**:
+  - Migrate remaining syntactic pattern matching and COBUILD slot formulas from prompt inference to deterministic spaCy rule gates.
+  - Strengthen discourse-level clause boundary detection, rhetorical functional scoping (Four Macro Functional Domains), and stance/hedging classification.
 
 ### Pending
 - **Extraction Pedagogical Quality (Source-to-Wiki)**:
   - **Vocabulary (Neuro-Symbolic Collocation & Academic Example Engine)**:
     - **spaCy Syntactic Extraction**: Extract authentic in-text usage (preposition binding `token.dep_ == 'prep'`, verb-object heads `dobj`, and adverbial/adjectival modifiers) directly from source sentences.
-    - **Markdown Vocabulary Card Collocations Injection**: Automatically render authoritative Oxford collocations (`- **Common Collocations (Oxford)**:`) in `extractions/<Unit>_vocabulary.md` at 0 token cost during markdown serialization.
+    - **Markdown Vocabulary Card Collocations Injection**: Automatically render authoritative Longman collocations (`- **Common Collocations (Longman)**:`) in `extractions/<Unit>_vocabulary.md` at 0 token cost during markdown serialization.
     - **Constrained Example Generation**: Feed retrieved authoritative collocations into the prompt as mandatory slot constraints (e.g., *"Construct example usage using the target collocation '[collocation]' "*), eliminating juvenile or trivial illustrative sentences.
-  - **Grammar**: Strengthen sentence selection criteria for authentic pedagogical/discourse value, and enrich `explanation` with functional linguistic stance (nominalization, discourse framing, hedging).
 - **Common Mistakes Curated Template Injection**:
   - Maintain curated pedagogical defect templates for core grammatical structures to enrich generic model explanations.
 - **UI/UX & Multilingual Enhancements**:

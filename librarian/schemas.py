@@ -374,6 +374,14 @@ class VocabularyItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
+    # The label the extraction engine assigned to this entry: a part of speech
+    # ('noun', 'verb', ...) for a single headword, or an expression type
+    # ('phrasal verb', 'collocation', 'set phrase', 'idiom') for a multi-word
+    # unit. Declared as a real field so it survives dataclass serialization into
+    # the vocabulary markdown instead of being re-inferred from the headword's
+    # first token at writing time. Excluded from the JSON schema because the
+    # model is never asked to supply it.
+    part_of_speech: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
 
 @dataclasses.dataclass
 class VocabularyExtraction:
@@ -387,6 +395,10 @@ class ExpressionItem:
     word: str = dataclasses.field(default="", metadata={"minLength": 1})
     definition: str = dataclasses.field(default="", metadata={"minLength": 1})
     example_usage: str = dataclasses.field(default="", metadata={"minLength": 1})
+    # Expression type mined by the engine ('phrasal verb', 'collocation',
+    # 'set phrase', 'idiom'). An expression is never a bare noun or verb, so this
+    # is the label the writer must print; see VocabularyItem.part_of_speech.
+    part_of_speech: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
 
 @dataclasses.dataclass
 class ExpressionsExtraction:

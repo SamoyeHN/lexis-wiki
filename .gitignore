@@ -18,6 +18,10 @@ Thumbs.db
 # Scripts and test files
 scripts/
 
+# Lexicon databases and their snapshots - hundreds of MB each, rebuilt by
+# scripts/build_ldoce_db.py, never committed
+*.db
+*.db.bak*
 
 # Execution logs
 logs/

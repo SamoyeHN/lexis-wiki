@@ -410,7 +410,12 @@ class LLMClient:
         # Prompts for logging
         mode_str = "STRICT_SCHEMA" if (schema and use_gbnf) else ("JSON_MODE" if force_json_mode else "TEXT_MODE")
         system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
-        user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
+        # If this is a multi-turn self-correction retry, log only the modification ticket/request instead of re-dumping the initial prompt
+        critique_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user" and any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), None)
+        if critique_msg:
+            user_prompt = critique_msg.strip()
+        else:
+            user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
         t_name = task_name or "chat"
         schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=False) if schema else None)
 
@@ -781,12 +786,32 @@ class LLMClient:
 
                 # Auto-heal compound/slashed or annotated part_of_speech tags in vocabulary items (e.g. 'adjective/noun', 'verb (phrasal)')
                 if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list):
-                    from .schemas import PARTS_OF_SPEECH, _normalize_enum
+                    from .schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES, _normalize_enum
+                    from .linguistics import LinguisticEngine
                     from typing import get_args
                     allowed_pos = get_args(PARTS_OF_SPEECH)
+                    allowed_expr = get_args(EXPRESSION_TYPES)
                     for v_item in data["vocabulary"]:
                         if isinstance(v_item, dict):
                             raw_pos = str(v_item.get("part_of_speech", "")).strip().lower()
+                            is_multiword = LinguisticEngine.is_multiword_expression(
+                                str(v_item.get("word", "")))
+                            # A multi-word unit keeps its expression type: healing it against
+                            # the part-of-speech enum would relabel 'tap into' as 'noun'.
+                            if raw_pos in [e.lower() for e in allowed_expr] and is_multiword:
+                                continue
+                            # The mirror case: a multi-word unit labelled with the part of
+                            # speech of one of its tokens is re-typed to its expression type.
+                            # Only extraction items (they carry a quoted sentence) are
+                            # re-typed; a quiz item keeps a plain part of speech.
+                            if is_multiword and "quoted_sentence" in v_item and \
+                                    raw_pos in [p.lower() for p in allowed_pos]:
+                                retyped = LinguisticEngine.classify_expression_type(
+                                    str(v_item.get("word", "")),
+                                    str(v_item.get("quoted_sentence", "")))
+                                if retyped:
+                                    v_item["part_of_speech"] = retyped
+                                continue
                             if raw_pos and raw_pos not in allowed_pos:
                                 # First attempt contextual disambiguation if compound/slashed (e.g. 'adjective/noun')
                                 slashed = [p.strip() for p in re.split(r'[/|\\]', re.sub(r'\(.*?\)', '', raw_pos)) if p.strip()]

@@ -61,6 +61,8 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - 🌟 **DISTINGUISH TRUE DOUBLE-KEYS FROM HIGH-LEVEL NEAR-SYNONYM DISCRIMINATION**:
      * **True Invalid Double-Key (Fatal Flaw)**: The stem is generic (e.g., *"The ____ instructor taught at universities"*) and lacks ANY contextual contrast or dependent collocation to distinguish between options like *"veteran"* vs *"senior"*. Both are equally valid without distinction -> Set `single_fit_valid: false`.
      * **Legitimate Advanced Near-Synonym Trap (High Pedagogical Value)**: The stem intentionally sets up deep contrastive or pragmatic constraints (e.g., contrasting *"complex/unclear empirical data"* against an unyielding personal belief, where *"conviction"* is superior to *"certainty"*, or matching a specific dependent preposition). When sentence context actively favors the target word over a near-synonym distractor through pragmatic contrast or lexical collocations, **this is an elite assessment item, NOT a double-key!** Do not disqualify subtle, high-level vocabulary discrimination items.
+    - 🌟 **RECOGNIZE SLA NARRATIVE CONTEXT CLUES & DEFINITION GROUNDING**:
+      * In addition to explicit bound prepositions, recognize valid single-fit items grounded in **triangulated narrative context clues** (roles, props/settings, characteristic actions) and **cognitive polarity/contrast** (e.g. concessive/causal turns that logically rule out near-synonyms). If situational clues unambiguously pinpoint the target definition over the distractors, rate single_fit_valid: true. Do NOT penalize items for using authentic situational logic rather than stiff collocation verbs!
    - 🌟 **RECOGNIZE AUTHENTIC METAPHOR & RHETORICAL EXTENSION**:
      * In advanced English (CEFR B2-C2), metaphorical extensions (e.g., treating an institution as a "custodian" or describing an economy as "reaping benefits") are legitimate, authentic English. Do not disqualify a valid key merely because it is used figuratively when context clues support it.
 
@@ -99,6 +101,9 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
      * Strict single-fit validation (`single_fit_valid: true/false`, ruthlessly vetoing any double-keys)
      * Objective cognitive distractor plausibility (`High`, `Medium`, `Low (Flawed)`)
    - ⚙️ **AUTOMATED CODE QUANTIFICATION**: The assessment system deterministically calculates numerical scores, pass thresholds, and arithmetic averages directly from your qualitative findings. You may supply nominal defaults for `pedagogical_score` and `overall_quality_score`.
+    - 🎯 **BENCHMARK SCORE RANGE (SLA Triangulation & Context Grounding)**:
+      * Items that successfully establish **triangulated context clues** (roles, props, actions) and **cognitive polarity/contrast** to unambiguously eliminate near-synonyms MUST receive **pedagogical_score >= 90** (typically 90–98). Such items represent elite SLA psychometric design, NOT merely baseline pass items!
+      * Flawless items with absolute single-fit and authentic distractor plausibility should be awarded 90–100, allowing high-quality units to comfortably achieve a 90+ overall audit score.
    - 🎯 **SUMMARY VERDICT**: Deliver a concise, authoritative pedagogical summary in `summary_verdict` synthesizing the overall quality, item strengths, and explicitly citing any invalid/ambiguous items.
 
 7. **SURGICAL CURE ACTION MAPPING SUMMARY (`triage_action` & `cured_question`)**:

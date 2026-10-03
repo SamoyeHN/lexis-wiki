@@ -5,7 +5,7 @@ import threading
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, get_args
+from typing import Dict, Iterable, List, Any, Optional, Set, Tuple, get_args
 
 from .config import config
 from .schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES
@@ -46,6 +46,76 @@ COBUILD_POS_TOKENS = frozenset({
     "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "adj", "adv",
     "det", "prep", "conj", "clause", "s", "n", "pron", "modal"
 })
+# Canonical identities for COBUILD slot labels. Two labels that name the same
+# constituent are interchangeable inside a formula ('[NP]' == '[Noun Phrase]'),
+# which is what makes a formula comparison casing- and wording-insensitive.
+GRAMMAR_SLOT_IDENTITIES = {
+    "np": "np", "n": "np", "noun": "np", "noun phrase": "np", "n phrase": "np",
+    "vp": "vp", "verb phrase": "vp", "predicate": "vp",
+    "s": "s", "subject": "s",
+    "v": "v", "verb": "v",
+    "v-ing": "v-ing", "verb-ing": "v-ing", "v ing": "v-ing", "participle": "v-ing",
+    "v-ing phrase": "v-ing", "participial phrase": "v-ing",
+    "v-ed": "v-ed", "verb-ed": "v-ed", "v ed": "v-ed", "v3": "v-ed",
+    "past participle": "v-ed", "v-ed phrase": "v-ed",
+    "adj": "adj", "adjective": "adj", "adj phrase": "adj",
+    "adv": "adv", "adverb": "adv", "adv phrase": "adv",
+    "prep": "prep", "prepp": "prep", "preposition": "prep",
+    "det": "det", "determiner": "det",
+    "conj": "conj", "conjunction": "conj",
+    "modal": "modal", "modal verb": "modal", "modal vp": "modal",
+    "clause": "clause", "main clause": "clause", "subordinate clause": "clause",
+    "to-v": "to-v", "to verb": "to-v", "infinitive": "to-v",
+    "wh": "wh", "wh word": "wh", "relative pronoun": "wh",
+    "o": "o", "object": "o",
+}
+
+
+def _formula_slot_identity(slot: str) -> str:
+    """Canonical identity of one slot label ('Noun Phrase' -> 'np')."""
+    cleaned = re.sub(r"[^a-z0-9]+", " ", str(slot).lower()).strip()
+    return GRAMMAR_SLOT_IDENTITIES.get(cleaned, cleaned)
+
+
+def canonical_formula_key(formula: str) -> str:
+    """Casing-, spacing- and separator-insensitive identity of a COBUILD formula.
+
+    'It + [be] + [NP] + that + [S]' and 'it be [Noun Phrase] that [Subject]' share
+    one key, so a formula that differs only in presentation is not a deviation.
+    """
+    if not formula:
+        return ""
+    keyed = re.sub(
+        r"\[([^\]]*)\]",
+        lambda m: f"[{_formula_slot_identity(m.group(1))}]",
+        str(formula).lower(),
+    )
+    keyed = keyed.replace("+", " ")
+    keyed = re.sub(r"\s*,\s*", ",", keyed)
+    keyed = re.sub(r"[^a-z0-9()\[\]/']+", " ", keyed)
+    keyed = re.sub(r"\s+", " ", keyed)
+    return keyed.strip().strip(".")
+
+
+def degenerate_grammar_slots(formula: str) -> List[str]:
+    """Slots that offer two names for the SAME constituent: '[NP/NP]', 'v/v'.
+
+    The lexicon never mines such a slot: it teaches nothing, and it is the
+    signature of a formula that was rewritten instead of copied.
+    """
+    offenders: List[str] = []
+    text = str(formula or "")
+    for slot in re.findall(r"\[([^\]]+)\]", text):
+        parts = [p for p in slot.split("/") if p.strip()]
+        if len(parts) >= 2 and len({_formula_slot_identity(p) for p in parts}) == 1:
+            offenders.append(slot.strip())
+    for token in re.sub(r"\[[^\]]*\]", " ", text).split():
+        parts = [p for p in token.split("/") if p.strip()]
+        if len(parts) >= 2 and len({_formula_slot_identity(p) for p in parts}) == 1:
+            offenders.append(token.strip())
+    return offenders
+
+
 
 # Fatal QA flags that invalidate pedagogical delivery and trigger quarantine / retry
 FATAL_QA_FLAGS = (
@@ -65,6 +135,24 @@ FATAL_QA_FLAGS = (
     "Multiple blanks",
     "Target word leaks",
     "missing fill-in-the-blank slot",
+    "blank slot POS mismatch",
+    "placed the blank in a NOUN slot",
+    "placed the blank in a finite VERB slot",
+    "indefinite article leakage",
+    "cross-target leakage",
+    "Anchor missing in question stem",
+    "Explanation anchor not grounded",
+    "Stem verbatim from dictionary example",
+    "Stem verbatim from curriculum quote",
+    "Inflection discordance",
+    "Distractor slot illegality",
+    # Backlog D1: skeleton-to-output alignment defects
+    "Prescribed options altered",
+    "Prescribed answer index altered",
+    "degenerate formula slot",
+    "deviates from the pre-extracted skeleton",
+    "duplicates the source quote",
+
 )
 
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
@@ -112,6 +200,26 @@ COMMON_IRREGULARS = {
     'fall': ('fell', 'fallen'), 'fell': ('fall',), 'fallen': ('fall',),
     'feel': ('felt',), 'felt': ('feel',),
 }
+
+
+def _form_in_text(tok: str, text: str) -> bool:
+    """
+    Backlog A1: the single word-form matcher behind every quote-evidence check.
+
+    Delegates to LinguisticEngine so an inflected occurrence counts ('attaches' for the
+    headword 'attach'), then keeps the historical stem-prefix heuristic - which also
+    accepts derivationally related forms ('degradation' for 'degrade') that no inflection
+    table covers - and the closed irregular-verb table.
+    """
+    if not tok or not text:
+        return False
+    if LinguisticEngine.text_contains_form(text, tok):
+        return True
+    if tok in text or (len(tok) >= 4 and tok[:4] in text):
+        return True
+    if tok in COMMON_IRREGULARS and any(ir in text for ir in COMMON_IRREGULARS[tok]):
+        return True
+    return False
 
 # Common English contractions for contraction-aware anchor matching
 CONTRACTIONS_MAP = {
@@ -295,6 +403,24 @@ def _clean_core(text: str) -> str:
     return re.sub(r"[^\w\s]", "", norm).strip()
 
 
+def _batch_target_conflict(word: str, other_headword: str) -> bool:
+    """
+    True if `word` IS, or is an inflected/derived form of, `other_headword`.
+    Mirrors exactly the stem-stripping used by the Cross-Target Stem Leakage Gate so
+    that the anchor-presence gate can never demand a word the leakage gate bans.
+    """
+    a = _clean_core(word)
+    b = _clean_core(other_headword)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    _strip = r"(?:ed|ing|s|es|ly|tion|ment)$"
+    stem_a = re.sub(_strip, "", a)
+    stem_b = re.sub(_strip, "", b)
+    return len(stem_a) >= 4 and len(stem_b) >= 4 and stem_a == stem_b
+
+
 def _ngram_coverage(quote_clean: str, source_clean: str, n: int = 3) -> float:
     """Calculates n-gram overlap between cleaned quote and source text."""
     q_words = quote_clean.split()
@@ -311,6 +437,47 @@ def _ngram_coverage(quote_clean: str, source_clean: str, n: int = 3) -> float:
     if not q_ngrams:
         return 0.0
     return len(q_ngrams.intersection(s_ngrams)) / len(q_ngrams)
+
+
+_VERB_SUFFIXES = ("ies", "ied", "ing", "es", "ed", "s", "d")
+
+
+def _inflected_variants_of(word: str) -> set:
+    """Surface forms a target can plausibly take, without a spaCy round-trip per token."""
+    w = re.sub(r"[^a-z]", "", (word or "").lower())
+    forms = {w}
+    if not w:
+        return forms
+    for suffix in ("s", "es", "d", "ed", "ing"):
+        forms.add(w + suffix)
+    if w.endswith("y") and len(w) > 2:
+        forms.update({w[:-1] + "ies", w[:-1] + "ied"})
+    if w.endswith("e") and len(w) > 3:
+        forms.update({w[:-1] + "ing", w[:-1] + "s"})
+    for suffix in _VERB_SUFFIXES:
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            base = w[: -len(suffix)]
+            forms.update({base, base + "s", base + "es", base + "d", base + "ed", base + "ing"})
+    return {f for f in forms if len(f) >= 3}
+
+
+def _source_token_variants(source: str, target: str) -> List[List[str]]:
+    """A corpus source, plus the same source with the target word blanked out.
+
+    The most common writer shortcut is to take the blueprint's own example and drop the
+    target into a blank. That hole breaks the source's 5-grams, so a short example (every
+    5-gram of it contains the target) slips past a plain n-gram test. Comparing the stem
+    against the masked source as well closes that hole.
+    """
+    tokens = re.sub(r"[^\w\s]", " ", (source or "").lower()).split()
+    if not tokens:
+        return []
+    variants = [tokens]
+    forms = _inflected_variants_of(target)
+    kept = [t for t in tokens if t not in forms]
+    if len(kept) != len(tokens):
+        variants.append(kept)
+    return variants
 
 
 def _is_hallucinated_quote(quote: str) -> bool:
@@ -370,6 +537,27 @@ def _extract_source_content(user_prompt: str) -> str:
         )[0].strip()
 
     return content
+
+
+# Backlog C1: a passage sets ONE difficulty ceiling, and every support sentence the
+# student is asked to read - the 'example_usage' of a vocabulary or expression item,
+# the 'imitation_example' of a grammar pattern - has to respect it. Before this, each
+# quiz audit in processor.py wrote its own ladder and the grammar / vocabulary
+# extraction paths had none at all.
+MIN_SOURCE_WORDS_FOR_CEILING = 40
+
+
+def _cefr_source_ceiling(user_prompt: str) -> Tuple[Optional[str], Set[str]]:
+    """(CEFR level of the authentic passage, the words that passage already uses).
+
+    Returns (None, set()) when the prompt carries no real passage: instruction text,
+    target lists and retry critiques must never be measured as source difficulty.
+    """
+    source = _extract_source_content(user_prompt)
+    words = re.findall(r"[a-zA-Z]+", source.lower())
+    if len(words) < MIN_SOURCE_WORDS_FOR_CEILING:
+        return None, set()
+    return LinguisticEngine.calculate_text_cefr(source), {w for w in words if len(w) >= 4}
 
 
 def _extract_wordlist(user_prompt: str) -> List[str]:
@@ -693,11 +881,7 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             if word_tokens:
                 # Match token, stem/inflection (e.g. degrade -> degradation, took -> take, pose -> poses), or irregular forms
                 def _tok_in_quote(tok: str) -> bool:
-                    if tok in clean_quote or (len(tok) >= 4 and tok[:4] in clean_quote):
-                        return True
-                    if tok in COMMON_IRREGULARS and any(ir in clean_quote for ir in COMMON_IRREGULARS[tok]):
-                        return True
-                    return False
+                    return _form_in_text(tok, clean_quote)
 
                 matched_count = sum(1 for w in word_tokens if _tok_in_quote(w))
                 min_needed = max(1, len(word_tokens) // 2 + (1 if len(word_tokens) % 2 == 1 else 0))
@@ -762,23 +946,187 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     flags: List[str] = []
     checks = passes = 0
 
-    # Extract study list headwords from prompt if evaluating a quiz
+    # Extract study list headwords and blueprint specifications from prompt if evaluating a quiz
     prompt_headwords = set()
+    prompt_blueprints: Dict[str, Dict[str, Any]] = {}
     if task_type == "quiz" and user_prompt:
         for m in re.finditer(r"## \[\[(.*?)\]\]", user_prompt):
             prompt_headwords.add(m.group(1).strip().lower())
         if not prompt_headwords:
             for m in re.finditer(r"-\s*Target:\s*([^\n\r]+)", user_prompt):
                 prompt_headwords.add(m.group(1).strip().lower())
+        # Support Target Word from Authentic Corpus Blueprint
+        for m in re.finditer(r"-\s*Target Word:\s*([^\n\r]+)", user_prompt, re.IGNORECASE):
+            w = m.group(1).strip().lower()
+            if w:
+                prompt_headwords.add(w)
+
+        # Parse full item blueprints: ### Item N ###
+        blueprint_blocks = re.split(r"###\s*Item\s*\d+\s*###", user_prompt, flags=re.IGNORECASE)
+        for block in blueprint_blocks:
+            m_target = re.search(r"-\s*Target Word:\s*([^\n\r]+)", block, re.IGNORECASE)
+            if not m_target:
+                continue
+            b_word = m_target.group(1).strip().lower()
+            m_pos = re.search(r"-\s*Part of Speech:\s*([^\n\r]+)", block, re.IGNORECASE)
+            m_infl = re.search(r"-\s*Inflectional Form:\s*([^\n\r]+)", block, re.IGNORECASE)
+            m_anc = re.search(r"-\s*Collocational Anchor:\s*([^\n\r]+)", block, re.IGNORECASE)
+            m_ex = re.search(
+                r"(?:Authentic Corpus Blueprint:\s*'(.+?)'\s*$"
+                r"|authentic_example['\"]\s*:\s*['\"]([^'\n\r]+)['\"])",
+                block,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            
+            anchor_val = ""
+            anchor_type = ""
+            if m_anc:
+                raw_anc = m_anc.group(1).strip()
+                m_type = re.match(r"^(.*?)\s*\(([^)]+)\)$", raw_anc)
+                if m_type:
+                    anchor_val = m_type.group(1).strip().lower()
+                    anchor_type = m_type.group(2).strip().lower()
+                else:
+                    anchor_val = raw_anc.lower()
+
+            ex_val = ""
+            if m_ex:
+                ex_val = (m_ex.group(1) or m_ex.group(2) or "").strip()
+
+            # Quote provenance as rendered by the blueprint: a licensed quote is corpus evidence
+            # strong enough to be modelled, a display-only quote may never be reused at all.
+            m_lq = re.search(
+                r"Curriculum Quote \(licensed\):\s*'(.+?)'\s*$", block, re.IGNORECASE | re.MULTILINE
+            )
+            m_cq = re.search(
+                r"Curriculum Quote \(display-only.*?\):\s*'(.+?)'\s*$", block, re.IGNORECASE | re.MULTILINE
+            )
+            licensed_quote_val = m_lq.group(1).strip() if m_lq else ""
+            candidate_quote_val = m_cq.group(1).strip() if m_cq else ""
+
+            # Backlog D1: the blueprint also prescribes the four options and the answer
+            # index; the writer is only allowed to author stem, explanation and audit.
+            m_opts = re.search(r"-\s*Prescribed Options:\s*\[([^\]]*)\]", block, re.IGNORECASE)
+            prescribed_opts_val = [o.strip() for o in m_opts.group(1).split(",") if o.strip()] if m_opts else []
+            m_pidx = re.search(r"-\s*Correct Answer Index:\s*(\d+)", block, re.IGNORECASE)
+            prescribed_index_val = int(m_pidx.group(1)) if m_pidx else None
+
+
+            prompt_blueprints[b_word] = {
+                "target_word": b_word,
+                "part_of_speech": m_pos.group(1).strip().lower() if m_pos else "",
+                "inflection": m_infl.group(1).strip().lower() if m_infl else "",
+                "anchor": anchor_val,
+                "anchor_type": anchor_type,
+                "example": ex_val,
+                "licensed_quote": licensed_quote_val,
+                "candidate_quote": candidate_quote_val,
+                "quote_provenance": "weak" if candidate_quote_val else ("strong" if licensed_quote_val else ""),
+                "prescribed_options": prescribed_opts_val,
+                "prescribed_index": prescribed_index_val,
+
+            }
+
+    # Backlog C1: one ceiling for every support sentence the student reads.
+    ceiling_level, ceiling_words = (None, set())
+    if task_type in ("vocabulary", "expressions", "grammar") and user_prompt:
+        ceiling_level, ceiling_words = _cefr_source_ceiling(user_prompt)
+
+    def _over_example_ceiling(sentence: str, own_words: Iterable[str] = ()) -> List[Tuple[str, str]]:
+        """Words of an example sentence that the source passage does not license.
+
+        `own_words` are exempt: an example is required to contain the headword it
+        teaches, however hard that headword is.
+        """
+        if not ceiling_level or not sentence:
+            return []
+        allow = set(ceiling_words)
+        for word_text in own_words:
+            lowered = str(word_text).lower()
+            allow.update(re.findall(r"[a-z]{4,}", lowered))
+            # 're-schedule' is one headword; its example may show 'rescheduled',
+            # which the lemma lookup then resolves back to the exempt form.
+            joined = re.sub(r"[^a-z]+", "", lowered)
+            if joined:
+                allow.add(joined)
+        return LinguisticEngine.over_ceiling_tokens(sentence, ceiling_level, mode="text", allow=allow)
+
+    def _ceiling_reason(over: List[Tuple[str, str]], field: str) -> str:
+        offenders = ", ".join(f"'{w}' ({lvl})" for w, lvl in over[:3])
+        extra = f" (+{len(over) - 3} more)" if len(over) > 3 else ""
+        band = LinguisticEngine.cefr_ceiling(ceiling_level, mode="text")
+        return (
+            f"{field} exceeds the CEFR {band} ceiling of the CEFR {ceiling_level} "
+            f"source passage: {offenders}{extra}"
+        )
+
+    # Backlog D1: the formulas the lexicon pre-extracted, indexed by a presentation-
+    # insensitive key. An item consumes a skeleton when it copies it; a same-category
+    # skeleton left unconsumed means the model rewrote the formula it was handed.
+    grammar_skeletons: List[Dict[str, str]] = []
+    skeleton_keys: Dict[str, List[Dict[str, str]]] = {}
+    if task_type == "grammar" and user_prompt:
+        grammar_skeletons = _extract_target_skeletons(user_prompt, "grammar")
+        from .processor import WikiProcessor
+        for _sk in grammar_skeletons:
+            _raw_formula = str(_sk.get("formula", ""))
+            # Index the skeleton both as mined and as the pipeline would canonicalize it:
+            # the pedagogy branch unwraps literal brackets ('[Main Clause]' -> '[S]')
+            # before comparing, so both presentations are the same formula.
+            _skel_keys = {
+                canonical_formula_key(_raw_formula),
+                canonical_formula_key(WikiProcessor.unwrap_literal_brackets(_raw_formula)),
+            }
+            for _key in _skel_keys:
+                if _key:
+                    skeleton_keys.setdefault(_key, []).append(_sk)
+    consumed_skeletons: set = set()
+
+    def _align_grammar_formula(pattern: str, category: str) -> Tuple[bool, str]:
+        """(copied a skeleton formula?, the skeleton formula this item should have copied).
+
+        A formula that equals a mined skeleton is aligned even if another item already
+        delivered that skeleton — duplicated coverage is the coverage gate's business,
+        not an alignment defect. Only a formula that equals NO mined skeleton is a rewrite.
+        """
+        if not grammar_skeletons:
+            return True, ""
+        key = canonical_formula_key(pattern)
+        matched = skeleton_keys.get(key, [])
+        for sk in matched:
+            if id(sk) not in consumed_skeletons:
+                consumed_skeletons.add(id(sk))
+                return True, str(sk.get("formula", ""))
+        if matched:
+            return True, ""
+        wanted = ""
+        for sk in grammar_skeletons:
+            if id(sk) in consumed_skeletons:
+                continue
+            if str(sk.get("category", "")).strip().lower() == str(category).strip().lower():
+                wanted = str(sk.get("formula", ""))
+                break
+        return False, wanted
 
     for item in items:
         if task_type == "vocabulary":
             word = _safe_str(item.get("word"))
             pos = _safe_str(item.get("part_of_speech")).lower()
             quote = _safe_str(item.get("quoted_sentence"))
-            if not pos and word:
-                from .linguistics import LinguisticEngine
-                pos = LinguisticEngine.determine_contextual_pos(word, quote)
+            is_expression = LinguisticEngine.is_multiword_expression(word)
+            # A label is missing, or a multi-word unit carries the part of speech of one
+            # of its tokens ('tap into' -> 'verb') instead of its expression type.
+            needs_pos = bool(word) and (
+                not pos or (is_expression and pos not in LinguisticEngine.EXPRESSION_TYPE_LABELS)
+            )
+            if needs_pos:
+                # A multi-word unit is typed as an expression ('collocation', 'phrasal
+                # verb', 'set phrase', 'idiom'); only a single headword is typed by the
+                # parse of its quote.
+                if is_expression:
+                    pos = LinguisticEngine.classify_expression_type(word, quote) or "collocation"
+                else:
+                    pos = LinguisticEngine.determine_contextual_pos(word, quote)
                 item["part_of_speech"] = pos
             definition = _safe_str(item.get("definition"))
             example = _safe_str(item.get("example_usage"))
@@ -786,21 +1134,31 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             
             # Allow words/phrases with slots, hyphens, brackets, parentheses, apostrophes
             valid_word = bool(re.search(r"^[A-Za-z\s\-'\[\]\(\)]+$", word) and len(word) >= 2)
-            valid_pos = pos in VALID_POS_SET
+            # A multi-word row may carry an expression type, or (as a fallback the healing
+            # above could not decide) the part of speech of a fixed frame it is taught as.
+            allowed_pos = (VALID_POS_SET | VALID_EXPR_POS_SET) if is_expression else VALID_POS_SET
+            valid_pos = pos in allowed_pos
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
-            
-            if valid_word and valid_pos and definition and is_distinct_example:
+            over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
+            # F2: 'A core academic term functioning as a noun.' is the engine's own filler,
+            # not a definition. It fails the check the same way a missing one does.
+            invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
+
+            if valid_word and valid_pos and definition and not invented_definition and is_distinct_example and not over_ceiling:
                 passes += 1
             else:
                 reasons = []
                 if not valid_word: reasons.append(f"invalid headword '{word}'")
                 if not valid_pos: reasons.append(f"invalid PoS '{pos}'")
                 if not definition: reasons.append("missing definition")
+                elif invented_definition: reasons.append("invented fallback definition (no lexicon host grounds it)")
                 if not has_example:
                     reasons.append("missing example_usage")
                 elif not is_distinct_example:
                     reasons.append("example_usage is an unoriginal duplicate of quoted_sentence")
+                elif over_ceiling:
+                    reasons.append(_ceiling_reason(over_ceiling, "example_usage"))
                 flags.append(f"⚠️ Vocabulary item '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "expressions":
             word = _safe_str(item.get("word"))
@@ -813,8 +1171,12 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             is_trivial = word.lower() in ("talk", "listen", "turn", "watch", "sit down", "talk to", "listen to", "look at")
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
+            over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
+            # F2: the cascade's invented filler is not a definition. An expression the lexicon
+            # does not define is a defect to be reported, not a row to be shipped.
+            invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
 
-            if is_multiword and not is_trivial and definition and is_distinct_example:
+            if is_multiword and not is_trivial and definition and not invented_definition and is_distinct_example and not over_ceiling:
                 passes += 1
             else:
                 reasons = []
@@ -822,10 +1184,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     reasons.append("lacks multi-word/slot form or is too basic")
                 if not definition:
                     reasons.append("missing definition")
+                elif invented_definition:
+                    reasons.append("invented fallback definition (no lexicon host grounds it)")
                 if not has_example:
                     reasons.append("missing example_usage")
                 elif not is_distinct_example:
                     reasons.append("example_usage is an unoriginal duplicate of quoted_sentence")
+                elif over_ceiling:
+                    reasons.append(_ceiling_reason(over_ceiling, "example_usage"))
                 flags.append(f"⚠️ Expression '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "grammar":
             pattern = _safe_str(item.get("pattern_formula"))
@@ -833,18 +1199,33 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             quote = _safe_str(item.get("quote"))
             category = _safe_str(item.get("category"))
             if not category and quote:
-                from .linguistics import LinguisticEngine
                 category = LinguisticEngine.classify_grammar_dependency(quote) or "Information Packaging"
                 item["category"] = category
             checks += 1
             
             reasons = []
+            imitation = _safe_str(item.get("imitation_example"))
             if not audit:
                 reasons.append("missing design_audit")
             if not pattern:
                 reasons.append("missing pattern_formula")
-            if not _safe_str(item.get("imitation_example")):
+            if not imitation:
                 reasons.append("missing imitation_example")
+            else:
+                if quote and _clean_core(imitation) == _clean_core(quote):
+                    # Backlog D1: an imitation example that IS the passage sentence teaches
+                    # no transfer — the student copies instead of re-using the pattern.
+                    reasons.append("imitation_example duplicates the source quote")
+                    flags.append(
+                        f"❌ Grammar pattern '{pattern[:40]}': imitation_example duplicates the source quote "
+                        "(an imitation must be a new sentence, not the quoted one)"
+                    )
+
+                over_ceiling = _over_example_ceiling(imitation)
+                if over_ceiling:
+                    # Backlog C1: a pattern modelled from an A2 passage must not be
+                    # demonstrated with C2 vocabulary the student has not met.
+                    reasons.append(_ceiling_reason(over_ceiling, "imitation_example"))
             if not _safe_str(item.get("common_mistakes")):
                 reasons.append("missing common_mistakes")
             
@@ -889,6 +1270,32 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     ing_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", clean_quote_raw) if w not in ING_EXCLUDE]
                     if not ing_tokens:
                         reasons.append("formula requires '[V-ing]' but quote contains no participle verb ungrounded in quote")
+
+            # Backlog D1: Degenerate Slot Gate — '[NP/NP]' names the same constituent
+            # twice, teaches nothing, and is never mined by the lexicon.
+            degenerate_slots = degenerate_grammar_slots(pattern)
+            if degenerate_slots:
+                reasons.append(f"degenerate formula slot {degenerate_slots} names the same constituent twice")
+                flags.append(
+                    f"❌ Grammar pattern '{pattern[:40]}': degenerate formula slot {degenerate_slots} "
+                    "(a slot may not be offered to itself)"
+                )
+
+            # Backlog D1: Skeleton Alignment Gate — the formula the lexicon mined is the
+            # formula the item must ship. Casing, '+' separators and slot synonyms are
+            # presentation; a rewritten structure is a deviation.
+            aligned, wanted_formula = _align_grammar_formula(pattern, category)
+            if not aligned and wanted_formula:
+                reasons.append(f"pattern_formula deviates from the pre-extracted skeleton '{wanted_formula}'")
+                flags.append(
+                    f"❌ Grammar pattern '{pattern[:40]}' deviates from the pre-extracted skeleton "
+                    f"formula '{wanted_formula}'"
+                )
+            elif not aligned:
+                flags.append(
+                    f"⚠️ Grammar pattern '{pattern[:40]}' matches none of the pre-extracted skeleton formulas"
+                )
+
 
             # Auto-Remap explicit category mismatches if not already healed
             _, remap_notice = auto_remap_grammar_category(item)
@@ -1053,7 +1460,27 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             has_blank_when_expected = True
             is_single_blank = True
             no_stem_leak = True
+            no_article_leak = True
+            blank_pos_agreed = True
             is_adequate_complexity = True
+            # Gates below are only evaluated for lexical fill-in-the-blank items; they must
+            # still be bound for translation / comprehension / comparative-translation items
+            # or the shared item_passed computation below raises UnboundLocalError.
+            no_cross_target_leak = True
+            leaked_other_targets: List[str] = []
+            anchor_in_stem = True
+            explanation_grounded = True
+            no_verbatim_example = True
+            verbatim_label = "dictionary example"
+            inflection_agreed = True
+            no_illegal_distractors = True
+            illegal_distractors: List[str] = []
+            # Backlog D1: the Prescribed Options Contract is satisfied by default — it only
+            # binds when the blueprint actually prescribes options (cloze and comprehension
+            # blueprints do not).
+            options_match_blueprint = True
+            index_match_blueprint = True
+
 
             if is_comparative_translation or is_comprehension:
                 # Comparative translation and Reading/Listening/Video comprehension questions do not require blanks
@@ -1085,6 +1512,279 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     no_stem_leak = False
                     flags.append(
                         f"❌ Quiz item '{target}': Target word leaks verbatim into question stem outside blank: {leaked_words}"
+                    )
+
+                # Article Leakage Gate (Pre-blank 'a' or 'an' leaking answer or invalidating distractors)
+                no_article_leak = True
+                if options and re.search(r"\b(?:a|an)\s+_{2,}\b", question, flags=re.IGNORECASE):
+                    initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
+                    has_vowel_init = any(init in 'aeiou' for init in initials)
+                    has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
+                    if has_vowel_init and has_cons_init:
+                        no_article_leak = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Question stem has indefinite article ('a/an') immediately preceding blank with mixed vowel/consonant options (fatal test-wiseness leakage); use 'the ____', plural, or possessive instead."
+                        )
+
+                # Cross-Target Stem Leakage Gate (Zero-Tolerance Physical Gate):
+                # The question stem MUST NOT leak other targets from the current batch outside the blank
+                no_cross_target_leak = True
+                leaked_other_targets = []
+                if prompt_headwords:
+                    clean_target = _clean_core(target)
+                    stem_no_blank = re.sub(r'_{2,}', ' ', question)
+                    stem_words_lower = {w.lower() for w in re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)}
+                    for other_hw in prompt_headwords:
+                        if not other_hw or other_hw == clean_target or other_hw == target.lower():
+                            continue
+                        if other_hw in stem_words_lower:
+                            leaked_other_targets.append(other_hw)
+                        else:
+                            other_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', other_hw)
+                            if len(other_stem) >= 4 and any(
+                                (len(re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', sw)) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', sw) == other_stem)
+                                for sw in stem_words_lower
+                            ):
+                                leaked_other_targets.append(other_hw)
+                if leaked_other_targets:
+                    no_cross_target_leak = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Question stem leaks other batch target word(s) outside blank: {leaked_other_targets} (cross-target leakage)!"
+                    )
+
+                # Blank Syntactic Slot & POS Agreement Gate (Zero-Tolerance Physical Gate)
+                # Ensure the blank slot does not violate the target's part of speech
+                blank_pos_agreed = True
+                bp_info = prompt_blueprints.get(target.lower(), {}) if prompt_blueprints else {}
+                expected_pos = _safe_str(item.get("part_of_speech")).strip().lower()
+                if not expected_pos:
+                    expected_pos = bp_info.get("part_of_speech", "")
+                if not expected_pos:
+                    expected_pos = LinguisticEngine.determine_contextual_pos(target, target)
+
+                if expected_pos and target and "____" in question:
+                    try:
+                        nlp = LinguisticEngine.get_spacy()
+                        filled_sent = question.replace("____", target)
+                        doc_filled = nlp(filled_sent)
+                        target_tok = None
+                        for tok in doc_filled:
+                            if tok.text.lower() == target or tok.lemma_.lower() == target:
+                                target_tok = tok
+                                break
+                        if target_tok:
+                            actual_spacy_pos = target_tok.pos_
+                            # POS clash rules:
+                            # 1. Target is VERB, but blank is in NOUN position (e.g. subject, direct object, prepositional object)
+                            if expected_pos in ("verb", "v") and actual_spacy_pos in ("NOUN", "PROPN"):
+                                blank_pos_agreed = False
+                                flags.append(
+                                    f"❌ Quiz item '{target}': Target is a VERB, but question stem placed the blank in a NOUN slot (dep: {target_tok.dep_})!"
+                                )
+                            # 2. Target is NOUN, but blank is in finite VERB position
+                            elif expected_pos in ("noun", "n") and actual_spacy_pos == "VERB" and target_tok.dep_ in ("ROOT", "relcl", "advcl", "conj"):
+                                blank_pos_agreed = False
+                                flags.append(
+                                    f"❌ Quiz item '{target}': Target is a NOUN, but question stem placed the blank in a finite VERB slot (dep: {target_tok.dep_})!"
+                                )
+                    except Exception:
+                        pass
+
+                # Anchor Presence in Question Stem Gate
+                anchor_in_stem = True
+                req_anchor = bp_info.get("anchor", "")
+                # Blueprint Self-Conflict Guard: an anchor that is itself another batch target
+                # makes the item logically unsatisfiable — this gate DEMANDS the word in the
+                # stem while the Cross-Target Stem Leakage Gate bans it with a fatal flag.
+                # That is a blueprint defect, not an LLM defect, so the leakage gate wins and
+                # the anchor requirement is waived with a non-fatal (non-capping) warning.
+                if req_anchor and req_anchor not in ("general context", "semantic context clues") and prompt_headwords:
+                    for _other_hw in prompt_headwords:
+                        if not _other_hw or _batch_target_conflict(target, _other_hw):
+                            continue
+                        if _batch_target_conflict(req_anchor, _other_hw):
+                            flags.append(
+                                f"⚠️ Quiz item '{target}': blueprint anchor '{req_anchor}' is itself another batch target ('{_other_hw}') — anchor-presence gate waived (blueprint self-conflict)"
+                            )
+                            req_anchor = ""
+                            break
+                if req_anchor and req_anchor not in ("general context", "semantic context clues"):
+                    stem_clean_l = question.lower()
+                    if not re.search(rf"\b{re.escape(req_anchor)}\b", stem_clean_l):
+                        anchor_in_stem = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Anchor missing in question stem: required collocational anchor '{req_anchor}' was not included in stem!"
+                        )
+
+                # Backlog D1: Prescribed Options Contract Gate — the blueprint owns the
+                # options and the answer index (CRC32-positioned distractors); the writer
+                # may only author the stem, explanation and audit.
+                prescribed_opts = bp_info.get("prescribed_options") or []
+                prescribed_idx = bp_info.get("prescribed_index")
+                if prescribed_opts and is_list_valid:
+                    wanted_opts = [str(o).strip().lower() for o in prescribed_opts]
+                    shipped_opts = [str(o).strip().lower() for o in options]
+                    if shipped_opts != wanted_opts:
+                        options_match_blueprint = False
+                        substituted = sorted(set(wanted_opts) - set(shipped_opts))
+                        introduced = sorted(set(shipped_opts) - set(wanted_opts))
+                        flags.append(
+                            f"❌ Quiz item '{target}': Prescribed options altered — blueprint prescribed "
+                            f"[{', '.join(str(o) for o in prescribed_opts)}], item shipped "
+                            f"[{', '.join(str(o) for o in options)}]"
+                            + (f" (substituted: {substituted}; introduced: {introduced})" if substituted or introduced else "")
+                        )
+                    if isinstance(prescribed_idx, int) and isinstance(idx, int) and idx != prescribed_idx:
+                        index_match_blueprint = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Prescribed answer index altered — blueprint index "
+                            f"{prescribed_idx}, item shipped {idx}"
+                        )
+
+
+                # Explanation Grounding Gate (Check if explanation hallucinated an ungrounded preposition or anchor)
+                explanation_grounded = True
+                if explanation and "____" in question:
+                    m_exp_prep = re.findall(r"collocat(?:es?|ing)\s+with\s+['\"]?([a-zA-Z]+)['\"]?|govern(?:s|ing)?\s+['\"]?([a-zA-Z]+)['\"]?", explanation, flags=re.IGNORECASE)
+                    for grp in m_exp_prep:
+                        claimed_colloc = (grp[0] or grp[1]).lower()
+                        if claimed_colloc in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards"):
+                            if not re.search(rf"\b{re.escape(claimed_colloc)}\b", question.lower()):
+                                explanation_grounded = False
+                                flags.append(
+                                    f"❌ Quiz item '{target}': Explanation anchor not grounded: explanation claims collocation with '{claimed_colloc}', but '{claimed_colloc}' is absent from question stem!"
+                                )
+                                break
+
+                # Verbatim Copy Gate (P1-3): a stem may emulate a corpus model's syntax and
+                # register, but it may never reuse its wording. Both corpus models are checked —
+                # the LDOCE example and the curriculum quote that was strong enough to license
+                # evidence. Each source is compared twice: as written, and with the target word
+                # blanked out, because the classic shortcut is to mask the blueprint's own
+                # example and that hole otherwise breaks every 5-gram of a short example.
+                # A display-only quote is too short for an n-gram test, so reusing any part of
+                # it counts as copying outright.
+                no_verbatim_example = True
+                verbatim_label = "dictionary example"
+                verbatim_hit = ""
+                stem_clean = re.sub(r"_{2,}", " ", question.lower())
+                stem_tokens = re.sub(r"[^\w\s]", " ", stem_clean).split()
+                stem_5grams = {tuple(stem_tokens[i:i + 5]) for i in range(len(stem_tokens) - 4)}
+                for _label, _source in (
+                    ("dictionary example", bp_info.get("example", "")),
+                    ("curriculum quote", bp_info.get("licensed_quote", "")),
+                ):
+                    for src_clean in _source_token_variants(_source, target):
+                        if len(src_clean) < 5 or not stem_5grams:
+                            continue
+                        src_5grams = {tuple(src_clean[i:i + 5]) for i in range(len(src_clean) - 4)}
+                        overlap_5grams = src_5grams.intersection(stem_5grams)
+                        if overlap_5grams:
+                            no_verbatim_example = False
+                            verbatim_label = _label
+                            verbatim_hit = " ".join(next(iter(overlap_5grams)))
+                            break
+                    if not no_verbatim_example:
+                        break
+                weak_quote = (
+                    bp_info.get("candidate_quote", "")
+                    if bp_info.get("quote_provenance") == "weak" else ""
+                )
+                weak_tokens = re.sub(r"[^\w\s]", " ", weak_quote.lower()).split()
+                if no_verbatim_example and weak_tokens and len(weak_tokens) < 5:
+                    if " ".join(weak_tokens) in " ".join(stem_tokens):
+                        no_verbatim_example = False
+                        verbatim_label = "curriculum quote"
+                        verbatim_hit = " ".join(weak_tokens)
+                if not no_verbatim_example:
+                    flags.append(
+                        f"❌ Quiz item '{target}': Stem verbatim from {verbatim_label} "
+                        f"(detected n-gram overlap: '{verbatim_hit}...')!"
+                    )
+
+                # Inflection Concordance Gate (P1-2)
+                # The blueprint declares a verb form, the stem physically demands one, and every
+                # option must be cast in it. A declared 'past tense (VBD)' target sitting in a
+                # 'will ____' slot — or offered as the bare base form — makes the item unanswerable.
+                inflection_agreed = True
+                declared_tag = LinguisticEngine.inflection_tag_from_label(bp_info.get("inflection", ""))
+                if declared_tag and expected_pos in ("verb", "v") and target and "____" in question:
+                    base_verb = LinguisticEngine.lemma_of(target)
+                    expected_form = LinguisticEngine.verb_form_for_tag(base_verb, declared_tag)
+                    target_tag = LinguisticEngine.verb_form_tag_of(target)
+                    # Concordant when the option equals the deterministically inflected lemma, or
+                    # when the option itself parses as the declared form — the fallback covers
+                    # irregular and dictionary-silent forms the inflector cannot reproduce.
+                    form_agreed = (
+                        not expected_form
+                        or target.strip().lower() == expected_form
+                        or target_tag == declared_tag
+                    )
+                    if not form_agreed:
+                        inflection_agreed = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Inflection discordance: blueprint declares "
+                            f"'{bp_info.get('inflection')}' (expected form '{expected_form}') "
+                            f"but the answer option is '{target}'!"
+                        )
+                    pre_blank_tokens = re.findall(r"[a-z']+", question.lower().split("____")[0])
+                    last_pre = pre_blank_tokens[-1] if pre_blank_tokens else ""
+                    slot_form_requirements = {
+                        "to": {"VB", "VBP"}, "will": {"VB", "VBP"}, "would": {"VB", "VBP"},
+                        "shall": {"VB", "VBP"}, "should": {"VB", "VBP"}, "can": {"VB", "VBP"},
+                        "could": {"VB", "VBP"}, "may": {"VB", "VBP"}, "might": {"VB", "VBP"},
+                        "must": {"VB", "VBP"}, "do": {"VB", "VBP"}, "does": {"VB", "VBP"},
+                        "did": {"VB", "VBP"}, "is": {"VBG"}, "are": {"VBG"}, "was": {"VBG"},
+                        "were": {"VBG"}, "am": {"VBG"}, "has": {"VBN"}, "have": {"VBN"},
+                        "had": {"VBN"},
+                    }
+                    if last_pre in slot_form_requirements and declared_tag not in slot_form_requirements[last_pre]:
+                        inflection_agreed = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Inflection discordance: the stem slot "
+                            f"'... {last_pre} ____' requires {'/'.join(sorted(slot_form_requirements[last_pre]))} "
+                            f"but the blueprint declares '{bp_info.get('inflection')}'!"
+                        )
+                    # Parallel inflection across options (soft warning): a mixed-form option set
+                    # lets the item be solved by morphology instead of meaning.
+                    if declared_tag in ("VBD", "VBG", "VBZ", "VBN", "VB", "VBP"):
+                        form_family = {"VBD", "VBN"} if declared_tag in ("VBD", "VBN") else {declared_tag}
+                        for o_idx, opt in enumerate(options):
+                            if o_idx == idx:
+                                continue
+                            opt_l = str(opt).strip().lower()
+                            opt_tag = LinguisticEngine.verb_form_tag_of(opt_l)
+                            if opt_tag and LinguisticEngine.lemma_of(opt_l) != opt_l and opt_tag not in form_family:
+                                flags.append(
+                                    f"⚠️ Quiz item '{target}': distractor '{opt_l}' carries verb form "
+                                    f"{opt_tag} while the blueprint declares '{bp_info.get('inflection')}'"
+                                )
+
+                # Distractor Slot Legality Gate (P1-1)
+                # Every option must be able to occupy the target's own syntactic slot;
+                # 'log in to a ____' offering the adverb 'somehow' is solved by morphology
+                # instead of meaning. Only positive dictionary evidence vetoes an option.
+                if is_list_valid and valid_idx and expected_pos:
+                    requires_obj = (
+                        expected_pos in ("verb", "v")
+                        and LinguisticEngine.verb_takes_object(LinguisticEngine.lemma_of(target)) is True
+                    )
+                    for o_idx, opt in enumerate(options):
+                        if o_idx == idx:
+                            continue
+                        opt_l = str(opt).strip().lower()
+                        if not opt_l or opt_l == str(target).strip().lower():
+                            continue
+                        if not LinguisticEngine.distractor_occupies_slot(
+                            opt_l, expected_pos, requires_object=requires_obj
+                        ):
+                            illegal_distractors.append(opt_l)
+                if illegal_distractors:
+                    no_illegal_distractors = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Distractor slot illegality: "
+                        f"{illegal_distractors} cannot occupy the {expected_pos} slot the "
+                        f"target '____' occupies!"
                     )
 
                 # Syntax Complexity Check (CEFR Level & Clause Check - Soft Warning)
@@ -1147,7 +1847,17 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 has_blank_when_expected and
                 is_single_blank and
                 no_stem_leak and
-                no_in_list_recycling
+                no_cross_target_leak and
+                no_article_leak and
+                blank_pos_agreed and
+                anchor_in_stem and
+                explanation_grounded and
+                no_verbatim_example and
+                inflection_agreed and
+                no_illegal_distractors and
+                no_in_list_recycling and
+                options_match_blueprint and
+                index_match_blueprint
             )
 
             if item_passed:
@@ -1163,9 +1873,44 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not has_blank_when_expected: reasons.append("missing fill-in-the-blank slot (____)")
                 if not is_single_blank: reasons.append("multiple blanks detected in stem")
                 if not no_stem_leak: reasons.append("target word leaks into question stem")
+                if not no_cross_target_leak: reasons.append(f"cross-target leakage {leaked_other_targets}")
+                if not no_article_leak: reasons.append("indefinite article leakage before blank")
+                if not blank_pos_agreed: reasons.append(f"blank slot POS mismatch with target '{target}'")
+                if not anchor_in_stem: reasons.append(f"collocational anchor '{req_anchor}' missing in stem")
+                if not explanation_grounded: reasons.append("explanation anchor not grounded in stem")
+                if not no_verbatim_example: reasons.append(f"stem verbatim from {verbatim_label}")
+                if not inflection_agreed: reasons.append(f"inflection discordance with blueprint '{bp_info.get('inflection')}'")
+                if not no_illegal_distractors: reasons.append(f"distractor slot illegality {illegal_distractors}")
+                if not options_match_blueprint:
+                    reasons.append(f"prescribed options altered from blueprint {bp_info.get('prescribed_options')}")
+                if not index_match_blueprint:
+                    reasons.append(f"prescribed answer index altered from blueprint index {bp_info.get('prescribed_index')}")
+
                 if not no_in_list_recycling:
                     reasons.append(f"recycles study list headwords in distractors {recycled_in_distractors}")
                     flags.append(f"❌ Quiz item '{target or question[:25]}' in-list distractor recycling: {recycled_in_distractors}")
+                elif not has_blank_when_expected:
+                    flags.append(f"❌ Quiz item '{target}': missing fill-in-the-blank slot (____)")
+                elif not is_single_blank:
+                    flags.append(f"❌ Quiz item '{target}': Multiple blanks detected in stem")
+                elif not no_stem_leak:
+                    flags.append(f"❌ Quiz item '{target}': Target word leaks into question stem: {leaked_words}")
+                elif not no_cross_target_leak:
+                    flags.append(f"❌ Quiz item '{target}': cross-target leakage: {leaked_other_targets}")
+                elif not no_article_leak:
+                    flags.append(f"❌ Quiz item '{target}': indefinite article leakage before blank")
+                elif not blank_pos_agreed:
+                    flags.append(f"❌ Quiz item '{target}': blank slot POS mismatch with target '{target}'")
+                elif not anchor_in_stem:
+                    flags.append(f"❌ Quiz item '{target}': Anchor missing in question stem ('{req_anchor}')")
+                elif not explanation_grounded:
+                    flags.append(f"❌ Quiz item '{target}': Explanation anchor not grounded in stem")
+                elif not no_verbatim_example:
+                    flags.append(f"❌ Quiz item '{target}': Stem verbatim from {verbatim_label}")
+                elif not inflection_agreed:
+                    flags.append(f"❌ Quiz item '{target}': Inflection discordance with blueprint declaration")
+                elif not no_illegal_distractors:
+                    flags.append(f"❌ Quiz item '{target}': Distractor slot illegality {illegal_distractors}")
                 else:
                     flags.append(f"⚠️ Quiz question failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "summary":
@@ -1401,11 +2146,7 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 rw_tokens = [w for w in rw_clean_word.split() if w and w not in STOP_SLOTS]
                 if rw_tokens:
                     def _rw_tok_in(text_core: str, tok: str) -> bool:
-                        if tok in text_core or (len(tok) >= 4 and tok[:4] in text_core):
-                            return True
-                        if tok in COMMON_IRREGULARS and any(ir in text_core for ir in COMMON_IRREGULARS[tok]):
-                            return True
-                        return False
+                        return _form_in_text(tok, text_core)
 
                     rw_current_core = _clean_core(str(item.get(quote_field) or ""))
                     if rw_current_core:
@@ -1571,11 +2312,7 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
 
         # Check A: Does the word appear in its claimed quote?
         def _tok_matches(tok: str, target_text: str) -> bool:
-            if tok in target_text or (len(tok) >= 4 and tok[:4] in target_text):
-                return True
-            if tok in COMMON_IRREGULARS and any(ir in target_text for ir in COMMON_IRREGULARS[tok]):
-                return True
-            return False
+            return _form_in_text(tok, target_text)
 
         if word_tokens:
             min_needed = max(1, len(word_tokens) // 2 + (1 if len(word_tokens) % 2 == 1 else 0))
@@ -1748,6 +2485,11 @@ class LogEvaluator:
                 delivered_count = len(items)
                 if delivered_count < expected_count:
                     coverage_ratio = delivered_count / expected_count
+                    # Detect whether targets come from auto-mining (AWL suggestions) vs teacher-provided syllabus
+                    # "DETERMINISTIC TARGET VOCABULARY" = auto-mined AWL words (soft recommendations)
+                    # "DETERMINISTIC TARGET PATTERNS"   = in-text grammar patterns (strict, they ARE in the text)
+                    is_auto_mined = "DETERMINISTIC TARGET VOCABULARY" in (effective_prompt or "")
+
                     # Name the missing targets so the retry critique can target them specifically
                     name_key = "word" if task_type == "vocabulary" else "formula"
                     missing_names: List[str] = []
@@ -1761,11 +2503,22 @@ class LogEvaluator:
                             if sk_name and _clean_core(sk_name).lower() not in delivered_names:
                                 missing_names.append(sk_name)
                     missing_txt = f" — missing: {', '.join(missing_names[:12])}" if missing_names else ""
-                    flags.append(
-                        f"❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only {delivered_count}/{expected_count} targets{missing_txt}"
-                    )
-                    # Proportionately scale composite score so that 1/5 outputs score ~20%, NOT 100%!
-                    composite_score = round(composite_score * coverage_ratio, 1)
+
+                    target_source_desc = "Auto-mined" if is_auto_mined else "Syllabus"
+                    # Unified Target Coverage Gate (85% tolerance):
+                    # Accounts for local LLM (e.g. gemma4) tendency to occasionally deliver e.g. 19/20 or 4/5 items.
+                    # >= 85% coverage: Informational warning (non-fatal), slight score adjustment (at most 10%).
+                    # < 85% coverage: FATAL defect (❌ [INCOMPLETE_COVERAGE]), triggers retry/correction and proportional score scaling.
+                    if coverage_ratio >= 0.85:
+                        flags.append(
+                            f"⚠️ [PARTIAL_COVERAGE] {target_source_desc} target coverage: delivered {delivered_count}/{expected_count} targets{missing_txt}"
+                        )
+                        composite_score = max(0.0, round(composite_score * max(coverage_ratio, 0.9), 1))
+                    else:
+                        flags.append(
+                            f"❌ [INCOMPLETE_COVERAGE] Incomplete target coverage: delivered only {delivered_count}/{expected_count} targets{missing_txt}"
+                        )
+                        composite_score = round(composite_score * coverage_ratio, 1)
 
         # Special handling for expert_audit task: align composite_score with deterministic code gate
         if task_type == "expert_audit" and isinstance(parsed, dict):
