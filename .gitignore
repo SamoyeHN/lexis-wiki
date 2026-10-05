@@ -35,3 +35,6 @@ wiki_config.json
 
 # Lexical source archives (keep compiled json only)
 scratch/
+
+# Throwaway diagnostic scripts and their captured output
+scratchs/

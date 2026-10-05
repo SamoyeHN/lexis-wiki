@@ -412,10 +412,12 @@ class LLMClient:
         system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
         # If this is a multi-turn self-correction retry, log only the modification ticket/request instead of re-dumping the initial prompt
         critique_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user" and any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), None)
+        initial_user_prompt = next((m["content"] for m in messages if m["role"] == "user" and not any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), "")
         if critique_msg:
             user_prompt = critique_msg.strip()
         else:
             user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
+        eval_user_prompt = initial_user_prompt or user_prompt
         t_name = task_name or "chat"
         schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=False) if schema else None)
 
@@ -937,8 +939,8 @@ class LLMClient:
                                 "task": t_name,
                                 "model": self.model or "unknown",
                                 "system_prompt": system_prompt,
-                                "user_prompt": user_prompt,
-                                "context_prompt": f"{system_prompt}\n{user_prompt}".strip(),
+                                "user_prompt": eval_user_prompt,
+                                "context_prompt": f"{system_prompt}\n{eval_user_prompt}".strip(),
                                 "raw_response": final_json,
                                 "parsed_json": dict_to_eval,
                             }
@@ -969,32 +971,12 @@ class LLMClient:
                                 scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
                                 
-                                # Format 3-element surgical defect tickets: [FIELD] -> [VIOLATION] -> [WHERE TO LOOK]
-                                t_name_lower = str(t_name).lower()
-
-                                def _find_item_index(clean_str: str, array_name: str) -> str:
-                                    """Attempts to find the exact 0-based array index in dict_to_eval."""
-                                    if not isinstance(dict_to_eval, dict):
-                                        return "..."
-                                    target_list = dict_to_eval.get(array_name)
-                                    if not isinstance(target_list, list) or not target_list:
-                                        return "..."
-                                    # Extract quoted snippet or word inside single quotes from flag (e.g. 'Wearing rubber boots...')
-                                    quote_match = re.search(r"['‘]([^'’]+?)['’]", clean_str)
-                                    if not quote_match:
-                                        return "..."
-                                    snippet = quote_match.group(1).rstrip(".… ").strip().lower()
-                                    if not snippet:
-                                        return "..."
-                                    for idx, it in enumerate(target_list):
-                                        if not isinstance(it, dict):
-                                            continue
-                                        # Check across relevant text fields
-                                        for key in ("quote", "quoted_sentence", "word", "target_word", "pattern_formula", "question", "source_sentence"):
-                                            val = str(it.get(key) or "").lower()
-                                            if snippet in val or (len(snippet) >= 8 and snippet[:15] in val):
-                                                return str(idx)
-                                    return "..."
+                                # F10 (Backlog): a repair ticket names a field, never a sentence.
+                                # The inline builder that used to sit here emitted a free-text error
+                                # plus a "[LOOKUP]: <source text>" hint, which left the model free to
+                                # rewrite whole items — in the Book_2_Unit_3_Section_A run it rewrote
+                                # the four options the blueprint had already fixed and then repeated
+                                # the same mistake. librarian/qa_ticket.py is now the only channel.
 
                                 # Dynamic source section header discovery for LOOKUP
                                 source_header = "### PASSAGE (WITH NUMBERED SENTENCES) ###"
@@ -1010,116 +992,35 @@ class LLMClient:
                                     elif "CONTENT:" in user_prompt:
                                         source_header = "CONTENT:"
 
-                                def _format_defect_ticket(flag: str) -> str:
-                                    clean = flag.lstrip("❌⚠️✂️ ").strip()
-                                    clean_lower = clean.lower()
-
-                                    # Grammar patterns
-                                    if "grammar" in t_name_lower or "pattern" in clean_lower:
-                                        idx_str = _find_item_index(clean, "grammar_patterns")
-                                        return (
-                                            f"- [FIELD]: `grammar_patterns[{idx_str}]`\n"
-                                            f"  [ERROR]: {clean}\n"
-                                            f"  [LOOKUP]: `{source_header}`"
-                                        )
-
-                                    # Quizzes (Vocabulary / Reading / Translation / Listening / Video / General)
-                                    if "quiz" in t_name_lower or "question" in clean_lower:
-                                        idx_str = _find_item_index(clean, "questions")
-                                        if "target_word" in clean_lower or "synchronization" in clean_lower or "key" in clean_lower:
-                                            return (
-                                                f"- [FIELD]: `questions[{idx_str}].target_word` vs `options[...]`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: TARGET VOCABULARY LIST or `{source_header}`"
-                                            )
-                                        if ("blank" in clean_lower or "____" in clean) and not any(k in t_name_lower for k in ("reading", "listening", "video")):
-                                            return (
-                                                f"- [FIELD]: `questions[{idx_str}].question`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TASK INSTRUCTIONS ###`"
-                                            )
-                                        if "distractor" in clean_lower or "recycl" in clean_lower or "duplicate" in clean_lower or "option" in clean_lower:
-                                            return (
-                                                f"- [FIELD]: `questions[{idx_str}].options`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `### TASK INSTRUCTIONS ###`"
-                                            )
-                                        return (
-                                            f"- [FIELD]: `questions[{idx_str}]`\n"
-                                            f"  [ERROR]: {clean}\n"
-                                            f"  [LOOKUP]: `{source_header}`"
-                                        )
-
-                                    # Vocabulary & Expression extractions
-                                    if any(k in t_name_lower for k in ("vocabulary", "expression", "extract")):
-                                        array_key = "vocabulary" if "vocabulary" in (dict_to_eval or {}) else ("expressions" if "expressions" in (dict_to_eval or {}) else "items")
-                                        idx_str = _find_item_index(clean, array_key)
-                                        field_prefix = f"{array_key}[{idx_str}]"
-                                        if any(k in clean_lower for k in ("quoted_sentence", "quote", "not appear in quoted sentence", "non-verbatim")):
-                                            return (
-                                                f"- [FIELD]: `{field_prefix}.quoted_sentence`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `{source_header}`"
-                                            )
-                                        if "incomplete_coverage" in clean_lower or "target coverage" in clean_lower:
-                                            return (
-                                                f"- [FIELD]: `{array_key}` (Array Coverage)\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [ACTION]: Append all missing syllabus targets to the `{array_key}` array. If multiple targets occur in the same sentence, quote it for each item."
-                                            )
-                                        if "not found" in clean_lower or "hallucinat" in clean_lower:
-                                            return (
-                                                f"- [FIELD]: `{field_prefix}.word`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: TARGET VOCABULARY LIST or `{source_header}`"
-                                            )
-                                        if "definition" in clean_lower or "duplicate" in clean_lower:
-                                            return (
-                                                f"- [FIELD]: `{field_prefix}.definition`\n"
-                                                f"  [ERROR]: {clean}\n"
-                                                f"  [LOOKUP]: `{source_header}`"
-                                            )
-
-                                    # Generic defect ticket fallback
-                                    return (
-                                        f"- [ERROR]: {clean}\n"
-                                        f"  [LOOKUP]: Turn 1 context sections"
-                                    )
-
-                                ticket_bullets = "\n\n".join([_format_defect_ticket(f) for f in actionable_flags[:5]])
-
-                                # Single fatal critical invariant per task type
-                                if "grammar" in t_name_lower:
-                                    critical_invariant = (
-                                        f"Every `quote` MUST be an exact sentence copied verbatim from `{source_header}`. "
-                                        "The `quote`, `category`, `pattern_formula`, and `design_audit` MUST be synchronized together. "
-                                        "If the category does not exist in the source text, switch to one that does."
-                                    )
-                                elif "translation" in t_name_lower:
-                                    critical_invariant = "The source sentence must strictly embody the target formula, and the correct option must be 100% natural English."
-                                elif "reading" in t_name_lower:
-                                    critical_invariant = f"Every question stem and correct answer must be uniquely warranted by verbatim evidence from `{source_header}`, with concise, parallel options matching CEFR complexity limits."
-                                elif "listening" in t_name_lower:
-                                    critical_invariant = "Every dialogue turn and comprehension question must strictly adhere to the target CEFR level, with exactly 4 distinct and plausible options grounded in the script."
-                                elif "video" in t_name_lower:
-                                    critical_invariant = "Every question stem must correlate directly with its segment timestamp and transcript evidence, with exactly 4 distinct options and no duplicate choices."
-                                elif "quiz" in t_name_lower:
-                                    critical_invariant = "Keep strictly ONE continuous 4-underscore blank '____' in each stem, align `target_word` with `options[correct_answer_index]`, and never repeat options."
-                                elif any(k in t_name_lower for k in ("vocabulary", "expression")):
-                                    critical_invariant = (
-                                        f"Every headword, lemma, and `quoted_sentence` must physically exist verbatim in `{source_header}`, "
-                                        "and the `quoted_sentence` MUST itself contain the headword — if your cited sentence lacks it, "
-                                        "find and cite the correct sentence that does. Headwords must be strictly single words."
-                                    )
-                                else:
-                                    critical_invariant = f"Every cited element and sentence must physically exist verbatim in `{source_header}`."
-
-                                critique_prompt = (
-                                    f"\n\n### 🚨 QUALITY AUDIT DEFECT TICKET\n"
-                                    f"Fix ONLY the following defective item(s) while keeping all valid items completely intact:\n\n"
-                                    f"{ticket_bullets}\n\n"
-                                    f"🛑 MANDATE: {critical_invariant} Return ONLY the complete corrected JSON object."
+                                from .qa_ticket import (
+                                    build_qa_tickets,
+                                    detect_array_key,
+                                    format_qa_ticket_block,
+                                    score_ticket,
                                 )
+
+                                qa_tickets = build_qa_tickets(
+                                    actionable_flags,
+                                    task_name=t_name,
+                                    parsed=dict_to_eval,
+                                    source_header=source_header,
+                                )
+                                if not qa_tickets:
+                                    # Nothing could be attributed to a field. The only honest
+                                    # instruction left names the array and the scored dimension.
+                                    qa_tickets = [score_ticket(
+                                        composite,
+                                        lowest_dim,
+                                        array_key=detect_array_key(dict_to_eval),
+                                        source_header=source_header,
+                                    )]
+                                critique_prompt = format_qa_ticket_block(qa_tickets)
+
+                                # The mandate is built from the tickets themselves (F10 rule 4): it
+                                # names only the declarations this run actually violated. The fixed
+                                # per-task-type invariant that used to be appended here named rules
+                                # the item may never have broken, which told the model to re-derive
+                                # constraints instead of fixing the field named in front of it.
                                 import logging
                                 logging.getLogger("librarian").info(
                                     f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) via multi-turn self-correction..."
@@ -1177,8 +1078,8 @@ class LLMClient:
                             "task": t_name,
                             "model": self.model or "unknown",
                             "system_prompt": system_prompt,
-                            "user_prompt": user_prompt,
-                            "context_prompt": f"{system_prompt}\n{user_prompt}".strip(),
+                            "user_prompt": eval_user_prompt,
+                            "context_prompt": f"{system_prompt}\n{eval_user_prompt}".strip(),
                             "raw_response": final_json,
                             "parsed_json": dict_for_final_eval,
                         }

@@ -96,7 +96,7 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
                 "pattern_formula": "It + [be] + said + that + [Clause]",
                 "quote": "It was said that Cliff Young had never kept a single prize.",
                 "design_audit": "AUDIT: It was said that...",
-                "imitation_example": "It is estimated that global temperatures will rise.",
+                "imitation_example": "It is said that global temperatures will rise.",
                 "common_mistakes": "Misplaced agent.",
             },
             {
@@ -124,7 +124,7 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
             "pattern_formula": "Although + [Clause], [Main Clause]",
             "quote": "Although he was still far behind the world-class athletes, he kept at it.",
             "design_audit": "AUDIT: Although + Clause",
-            "imitation_example": "It is estimated that global temperatures will rise.",
+            "imitation_example": "Although conditions were difficult, the estimated costs remained low.",
             "common_mistakes": "Incorrect coordination.",
         }
         score, flags = _score_pedagogy([compliant], "grammar", SAMPLE_SOURCE)

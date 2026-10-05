@@ -741,8 +741,9 @@ class TestQuizGateRegressions(unittest.TestCase):
         self.assertGreater(score, 0.0)
 
     def test_anchor_gate_waived_when_anchor_is_another_batch_target(self):
-        # Blueprint self-conflict: the anchor 'punctuality' is itself a batch target, so the
-        # anchor-presence gate and the cross-target leakage gate can never both be satisfied.
+        # Blueprint self-conflict: the anchor 'punctuality' is itself a batch target, so no stem
+        # could ever satisfy the anchor requirement and the cross-target leakage ban at once.
+        # Level 1 reports the contradiction in the blueprint instead of asking the model.
         user_prompt = (
             "## [[pay]]\n## [[punctuality]]\n"
             "### Item 1 ###\n"
@@ -759,11 +760,17 @@ class TestQuizGateRegressions(unittest.TestCase):
             "explanation": "'pay' is the only verb that collocates with 'respect'.",
         }]
         score, flags = _score_pedagogy(quiz, "quiz", user_prompt=user_prompt)
-        self.assertFalse(any("Anchor missing in question stem" in f for f in flags))
-        self.assertTrue(any("anchor-presence gate waived" in f for f in flags))
+        self.assertFalse(any("Anchor missing in question stem" in f for f in flags), flags)
+        self.assertTrue(any("blueprint self-conflict" in f for f in flags), flags)
+        self.assertFalse(any(f.startswith("❌") for f in flags), flags)
         self.assertGreater(score, 0.0)
 
-    def test_anchor_gate_still_enforced_for_legitimate_anchor(self):
+    def test_anchor_presence_is_no_longer_a_level_one_gate(self):
+        # F10 rule 1.1. 'sector' declares the anchor 'manufacture', the model writes
+        # 'the manufacturing ____', a literal token search finds no 'manufacture', and that one
+        # false error ate two of five repair slots and drove a 44-second regeneration round.
+        # Level 1 no longer searches for a word inside a sentence; the blueprint checks its own
+        # anchor against its own model sentence (LinguisticEngine blueprint_warnings) instead.
         user_prompt = (
             "## [[log]]\n## [[agenda]]\n"
             "### Item 1 ###\n"
@@ -777,10 +784,13 @@ class TestQuizGateRegressions(unittest.TestCase):
             "question": "She forgot to ____ the meeting details before the business trip started.",
             "options": ["log", "record", "note", "enter"],
             "correct_answer_index": 0,
-            "explanation": "'log' fits the context.",
+            "explanation": "'log' collocates with 'into' the system.",
         }]
         score, flags = _score_pedagogy(quiz, "quiz", user_prompt=user_prompt)
-        self.assertTrue(any("Anchor missing in question stem" in f for f in flags))
+        self.assertFalse(any("Anchor missing in question stem" in f for f in flags), flags)
+        self.assertFalse(any("Explanation anchor not grounded" in f for f in flags), flags)
+        self.assertFalse(any("blank slot POS mismatch" in f for f in flags), flags)
+        self.assertGreater(score, 0.0)
 
     def test_cross_target_leakage_gate_still_fatal(self):
         user_prompt = "## [[log]]\n## [[agenda]]\n"
@@ -822,7 +832,12 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
         )
         self.assertTrue(any("Inflection discordance" in f for f in flags))
 
-    def test_stem_that_contradicts_the_declared_form_is_flagged(self):
+    def test_stem_that_contradicts_the_declared_form_is_no_longer_guessed(self):
+        # F10 rule 1.4: the auxiliary table that read '... will ____' and inferred which form
+        # the slot demanded is deleted — a detector built that way covers 'is currently ____'
+        # and misses 'has been ____'. What Level 1 keeps is the pure comparison of the declared
+        # tag against the form the answer option actually carries, and here 'annoyed' matches
+        # 'past tense (VBD)', so the item is clean.
         quiz = [{
             "target_word": "annoyed",
             "question": "What will ____ his colleagues most when the report arrives a day late?",
@@ -833,7 +848,9 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
         score, flags = _score_pedagogy(
             quiz, "quiz", user_prompt=self._prompt("annoyed", "verb", "past tense (VBD)")
         )
-        self.assertTrue(any("requires VB/VBP" in f for f in flags))
+        self.assertFalse(any("requires VB/VBP" in f for f in flags), flags)
+        self.assertFalse(any("Inflection discordance" in f for f in flags), flags)
+        self.assertEqual(score, W_PEDAGOGY)
 
     def test_concordant_verb_item_raises_no_inflection_flag(self):
         quiz = [{
@@ -850,7 +867,10 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
         )
         self.assertFalse(any("Inflection discordance" in f for f in flags))
 
-    def test_adverb_distractor_in_a_noun_slot_is_flagged(self):
+    def test_adverb_distractor_in_a_noun_slot_is_reported_not_fatal(self):
+        # F10 改哪几处 2: the verdict is a pure dictionary comparison, so it stays reported — but
+        # the options are blueprint-owned and the writer is forbidden from changing them, so a
+        # ❌ here would trigger a regeneration that may not fix the thing it was called for.
         quiz = [{
             "target_word": "agenda",
             "question": "The committee circulated the written ____ before the quarterly meeting began.",
@@ -861,8 +881,10 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
         score, flags = _score_pedagogy(
             quiz, "quiz", user_prompt=self._prompt("agenda", "noun", "base form")
         )
-        self.assertTrue(any("Distractor slot illegality" in f for f in flags))
-        self.assertEqual(score, 0.0)
+        warnings = [f for f in flags if "Distractor slot illegality" in f]
+        self.assertTrue(warnings, flags)
+        self.assertTrue(all(f.startswith("⚠️") for f in warnings), warnings)
+        self.assertGreater(score, 0.0)
 
     def test_legal_noun_distractors_are_not_flagged(self):
         quiz = [{
@@ -895,10 +917,22 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
         """A ❌ quiz gate must actually gate the pipeline, not just print a warning."""
         from librarian.evaluator import FATAL_QA_FLAGS
         self.assertIn("Inflection discordance", FATAL_QA_FLAGS)
-        self.assertIn("Distractor slot illegality", FATAL_QA_FLAGS)
         self.assertIn("Stem verbatim from dictionary example", FATAL_QA_FLAGS)
         self.assertIn("Stem verbatim from curriculum quote", FATAL_QA_FLAGS)
         self.assertIn("cross-target leakage", FATAL_QA_FLAGS)
+
+    def test_the_four_sentence_gates_are_not_fatal(self):
+        """F10 rule 0: nothing that needs a sentence read may be a Level-1 fatal flag."""
+        from librarian.evaluator import FATAL_QA_FLAGS
+        for retired in (
+            "blank slot POS mismatch",
+            "placed the blank in a NOUN slot",
+            "placed the blank in a finite VERB slot",
+            "Anchor missing in question stem",
+            "Explanation anchor not grounded",
+            "Distractor slot illegality",
+        ):
+            self.assertNotIn(retired, FATAL_QA_FLAGS)
 
     def test_vocabulary_quiz_prompt_restores_the_copying_guard(self):
         prompt_path = Path(__file__).resolve().parent.parent / "librarian" / "prompts" / "vocabulary_quiz.md"

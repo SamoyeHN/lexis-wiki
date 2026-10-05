@@ -46,6 +46,35 @@
               "type": "string"
             }
           },
+          "sub_concepts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sub_concept_name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "significance_or_takeaway": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "key_points": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "sub_concept_name",
+                "significance_or_takeaway",
+                "key_points"
+              ],
+              "additionalProperties": false
+            }
+          },
           "related_connections": {
             "type": "array",
             "maxItems": 3,

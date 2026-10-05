@@ -427,10 +427,17 @@ class GrammarExtraction:
     grammar_patterns: List[GrammarItem] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 @dataclasses.dataclass
+class SubConceptItem:
+    sub_concept_name: str = dataclasses.field(default="", metadata={"minLength": 1})
+    significance_or_takeaway: str = dataclasses.field(default="", metadata={"minLength": 1})
+    key_points: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 1})
+
+@dataclasses.dataclass
 class ConceptItem:
     concept_name: str = dataclasses.field(default="", metadata={"minLength": 1})
     educational_significance: str = dataclasses.field(default="", metadata={"minLength": 1})
     key_details: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 1})
+    sub_concepts: List[SubConceptItem] = dataclasses.field(default_factory=list, metadata={"minItems": 0})
     related_connections: List[str] = dataclasses.field(default_factory=list, metadata={
         "maxItems": 3,
         "item_minLength": 1,

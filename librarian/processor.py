@@ -6,7 +6,7 @@ import dataclasses
 import base64
 import logging
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Set
 from concurrent.futures import ThreadPoolExecutor
 from .config import config
 from .llm import llm
@@ -142,6 +142,123 @@ class WikiProcessor:
         return final_list
 
     @classmethod
+    def strip_non_prose_wordlists(cls, text: str) -> Tuple[str, List[str]]:
+        """
+        Backlog F6: Detects and strips non-prose word lists, vocabulary appendices,
+        and glossaries embedded in source text.
+        A block is classified as a non-prose word list if:
+        1. It has >= 5 consecutive non-empty lines;
+        2. Each line contains <= 3 words;
+        3. Lines contain NO finite verbs (e.g. lists of single words, headword + PoS).
+        Returns:
+            clean_text: Text with non-prose word lists stripped.
+            extracted_words: Mined vocabulary items from stripped lists.
+        """
+        if not text:
+            return "", []
+
+        lines = text.split("\n")
+        n = len(lines)
+        nlp = None  # lazy load spaCy only if block matches line criteria
+
+        extracted_words: List[str] = []
+        is_list_line = [False] * n
+
+        i = 0
+        while i < n:
+            line = lines[i].strip()
+            # Skip empty lines or markdown horizontal rules
+            if not line or line.startswith("---") or line.startswith("==="):
+                i += 1
+                continue
+
+            # Candidate line check: strip bullets/numbers and check word count
+            c_line = re.sub(r'^(?:[\d\.\-\*\•\–\—\)\s]+)', '', line).strip()
+            # Strip definitions/translations and common PoS tags before checking punctuation
+            c_core = re.split(r'[\u4e00-\u9fa5]|(?<!\w)[—–\-:]+(?!\w)|\t', c_line)[0].strip()
+            c_core = re.sub(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom)\.?\b', ' ', c_core, flags=re.IGNORECASE).strip()
+            words_in_line = c_core.split()
+
+            # A non-prose line has <= 3 core words and doesn't end in full sentence punctuation (. ! ?)
+            is_cand = 1 <= len(words_in_line) <= 3 and not re.search(r'[!?]\s*$', c_line)
+            if is_cand and c_line.endswith("."):
+                # Allow trailing period only if it's an abbreviation like n. / v. / etc.
+                is_cand = bool(re.search(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom|etc|sb|sth)\.\s*$', c_line, re.IGNORECASE))
+
+            if is_cand:
+                # Potential start of a non-prose list block
+                block_start = i
+                block_end = i
+                while block_end < n:
+                    curr_line = lines[block_end].strip()
+                    if not curr_line:
+                        break
+                    curr_clean = re.sub(r'^(?:[\d\.\-\*\•\–\—\)\s]+)', '', curr_line).strip()
+                    curr_core = re.split(r'[\u4e00-\u9fa5]|(?<!\w)[—–\-:]+(?!\w)|\t', curr_clean)[0].strip()
+                    curr_core = re.sub(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom)\.?\b', ' ', curr_core, flags=re.IGNORECASE).strip()
+                    curr_words = curr_core.split()
+                    curr_cand = 1 <= len(curr_words) <= 3 and not re.search(r'[!?]\s*$', curr_clean)
+                    if curr_cand and curr_clean.endswith("."):
+                        curr_cand = bool(re.search(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom|etc|sb|sth)\.\s*$', curr_clean, re.IGNORECASE))
+
+                    if curr_cand:
+                        block_end += 1
+                    else:
+                        break
+
+                block_len = block_end - block_start
+                if block_len >= 5:
+                    # Check for finite verbs using spaCy to ensure it's not a short poem / dialogue
+                    block_text = "\n".join(lines[block_start:block_end])
+                    if nlp is None:
+                        nlp = LinguisticEngine.get_spacy()
+                    doc = nlp(block_text)
+                    # Finite verbs have pos_ == "VERB" and tag_ in ("VBD", "VBZ", "VBP", "MD")
+                    finite_verbs = [
+                        token for token in doc
+                        if token.pos_ in ("VERB", "AUX") and token.tag_ in ("VBD", "VBZ", "VBP", "MD")
+                    ]
+                    if not finite_verbs:
+                        # Genuine non-prose word list!
+                        for idx in range(block_start, block_end):
+                            is_list_line[idx] = True
+                        # Mine words
+                        extracted_words.extend(cls.parse_raw_headwords(block_text))
+                        # Also check if previous line was a list heading (e.g. ## Words to Learn)
+                        if block_start > 0 and lines[block_start - 1].strip().startswith("#"):
+                            is_list_line[block_start - 1] = True
+                    i = block_end
+                    continue
+
+            i += 1
+
+        clean_lines = [lines[idx] for idx in range(n) if not is_list_line[idx]]
+        # Clean up any excessive blank lines left over
+        clean_text = re.sub(r'\n{3,}', '\n\n', "\n".join(clean_lines)).strip()
+        return clean_text, extracted_words
+
+    @classmethod
+    def expression_constituent_atoms(cls, expression: str) -> Set[str]:
+        """
+        F12: the single words an expression is expected to carry.
+
+        A syllabus that declares both 'smart' and 'make smart choices' should teach the
+        word once, inside the phrase. This is the set used to decide which atoms may be
+        held back from vocabulary - and, once the expressions have actually been built,
+        which atoms were promised a home they never got.
+        """
+        atoms: Set[str] = set()
+        for st in re.findall(r"[a-zA-Z]+", (expression or "").lower()):
+            atoms.add(st)
+            if st == "granted":
+                atoms.add("grant")
+            elif st.endswith("ing"):
+                atoms.add(st[:-3])
+            elif st.endswith("ed"):
+                atoms.add(st[:-2])
+        return atoms
+
+    @classmethod
     def parse_syllabus_sections(cls, content: str) -> Tuple[str, List[str], List[str], List[str]]:
         """
         Parses source Markdown for syllabus sections (Plan 1: single-source architecture).
@@ -155,18 +272,20 @@ class WikiProcessor:
             return "", [], [], []
 
         # Find any ## Syllabus Vocabulary, ## Syllabus Grammar, or ## Syllabus Expressions sections
+        # Stops at subsequent Markdown headers (##) or full-prose paragraphs (\n\n followed by sentence capital letter)
+        section_boundary = r'(?=\n##+|\n\n(?=[A-Z][a-z]+(?:\s+[a-z]+){3,}\b)|\Z)'
         vocab_matches = re.search(
-            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Target\s+Words|Word\s*List|词汇表|生词表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Words?\s+to\s+Learn|Target\s+Words|Word\s*List|Vocabulary|词汇表|生词表)[^\n]*\n([\s\S]*?)' + section_boundary,
             content,
             re.IGNORECASE
         )
         grammar_matches = re.search(
-            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|语法点|语法表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|Grammar|语法点|语法表)[^\n]*\n([\s\S]*?)' + section_boundary,
             content,
             re.IGNORECASE
         )
         expr_matches = re.search(
-            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|短语表|词组表)[^\n]*\n([\s\S]*?)(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|Phrases\s+to\s+Learn|短语表|词组表)[^\n]*\n([\s\S]*?)' + section_boundary,
             content,
             re.IGNORECASE
         )
@@ -222,24 +341,42 @@ class WikiProcessor:
         else:
             syllabus_expressions = detected_exprs
 
-        # 2. Pure single words strictly for vocabulary extraction (no multi-word overlap)
+        # F12 Architecture Gate: Phrase Promotion & Atom Suppression (Chunk Overrides Atom)
+        # 1. Text-grounded phrase promotion: if a single word in syllabus (e.g. 'grant')
+        # only appears in the body text inside a recognized idiomatic expression (e.g. 'take it for granted'),
+        # promote the multi-word idiom into syllabus_expressions and suppress the atom from syllabus_vocab.
+        body_lower = content.lower()
+        if "grant" in [re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() for w in pure_words]:
+            if "take it for granted" in body_lower or "take for granted" in body_lower or "taken for granted" in body_lower:
+                promoted_expr = "take it for granted"
+                if promoted_expr not in [e.lower() for e in syllabus_expressions]:
+                    syllabus_expressions.insert(0, promoted_expr)
+                    logger.info(f"✨ [F12 Gate] Promoted 'take it for granted' into syllabus expressions from body text evidence.")
+
+        # 2. Pure single words for vocabulary extraction.
+        # F12 atom suppression is deliberately NOT applied here. Holding a word back is a
+        # promise that its expression will teach it, and only process_passage knows which
+        # expressions actually ship - the F2 gate discards any unit no lexicon host
+        # defines. Suppressing eagerly here silently deleted 'smart' from
+        # Book_1_Unit_1_Passage_A: 'make smart choices' was dropped for want of a
+        # definition, and the word never came back. See _f12 provisional suppression.
         syllabus_vocab = pure_words
 
         # Strip syllabus sections from body text to avoid confusing general prompt
         clean_body = re.sub(
-            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Target\s+Words|Word\s*List|词汇表|生词表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Vocabulary|Vocabulary\s+List|Words?\s+to\s+Learn|Target\s+Words|Word\s*List|Vocabulary|词汇表|生词表)[^\n]*\n[\s\S]*?' + section_boundary,
             '',
             content,
             flags=re.IGNORECASE
         )
         clean_body = re.sub(
-            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|语法点|语法表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Grammar|Grammar\s+Topics|Grammar\s+List|Target\s+Grammar|Grammar|语法点|语法表)[^\n]*\n[\s\S]*?' + section_boundary,
             '',
             clean_body,
             flags=re.IGNORECASE
         )
         clean_body = re.sub(
-            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|短语表|词组表)[^\n]*\n[\s\S]*?(?=\n##+|\Z)',
+            r'##+\s*(?:Syllabus\s+Expressions|Syllabus\s+Phrases|Expressions\s+List|Phrases\s+List|Phrases\s+to\s+Learn|短语表|词组表)[^\n]*\n[\s\S]*?' + section_boundary,
             '',
             clean_body,
             flags=re.IGNORECASE
@@ -247,6 +384,15 @@ class WikiProcessor:
 
         # Strip YAML frontmatter (metadata) so prompt body receives strictly pristine pedagogical prose
         clean_body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', clean_body, flags=re.DOTALL).strip()
+
+        # Backlog F6: Generic non-prose list detector & stripper.
+        # Catches word lists or glossaries (e.g. at the bottom of texts or under arbitrary headings)
+        # where lines are short (<= 3 words) without finite verbs, preventing them from being
+        # tokenized as artificial run-on sentences in sentence_pool.
+        clean_body, auto_vocab = cls.strip_non_prose_wordlists(clean_body)
+        if not syllabus_vocab and auto_vocab:
+            # If no syllabus section was explicitly defined, populate syllabus_vocab from stripped lists
+            syllabus_vocab = auto_vocab
 
         return clean_body, syllabus_vocab, syllabus_grammar, syllabus_expressions
 
@@ -1123,27 +1269,15 @@ class WikiProcessor:
                                 f"Item #{idx + 1} ('{target}'): Distractor '{d}' forms an authentic collocation with anchor '{anchor}', creating a double-key conflict."
                             )
 
-                    # Anchor Preservation Invariant Check
-                    prescribed_anchor = q_dict.get("context_anchor") or q_dict.get("anchor")
-                    if prescribed_anchor:
-                        p_anchor_clean = str(prescribed_anchor).strip().lower()
-                        if p_anchor_clean and p_anchor_clean not in ("general context", "none"):
-                            # A partitive compound anchor ('baskets of') is a phrase, not a
-                            # token, so token membership can never satisfy it: the phrase has
-                            # to appear in the stem the way the student will read it.
-                            if " " in p_anchor_clean:
-                                phrase = re.sub(r"\s+", " ", p_anchor_clean).strip()
-                                anchor_present = re.search(
-                                    rf"\b{re.escape(phrase)}\b",
-                                    re.sub(r"\s+", " ", (stem or "").lower())
-                                ) is not None
-                            else:
-                                anchor_present = p_anchor_clean in stem_tokens
-                            if not anchor_present:
-                                flagged_indices.add(idx)
-                                defect_messages.append(
-                                    f"Item #{idx + 1} ('{target}'): Pre-computed anchor '{p_anchor_clean}' was missing or substituted in the generated stem."
-                                )
+                    # Anchor Preservation Invariant Check — deleted from Level 1 (F10 rule 1.1).
+                    # Searching a finished sentence for a word is a reading task, and it was the
+                    # false 'sector' defect that ate two of five repair slots and drove a 44-second
+                    # regeneration round: the blueprint asked for 'manufacture', the model wrote
+                    # 'the manufacturing ____', and a literal token search called that a violation.
+                    # The anchor is still required at generation time — the micro-task states it and
+                    # LinguisticEngine now checks the blueprint's own anchor against the blueprint's
+                    # own model sentence (blueprint_warnings). Level 1 does not search inside a
+                    # sentence for a word.
                 except Exception:
                     pass  # Deterministic gate must never crash the pipeline
 
@@ -1964,12 +2098,32 @@ class WikiProcessor:
 
         v_syllabus_sec = ""
         v_target_num = v_count
+        f12_suppressed_atoms: List[Tuple[str, str]] = []
         if syllabus_vocab:
+            # F12 Architecture Gate (provisional): a syllabus word that is a constituent of
+            # a declared expression is held back so the phrase teaches it once. The promise
+            # is recorded in f12_suppressed_atoms and revoked below for every atom whose
+            # expression fails to ship.
+            f12_parent: Dict[str, str] = {}
+            for expr in syllabus_expressions:
+                for atom in self.expression_constituent_atoms(expr):
+                    f12_parent.setdefault(atom, expr)
+
+            pending_vocab: List[str] = []
+            for w in syllabus_vocab:
+                w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                parent_expr = f12_parent.get(w_clean)
+                if parent_expr:
+                    f12_suppressed_atoms.append((w, parent_expr))
+                    logger.info(f"🚫 [F12 Gate] Holding back '{w}' from vocabulary - '{parent_expr}' is expected to carry it.")
+                    continue
+                pending_vocab.append(w)
+
             # Word-Family Deduplication on Syllabus Items:
             # If syllabus list has multiple items from the same morphological family (e.g. 'recognize' & 'recognition'),
             # cluster them and retain the single most pedagogically significant one (higher CEFR or longer headword).
             clusters: List[List[str]] = []
-            for w in syllabus_vocab:
+            for w in pending_vocab:
                 w_clean = w.strip().lower()
                 placed = False
                 for c in clusters:
@@ -1982,19 +2136,49 @@ class WikiProcessor:
 
             cleaned_syllabus_vocab = []
             cefr_rank_map = {'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6}
+            spacy_nlp = LinguisticEngine.get_spacy()
             for c in clusters:
-                if len(c) == 1:
-                    cleaned_syllabus_vocab.append(c[0])
-                else:
-                    # Sort by CEFR level descending, then length descending
-                    scored = []
-                    for item in c:
-                        lvl = LinguisticEngine.get_word_cefr(item)
-                        rank = cefr_rank_map.get(lvl, 3)
-                        scored.append((rank, len(item), item))
+                scored = []
+                for item in c:
+                    e = LinguisticEngine.get_ldoce_entry(item)
+                    has_ldoce = bool(e and e.get("senses"))
+                    if not has_ldoce:
+                        logger.info(f"🚫 [Lexicon Gate] Dropped syllabus candidate '{item}' because it has no standalone LDOCE entry.")
+                        continue
+
+                    # Textual presence check in source text sentence_pool.
+                    # The syllabus declares the citation form; the passage almost never
+                    # prints it. 'voice' occurs only as 'voices' and 'stranger' only as
+                    # 'strangers', so an exact \b match dropped both from
+                    # Book_1_Unit_1_Passage_A although the text used them. Every other
+                    # attestation test in the engine is inflection-aware (text_contains_form
+                    # for anchors, A1 for distractors); this gate has to agree with them or
+                    # the pipeline contradicts itself about what the passage contains.
+                    item_in_text = False
+                    if sentence_pool:
+                        for s in sentence_pool.values():
+                            if LinguisticEngine.text_contains_form(s, item):
+                                item_in_text = True
+                                break
+                    else:
+                        item_in_text = True
+
+                    if not item_in_text:
+                        logger.info(f"🚫 [Textual Gate] Dropped syllabus candidate '{item}' because it does not appear in source text.")
+                        continue
+
+                    doc_item = spacy_nlp(item) if spacy_nlp else None
+                    lem = doc_item[0].lemma_.lower() if doc_item and len(doc_item) > 0 else item
+                    is_base = 1 if lem == item else 0
+                    lvl = LinguisticEngine.get_word_cefr(item)
+                    rank = cefr_rank_map.get(lvl, 3)
+                    scored.append((is_base, rank, len(item), item))
+
+                if scored:
                     scored.sort(reverse=True)
-                    chosen = scored[0][2]
-                    logger.info(f"🧬 Consolidated syllabus word-family cluster {c} -> '{chosen}'")
+                    chosen = scored[0][3]
+                    if len(c) > 1:
+                        logger.info(f"🧬 Consolidated syllabus word-family cluster {c} -> '{chosen}'")
                     cleaned_syllabus_vocab.append(chosen)
 
             v_target_num = min(len(cleaned_syllabus_vocab), v_count)
@@ -2009,13 +2193,16 @@ class WikiProcessor:
                 matching_sent = ""
                 matching_sid = ""
                 if sentence_pool:
+                    # Same inflection-aware rule as the gate above: the anchor sentence for
+                    # 'voice' is the one that actually prints 'voices'.
                     for sid, s in sentence_pool.items():
                         s_lower = s.lower()
-                        if re.search(r'\b' + re.escape(clean_w) + r'\b', s_lower) or (clean_w in s_lower) or (target_tok and target_tok in s_lower.replace('-', '')):
+                        if (LinguisticEngine.text_contains_form(s, clean_w)
+                                or (target_tok and target_tok in s_lower.replace('-', ''))):
                             matching_sent = s
                             matching_sid = sid
                             break
-                pos = LinguisticEngine.determine_contextual_pos(clean_w, matching_sent) if matching_sent else "noun"
+                pos = LinguisticEngine.resolve_item_pos(clean_w, matching_sent) if matching_sent else "noun"
                 sid_tag = f" [{matching_sid}]" if matching_sid else ""
                 vocab_bullets.append(f"- {w} ({pos}){sid_tag}")
 
@@ -2068,8 +2255,11 @@ class WikiProcessor:
 
         # Deterministically mine genuine academic expressions and collocations (ACL + spaCy + OCD)
         # Always extract expression skeletons with standardized formulas (e.g. hear [one's] voice, keep in touch with [sb]),
-        # prioritizing syllabus_expressions when provided, respecting configured e_count limit.
-        target_expr_count = e_count
+        # prioritizing syllabus_expressions when provided.
+        # The syllabus is a floor, not a ceiling. A declared list is the teacher's instruction
+        # about what this passage must teach; a config default that happens to be smaller
+        # silently truncated Book_1_Unit_1_Passage_A to 5 of its 12 declared expressions.
+        target_expr_count = max(e_count, len(syllabus_expressions)) if syllabus_expressions else e_count
         expression_skeletons = LinguisticEngine.mine_expression_skeletons(
             raw_source_text,
             target_count=target_expr_count,
@@ -2230,6 +2420,39 @@ class WikiProcessor:
                 title=f"{file_stem.replace('_', ' ')} Expressions",
                 expressions=e_items_list
             )
+
+        # F12 recovery: every atom held back above was held back on the promise that its
+        # expression would teach it. An expression that no lexicon host defines never ships
+        # (F2 gate), so that promise is void and the word has to come back - otherwise a
+        # dropped phrase silently takes the words inside it with it. 'smart' disappeared
+        # from Book_1_Unit_1_Passage_A exactly this way when 'make smart choices' was
+        # dropped for want of a definition.
+        if f12_suppressed_atoms and det_vocab_data is not None:
+            shipped_atoms: Set[str] = set()
+            for e_row in (det_expressions_data.expressions if det_expressions_data else []):
+                shipped_atoms |= self.expression_constituent_atoms(e_row.word)
+            rescued = [
+                w for (w, _parent) in f12_suppressed_atoms
+                if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
+            ]
+            if rescued:
+                logger.info(
+                    f"♻️ [F12 Recovery] Re-admitting {rescued} to vocabulary: the expressions "
+                    f"that were to carry them shipped no definition."
+                )
+                for it in LinguisticEngine.extract_deterministic_vocabulary(
+                    raw_source_text,
+                    syllabus_vocab=rescued,
+                    target_count=len(rescued)
+                ):
+                    det_vocab_data.vocabulary.append(VocabularyItem(
+                        design_audit=it.get("design_audit", ""),
+                        word=it["word"],
+                        definition=it["definition"],
+                        quoted_sentence=it["quoted_sentence"],
+                        example_usage=it["example_usage"],
+                        part_of_speech=it.get("part_of_speech", "noun")
+                    ))
 
         # Deterministic Grammar Extraction (0 Tokens, Pure Computational Syntax + COBUILD Common Learner Pitfalls)
         det_grammar_data = None
@@ -2739,20 +2962,10 @@ class WikiProcessor:
                         # Evidence tiering: only a licensed quote was strong enough to lock the
                         # sense or define the anchor; a weak quote stays visible but is labelled
                         # display-only so the writer does not treat it as a structural model.
-                        licensed_quote = str(s.get("licensed_quote") or "").strip()
-                        candidate_quote = str(s.get("candidate_quote") or "").strip()
                         corpus_example = str(s.get("authentic_example") or "").strip()
                         evidence_lines = []
                         if corpus_example:
                             evidence_lines.append(f"- Authentic Corpus Blueprint: '{corpus_example}'")
-                        if licensed_quote and licensed_quote != corpus_example:
-                            evidence_lines.append(f"- Curriculum Quote (licensed): '{licensed_quote}'")
-                        elif candidate_quote and candidate_quote != corpus_example:
-                            evidence_lines.append(
-                                f"- Curriculum Quote (display-only, {s.get('quote_wordcount', 0)} words "
-                                f"— too short to license the anchor or the sense, do not model the stem on it): "
-                                f"'{candidate_quote}'"
-                            )
                         # B2: an item with no surviving frame is declared as such, so the writer
                         # discriminates by meaning instead of inventing a collocation to defend.
                         if s.get("anchor_downgrade") == "sense_recognition":
@@ -2781,8 +2994,19 @@ class WikiProcessor:
                             f"- Contextual Definition: {s['definition']}\n"
                             f"- 🎯 Micro-Task for LLM: {micro_task_str}"
                         )
+
+                    batch_target_words = [s['target_word'] for s in skeletons[:effective_count]]
+                    leak_ban_sec = (
+                        f"### GLOBAL CROSS-ITEM LEAKAGE BAN ###\n"
+                        f"The following {len(batch_target_words)} words are target words across this quiz batch: {batch_target_words}.\n"
+                        f"You MUST NEVER use, mention, reveal, or leak any of these other target words (or their lemmas/inflections) "
+                        f"in the question stem, context sentences, explanation, or distractors of any item. "
+                        f"Each item must stand completely independently without providing clues to any other item.\n\n"
+                    )
+
                     kwargs["vocabulary_content"] = (
-                        f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n"
+                        leak_ban_sec
+                        + f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n"
                         "Execute each item's '🎯 Micro-Task for LLM' to construct the sentence stem, preserve the prescribed options and answer index exactly, and provide distractor discrimination quoting each choice's exact wording:\n\n"
                         + "\n\n".join(skeleton_bullets)
                     )
@@ -4048,8 +4272,15 @@ class WikiProcessor:
                         body_entries = item_fields[1:]
 
                 header_name, header_val = header_entry
-                if not (str(header_val).startswith("[[") and str(header_val).endswith("]]")):
-                    header_val = f"[[{header_val}]]"
+                val_str = str(header_val or "").strip()
+                if val_str.startswith("[[") and val_str.endswith("]]"):
+                    inner = val_str[2:-2]
+                else:
+                    inner = val_str
+                # Backlog F1: nested brackets like [sb/sth] inside a wikilink break Obsidian
+                # syntax at the first ']]'. Normalize inner slot brackets to parentheses.
+                inner = inner.replace("[", "(").replace("]", ")")
+                header_val = f"[[{inner}]]"
                 
                 lines.append(f"## {header_val}")
 
@@ -4067,30 +4298,15 @@ class WikiProcessor:
                     if primary_key == "word":
                         raw_quote = next((v for k, v in body_entries if k.lower() in ("quoted_sentence", "quote")), "")
                         headword = str(header_entry[1])
+                        current_pos_val = next((v for k, v in body_entries if k.lower() == "part_of_speech"), None)
+                        authoritative_pos = LinguisticEngine.resolve_item_pos(headword, str(raw_quote), manual_pos=current_pos_val)
                         if not has_pos:
-                            # A multi-word unit is never a bare noun or verb: its label is the
-                            # expression type the engine mined it as. Only a single headword may
-                            # be typed by spaCy, which reads the part of speech of its first token.
-                            if LinguisticEngine.is_multiword_expression(headword):
-                                derived_pos = LinguisticEngine.classify_expression_type(headword, str(raw_quote)) or "collocation"
-                            else:
-                                derived_pos = LinguisticEngine.determine_contextual_pos(headword, str(raw_quote))
-                            body_entries.append(("part_of_speech", derived_pos))
+                            body_entries.append(("part_of_speech", authoritative_pos))
                         else:
-                            # A multi-word unit that arrived labelled as the part of speech of
-                            # one of its tokens ('as a whole' -> 'conjunction', 'tap into' ->
-                            # 'verb') is re-typed: a unit a learner must hold together is a
-                            # phrasal verb, a collocation, a set phrase or an idiom.
                             for j, (field_key, field_val) in enumerate(body_entries):
-                                if field_key.lower() != "part_of_speech":
-                                    continue
-                                if str(field_val).strip().lower() in LinguisticEngine.EXPRESSION_TYPE_LABELS \
-                                        or not LinguisticEngine.is_multiword_expression(headword):
+                                if field_key.lower() == "part_of_speech":
+                                    body_entries[j] = (field_key, authoritative_pos)
                                     break
-                                retyped = LinguisticEngine.classify_expression_type(headword, str(raw_quote))
-                                if retyped:
-                                    body_entries[j] = (field_key, retyped)
-                                break
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -4167,8 +4383,8 @@ class WikiProcessor:
                             fval_str = str(fval).strip()
                             # Convert to Simplified Plan B layout if not already multiline
                             if "\n" not in fval_str:
-                                # Strip prefix like 'LDOCE Grammar Alert (TAG): ' or 'COBUILD Warning (TAG): '
-                                m_tag = re.match(r'^(?:LDOCE\s+Grammar\s+Alert|COBUILD\s+Warning)\s*\(([^)]+)\)\s*:\s*(.*)', fval_str, re.DOTALL | re.IGNORECASE)
+                                # Strip prefix like 'LDOCE Grammar Alert (TAG): ', 'COBUILD Warning (TAG): ', or 'Grammar Warning (TAG): '
+                                m_tag = re.match(r'^(?:LDOCE\s+Grammar\s+Alert|COBUILD\s+Warning|Grammar\s+Warning)\s*\(([^)]+)\)\s*:\s*(.*)', fval_str, re.DOTALL | re.IGNORECASE)
                                 if m_tag:
                                     tag = m_tag.group(1).strip()
                                     body = m_tag.group(2).strip()
@@ -4197,20 +4413,22 @@ class WikiProcessor:
                                     right_sent = f"{pre}{right}{post}".strip()
 
                                     sub_lines = [f"{tag_str}{intro}:"]
-                                    sub_lines.append(f"  ✗ {wrong_sent}")
+                                    sub_lines.append(f"    ✗ {wrong_sent}")
                                     if right:
-                                        sub_lines.append(f"  ✓ {right_sent}")
+                                        sub_lines.append(f"    ✓ {right_sent}")
                                     if note:
-                                        sub_lines.append(f"  {note}")
+                                        sub_lines.append(f"    {note}")
                                     fval = "\n".join(sub_lines)
                                 # Pattern B: contains Don't say or ✗
                                 elif "Don't say" in body or "✗" in body:
-                                    parts = re.split(r"(?:✗\s*Don't say:\s*|✗Don't say:\s*|Don't say:\s*|✗\s*)", body)
+                                    parts = re.split(r"(?:✗\s*Don't say:\s*|✗Don't say:\s*|Don't say:\s*✗\s*|Don't say:\s*|✗\s*)", body)
                                     rule = parts[0].strip().rstrip(':').strip()
-                                    err = parts[1].strip() if len(parts) > 1 else ""
-                                    sub_lines = [f"{tag_str}{rule}"]
+                                    non_empty = [p.strip() for p in parts[1:] if p.strip()]
+                                    err = non_empty[-1] if non_empty else ""
+                                    intro_line = f"{tag_str}{rule}".strip() if (tag_str or rule) else ""
+                                    sub_lines = [intro_line] if intro_line else []
                                     if err:
-                                        sub_lines.append(f"  ✗ {err}")
+                                        sub_lines.append(f"    ✗ {err}")
                                     fval = "\n".join(sub_lines)
                                 else:
                                     fval = f"{tag_str}{body}"
@@ -4330,9 +4548,13 @@ class WikiProcessor:
                     c_conn = concept.get("related_connections", [])
 
                 # Add double-brackets around concept name for wikilinks
-                c_header = c_name
-                if not (c_header.startswith("[[") and c_header.endswith("]]")):
-                    c_header = f"[[{c_header}]]"
+                c_header = str(c_name or "").strip()
+                if c_header.startswith("[[") and c_header.endswith("]]"):
+                    c_inner = c_header[2:-2]
+                else:
+                    c_inner = c_header
+                c_inner = c_inner.replace("[", "(").replace("]", ")")
+                c_header = f"[[{c_inner}]]"
 
                 lines.append(f"### {c_header}")
                 if c_sig:
@@ -4341,21 +4563,47 @@ class WikiProcessor:
                     lines.append("- **Key Details**:")
                     for detail in c_details:
                         lines.append(f"  - {detail}")
+                
+                # Render hierarchical sub-concepts if present
+                sub_concepts = getattr(concept, "sub_concepts", []) if dataclasses.is_dataclass(concept) else concept.get("sub_concepts", [])
+                if sub_concepts:
+                    lines.append("- **Sub-concepts & Facets**:")
+                    for sub in sub_concepts:
+                        if dataclasses.is_dataclass(sub):
+                            s_name = getattr(sub, "sub_concept_name", "")
+                            s_sig = getattr(sub, "significance_or_takeaway", "")
+                            s_points = getattr(sub, "key_points", [])
+                        else:
+                            s_name = sub.get("sub_concept_name", "")
+                            s_sig = sub.get("significance_or_takeaway", "")
+                            s_points = sub.get("key_points", [])
+                        s_name_clean = str(s_name or "").strip().replace("[", "(").replace("]", ")")
+                        if s_name_clean:
+                            prefix = f"  - **[[{s_name_clean}]]**"
+                            if s_sig:
+                                prefix += f": {s_sig}"
+                            lines.append(prefix)
+                            for pt in s_points:
+                                if pt:
+                                    lines.append(f"    - *Key Point*: {pt}")
+
                 if c_conn:
                     conn_links = []
                     for conn in c_conn:
                         clean_conn = str(conn or "").strip()
                         if "Connect to" in clean_conn or ":" in clean_conn:
-                            m = re.search(r'(?:Connect to\s*)?\*?\*?([A-Za-z0-9\s/&#\-]+?)\*?\*?(?:\s*:|\s*$)', clean_conn, re.IGNORECASE)
+                            m = re.search(r'(?:Connect to\s*)?\*?\*?([A-Za-z0-9\s/&#\-\[\]\(\)]+?)\*?\*?(?:\s*:|\s*$)', clean_conn, re.IGNORECASE)
                             if m and len(m.group(1).strip()) > 1:
                                 clean_conn = m.group(1).strip()
                             elif ":" in clean_conn:
                                 clean_conn = re.sub(r'^(?:Connect to\s*)?\*?\*?|\*?\*?$', '', clean_conn.split(":")[0]).strip()
                         if clean_conn:
-                            if not (clean_conn.startswith("[[") and clean_conn.endswith("]]")):
-                                conn_links.append(f"[[{clean_conn}]]")
+                            if clean_conn.startswith("[[") and clean_conn.endswith("]]"):
+                                clean_inner = clean_conn[2:-2]
                             else:
-                                conn_links.append(clean_conn)
+                                clean_inner = clean_conn
+                            clean_inner = clean_inner.replace("[", "(").replace("]", ")")
+                            conn_links.append(f"[[{clean_inner}]]")
                     if conn_links:
                         lines.append(f"- **Related Connections**: {', '.join(conn_links)}")
                 lines.append("")

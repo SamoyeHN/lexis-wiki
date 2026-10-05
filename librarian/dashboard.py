@@ -715,22 +715,62 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             if cat == "summaries":
                                 try:
                                     content = f.read_text(encoding="utf-8")
-                                    concepts_found = re.findall(r'###\s+\[\[(.*?)\]\]', content)
-                                    for cname in concepts_found:
-                                        c_node_id = f"concept:{cname}"
-                                        if c_node_id not in node_ids:
-                                            nodes.append({
-                                                "id": c_node_id,
-                                                "label": cname,
-                                                "group": "concepts", # Keep group as concepts for styling
-                                                "path": str(rel_p).replace("\\", "/") # Point directly to the unified Unit Summary document!
-                                            })
-                                            node_ids.add(c_node_id)
-                                            # Also automatically link the concept node to its parent summary node!
-                                            links.append({
-                                                "source": c_node_id,
-                                                "target": node_id
-                                            })
+                                    # Parse parent concepts and their nested sub-concepts
+                                    # Regex matches '### [[Concept Name]]' followed by content until the next '###'
+                                    concept_blocks = re.split(r'(?m)^###\s+\[\[(.*?)\]\]', content)
+                                    # concept_blocks[0] is preamble, then [name1, body1, name2, body2, ...]
+                                    if len(concept_blocks) >= 3:
+                                        for i in range(1, len(concept_blocks), 2):
+                                            cname = concept_blocks[i].strip()
+                                            cbody = concept_blocks[i+1] if i+1 < len(concept_blocks) else ""
+                                            c_node_id = f"concept:{cname}"
+                                            if c_node_id not in node_ids:
+                                                nodes.append({
+                                                    "id": c_node_id,
+                                                    "label": cname,
+                                                    "group": "concepts", # Keep group as concepts for styling
+                                                    "path": str(rel_p).replace("\\", "/") # Point directly to the unified Unit Summary document!
+                                                })
+                                                node_ids.add(c_node_id)
+                                                links.append({
+                                                    "source": c_node_id,
+                                                    "target": node_id
+                                                })
+                                            # Parse sub-concepts within this concept body: - **[[SubConcept]]**
+                                            sub_matches = re.findall(r'-\s+\*\*\[\[(.*?)\]\]\*\*', cbody)
+                                            for sname in sub_matches:
+                                                sname = sname.strip()
+                                                s_node_id = f"subconcept:{sname}"
+                                                if s_node_id not in node_ids:
+                                                    nodes.append({
+                                                        "id": s_node_id,
+                                                        "label": sname,
+                                                        "group": "concepts",
+                                                        "path": str(rel_p).replace("\\", "/")
+                                                    })
+                                                    node_ids.add(s_node_id)
+                                                    # Link sub-concept to parent concept
+                                                    links.append({
+                                                        "source": s_node_id,
+                                                        "target": c_node_id
+                                                    })
+                                    else:
+                                        # Fallback for simple matches
+                                        concepts_found = re.findall(r'###\s+\[\[(.*?)\]\]', content)
+                                        for cname in concepts_found:
+                                            c_node_id = f"concept:{cname}"
+                                            if c_node_id not in node_ids:
+                                                nodes.append({
+                                                    "id": c_node_id,
+                                                    "label": cname,
+                                                    "group": "concepts",
+                                                    "path": str(rel_p).replace("\\", "/")
+                                                })
+                                                node_ids.add(c_node_id)
+                                                links.append({
+                                                    "source": c_node_id,
+                                                    "target": node_id
+                                                })
                                 except Exception:
                                     pass
 
