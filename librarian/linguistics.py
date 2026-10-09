@@ -1340,7 +1340,7 @@ class LinguisticEngine:
                     """
                     SELECT host_word, sense_idx, tier, raw_phrase
                     FROM ldoce_phrase_index
-                    WHERE lower(raw_phrase) = ? OR lower(raw_phrase) = ?
+                    WHERE raw_phrase = ? COLLATE NOCASE OR raw_phrase = ? COLLATE NOCASE
                     ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
                     LIMIT 1
                     """,
