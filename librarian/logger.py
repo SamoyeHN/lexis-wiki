@@ -11,7 +11,7 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
     """
     # Ensure we use an absolute path for logs
     logs_dir = Path(config.project_root).resolve() / "logs"
-    logs_dir.mkdir(exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
     finish_dt = end_time if isinstance(end_time, datetime.datetime) else datetime.datetime.now()
     timestamp = finish_dt.strftime("%Y%m%d_%H%M%S_%f")[:-3]

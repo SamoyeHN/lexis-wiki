@@ -1199,6 +1199,9 @@ class LLMClient:
         # 0. Strip <think>...</think> reasoning blocks if present in text output
         json_str = re.sub(r"<think>.*?</think>", "", json_str, flags=re.DOTALL).strip()
 
+        # 0.1. Fix incomplete or invalid unicode escapes (e.g. truncated "\\u1" or "\\u123" at end of generation)
+        json_str = re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', json_str)
+
         # 0.5. Strip out-of-band parenthesized comments leaked OUTSIDE JSON strings
         # (small models sometimes emit e.g. `"value", (Note: 'x' is ...),`).
         # Safe: valid JSON never contains '(' outside of string values, so any such

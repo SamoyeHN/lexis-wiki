@@ -354,9 +354,11 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         import tempfile, shutil
         from pathlib import Path
 
+        processor = WikiProcessor()
+        orig_root = processor.config.project_root
+        orig_wiki_dir = processor.config.data.get("wiki_dir")
         tmp_dir = Path(tempfile.mkdtemp())
         try:
-            processor = WikiProcessor()
             processor.config.project_root = tmp_dir
             processor.config.data["wiki_dir"] = "wiki"
             processor.config.ensure_dirs()
@@ -397,6 +399,9 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
             self.assertIn('qa_status: "review_needed"', rev_content)
             self.assertIn("qa_score: 75", rev_content)
         finally:
+            processor.config.project_root = orig_root
+            if orig_wiki_dir is not None:
+                processor.config.data["wiki_dir"] = orig_wiki_dir
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def test_non_verbatim_quote_triggers_fatal_flag(self):
