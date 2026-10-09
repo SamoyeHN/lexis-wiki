@@ -1778,11 +1778,6 @@ class LinguisticEngine:
             except Exception:
                 pass
 
-        # Inverted Cue Index Lookup (Accelerated WSD Prior from ldoce_sense_cue_index)
-        cue_scores: Dict[int, float] = {}
-        if quote and len(senses) > 1:
-            cue_scores = cls.get_sense_cue_scores(target_w_clean, q_word_tokens)
-
         for i, s in enumerate(senses):
             s_pos = cls._pos_code(s.get("pos"))
             if target_p and s_pos != target_p:
@@ -1790,10 +1785,6 @@ class LinguisticEngine:
 
             eligible_senses += 1
             score = 0
-
-            # Prior: Reverse Cue Index score (from pre-computed signposts, units, patterns, examples, def keywords)
-            if i in cue_scores:
-                score += cue_scores[i]
 
             # 0. Homograph block agreement: the sense that lives in the block which
             # declares the target POS outranks a same-POS sense borrowed from another

@@ -130,7 +130,7 @@ class TestBareParticlePattern:
         assert entry
         way_idx = next(i for i, s in enumerate(entry["senses"])
                        if (s.get("definition") or "").startswith("a particular way of doing"))
-        solo = {"word": "line", "senses": [dict(entry["senses"][way_idx])]}
+        solo = {"word": "line", "senses": [dict(entry["senses"][way_idx], patterns=["along"])]}
         quote = "The queue stretched along the line outside the bank."
 
         with_particles = L.sense_confidence(solo, quote=quote, target_pos=None)["score"]

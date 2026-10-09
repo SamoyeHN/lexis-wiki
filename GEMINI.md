@@ -327,16 +327,4 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - **4. 教学法与 Markdown 卡片演化（Source-to-Wiki Enrichment）**:
   - Markdown 词汇卡片自动注入 Longman 经典搭配列表（0 Token 消耗）。
   - 优质错题本模板与知识图谱交互可视化。
-- **5. LDOCE 词典库子义项结构性治理（P1: Subsense Unpacking & Disambiguation - 核心高频词同型不同意修复与语体语域补全）**:
-  - **现状与缺陷记录**：
-    - 在全库 52,746 词条中，共有 1,125 个核心词（共 3,783 个子义项，如 `cut`, `about`, `action`, `address`, `afford`, `after`, `against`, `air`, `all` 等）在原版词典中采用 `subsense` (`a)`, `b)`, `c)`) 组织结构（同型不同意/细分语境）。目前 `build_ldoce_db.py` 粗暴抓取第一个 `<span class="def">` 并压平，导致子义项定义丢失（仅保留 a，丢失 b/c），且出现例句与释义张冠李戴（将 b 的例句误挂在 a 释义名下）以及及物/不及物语法标签被强行覆盖的系统性缺陷。
-    - **语体/语域（`register`，如 `spoken`, `formal`, `informal`）与地域（`variety`，如 `American English`, `British English`）遗漏**：目前仅短语动词有提取，普通义项解析完全遗漏了 `<span class="registerlab">` 和 `<span class="geo">` 标签，导致 `hello, stranger!` 等口语和特定语域提示缺失。
-  - **后续治理目标**：升级 `scripts/build_ldoce_db.py` 的解析与重构管线：
-    1. 支持递归解包 `subsense` 为规范化独立义项单元，继承父级 `signpost` 与 `homograph_num`，并赋予独立的子编号、精确释义、语法标签及对应专属例句，彻底释放高频多义词的精准消歧能力；
-    2. 全量补齐普通义项中的 `register`（语体）与 `variety`（地域）标签，并在前端释义与题干微任务蓝图中规范化展现为 `[spoken]` / `[formal]` 等前缀提示。
-- **6. 单字义项特征与常用搭配反向倒排索引（P1: Sense-Collocation Reversing Lookup Index for Accelerated WSD）**:
-  - **设计目标**：构建“课文上下文特征词/搭配锚点 $\rightarrow$ (单词, 义项索引, 权重分值)”的离线反向倒排索引结构（Reverse Index Cache / SQLite FTS），将单字词义判定的复杂度从 $O(N_{senses} \times M_{tokens})$ 降到 $<0.1\text{ms}$ 的哈希倒排检索。
-  - **核心机制**：
-    1. **特征提取与索引构建**：预先扫描 `ldoce6_essential.db` 中所有单词的每个义项，提取其强相关特征词（如 `collocations` 词组、`patterns` 模式关键词、`definition` 核心实词、例句依存修饰词），建立反向哈希倒排表；
-    2. **极速命中与容错打分**：当输入课文原句时，直接通过句子词法 Token 命中候选义项并累加权重（如 `rate` 伴随 `interest` 即刻以极大权重倒排命中“利息”义项；`keen` 伴随 `interest` 即刻倒排命中“兴趣”义项）；
-    3. **长难句抗噪与防漂移**：有效屏蔽长难句中远离核心谓词的次要修饰成分干扰，大幅降低多义词在复杂修饰语境下的消歧漂移率，为下游单字提取与微任务蓝图生成提供毫秒级、免 LLM 的绝对语义基石。
+- Add Bipolar Antonym distractors such as truth/peace/life/love/success/begin 

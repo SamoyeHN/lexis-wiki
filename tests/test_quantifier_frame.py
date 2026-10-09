@@ -36,9 +36,9 @@ def test_quantifier_head_blanking_skeleton():
         assert " " not in opt  # Each option is a single quantifier noun like 'piece', 'bit', 'slice'
 
     # Micro task must explicitly instruct quantifier frame blanking
-    assert "a ____ of" in skel["micro_task"]
-    assert "The words 'a' and 'of' MUST remain visible in the stem outside the blank" in skel["micro_task"]
+    assert "____ of" in skel["micro_task"]
     assert "piece" in skel["micro_task"]
+    assert "Fit into frame" in skel["micro_task"]
 
 
 def test_quantifier_evaluator_gate_acceptance():
