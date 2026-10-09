@@ -43,9 +43,22 @@ CREATE TABLE ldoce_phrase_index (
 );
 ```
 
+### 2.3 Table: `ldoce_sense_cue_index` (Sense-Collocation Reversing Lookup Index)
+Contains 813,805 cue-to-sense inverted mappings across all 48,960 LDOCE headwords. Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
+
+```sql
+CREATE TABLE ldoce_sense_cue_index (
+    host_word TEXT NOT NULL,     -- Target headword owning the sense
+    cue_word TEXT NOT NULL,      -- Contextual cue token (signpost, pattern, example token, def keyword)
+    sense_idx INTEGER NOT NULL,  -- 0-indexed sense position under the host headword
+    weight INTEGER NOT NULL,     -- Cue salience weight (Signpost=30, Pattern=25, Example Colloc=20, Def=15)
+    PRIMARY KEY (cue_word, host_word, sense_idx)
+) WITHOUT ROWID;
+```
+
 > [!TIP]
-> **Active Role in Distractor Synthesis & Normalization**:
-> Rather than arbitrary ungrounded generation, `ldoce_phrase_index` provides the closed-world canonical index of authentic English expressions. It is loaded on-demand into an in-memory set and queried by [`LinguisticEngine.generate_phrase_distractors`](file:///E:/teacher-wiki/librarian/linguistics.py) to validate candidate phrase distractors across 4 structural families, guaranteeing 0 hallucination and strict pedagogical validity.
+> **Active Role in Sub-Millisecond WSD & Reversing Lookup**:
+> Allows instant retrieval of sense candidates matching contextual tokens from the passage. Queries `SELECT host_word, sense_idx, weight FROM ldoce_sense_cue_index WHERE cue_word = ? AND host_word = ?` in sub-millisecond offline lookup without parsing full entries.
 
 ---
 
@@ -73,13 +86,16 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `phrases` | `list[dict]` | Fixed idioms and phrase patterns catalogued under this entry. |
 | `entry_status` | `str` | Provenance status (`active`, `derived`, `repaired`). |
 
-### 3.1 Sense Object Format
+### 3.1 Sense Object Format (with Subsense Unpacking & Register Metadata)
 ```json
 {
   "definition": "to leave someone, especially someone you are responsible for",
   "pos": "verb",
   "signpost": "LEAVE SOMEBODY",
   "gram": "[transitive]",
+  "sensenum": "1a)",
+  "register": "formal",
+  "variety": "British English",
   "examples": [
     "How could she abandon her own child?"
   ],
@@ -88,6 +104,12 @@ Every record's `data_json` contains a structured dictionary with the following c
   ]
 }
 ```
+
+### 3.2 Subsense Structural Governance & Payload Deduplication
+1. **Subsense Hierarchy Flattening**: Sub-senses (`subsense`, `1a`, `1b`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, grammar traits, and semantic context from their parent sense elements.
+2. **Explicit Register & Variety Fields**: Stylistic registers (`[spoken]`, `[formal]`, `[literary]`) and geographical dialect varieties (`British English`, `American English`) are stripped of styling noise and persisted as explicit queryable keys.
+3. **Language Activator Multi-POS Deduplication**: Employs a strict `seen_la_concepts` uniqueness gate across multi-POS popup entries (e.g. `control`), completely preventing duplicated concept blocks (e.g. shrinking redundant concept clusters from 31 down to 17 unique blocks).
+4. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
 
 ---
 
