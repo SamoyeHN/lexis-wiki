@@ -879,6 +879,16 @@ class LLMClient:
                                     if re.search(rf"\b{esc_target}\b", stem, re.IGNORECASE):
                                         stem = re.sub(rf"\b{esc_target}\b", "____", stem, count=1, flags=re.IGNORECASE)
 
+                                # Auto-heal pre-blank indefinite article leakage (e.g. 'a ____' or 'an ____' with mixed vowel/consonant options)
+                                options = q_item.get("options")
+                                if isinstance(options, list) and options and re.search(r"\b(?:a|an)\s+_{2,}\b", stem, flags=re.IGNORECASE):
+                                    initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
+                                    has_vowel_init = any(init in 'aeiou' for init in initials)
+                                    has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
+                                    if has_vowel_init and has_cons_init:
+                                        # Self-heal to 'the ____' to preserve grammaticality and eliminate test-wiseness leakage
+                                        stem = re.sub(r"\b(?:a|an)\s+(_{2,})\b", r"the \1", stem, flags=re.IGNORECASE)
+
                                 if "question" in q_item:
                                     q_item["question"] = stem
                                 elif "translated_sentence" in q_item:
@@ -1042,6 +1052,7 @@ class LLMClient:
                                     start_time=start_time,
                                     end_time=end_time,
                                     model=self.model,
+                                    context_prompt=eval_user_prompt,
                                 )
 
                                 # Multi-turn self-correction:
@@ -1125,6 +1136,7 @@ class LLMClient:
                     start_time=start_time,
                     end_time=end_time,
                     model=self.model,
+                    context_prompt=eval_user_prompt,
                 )
 
                 return result_obj

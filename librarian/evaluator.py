@@ -1029,6 +1029,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     ceiling_level, ceiling_words = (None, set())
     if task_type in ("vocabulary", "expressions", "grammar") and user_prompt:
         ceiling_level, ceiling_words = _cefr_source_ceiling(user_prompt)
+    elif task_type == "quiz" and user_prompt:
+        m_cefr = re.search(r'(?:overall_)?cefr(?:_level)?:\s*["\']?([A-C][1-2])["\']?|CEFR\s+([A-C][1-2])', user_prompt, re.IGNORECASE)
+        if m_cefr:
+            ceiling_level = (m_cefr.group(1) or m_cefr.group(2)).upper()
 
     def _over_example_ceiling(sentence: str, own_words: Iterable[str] = ()) -> List[Tuple[str, str]]:
         """Words of an example sentence that the source passage does not license.
@@ -1481,7 +1485,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 else:
                     selected_opt = _clean_core(str(options[idx]))
                     # Match exact or valid inflections (e.g. assert -> asserted, marathon -> marathons)
+                    # or quantifier/phrase head blanking (e.g. clean_target="a piece of", selected_opt="piece")
                     target_in_options = (clean_target == selected_opt) or (
+                        selected_opt in clean_target.split()
+                    ) or (
                         len(clean_target) >= 4 and len(selected_opt) >= 4 and (
                             selected_opt.startswith(clean_target[:4]) or clean_target.startswith(selected_opt[:4]) or (clean_target in selected_opt)
                         )
@@ -1784,8 +1791,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     )
 
                 # Syntax Complexity Check (CEFR Level & Clause Check - Soft Warning)
-                # Stems should ideally have >= 9 words, or contain a subordinate/coordinate clause marker or comma
-                if len(stem_words) < 9:
+                # Stems should ideally have >= 9 words, or contain a subordinate/coordinate clause marker or comma.
+                # For foundational learners (CEFR A1/A2), concise direct stems are pedagogically appropriate.
+                if len(stem_words) < 9 and ceiling_level not in ("A1", "A2"):
                     clause_markers = ('although', 'though', 'while', 'whereas', 'because', 'since', 'if', 'unless', 'which', 'that', 'who', 'whom', 'whose', 'where', 'when', 'after', 'before', 'until', 'so that')
                     has_clause = any(re.search(rf'\b{re.escape(cm)}\b', question, flags=re.IGNORECASE) for cm in clause_markers)
                     has_comma = (',' in question or ';' in question)

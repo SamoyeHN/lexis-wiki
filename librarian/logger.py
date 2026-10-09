@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from .config import config
 
-def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None, model=None):
+def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None, model=None, context_prompt=None):
     """
     Logs an LLM task to the logs directory with structured status, true API constraints, timing metrics, and failure categorization.
     """
@@ -46,6 +46,8 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
                 "task": task_name,
                 "model": actual_model,
                 "user_prompt": user_prompt,
+                "system_prompt": system_prompt,
+                "context_prompt": context_prompt or (f"{system_prompt}\n{user_prompt}".strip() if system_prompt else None),
                 "raw_response": response_text,
                 "parsed_json": parsed,
                 "status": status,

@@ -117,3 +117,40 @@ class TestSenseLockFrames:
         lock = L.sense_confidence(entry, quote=quote, target_pos="adjective")
         definition = (entry["senses"][lock["index"]].get("definition") or "").lower()
         assert "not difficult or complicated" in definition, definition
+
+
+class TestBareParticlePattern:
+
+    def test_bare_particle_pattern_line_is_a_frame_not_a_bare_word(self):
+        # Longman prints 'along' as a one-word pattern line under the 'way of doing
+        # something' sense of 'line'. It states 'line along', so a sentence that has
+        # 'along' with the headword on the far side of it says nothing about the frame
+        # - yet the bare word used to be worth 15 points to every sense that prints it.
+        entry = L.get_ldoce_entry("line")
+        assert entry
+        way_idx = next(i for i, s in enumerate(entry["senses"])
+                       if (s.get("definition") or "").startswith("a particular way of doing"))
+        solo = {"word": "line", "senses": [dict(entry["senses"][way_idx])]}
+        quote = "The queue stretched along the line outside the bank."
+
+        with_particles = L.sense_confidence(solo, quote=quote, target_pos=None)["score"]
+        saved = L._PATTERN_PARTICLES
+        L._PATTERN_PARTICLES = ()
+        try:
+            bare_word_scoring = L.sense_confidence(solo, quote=quote, target_pos=None)["score"]
+        finally:
+            L._PATTERN_PARTICLES = saved
+        assert with_particles < bare_word_scoring - 10, (with_particles, bare_word_scoring)
+
+    def test_particle_frame_scores_when_the_headword_sits_in_it(self):
+        # The rule is not a ban on particles: 'line along' earns its points when the
+        # headword is in the frame, exactly as 'serious about' does.
+        entry = L.get_ldoce_entry("line")
+        way_idx = next(i for i, s in enumerate(entry["senses"])
+                       if (s.get("definition") or "").startswith("a particular way of doing"))
+        solo = {"word": "line", "senses": [dict(entry["senses"][way_idx])]}
+        framed = L.sense_confidence(solo, quote="they lined up along the ridge",
+                                    target_pos=None)["score"]
+        bare = L.sense_confidence(solo, quote="they lined up on the ridge",
+                                  target_pos=None)["score"]
+        assert framed > bare, (framed, bare)

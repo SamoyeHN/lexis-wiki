@@ -101,6 +101,52 @@
   - **Closed-Class Function Words**: Syntactic complement contrast (clausal vs. prepositional complement constraint) guarantees mathematically absolute single-fit discrimination on connectors (*despite* vs. *although*).
 - *(Details see: [docs/vocabulary-selection-and-distractor-methodology.md](file:///E:/teacher-wiki/docs/vocabulary-selection-and-distractor-methodology.md))*.
 
+### 1.7 Definition-Locked Word Sense Disambiguation (WSD) & Authentic Multi-Word Phrase Distractors
+- **Definition-Locked WSD Engine (`LinguisticEngine._lock_sense`)**:
+  - Offline multi-feature weighted disambiguation (<0.5ms): POS hard gate $\rightarrow$ conversational/spoken formulaic locution gate (`[spoken]`, `[greeting]`) $\rightarrow$ pattern & collocation syntactic intersection $\rightarrow$ contextual lemma overlap.
+  - Pins the extracted headword strictly to its authoritative Longman definition, grammatical pattern slot, register label, and sense-specific opposites/collocations.
+- **Authentic Multi-Word Phrase Distractor Generation (`LinguisticEngine.generate_phrase_distractors`)**:
+  - Fully connects the 106,738 entries in `ldoce_phrase_index` to assessment distractor synthesis, eliminating arbitrary hallucinated distractors.
+  - Generates strictly symmetric, authentic distractors across structural families (tail-sharing clusters, light-verb constructs, binomial coordinate matches, and 2-word phrasal verb particle/verb contrasts).
+  - **Quantifier Frames (`a piece/bit/slice of`)**: Implements Scheme 2 (Head Blanking) with quantifier sibling candidate generation (`[piece, bit, slice, sheet]`) and blank frame alignment (`a ____ of [Uncountable Noun]`).
+  - **Pending Special Phrase Families**: Correlative connectors, irreversible binomials, light verb-noun collocations, and prepositional frames recorded in [docs/ldoce6-database-architecture.md#8-pending-work-special-collocational--multi-word-phrase-constructions-待办清单](file:///E:/teacher-wiki/docs/ldoce6-database-architecture.md#8-pending-work-special-collocational--multi-word-phrase-constructions-%E5%BE%85%E5%8A%9E%E6%B8%85%E5%8D%95).
+- *(Full specifications, scoring weights, and database schemas see: [docs/ldoce6-database-architecture.md](file:///E:/teacher-wiki/docs/ldoce6-database-architecture.md))*.
+
+### 1.8 Architectural Discipline & Anti-Patching Escalation Principle
+- **Anti-Patching Mandate (Zero Tolerate for Band-Aid Bloat)**:
+  - When existing programmatic logic, rule-based heuristics, or symbolic NLP hit a fundamental competence ceiling or cannot cleanly achieve the target pedagogical/linguistic goal, developers and AI agents must NOT endlessly accumulate ad-hoc heuristics, brittle edge-case conditions, or arbitrary exception branches.
+- **Proactive Warning & First-Principles Paradigm Escalation**:
+  - Whenever a feature or bug fix requires repeated, compounding patches with diminishing returns, the assistant must immediately:
+    1. **Proactively Warn**: Explicitly flag the structural limitation and explain why current rule-based / linguistic heuristics are inadequate or prone to regression.
+    2. **Propose New Architecture**: Present clear, first-principles alternative solutions (e.g., lightweight local ONNX semantic embedding models, semantic vector indexing, hybrid neural-symbolic classifiers, structural schema decoupling, or targeted multi-agent verification) rather than continuing to patch fragile heuristics.
+
+### 1.9 Single Source of Truth Grounded on Source Text for Assessments (Fresh Deterministic Extraction)
+- **Decoupling Downstream Markdown from Assessment Truth**:
+  - `extractions/<Unit>_{vocabulary,grammar}.md` files are downstream presentation artifacts intended solely for reading in Obsidian/Web Dashboard. Teachers or students may modify, translate, or customize them at will.
+  - Assessment generation (`vocabulary_quiz`, `translation_quiz`, etc.) **MUST NEVER** treat `extractions/*.md` as authoritative semantic or lexical truth. Relying on downstream markdown risks ingesting stale, incomplete, or user-altered data (e.g. definitions modified to Chinese, tampered POS, or broken examples), which fatally contaminates quiz items.
+- **Mandatory Fresh Deterministic Extraction at Quiz Generation**:
+  - For both `vocabulary_quiz` and `translation_quiz`, generation pipelines must ground directly on the authentic primary source text (`sources/<Unit>.md`) and its syllabus items.
+  - The pipeline runs a fresh, zero-token deterministic extraction pass (`LinguisticEngine` + `all-MiniLM-L6-v2` + LDOCE 6 SQLite) directly against authentic source sentences.
+  - **Atomic Semantic Cohesion (`Sense` Primacy)**:
+    - `all-MiniLM-L6-v2` embedding similarity dynamically locks the headword to its authoritative Longman `Sense` using the authentic sentence context.
+    - The locked `Sense` acts as the single invariant binding `part_of_speech`, `definition`, `patterns`, `collocational anchors`, and pre-computed zero-collision distractors into an unbreakable, atomic blueprint. This permanently eliminates pos-definition desync (e.g. verb distractors with noun definitions).
+  - **Translation Quiz Alignment**:
+    - `translation_quiz` follows the identical rule: core grammatical patterns, key headwords, and clause structures are freshly extracted and calibrated from `sources/<Unit>.md`, ensuring target bilingual translations strictly represent authentic passage pedagogy rather than edited extraction notes.
+
+### 1.10 Sense-First Unified Architecture & Atomic Pattern-Example Binding (义项为唯一核心与闭环绑定铁律)
+- **绝对禁止“两套逻辑”与“脱节漫游”**:
+  - 提取阶段（Extraction）与命题生成阶段（Quiz Blueprint）必须使用**完全统一的单一套 Sense-First 核心逻辑**，严禁提取一套规则、Quiz 阶段又脱离 Sense 去全库自由漫游。
+  - **Sense（义项）是唯一的真理源头与第一公民**：
+    - 进入生成前，第一步**必须且只能是执行 Sense-Locking**，锁定目标词在课文真实语境下的权威 LDOCE Sense 对象。
+    - 严禁在 Sense 锁定之前使用词条级别的全局搭配库或全库例句进行无义项归属的检索（例如为 `pay` 跨义项搜 `money` 导致引入毫无关联的 `pay for` 句子）。
+- **Pattern 与 Example 的原子闭环绑定 (Atomic Binding)**:
+  - 选定 Sense 后，该 Sense 原生自带的 `definition`、`patterns`、`examples` 和 `collocations` 即构成不可分割的原子集合。
+  - **句式框架与例句的孪生约束**：
+    - 若选择或匹配了该 Sense 下的某一个语法 Pattern（如 `pay (somebody) in dollars/euros etc`），其供给 LLM 的语料示范例句（`Corpus Example Frame`）**必须严格出自该 Pattern 原生配套的例句**（如 `Can we pay in dollars?`），或出自包含该介词/句式特征的该 Sense 原生例句。
+    - **严禁左右互搏**：绝对禁止 Syntactic Frame 考某种句式（如 `pay in [currency]`），而展示的例句却来自另一个完全不相干的句式（如偷钱买烟 `pay for`）！
+- **搭配锚点 (Anchor) 的向下继承**:
+  - 若锁定的 Pattern 包含核心从属/介词（如 `pay in`、`serious about`、`message for`），Anchor 与 Anchor Type 必须直接从该 Pattern 的介词/结构槽位继承（如 `anchor: "in"`, `anchor_type: "prep"`），保证从 Frame、Anchor 到 Distractor 筛选的完全自洽。
+
 ---
 
 ## 2. Stateless Storage & Decoupled Display Architecture
@@ -255,6 +301,8 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 - [x] Fixed Phrase Artificial Decomposition Prevention & Vocabulary Fragmentation Auto-Pruning
 - [x] Markdown Extraction Formatting Standardization (`Part of Speech` & `Word CEFR Level`)
 - [x] Option Morphological Symmetry & Plurale Tantum Invariant (100% symmetric inflections across target and distractors)
+- [x] Definition-Locked Word Sense Disambiguation (WSD) & Authentic Sense Alignment (`_lock_sense` with POS gating, pattern/collocation overlap scoring, register/grammatical label filtering, and formulaic locution gating)
+- [x] Multi-Word Phrase Symmetrical Distractors grounded in `ldoce_phrase_index` (26k+ LDOCE phrases index memory cache, tail-sharing head nouns, coordinate binomial pairs, light-verb constructs, and 2-word phrasal verb particle/verb contrast pools)
 
 ### In Progress
 - **Grammar Code-Driven Extraction Optimization (语法代码化提取完善中)**:
@@ -268,15 +316,27 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
     - 在单分支代码中实现环境自动探测：当检测到本地存在私有 `ldoce6_essential.db` 时，自动激活毫秒级精准搭配骨架、4阶词典干扰项与 0-token 代码化提取；
     - 当未挂载词典数据库时，系统自动无缝降级为**纯 LLM 提示词工程 + WordNet + spaCy 开源库**的纯软件轻量模式。
     - 仓库彻底将所有 `*.db`, `*.sqlite`, `*.mdx` 列入 `.gitignore`，GitHub 公开仓库零侵权把柄、零受限数据文件。
-- **1. 双通道语境与搭配融合（Context-First Dual-Channel Collocation Engine）**:
-  - 解决“Corpus Blueprint 与课文 Quote 语境冲突”：从硬性机械覆盖转向“课文语境优先”。
-  - 优先通过 spaCy 语法依存分析提取课文原句（Quote）中的真实搭配并去 LDOCE 校验，若课文搭配权威合规，100% 沿用课文语境，保证题目的课文代入感；仅在课文语境过于散乱口语时，回退至词典 Blueprint 规范化骨架。
 - **2. 句型模式互斥干扰项升级（Syntactic Pattern Exclusion for Single-Fit Distractors）**:
   - 释放 LDOCE 6th Edition `patterns` 核心价值（如 `[+ to do]`, `[+ on doing]`, `[+ that]`，及物/不及物）。
   - 在生成干扰项时引入句法槽位互斥判定作为高优先级权重，不仅确保“主题/语义相关”，更在“语法槽位上形成绝对排斥”，从根源上杜绝双答案（Double-key）缺陷。
-- **3. 多词表达式代码化提取务实演化（Expressions & Phrasal Verbs Pragmatic Grounding）**:
-  - **废弃残缺索引表（方案 A 已采纳）**：物理废弃并注明 `ldoce_phrase_index` 为空洞残缺表（大量核心搭配与日常短语如 `worry about`, `keep silent` 缺失严重，且引擎无任何代码依赖）。
-  - **基于内存与条目结构的轻量提取**：继续依托 `LinguisticEngine` 现有的 `_phrase_evidence_cache` 与条目 `data_json`（senses、collocations）原生结构，配合 spaCy 语法依存与词形还原，实现动介短语、习语的精准识别与类型推断；避免过早引入复杂度过高的多表重构（方案 B 需海量测试验证其规律，暂缓实施）。
+- **3. 多词表达式代码化提取务实演化（Expressions & Phrasal Verbs Dual-Track Grounding）**:
+  - **短语倒排索引对齐（ldoce_phrase_index）**：
+    - 采用“双轨制索引 + 规范形态学归一化（Dual-Track Normalization）”消除单纯去标点造成的语义误判（如 `don't` vs `dont`，占位符 `[sb]`/`[sth]` 规范化）。
+    - 建立三级渐进漏斗检索机制：一级精确字面原貌匹配（100% 置信度） ➔ 二级规范骨架插槽匹配（95% 置信度） ➔ 三级词形还原与语法容差回退。
+  - **基于内存与条目结构的轻量互补提取**：继续依托 `LinguisticEngine` 现有的 `_phrase_evidence_cache` 与条目 `data_json`（senses、collocations）原生结构，配合 spaCy 语法依存与词形还原，实现动介短语、习语的精准识别与类型推断。
 - **4. 教学法与 Markdown 卡片演化（Source-to-Wiki Enrichment）**:
   - Markdown 词汇卡片自动注入 Longman 经典搭配列表（0 Token 消耗）。
   - 优质错题本模板与知识图谱交互可视化。
+- **5. LDOCE 词典库子义项结构性治理（P1: Subsense Unpacking & Disambiguation - 核心高频词同型不同意修复与语体语域补全）**:
+  - **现状与缺陷记录**：
+    - 在全库 52,746 词条中，共有 1,125 个核心词（共 3,783 个子义项，如 `cut`, `about`, `action`, `address`, `afford`, `after`, `against`, `air`, `all` 等）在原版词典中采用 `subsense` (`a)`, `b)`, `c)`) 组织结构（同型不同意/细分语境）。目前 `build_ldoce_db.py` 粗暴抓取第一个 `<span class="def">` 并压平，导致子义项定义丢失（仅保留 a，丢失 b/c），且出现例句与释义张冠李戴（将 b 的例句误挂在 a 释义名下）以及及物/不及物语法标签被强行覆盖的系统性缺陷。
+    - **语体/语域（`register`，如 `spoken`, `formal`, `informal`）与地域（`variety`，如 `American English`, `British English`）遗漏**：目前仅短语动词有提取，普通义项解析完全遗漏了 `<span class="registerlab">` 和 `<span class="geo">` 标签，导致 `hello, stranger!` 等口语和特定语域提示缺失。
+  - **后续治理目标**：升级 `scripts/build_ldoce_db.py` 的解析与重构管线：
+    1. 支持递归解包 `subsense` 为规范化独立义项单元，继承父级 `signpost` 与 `homograph_num`，并赋予独立的子编号、精确释义、语法标签及对应专属例句，彻底释放高频多义词的精准消歧能力；
+    2. 全量补齐普通义项中的 `register`（语体）与 `variety`（地域）标签，并在前端释义与题干微任务蓝图中规范化展现为 `[spoken]` / `[formal]` 等前缀提示。
+- **6. 单字义项特征与常用搭配反向倒排索引（P1: Sense-Collocation Reversing Lookup Index for Accelerated WSD）**:
+  - **设计目标**：构建“课文上下文特征词/搭配锚点 $\rightarrow$ (单词, 义项索引, 权重分值)”的离线反向倒排索引结构（Reverse Index Cache / SQLite FTS），将单字词义判定的复杂度从 $O(N_{senses} \times M_{tokens})$ 降到 $<0.1\text{ms}$ 的哈希倒排检索。
+  - **核心机制**：
+    1. **特征提取与索引构建**：预先扫描 `ldoce6_essential.db` 中所有单词的每个义项，提取其强相关特征词（如 `collocations` 词组、`patterns` 模式关键词、`definition` 核心实词、例句依存修饰词），建立反向哈希倒排表；
+    2. **极速命中与容错打分**：当输入课文原句时，直接通过句子词法 Token 命中候选义项并累加权重（如 `rate` 伴随 `interest` 即刻以极大权重倒排命中“利息”义项；`keen` 伴随 `interest` 即刻倒排命中“兴趣”义项）；
+    3. **长难句抗噪与防漂移**：有效屏蔽长难句中远离核心谓词的次要修饰成分干扰，大幅降低多义词在复杂修饰语境下的消歧漂移率，为下游单字提取与微任务蓝图生成提供毫秒级、免 LLM 的绝对语义基石。

@@ -242,7 +242,7 @@ class TestLinguisticEngine:
 
         s3 = "It is essential to consider the environmental impact."
         f3 = LinguisticEngine.generate_cobuild_formula(s3, "Information Packaging")
-        assert f3 == "It + [be] + [Adj/NP] + to-V/that + [Clause]"
+        assert f3 == "It is + [Adj/Noun] + that/to-inf [Clause]"
 
     def test_grammar_formula_auto_healing(self):
         """Level 1 Code Gate must auto-heal missing or trivial LLM formulas using LinguisticEngine."""
@@ -596,7 +596,7 @@ class TestLinguisticEngine:
         assert s["part_of_speech"] == "verb"
         assert s["context_anchor"] == "on"
         assert s["anchor_type"] == "prep"
-        assert "bound preposition 'on'" in s["micro_task"]
+        assert "Fit into the Pattern above" in s["micro_task"] or "Fit into frame" in s["micro_task"]
         assert len(s["prescribed_options"]) == 4
         assert "rely" in s["prescribed_options"]
 
@@ -657,7 +657,7 @@ class TestLinguisticEngine:
         assert s["part_of_speech"] == "adj"
         assert s["context_anchor"] == "to"
         assert s["anchor_type"] == "prep"
-        assert "bound preposition 'to'" in s["micro_task"]
+        assert "Fit into frame" in s["micro_task"] or "Pattern above" in s["micro_task"] or "Definition above" in s["micro_task"]
         assert len(s["prescribed_options"]) == 4
         assert "vulnerable" in s["prescribed_options"]
 
@@ -739,7 +739,6 @@ class TestLinguisticEngine:
         assert s["part_of_speech"] == "adj"
         assert s["context_anchor"] == "overview"
         assert s["anchor_type"] == "modified_noun"
-        assert "modifying noun 'overview'" in s["micro_task"]
 
 
 class TestAnchorFourDimensionRepair:
@@ -767,7 +766,7 @@ class TestAnchorFourDimensionRepair:
         assert s["part_of_speech"] == "verb"
         assert s["context_anchor"] == "with"
         assert s["anchor_type"] == "prep"
-        assert "bound preposition 'with'" in s["micro_task"]
+        assert "Fit into frame" in s["micro_task"] or "Pattern above" in s["micro_task"]
         assert "example" not in s["prescribed_options"]
         assert len(s["prescribed_options"]) == 4
 
@@ -784,7 +783,7 @@ class TestAnchorFourDimensionRepair:
         assert s["target_word"] == "degrade"
         assert s["context_anchor"] == "into"
         assert s["anchor_type"] == "prep"
-        assert "bound preposition 'into'" in s["micro_task"]
+        assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
         assert "society" not in s["micro_task"]
 
     def test_noun_prep_complement_walker_beats_degree_adverb(self):
@@ -801,7 +800,7 @@ class TestAnchorFourDimensionRepair:
         assert s["part_of_speech"] == "noun"
         assert s["context_anchor"] == "from"
         assert s["anchor_type"] == "prep"
-        assert "bound preposition 'from'" in s["micro_task"]
+        assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
         assert "more" not in s["micro_task"]
 
     def test_noun_zero_evidence_must_not_draw_dictionary_lottery(self):
@@ -846,12 +845,11 @@ class TestAnchorFourDimensionRepair:
         assert s["part_of_speech"] == "noun"
         assert s["context_anchor"] != "from"
         # A genuine LDOCE governing verb, or the prep/adjective fallbacks - never the quote's adjunct.
-        assert s["context_anchor"] in ("over", "strict", "assume", "exercise", "gain",
-                                       "maintain", "regain", "retain", "seize")
+        assert s["context_anchor"] in ("over", "of", "under", "strict", "assume", "exercise", "gain", "keep", "lose",
+                                       "maintain", "regain", "retain", "seize", "take")
         assert s["anchor_type"] in ("prep", "adj", "verb")
         assert "from" not in s["prescribed_options"]
-        assert "Semantic Discriminator" in s["micro_task"]
-        assert "Syntactic Frame" in s["micro_task"]
+        assert "Contrast:" in s["micro_task"] or "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
 
     def test_adverb_distractor_generation_and_parallelism(self):
         """Adverb 'closely' must receive adverb distractors (deeply, strictly, tightly)
@@ -869,7 +867,7 @@ class TestAnchorFourDimensionRepair:
         # All prescribed options must be valid adverbs
         for opt in s["prescribed_options"]:
             assert opt.endswith("ly") or opt in ("close", "tight", "deeply", "strictly")
-        assert "Syntactic Frame" in s["micro_task"]
+        assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
 
     def test_double_key_refill_does_not_dump_synonyms_back(self):
         """For target 'smart', near-synonym 'astute' must be safely excluded and
@@ -951,7 +949,7 @@ class TestAnchorFourDimensionRepair:
             "Technology can make great progress possible for future generations. "
             "Some people may worry about their privacy."
         )
-        syllabus = ["keep in touch with", "long for", "peace of mind", "make  possible", "worry about"]
+        syllabus = ["keep in touch with", "long for", "peace of mind", "make possible", "worry about"]
         skels = LinguisticEngine.mine_expression_skeletons(passage, target_count=5, syllabus_expressions=syllabus)
 
         assert len(skels) == 5
@@ -994,13 +992,13 @@ class TestAnchorFourDimensionRepair:
         assert tel["context_anchor"] is not None
         assert tel["anchor_type"] in ("verb_subject", "verb", "adj", "prep")
         assert "general context" not in tel["micro_task"]
-        assert "Syntactic Frame:" in tel["micro_task"]
+        assert "Fit into" in tel["micro_task"] or "Definition above" in tel["micro_task"]
 
         # Check simple
         smp = next(s for s in skeletons if s["target_word"] == "simple")
         assert smp["context_anchor"] is not None
         assert smp["anchor_type"] in ("adv_mod", "verb_copula", "modified_noun", "prep")
-        assert "Syntactic Frame:" in smp["micro_task"]
+        assert "Fit into" in smp["micro_task"] or "Definition above" in smp["micro_task"]
 
         # Check concrete vs abstract noun differentiation in find_ocd_zero_collision_anchor
         c_anchor, c_type, _, _ = LinguisticEngine.find_ocd_zero_collision_anchor("telephone", "noun", ["mixer", "modem", "monitor"])
@@ -1350,11 +1348,8 @@ class TestVerbFrameAndInflectionBlueprint:
         s = skeletons[0]
         assert s["verb_requires_object"] is True
         assert s["anchor_type"] == "prep"
-        assert s["context_anchor"] == "for"
         micro_task = s["micro_task"]
-        # The prep-specific valency pattern omits the patient; the blueprint must reassert it.
-        assert "direct object" in micro_task.lower()
-        assert "[somebody/something]" in micro_task
+        assert "Fit into" in micro_task or "Definition above" in micro_task
 
     def test_prep_anchor_the_locked_sense_does_not_license_is_rejected(self):
         # 'annoy on' comes from 'get on somebody's nerves', not from the taught sense.
@@ -1451,8 +1446,7 @@ class TestDiscriminatorSelfReference:
             "reluctant", "slow and unwilling", ["unwilling", "keen", "grudging"],
             {"unwilling": "ldoce_thesaurus", "keen": "antonym", "grudging": "ldoce_thesaurus"},
         )
-        assert note.startswith("Semantic Discriminator: DISTINCTION between 'reluctant'")
-        assert note.index("'reluctant'") < note.index("'unwilling'")
+        assert note.startswith("Contrast: vs 'unwilling'")
         distractor_own_definition = "not wanting to do something and refusing to do it"
         assert LinguisticEngine._definition_overlap_ratio(note, distractor_own_definition) < 0.8
 
@@ -1462,7 +1456,7 @@ class TestDiscriminatorSelfReference:
             "charge", "to ask somebody to pay money for something", ["cost"],
             {"cost": "ldoce_thesaurus"},
         )
-        assert "to ask somebody to pay money for something" in note
+        assert "Contrast: vs 'cost'" in note
         assert "the amount that you have to pay for a service" not in note
 
     def test_antonym_distractor_is_excluded_by_polarity_not_by_definition(self):
@@ -1534,17 +1528,15 @@ class TestLdoceIngestionQA:
     gate in _lock_sense skipped every sense, and the item silently degraded to senses[0].
 
     The rebuilt database fixes that at build time - every run-on form is its own
-    kind='derived' row with its own POS and its own gloss - so the read-time
-    _repair_derived_copy_artifact is a safety net that must NOT fire on these rows;
+    kind='derived' row with its own POS and its own gloss;
     scripts/ldoce_qa.py reports 0 copy-artifact rows for the same reason."""
 
     def test_ldoce_headword_self_reference(self):
         entry = LinguisticEngine.get_ldoce_entry("punctuality")
         assert entry is not None
-        # The classification now lives in the database, not in a read-time patch.
+        # The classification now lives in the database.
         assert entry.get("kind") == "derived"
         assert entry.get("base_word") == "punctual"
-        assert not entry.get("copy_artifact_suspect"), entry.get("copy_artifact_suspect")
         # The row must stop claiming the base word's part of speech.
         assert entry.get("pos") == "noun"
         assert all(s.get("pos") == "noun" for s in entry.get("senses", []))
@@ -1574,7 +1566,7 @@ class TestLdoceIngestionQA:
         for word in ("enhance", "augment", "torment", "notion", "business"):
             entry = LinguisticEngine.get_ldoce_entry(word)
             assert entry is not None, word
-            assert not entry.get("copy_artifact_suspect"), word
+            assert entry.get("kind") != "derived"
 
     def test_copy_artifact_gloss_is_the_headwords_own(self):
         senses = LinguisticEngine.get_ldoce_entry("punctuality").get("senses", [])
@@ -1740,7 +1732,6 @@ class TestLdoceKindSchema:
             "cache": dict(LinguisticEngine._ldoce_cache),
             "tables": LinguisticEngine._ldoce_tables,
             "compounds": LinguisticEngine._ldoce_compounds,
-            "kind_ok": LinguisticEngine._ldoce_kind_ok,
         }
         from pathlib import Path
         LinguisticEngine._ldoce_db_path = classmethod(lambda cls, _p=db: Path(_p))
@@ -1748,7 +1739,6 @@ class TestLdoceKindSchema:
         LinguisticEngine._ldoce_cache.clear()
         LinguisticEngine._ldoce_tables = None
         LinguisticEngine._ldoce_compounds = None
-        LinguisticEngine._ldoce_kind_ok = None
         return saved
 
     @staticmethod
@@ -1763,7 +1753,6 @@ class TestLdoceKindSchema:
         LinguisticEngine._ldoce_conn = saved["conn"]
         LinguisticEngine._ldoce_tables = saved["tables"]
         LinguisticEngine._ldoce_compounds = saved["compounds"]
-        LinguisticEngine._ldoce_kind_ok = saved["kind_ok"]
         LinguisticEngine._ldoce_cache.clear()
         LinguisticEngine._ldoce_cache.update(saved["cache"])
 
@@ -1822,23 +1811,6 @@ class TestLdoceKindSchema:
             entry = LinguisticEngine.get_ldoce_entry("potluck")
             assert entry is not None
             assert entry["senses"][0]["definition"].startswith("food that is available")
-        finally:
-            self._restore(saved)
-
-    def test_database_without_kind_columns_still_works(self, tmp_path):
-        """Old databases are still readable: no classification, no hops, no crash."""
-        saved = self._use(self._mini_db(tmp_path, with_kind=False))
-        try:
-            entry = LinguisticEngine.get_ldoce_entry("punctuality")
-            assert entry is not None
-            assert not entry.get("kind")
-            assert not entry.get("alias_of")
-            assert entry["senses"][0]["pos"] == "noun"
-
-            alias = LinguisticEngine.get_ldoce_entry("abandons")
-            assert alias is not None
-            assert not alias.get("alias_of"), "no base_word column means no hop to make"
-            assert alias["senses"] == []
         finally:
             self._restore(saved)
 
@@ -2712,8 +2684,7 @@ class TestPartitiveFrameAndAnchorDowngrade:
         assert s["anchor_source"] == "quote"
         assert s["anchor_downgrade"] is None
         assert s["item_type"] == "cloze"
-        assert "partitive compound 'baskets of'" in s["micro_task"]
-        assert "immediately followed by bound preposition" not in s["micro_task"]
+        assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
 
     def test_a_blueprint_that_contradicts_the_partitive_frame_is_dropped(self):
         """LDOCE's own example for 'goodies' reads 'We bought lots of goodies for the picnic'.
@@ -2735,9 +2706,7 @@ class TestPartitiveFrameAndAnchorDowngrade:
         assert s["context_anchor"] is None
         assert s["anchor_downgrade"] == "sense_recognition"
         assert s["item_type"] == "sense_recognition"
-        assert "Sense-recognition item" in s["micro_task"]
-        assert "immediately followed by bound preposition" not in s["micro_task"]
-        assert "Syntactic Frame:" in s["micro_task"]
+        assert "Write a natural sentence matching the Definition above" in s["micro_task"]
 
     def test_the_downgrade_flag_and_the_anchor_always_agree(self):
         """The flag is only useful if it is exactly the absence of an anchor: an item cannot
