@@ -4553,6 +4553,19 @@ class LinguisticEngine:
             cand_syns = cls.get_synonyms(cand)
             if any(s in cand_syns or cand in cls.get_synonyms(s) for s in safe_distractors):
                 continue
+
+            # Deterministic Double-Key & Pattern Exclusion Gate:
+            # Rejects candidates that share identical syntactic patterns or collocations (double-key collision)
+            is_dk, dk_reason = cls.double_key_collision(
+                clean_target, cand,
+                anchor=context_anchor,
+                anchor_type=anchor_type,
+                pos=pos,
+                quote=quote
+            )
+            if is_dk:
+                continue
+
             if cand not in forbidden_words and cand not in exclude_words and len(cand) >= 2:
                 safe_distractors.append(cand)
                 if cand in sense_antonyms:
@@ -4761,6 +4774,51 @@ class LinguisticEngine:
     }
 
     @classmethod
+    def get_syntactic_pattern_slots(cls, word_or_entry: Union[str, Dict[str, Any]], sense: Optional[Dict[str, Any]] = None) -> Set[str]:
+        """Extracts normalized syntactic complement pattern slots for a headword from LDOCE 6th Edition.
+        
+        Returned slots can include:
+          - 'to_inf'     : infinitive complement ('to do sth')
+          - 'gerund'     : gerund complement ('doing sth') without bound prepositions
+          - 'sb_to_do'   : complex transitive with infinitive ('somebody to do sth')
+          - 'that_clause': clausal complement ('that ...' or '(that)')
+          - 'wh_clause'  : indirect question / wh-clause ('who/what/whether etc')
+        """
+        if isinstance(word_or_entry, dict):
+            entry = word_or_entry
+        else:
+            entry = cls.get_ldoce_entry(str(word_or_entry).strip().lower())
+        if not entry:
+            return set()
+
+        target_senses = [sense] if sense else entry.get("senses", [])
+        slots: Set[str] = set()
+        for s in target_senses:
+            for p in s.get("patterns", []):
+                pl = p.lower()
+                if "to do" in pl:
+                    if any(x in pl for x in ("sb to do", "somebody to do", "someone to do")):
+                        slots.add("sb_to_do")
+                    else:
+                        slots.add("to_inf")
+                if "doing" in pl:
+                    # Exclude prepositional gerunds like 'in/of/from doing'
+                    if not any(x in pl for x in ("of doing", "in doing", "for doing", "from doing", "against doing", "about doing", "with doing", "upon doing")):
+                        slots.add("gerund")
+                if "(that)" in pl or "that" in pl:
+                    if not pl.startswith("the ") and not pl.startswith("in the "):
+                        slots.add("that_clause")
+                if any(x in pl for x in ("wh-", "how/where", "who/what", "whether")):
+                    slots.add("wh_clause")
+            # Example-based inference fallback if patterns field is silent
+            for ex in s.get("examples", []):
+                ex_l = ex.lower()
+                w = entry.get("word", "").lower()
+                if f"{w} to " in ex_l:
+                    slots.add("to_inf")
+        return slots
+
+    @classmethod
     def double_key_collision(cls, target: str, distractor: str,
                              anchor: Optional[str] = None,
                              anchor_type: Optional[str] = None,
@@ -4819,6 +4877,32 @@ class LinguisticEngine:
                     return False, "frame_only"
                 if anchor_type == "modifies_verb" and not has_verb_mod:
                     return False, "frame_only"
+
+        # Verb Syntactic Pattern Exclusion Gate (Single-Fit Distractor Guarantee):
+        # If target governs a specific clausal/non-finite complement pattern ('to_inf', 'gerund', 'that_clause', 'sb_to_do')
+        # and distractor is completely incompatible with that complement pattern, the distractor is
+        # strictly single-fit discriminated (100% immune to double-key collision).
+        # Conversely, if distractor shares the identical complement pattern and is in near semantic field,
+        # it is a dangerous double-key collision!
+        # NOTE: Only trigger when testing complement patterns (not when an explicit bound preposition or noun collocation anchor is being tested).
+        if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") or (not anchor and pos in ("v", "verb")):
+            t_slots = cls.get_syntactic_pattern_slots(t)
+            d_slots = cls.get_syntactic_pattern_slots(d)
+            # If anchor_type directly specifies the target complement slot:
+            active_slot = anchor_type if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") else None
+            if not active_slot:
+                # Find intersective slots declared by target
+                common_slots = t_slots & {"to_inf", "gerund", "that_clause", "sb_to_do"}
+                if len(common_slots) == 1:
+                    active_slot = next(iter(common_slots))
+
+            if active_slot and active_slot in t_slots:
+                if active_slot not in d_slots:
+                    # Distractor cannot occupy target's syntactic complement slot -> single-fit discriminated!
+                    return False, "none"
+                elif d in near:
+                    # Both share the non-finite/clausal complement slot and are semantic neighbors -> double-key collision!
+                    return True, "double_key_pattern"
 
         t_preps_raw = cls.get_oxford_collocations(t, pos=pos).get("prep", [])
         t_preps = [w.strip().lower() for p in t_preps_raw for w in p.split("/") if w.strip()]
