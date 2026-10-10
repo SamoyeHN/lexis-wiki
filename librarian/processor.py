@@ -2674,14 +2674,15 @@ class WikiProcessor:
                                     if w_toks and skel_toks and (w_toks == skel_toks or w_toks.issubset(skel_toks) or skel_toks.issubset(w_toks)):
                                         return skel.get("pattern_formula", w), skel.get("type", "collocation")
 
-                            # 1.2 Match by sid only if the skeleton phrase actually appears in the quote or audit or word
+                            # 1.2 Match by sid only if the skeleton phrase matches the expression headword or audit
                             sid_match = re.search(r'\bS-(\d+)\b', f"{aud} {quote}", re.IGNORECASE)
                             if sid_match:
                                 target_sid = f"S-{sid_match.group(1)}"
                                 for skel in expression_skeletons:
                                     if skel.get("sid", "").upper() == target_sid.upper():
                                         skel_phrase = skel.get("phrase", "").lower()
-                                        if skel_phrase and skel_phrase in f"{w} {aud} {quote}".lower():
+                                        skel_toks = set(re.findall(r'[a-zA-Z]+', skel_phrase))
+                                        if skel_phrase and (skel_phrase in f"{w} {aud}".lower() or (w_toks and skel_toks and w_toks.intersection(skel_toks))):
                                             return skel.get("pattern_formula", w), skel.get("type", "collocation")
 
                         valid_slot_pattern = r'\[(something|somebody|someone|one\'s|one|entity|domain|factor|doing something|clause|[a-z_]+)\]|\bone\'s\b'
@@ -3637,7 +3638,7 @@ class WikiProcessor:
                                         {"questions": [healed_item]},
                                         banned_sentences=banned_quiz_sentences,
                                         unit_headwords=unit_headwords,
-                                        strict_distractor_recycling=False
+                                        strict_distractor_recycling=True
                                     )
 
                                 if not cure_l1_flagged:

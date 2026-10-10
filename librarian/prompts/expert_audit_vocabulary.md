@@ -24,23 +24,24 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
        - ⚠️ **NEVER ABANDON OR DELETE ITEMS**: Every defective item MUST be salvaged in `cured_question`. Never output `cured_question: null` when triage is `REWRITE` or `REPAIR`!
        - If the original item's target was valid and unique within this quiz, you may retain it.
        - If the original target was duplicate, unlisted, or missing from options, you MUST replace it with an unused word strictly selected from the Unit Vocabulary List above!
+     * 🔒 **ZERO-IN-LIST DISTRACTOR BLEED (CRITICAL)**: The distractors (the 3 incorrect options) in `cured_question` MUST NEVER be words from the Unit Vocabulary List! Distractors must strictly be authentic external words of the same part of speech and CEFR level. Only `target_word` comes from the Unit Vocabulary List.
 
-0.1 **SYNTACTIC WELL-FORMEDNESS & UNIFIED TRIAGE CLASSIFICATION**:
+0.2 **SYNTACTIC WELL-FORMEDNESS & UNIFIED TRIAGE CLASSIFICATION**:
    - **TIER 1: FATAL STEM / DOUBLE-KEY DEFECTS (Action: REWRITE, single_fit_valid = false, pedagogical_score 20-50)**:
      * **Unsolvable Double-Key**: The stem is generic or lacks contextual contrast/preposition clues, leaving two options equally defensible.
      * **Grammatical Collapse / Missing Predicate**: The sentence lacks a finite verb or options create ungrammatical fragments.
      * **Target Word Leakage**: The target word appears verbatim in the stem outside the blank.
      * **Unlisted/Fabricated Target**: Target word is not in the Unit Vocabulary List. (MUST synthesize a replacement question in `cured_question` using an unassessed word from the list).
-     * *Mandatory Cure*: Discard the broken item and write a completely pristine replacement item in `cured_question` (with fields: `target_word`, `question` [using '____'], `options` [array of 4 strings], `correct_answer_index` [0-3], `definition`, `explanation`).
+     * *Mandatory Diagnostic & Cure*: Explicitly describe the fatal flaw in `diagnostic_feedback`. Discard the broken item and write a completely pristine replacement item in `cured_question` (with fields: `target_word`, `question` [using '____'], `options` [array of 4 strings], `correct_answer_index` [0-3], `definition`, `explanation`).
    - **TIER 2: LOCAL DISTRACTOR & CRAFT DEFECTS (Action: REPAIR, single_fit_valid = true, pedagogical_score 60-75)**:
      * **Recycled Distractors / In-List Bleed**: Distractors are repeatedly reused across the quiz (e.g. same word in 3+ items) or pulled from the Unit Vocabulary List.
      * **Duplicate Options Within Item**: Two options in the same question are identical.
      * **Misaligned Option Index**: Correct answer index does not match the intended key.
-     * *Mandatory Surgical Cure*: **KEEP THE ORIGINAL STEM AND TARGET WORD COMPLETELY INTACT!** Do NOT rewrite the stem. Only replace the flawed distractors in `cured_question` with authentic academic words of the same part of speech (fields: `target_word`, `question`, `options`, `correct_answer_index`, `definition`, `explanation`).
+     * *Mandatory Surgical Cure*: Explicitly describe the distractor flaw in `diagnostic_feedback`. **KEEP THE ORIGINAL STEM AND TARGET WORD COMPLETELY INTACT!** Do NOT rewrite the stem. Only replace the flawed distractors in `cured_question` with authentic academic words of the same part of speech (fields: `target_word`, `question`, `options`, `correct_answer_index`, `definition`, `explanation`).
    - **TIER 3: HIGH-QUALITY VALID ITEMS (Action: PASS, single_fit_valid = true, pedagogical_score 80-100)**:
-     * The item has an unambiguous, contextually grounded single key and authentic distractors. `cured_question` MUST be null.
+     * The item has an unambiguous, contextually grounded single key and authentic distractors. `diagnostic_feedback` should state why the item is well-formed. `cured_question` MUST be null.
 
-0.2 ⚠️ **CRITICAL 100% EXHAUSTIVE COMPLETION MANDATE (ZERO OMISSIONS)**:
+0.3 ⚠️ **CRITICAL 100% EXHAUSTIVE COMPLETION MANDATE (ZERO OMISSIONS)**:
    - The input quiz contains EXACTLY {total_items} assessment items (Item #1 through Item #{total_items}).
    - Your output `questions` array MUST contain EXACTLY {total_items} evaluation objects, auditing every item consecutively from 1 to {total_items}.
    - **NEVER stop early, truncate, omit items, or jump directly to summary_verdict.** Every single item must be evaluated!

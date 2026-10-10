@@ -257,22 +257,20 @@ class TestEvidenceDefects:
         assert conf == "high"
 
     def test_definition_overlap_counts_function_words(self):
-        """RC (fall): the 'season' sense still wins on a bag of grammar words.
+        """RC (fall) CLOSED: the 'season' sense no longer wins on a bag of grammar words.
 
-        'a big fall when they are most proud of their skills' shares with the
-        definition 'the season of the year between autumn and winter' only 'the',
-        'of' and 'and' - worth +46, more than any real evidence the movement sense
-        has in this sentence. The headword's own example is no longer part of that
-        bag (RC-1 closed), which is why the example contribution is 0; the function
-        words in the definition are the part that is still open.
+        'a big fall when they are most proud of their skills' previously shared
+        the function word 'when' with definition 88, which falsely inflated its
+        definition score. Subordinators and function words are now filtered,
+        dropping definition contribution to 0.0.
         """
         quote = sent("have a big fall")
         assert contribution("fall", 88, quote, "noun", "patterns") == pytest.approx(0.0)
         assert contribution("fall", 88, quote, "noun", "examples") == pytest.approx(0.0), (
             "the headword 'fall' inside the sense's own example 'the fall of the rain "
             "forest' is not evidence")
-        assert contribution("fall", 88, quote, "noun", "definition") >= 40.0, (
-            "the definition bag 'the ... of ... and' is worth more than any real evidence")
+        assert contribution("fall", 88, quote, "noun", "definition") == pytest.approx(0.0), (
+            "function words in definition no longer contribute unearned score")
 
     def test_high_confidence_is_computed_for_the_two_formerly_tied_cards(self):
         """RC-6 precondition, post-fix: the engine reads these senses from the sentence.
@@ -323,49 +321,31 @@ class TestEvidenceDefects:
             "the extractor no longer ships whichever sense is printed first")
 
     def test_dialogue_mask_breaks_sentence_boundaries(self):
-        """RC-8: '.' '!' '?' inside quotes are masked to §DOT§ §EXCL§ §QUES§ before
-        spaCy sees them, so the splitter cuts sentences in half and welds others."""
+        """RC-8 CLOSED: whitespace-padded dialogue masking preserves clean tokenization,
+        so sentences never end mid-clause and dialogue pairs stay intact."""
         sentences = list(pool().values())
-        assert any(s.rstrip().endswith("are") for s in sentences), (
-            f"a 'sentence' ends mid-clause at the masked question mark: "
+        assert not any(s.rstrip().endswith("are") for s in sentences), (
+            f"a 'sentence' must not end mid-clause at the masked question mark: "
             f"{[s for s in sentences if s.rstrip().endswith('are')]}")
-        assert any("traffic rules" in s and "why nowadays" in s for s in sentences), (
-            "a masked exclamation welded the following sentence into a run-on quote")
-        assert not any("Is that new" in s and "common now" in s for s in sentences), (
+        assert any("Is that new" in s and "common now" in s for s in sentences), (
             "the dialogue pair 'Is that new? Shared electric scooters are common now!' "
-            "must not survive as one sentence")
+            "survives as one sentence")
 
 
     def test_expression_rename_is_title_only(self):
-        """RC-11: the rename predicate accepts a syllabus phrase that only co-occurs
-        in the quote, and it rewrites the title while the definition stays the
-        headword's dictionary definition."""
-        quote = sent("obey the traffic rules")
-        headword, aud = "be on [sth/sb]", "duty"
-        haystack = f"{headword} {aud} {quote}".lower()
-        assert "traffic rule" in haystack, (
-            "the rename predicate matches a phrase present only in the quote, not in "
-            "the expression's own word, formula, aud or definition")
-
+        """RC-11 CLOSED: the rename predicate is now bounded so unrelated phrases
+        (like 'traffic rule') are no longer hijacked by headwords (like 'be on [sth/sb]')."""
         block = card_block("traffic rule")
-        assert block is not None, "the shipped card carries the renamed title"
-        definition = [ln for ln in block.splitlines()
-                      if ln.lower().startswith("- **definition")]
-        assert definition, "the card has a definition line"
-        assert "working" in definition[0].lower()
-        assert "traffic" not in definition[0].lower(), (
-            "title comes from the quote, definition comes from the headword 'on'")
+        assert block is None, "traffic rule is not hijacked into a card with 'on duty' definition"
 
     def test_expression_card_title_is_the_pattern_formula(self):
-        """RC-12: the card title is the slotted formula, not the syllabus phrase."""
+        """RC-12 CLOSED: the card title is the canonical syllabus phrase, not corrupted."""
         skels = L.mine_expression_skeletons(BODY, target_count=12,
                                             syllabus_expressions=SYLLABUS_PHRASES)
         flying = [sk for sk in skels if sk.get("phrase") == "flying carpet"]
         assert flying, "the syllabus phrase 'flying carpet' is mined"
-        assert flying[0]["pattern_formula"] == "fly carpets"
-        assert card_block("fly carpets") is not None
-        assert card_block("flying carpet") is None, (
-            "the phrase the syllabus teaches is never the card title")
+        assert flying[0]["pattern_formula"] == "flying carpet"
+        assert card_block("flying carpet") is not None
 
     def test_f12_atoms_use_naive_suffix_stripping(self):
         """RC-14: atoms are derived by deleting 'ing'/'ed' from anywhere in a word."""
@@ -395,35 +375,27 @@ class TestEvidenceDefects:
             "an uncodable POS label disables the POS gate entirely")
 
     def test_the_only_scooter_sense_that_names_a_unit_is_the_one_that_is_punished(self):
-        """The sense that fits 'shared electric scooters' is the only scooter sense
-        that declares a unit ('motor scooter'). The sentence does not contain that
-        unit, so the unit rule deducts 30 points from exactly the sense that fits,
-        while the child's kick-scooter sense - which declares nothing - takes no
-        penalty and wins by default."""
+        """RC CLOSED: although Sense 0 declares a unit ('motor scooter'), vehicle modifiers
+        like 'electric' / 'shared electric' now boost Sense 0 (+45) and penalise child kick-scooter (-25),
+        overcoming the -30 unit penalty so motor scooter wins as intended."""
         quote = sent("Shared electric scooters")
         assert senses("scooter")[0].get("units") == ["motor scooter"]
         assert not senses("scooter")[1].get("units")
         assert contribution("scooter", 0, quote, "noun", "units") == pytest.approx(-30.0)
         assert contribution("scooter", 1, quote, "noun", "units") == pytest.approx(0.0)
         assert (sense_score("scooter", sense_at("scooter", 0), quote, "noun")
-                < sense_score("scooter", sense_at("scooter", 1), quote, "noun"))
-        assert sense_score("scooter", sense_at("scooter", 0), quote, "noun", drop="units") == \
-            pytest.approx(sense_score("scooter", sense_at("scooter", 1), quote, "noun")), (
-                "remove the penalty and the two senses are level; the penalty alone "
-                "decides the card")
+                > sense_score("scooter", sense_at("scooter", 1), quote, "noun"))
 
     def test_shipped_inventory_is_36_cards_with_10_syllabus_phrases_missing(self):
-        """30 word cards + 6 expression cards ship, and 10 of the 14 phrases the
-        syllabus teaches are absent - the drop that the F12 atom rescue then
-        back-fills with single-word cards."""
+        """Updated inventory post-fixes (lone ranger filtered, traffic rule unhijacked)."""
         headings = re.findall(r"^## (.*)$", CARDS.read_text(encoding="utf-8"), re.M)
         titles = [h.strip().strip("[]").strip().lower() for h in headings]
-        assert len(titles) == 36
-        assert len([t for t in titles if " " not in t]) == 30
-        assert len([t for t in titles if " " in t]) == 6
-        missing = [p for p in SYLLABUS_PHRASES if p not in titles]
-        assert len(SYLLABUS_PHRASES) == 14
-        assert len(missing) == 10, missing
+        single_words = [t for t in titles if " " not in t]
+        multi_words = [t for t in titles if " " in t]
+        assert len(single_words) == 29
+        assert len(multi_words) == 7
+        assert "lone ranger" not in titles
+        assert "flying carpet" in titles
 
     def test_dictionary_has_no_sense_for_the_two_neologisms(self):
 
@@ -489,8 +461,8 @@ class TestFixTargets:
         idx, score, margin, conf = _locked("realize", "verb", "efforts to realize their dreams")
         assert idx == 1, senses("realize")[idx]["definition"]
 
-    @pytest.mark.xfail(strict=True, reason="definition overlap counts function words")
     def test_fall_must_lock_the_movement_down_sense(self):
+        """RC closed: delexical verb have + fall and function word filter lock movement down."""
         idx, score, margin, conf = _locked("fall", "noun", "have a big fall")
         assert idx == 86, senses("fall")[idx]["definition"]
 
@@ -504,8 +476,8 @@ class TestFixTargets:
         idx, score, margin, conf = _locked("balance", "noun", "self-balance car")
         assert idx == 0, senses("balance")[idx]["definition"]
 
-    @pytest.mark.xfail(strict=True, reason="the -30 unit penalty demotes the only fitting sense")
     def test_scooter_must_lock_the_motor_scooter_sense(self):
+        """RC closed: motor scooter sense is boosted by vehicle modifiers."""
         idx, score, margin, conf = _locked("scooter", "noun", "Shared electric scooters")
         assert idx == 0, senses("scooter")[idx]["definition"]
 
@@ -519,16 +491,16 @@ class TestFixTargets:
     def test_vocabulary_path_must_demand_sense_confidence(self):
         """RC-6 closed: the shipped card carries the sense the sentence evidences."""
         items = L.extract_deterministic_vocabulary(BODY, syllabus_vocab=["corner"],
-                                                   target_count=1)
+                                                    target_count=1)
         assert items
         assert "two lines" not in (items[0].get("definition") or "").lower(), (
             "an unearned sense must not ship as an authoritative definition")
 
-    @pytest.mark.xfail(strict=True, reason="RC-8: dialogue punctuation is masked from spaCy")
     def test_dialogue_pair_must_survive_as_one_sentence(self):
+        """RC-8 closed: dialogue pair survives intact."""
         assert any("Is that new" in s and "common now" in s for s in pool().values())
 
-    @pytest.mark.xfail(strict=True, reason="RC-12: titles are built from pattern_formula")
     def test_expression_card_title_must_be_the_syllabus_phrase(self):
+        """RC-12 closed: syllabus phrase is preserved as title."""
         assert card_block("flying carpet") is not None
 

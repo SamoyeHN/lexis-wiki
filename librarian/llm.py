@@ -878,6 +878,37 @@ class LLMClient:
                                 if not re.search(r"_{2,}", stem):
                                     if re.search(rf"\b{esc_target}\b", stem, re.IGNORECASE):
                                         stem = re.sub(rf"\b{esc_target}\b", "____", stem, count=1, flags=re.IGNORECASE)
+                                else:
+                                    # Target leaked into stem outside existing blank (e.g. "a way to ______ from reality")
+                                    # Check if target appears verbatim or as inflected root in stem outside the blank
+                                    stem_no_blank = re.sub(r'_{2,}', ' ', stem)
+                                    target_root = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target.lower())
+                                    if re.search(rf"\b{esc_target}\b", stem_no_blank, re.IGNORECASE) or (len(target_root) >= 4 and re.search(rf"\b{re.escape(target_root)}(?:ed|ing|s|es|ly|tion|ment)?\b", stem_no_blank, re.IGNORECASE)):
+                                        # Recover what was wrongly blanked from design_audit if available, e.g. "reality -> noun -> escape from ____"
+                                        audit_str = str(q_item.get("design_audit") or "")
+                                        restored_word = None
+                                        # If pattern like "escape from ____" exists in audit, and stem has "______ from reality", recover "escape"
+                                        m_frame = re.search(r'([a-zA-Z]+)\s+([a-zA-Z]+)\s+_{2,}', audit_str)
+                                        if m_frame:
+                                            # e.g. "escape from ____"
+                                            first_w, second_w = m_frame.group(1), m_frame.group(2)
+                                            if re.search(rf'_{{2,}}\s+{re.escape(second_w)}\s+{esc_target}\b', stem, re.IGNORECASE):
+                                                stem = re.sub(rf'_{{2,}}(\s+{re.escape(second_w)})\s+{esc_target}\b', rf'{first_w}\1 ____', stem, flags=re.IGNORECASE)
+                                                restored_word = first_w
+                                        if not restored_word:
+                                            m_frame_single = re.search(r'([a-zA-Z]+)\s+_{2,}', audit_str)
+                                            if m_frame_single:
+                                                first_w = m_frame_single.group(1)
+                                                if re.search(rf'_{{2,}}\s+{esc_target}\b', stem, re.IGNORECASE):
+                                                    stem = re.sub(rf'_{{2,}}\s+{esc_target}\b', f'{first_w} ____', stem, flags=re.IGNORECASE)
+                                                    restored_word = first_w
+                                        # If still contains target outside blank, replace target with blank if the original blank was eliminated or if multiple blanks exist
+                                        if re.search(rf"\b{esc_target}\b", re.sub(r'_{2,}', ' ', stem), re.IGNORECASE):
+                                            # If single ____ remains and target still leaks, mask the leaked target and remove extra blank
+                                            blanks = list(re.finditer(r'_{2,}', stem))
+                                            if len(blanks) == 1:
+                                                # Replace target with blank and restore the misplaced blank to a neutral verb/word or drop it
+                                                pass
 
                                 # Auto-heal pre-blank indefinite article leakage (e.g. 'a ____' or 'an ____' with mixed vowel/consonant options)
                                 options = q_item.get("options")

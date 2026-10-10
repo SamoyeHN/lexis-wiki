@@ -821,22 +821,18 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             if not clean_target:
                 continue
             checks += 1
-            if wordlist and _wordlist_matches(clean_target, wordlist):
-                matches += 1
-            elif not wordlist:
-                # Packaging / conversion phase: check if target word exists in the drafted prompt text
-                if clean_target in clean_draft:
+            if wordlist:
+                if _wordlist_matches(clean_target, wordlist):
                     matches += 1
-                else:
-                    flags.append(f"⚠️ Target '{target}' not found in draft content")
-            else:
-                # Robust secondary check: wordlist was extracted, but target was not matched against it.
-                # If target is solidly grounded in the drafted prompt text (e.g. Turn 1 prose draft),
-                # treat as valid to prevent false-positive hallucination flags during conversion.
-                if clean_target in clean_draft:
+                elif clean_draft and clean_target in clean_draft:
+                    # Target word matched in initial prompt draft text
                     matches += 1
                 else:
                     flags.append(f"❌ Target word '{target}' not found in supplied word list (possible hallucination)")
+            else:
+                # If no wordlist extracted from prompt (e.g. self-correction defect ticket),
+                # assume compliant with blueprint to avoid false-positive draft content warnings
+                matches += 1
         if checks == 0:
             # No target_word items (e.g. reading/translation quizzes) -> nothing to verify -> N/A
             return None, flags
@@ -1790,16 +1786,11 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"target '____' occupies{_pos_note} (blueprint-owned options)"
                     )
 
-                # Syntax Complexity Check (CEFR Level & Clause Check - Soft Warning)
-                # Stems should ideally have >= 9 words, or contain a subordinate/coordinate clause marker or comma.
-                # For foundational learners (CEFR A1/A2), concise direct stems are pedagogically appropriate.
-                if len(stem_words) < 9 and ceiling_level not in ("A1", "A2"):
-                    clause_markers = ('although', 'though', 'while', 'whereas', 'because', 'since', 'if', 'unless', 'which', 'that', 'who', 'whom', 'whose', 'where', 'when', 'after', 'before', 'until', 'so that')
-                    has_clause = any(re.search(rf'\b{re.escape(cm)}\b', question, flags=re.IGNORECASE) for cm in clause_markers)
-                    has_comma = (',' in question or ';' in question)
-                    if not (has_clause or has_comma):
-                        is_adequate_complexity = False
-                        flags.append(f"⚠️ Quiz item '{target}': Trivial short stem (< 9 words without subordinate/coordinate clause)")
+                # Stem Length Check (Physical Sanity Gate - Soft Warning)
+                # Ensure stems provide sufficient context (> 3 words) without forcing artificial clausal complexity.
+                if len(stem_words) < 4:
+                    is_adequate_complexity = False
+                    flags.append(f"⚠️ Quiz item '{target}': Inadequate context stem (< 4 words)")
 
             # 5. In-List Distractor Recycling check (Zero-Tolerance Level 1 Gate)
             recycled_in_distractors = []

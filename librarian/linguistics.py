@@ -1682,6 +1682,7 @@ class LinguisticEngine:
 
         stopwords = {
             'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'so', 'because', 'as', 'until', 'while',
+            'when', 'where', 'why', 'how', 'which', 'what', 'who', 'whom', 'whose',
             'of', 'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after',
             'above', 'below', 'to', 'from', 'up', 'upon', 'down', 'in', 'out', 'on', 'off', 'over', 'under',
             'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does', 'did', 'doing',
@@ -1765,7 +1766,15 @@ class LinguisticEngine:
                             continue
                         sp = s.get("signpost") or ""
                         df = s.get("definition") or ""
-                        text = f"{sp}: {df}".strip(": ") if sp else df
+                        base_text = f"{sp}: {df}".strip(": ") if sp else df
+                        exs = s.get("examples") or []
+                        if exs:
+                            # Enrich candidate sense with representative examples to capture contextual valency
+                            clean_exs = [re.sub(r"\(=.*?\)", "", ex).strip() for ex in exs[:2] if ex]
+                            ex_str = "; ".join(clean_exs)
+                            text = f"{base_text}. Examples: {ex_str}" if ex_str else base_text
+                        else:
+                            text = base_text
                         candidate_texts.append(text)
                         candidate_indices.append(i)
                     if candidate_texts:
@@ -2115,13 +2124,27 @@ class LinguisticEngine:
                                     if any(k in q_low_all for k in ("friend", "know", "hello", "meet", "talk to", "yesterday")):
                                         score += 30
 
-                            # Governing verb (e.g. 'hold potlucks' -> meal/party, 'hear voices' -> sound/speech)
+                            # Vehicle modifier alignment (e.g. 'electric scooter', 'shared electric scooter')
+                            if target_w_clean in ("scooter", "bike", "bicycle", "car", "vehicle"):
+                                has_motor_modifier = any(
+                                    ch.lemma_.lower() in ("electric", "motorized", "motor", "battery")
+                                    for ch in tok.children if ch.dep_ in ("amod", "compound")
+                                ) or any(m in q_low_all for m in ("electric scooter", "motor scooter", "electric bike", "shared electric"))
+                                if has_motor_modifier:
+                                    if any(k in s_defn for k in ("motorcycle", "motor", "engine", "powerful")) or any("motor" in u.lower() for u in s.get("units", [])):
+                                        score += 45
+                                    elif "child" in s_defn:
+                                        score -= 25
+
+                            # Governing verb (e.g. 'hold potlucks' -> meal/party, 'hear voices' -> sound/speech, 'have a fall' -> movement/event)
                             if tok.head and tok.head.pos_ == "VERB":
                                 v_lem = tok.head.lemma_.lower()
+                                v_forms = cls.inflected_forms(v_lem) | {v_lem}
+                                v_pat = r"\b(?:" + "|".join(re.escape(f) for f in v_forms) + r")\b"
                                 if v_lem in ("hold", "host", "organize", "have", "attend", "bring"):
-                                    if any(k in s_defn for k in ("meal", "food", "party", "dinner", "lunch", "eat")):
+                                    if re.search(r"\b(meal|food|party|dinner|lunch|eat|eating)\b", s_defn):
                                         score += 40
-                                elif any(v_lem in ex.lower() for ex in s.get("examples", [])):
+                                if any(re.search(v_pat, ex.lower()) for ex in s.get("examples", [])):
                                     score += 35
 
                             # Prepositional container (e.g. 'part of the team' -> work/organization, 'in myths or people's dreams' -> asleep / mental experience)
@@ -4220,9 +4243,13 @@ class LinguisticEngine:
                     if len(parts) == 1:
                         cand = parts[0]
                     elif len(parts) >= 2:
-                        # Extract verb head from verb phrases (e.g. 'carry out something', 'perform a task')
+                        # Extract verb head from verb phrases ONLY if followed by standard placeholders (e.g. 'perform sth')
+                        # Do NOT extract verb head from phrasal verbs or idiomatic phrases (e.g. 'come forward', 'let me')
                         if wn_pos == "v":
-                            cand = parts[0]
+                            if parts[1] in ("sb", "sth", "someone", "something", "oneself", "a", "an", "the"):
+                                cand = parts[0]
+                            else:
+                                continue
                         # Extract noun head from noun phrases (e.g. 'branch of', 'facilities for', 'member of')
                         elif wn_pos == "n" and parts[1] in ("of", "for", "to", "in", "on", "with", "as", "sb", "sth"):
                             p_doc = nlp(parts[0])
@@ -4718,6 +4745,21 @@ class LinguisticEngine:
         antonyms.discard(target)
         return near, antonyms
 
+    GENERIC_COLLOCATION_MODIFIERS: Set[str] = {
+        "big", "huge", "enormous", "massive", "great", "small", "tiny", "little",
+        "good", "bad", "fine", "new", "old", "strong", "weak", "high", "low",
+        "deep", "different", "certain", "various", "several", "many", "much",
+        "more", "most", "less", "least", "real", "true", "full", "complete"
+    }
+    GENERIC_COLLOCATION_VERBS: Set[str] = {
+        "have", "has", "had", "make", "made", "get", "got", "give", "gave",
+        "take", "took", "do", "did", "done", "see", "saw", "find", "found", "use", "used"
+    }
+    COLLECTIVE_GROUP_NOUNS: Set[str] = {
+        "team", "company", "crew", "committee", "board", "panel", "unit",
+        "staff", "service", "force", "group", "crowd", "squad", "cast", "faculty"
+    }
+
     @classmethod
     def double_key_collision(cls, target: str, distractor: str,
                              anchor: Optional[str] = None,
@@ -4743,9 +4785,21 @@ class LinguisticEngine:
         near, antonyms = cls.semantic_fields(t)
         # Also include LDOCE thesaurus words in near semantic field
         for item in cls.get_ldoce_thesaurus(t):
-            tw = item.get("word", "").strip().lower()
-            if tw and " " not in tw and tw != t:
-                near.add(tw)
+            raw_w = item.get("word", "").strip().lower()
+            if not raw_w or raw_w == t:
+                continue
+            # Parse slash-separated tokens (e.g. 'longing/yearning' -> 'longing', 'yearning')
+            for chunk in raw_w.split("/"):
+                chunk = chunk.strip()
+                if chunk and " " not in chunk and chunk != t:
+                    near.add(chunk)
+
+        # Collective / Group Noun Double-Key Gate:
+        # If both target and distractor denote collections or groups of people/staff
+        # and frame is partitive/of-complement ('a ____ of experts'), any other group noun is a double key!
+        if t in cls.COLLECTIVE_GROUP_NOUNS and d in cls.COLLECTIVE_GROUP_NOUNS:
+            if anchor in ("of", "part of", "member of", "on", "in") or anchor_type in ("prep", "partitive"):
+                return True, "double_key_slot"
 
         # Adverb syntactic modification frame discrimination
         if anchor_type in ("modifies_adj", "modifies_verb"):
@@ -4794,8 +4848,17 @@ class LinguisticEngine:
             # If an explicit collocational anchor is present (e.g. adjective modifier or verb)
             # and candidate d does NOT share that collocation in OCD/LDOCE, candidate d is ruled out
             # by the anchor slot itself and is therefore a valid, single-fit distractor.
+            # EXCEPTION: If anchor is a generic adjective or verb (e.g. huge, massive, new, good, have),
+            # absence in OCD does NOT discriminate near-synonyms! Near-synonyms remain double keys.
             if anchor and anchor_type in ("adj", "verb", "modified_noun", "verb_subject", "modifies_adj", "modifies_verb"):
                 a_clean = anchor.lower()
+                is_generic_anchor = (
+                    (anchor_type in ("adj", "modified_noun") and a_clean in cls.GENERIC_COLLOCATION_MODIFIERS) or
+                    (anchor_type in ("verb", "verb_subject") and a_clean in cls.GENERIC_COLLOCATION_VERBS)
+                )
+                if is_generic_anchor:
+                    return True, "double_key_slot"
+
                 d_entry = cls.get_oxford_collocations(d, pos=pos or "noun")
                 shared_colloc = False
                 if anchor_type == "adj":
@@ -4992,19 +5055,20 @@ class LinguisticEngine:
         import sqlite3
         db_path = cls._ldoce_db_path()
         syn_map: Dict[str, Set[str]] = {}
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT phrase_key, raw_phrase FROM ldoce_phrase_index WHERE raw_phrase LIKE '%/%'")
-                groups: Dict[str, Set[str]] = {}
-                for k, raw in cur.fetchall():
-                    groups.setdefault(raw, set()).add(k)
-                for raw, keys in groups.items():
-                    if len(keys) > 1:
-                        for k in keys:
-                            syn_map.setdefault(k, set()).update(keys)
-        except Exception:
-            pass
+        if db_path.exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT phrase_key, raw_phrase FROM ldoce_phrase_index WHERE raw_phrase LIKE '%/%'")
+                    groups: Dict[str, Set[str]] = {}
+                    for k, raw in cur.fetchall():
+                        groups.setdefault(raw, set()).add(k)
+                    for raw, keys in groups.items():
+                        if len(keys) > 1:
+                            for k in keys:
+                                syn_map.setdefault(k, set()).update(keys)
+            except Exception:
+                pass
 
         cls._PHRASE_SYNONYMS_CACHE = syn_map
         return cls._PHRASE_SYNONYMS_CACHE
@@ -5018,16 +5082,17 @@ class LinguisticEngine:
         import sqlite3
         db_path = cls._ldoce_db_path()
         phrase_dict: Dict[str, str] = {}
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT DISTINCT phrase_key, tier FROM ldoce_phrase_index")
-                for key, tier in cur.fetchall():
-                    # Prioritize phrasal_verb > phrase_row > sense_unit
-                    if key not in phrase_dict or tier == "phrasal_verb":
-                        phrase_dict[key] = tier
-        except Exception:
-            pass
+        if db_path.exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT DISTINCT phrase_key, tier FROM ldoce_phrase_index")
+                    for key, tier in cur.fetchall():
+                        # Prioritize phrasal_verb > phrase_row > sense_unit
+                        if key not in phrase_dict or tier == "phrasal_verb":
+                            phrase_dict[key] = tier
+            except Exception:
+                pass
 
         cls._PHRASE_INDEX_CACHE = phrase_dict
         return cls._PHRASE_INDEX_CACHE
@@ -5586,12 +5651,20 @@ class LinguisticEngine:
             return "weak", len(tokens)
         try:
             doc = nlp(text)
-            # A usable quote must contain a real predicate (not just an aux/copula fragment)
-            has_predicate = any(
+            # A usable quote must contain a real predicate: either a lexical verb,
+            # or a complete copular clause with a subject and complement (e.g. 'The hospital staff were very helpful.')
+            has_lexical_verb = any(
                 tok.pos_ == "VERB" and tok.dep_ not in ("aux", "auxpass", "cop")
                 for tok in doc
             )
-            if not has_predicate:
+            has_copular_clause = any(
+                tok.pos_ in ("AUX", "VERB")
+                and (tok.dep_ in ("ROOT", "cop") or tok.head == tok)
+                and any(c.dep_ in ("acomp", "attr", "dobj", "prep") for c in tok.children)
+                and any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
+                for tok in doc
+            )
+            if not has_lexical_verb and not has_copular_clause:
                 return "weak", len(tokens)
         except Exception:
             return "weak", len(tokens)
@@ -5866,8 +5939,19 @@ class LinguisticEngine:
         "show": ("showed", "shown", "showing", "shows"),
         "hear": ("heard", "heard", "hearing", "hears"),
         "leave": ("left", "left", "leaving", "leaves"),
-        "lose": ("lost", "lost", "losing", "loses"),
         "understand": ("understood", "understood", "understanding", "understands"),
+        "stand": ("stood", "stood", "standing", "stands"),
+        "sit": ("sat", "sat", "sitting", "sits"),
+        "fall": ("fell", "fallen", "falling", "falls"),
+        "rise": ("rose", "risen", "rising", "rises"),
+        "shake": ("shook", "shaken", "shaking", "shakes"),
+        "ride": ("rode", "ridden", "riding", "rides"),
+        "drive": ("drove", "driven", "driving", "drives"),
+        "choose": ("chose", "chosen", "choosing", "chooses"),
+        "freeze": ("froze", "frozen", "freezing", "freezes"),
+        "speak": ("spoke", "spoken", "speaking", "speaks"),
+        "break": ("broke", "broken", "breaking", "breaks"),
+        "steal": ("stole", "stolen", "stealing", "steals"),
     }
 
     @classmethod
@@ -6595,7 +6679,7 @@ class LinguisticEngine:
         if (canonical_pos or "").lower() != "verb" or inflection_desc != "base form":
             return inflection_desc, base_options, target_word, "VB"
         tag = cls._example_target_tag(authentic_example, target_word)
-        if tag not in ("VBD", "VBZ", "VBG"):
+        if tag not in ("VBD", "VBZ", "VBG", "VBN"):
             return inflection_desc, base_options, target_word, "VB"
         inflected: List[str] = []
         for opt in base_options:
@@ -7600,9 +7684,9 @@ class LinguisticEngine:
                 quote_body = m.group(2)
                 quote_close = m.group(3)
                 masked_body = (
-                    quote_body.replace(".", "§DOT§")
-                              .replace("!", "§EXCL§")
-                              .replace("?", "§QUES§")
+                    quote_body.replace(".", " §DOT§ ")
+                              .replace("!", " §EXCL§ ")
+                              .replace("?", " §QUES§ ")
                 )
                 return f"{quote_open}{masked_body}{quote_close}"
 
@@ -7616,12 +7700,13 @@ class LinguisticEngine:
             para_doc = nlp(masked_para_text)
             para_sent_parts = []
             for sent in para_doc.sents:
-                raw_sent = (
-                    sent.text.replace("§DOT§", ".")
-                             .replace("§EXCL§", "!")
-                             .replace("§QUES§", "?")
-                             .strip()
-                )
+                raw_sent = sent.text
+                raw_sent = re.sub(r'\s*§DOT§\s*', '. ', raw_sent)
+                raw_sent = re.sub(r'\s*§EXCL§\s*', '! ', raw_sent)
+                raw_sent = re.sub(r'\s*§QUES§\s*', '? ', raw_sent)
+                raw_sent = re.sub(r'\s+([”"»])', r'\1', raw_sent)
+                raw_sent = re.sub(r'([“"«])\s+', r'\1', raw_sent)
+                raw_sent = re.sub(r'\s{2,}', ' ', raw_sent).strip()
                 if not raw_sent:
                     continue
                 # Clean enclosing markdown bold/italic formatting from pristine sentence text
@@ -7782,9 +7867,17 @@ class LinguisticEngine:
                     if c_pos in wn_map:
                         return wn_map[c_pos]
 
-        # 1. Exact match on token text or lemma
+        # 1. Exact match on token text, lemma, or morphological inflection
+        target_forms = cls.inflected_forms(clean_w) | {clean_w}
         for tok in doc:
-            if tok.text.lower() == target_tok or tok.lemma_.lower() == target_tok:
+            tok_lower = tok.text.lower()
+            tok_lem = tok.lemma_.lower()
+            matches_target = (
+                tok_lower == target_tok or tok_lem == target_tok or
+                tok_lower in target_forms or tok_lem in target_forms or
+                cls.form_matches(tok_lower, clean_w) or cls.form_matches(tok_lem, clean_w)
+            )
+            if matches_target:
                 # If modifying a noun as an adjectival modifier (amod, advmod)
                 if tok.dep_ in ("amod", "advmod") and tok.head.pos_ in ("NOUN", "PROPN"):
                     # Check if token is a participle or verb: only return adjective if dictionary admits clean_w as an adjective
@@ -8113,20 +8206,31 @@ class LinguisticEngine:
             raw_names.append(b)
             # Multi-word slash group expansion inside branch (e.g. 'not anymore/any longer' ->
             # 'not anymore', 'not any longer')
+            _parallel_preps = {
+                "on", "off", "in", "out", "up", "down", "at", "to", "from",
+                "with", "without", "by", "for", "of", "over", "under"
+            }
             m = re.search(r"(?:^|\s)([a-zA-Z0-9]+)/([a-zA-Z0-9]+\s+[a-zA-Z0-9]+)\s*(?:etc|\(.*?\)|\[.*?\]|$)", b)
             if m:
                 w1, w2_phrase = m.group(1), m.group(2)
-                prefix = b[:m.start(1)]
-                suffix = b[m.end(2):]
-                raw_names.append((prefix + w1 + suffix).strip())
-                raw_names.append((prefix + w2_phrase + suffix).strip())
+                w2_words = w2_phrase.split()
+                # If w1 and the first word of w2_phrase are parallel prepositions (e.g. 'on/off duty'),
+                # this is a single-word alternation before a common head ('be on duty' / 'be off duty'),
+                # NOT a multi-word alternative where w1 stands alone as a headless fragment ('be on').
+                if not (w1.lower() in _parallel_preps and w2_words and w2_words[0].lower() in _parallel_preps):
+                    prefix = b[:m.start(1)]
+                    suffix = b[m.end(2):]
+                    raw_names.append((prefix + w1 + suffix).strip())
+                    raw_names.append((prefix + w2_phrase + suffix).strip())
             m2 = re.search(r"(?:^|\s)([a-zA-Z0-9]+\s+[a-zA-Z0-9]+)/([a-zA-Z0-9]+)\s*(?:etc|\(.*?\)|\[.*?\]|$)", b)
             if m2:
                 w1_phrase, w2 = m2.group(1), m2.group(2)
-                prefix = b[:m2.start(1)]
-                suffix = b[m2.end(2):]
-                raw_names.append((prefix + w1_phrase + suffix).strip())
-                raw_names.append((prefix + w2 + suffix).strip())
+                w1_words = w1_phrase.split()
+                if not (w2.lower() in _parallel_preps and w1_words and w1_words[-1].lower() in _parallel_preps):
+                    prefix = b[:m2.start(1)]
+                    suffix = b[m2.end(2):]
+                    raw_names.append((prefix + w1_phrase + suffix).strip())
+                    raw_names.append((prefix + w2 + suffix).strip())
 
         spellings: Set[str] = set()
         for variant_name in raw_names:
@@ -8482,11 +8586,11 @@ class LinguisticEngine:
         if w == 'lens':
             return 'lenses'
 
-        # Check if word is already recognized as plural noun (e.g. 'things', 'assets', 'possessions')
-        # to prevent corrupt pseudo-plurals like 'thingses' or 'assetses'
+        # Check if word is already recognized as plural noun (e.g. 'things', 'assets', 'possessions', 'dreams')
+        # to prevent corrupt pseudo-plurals like 'thingses' or 'dreamses'
         nlp = cls.get_spacy()
-        doc = nlp(w)
-        tok = doc[0]
+        doc = nlp(f"these {w}")
+        tok = doc[1] if len(doc) > 1 else doc[0]
         if tok.tag_ == 'NNS' and tok.lemma_.lower() != w and not w.endswith(('ss', 'us', 'is')):
             return w
 
@@ -8996,16 +9100,20 @@ class LinguisticEngine:
             matched_patterns = gp_engine.match_sentence(doc)
 
             if matched_patterns:
-                top_match = matched_patterns[0]
-                cat = top_match["category"]
-                formula = top_match.get("formula", "")
+                for match_item in matched_patterns:
+                    cat = match_item["category"]
+                    formula = match_item.get("formula", "")
+                    if cat and formula and not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
+                        raw_skeletons.append({
+                            "sid": sid,
+                            "quote": sent_clean,
+                            "category": cat,
+                            "pattern_formula": formula,
+                        })
             else:
                 cat = cls.classify_grammar_dependency(sent_clean)
                 formula = cls.generate_cobuild_formula(sent_clean, category=cat) if cat else ""
-
-            if cat and formula:
-                # Filter out generic/un-abstracted formulas (e.g. [Subject] + [VP] + [Clause] or simple [S])
-                if not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
+                if cat and formula and not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
                     raw_skeletons.append({
                         "sid": sid,
                         "quote": sent_clean,
@@ -9017,14 +9125,21 @@ class LinguisticEngine:
             return []
 
         # Diverse selection algorithm across macro domains and distinct formulas
-        # Normalize relative clauses ([NP] + who/that/which + [VP]) to avoid duplicate slots
+        # Normalize relative clauses and conditional clauses to avoid duplicate slots
         def _norm_structure(formula_str: str) -> str:
-            return re.sub(
-                r"\[NP\]\s*\+\s*(?:who|which|that|whom|whose)\s*\+\s*\[VP\]",
+            res = re.sub(
+                r"\[NP\]\s*(?:\+|,\s*)\s*(?:who|which|that|whom|whose)\s*\+\s*\[VP\]",
                 "[NP] + rel_pron + [VP]",
                 formula_str,
                 flags=re.IGNORECASE
             )
+            res = re.sub(
+                r"^(?:if|unless|as long as|provided that)\s*\+\s*\[Clause\]",
+                "[Condition] + [Clause]",
+                res,
+                flags=re.IGNORECASE
+            )
+            return res
 
         selected: List[Dict[str, str]] = []
         seen_cats: Set[str] = set()
@@ -9232,6 +9347,11 @@ class LinguisticEngine:
                 expr_clean = re.sub(r"\s+", " ", expr.strip())
                 words = expr_clean.split()
 
+                # Filter proper nouns / TV trivia entities (e.g. 'lone ranger' with kind == 'entity')
+                ldoce_ent = cls.get_ldoce_entry(expr_clean)
+                if ldoce_ent and ldoce_ent.get("kind") == "entity":
+                    continue
+
                 # If syllabus expression starts with passive auxiliary 'be' (e.g. 'be admitted to', 'be featured in'),
                 # check if it is a genuine LDOCE dictionary idiom/entry (e.g. 'be accustomed to', 'be bound to', 'be fond of').
                 # If not a genuine 'be' entry, strip leading 'be' to yield active lemma base ('admit to', 'feature in').
@@ -9290,7 +9410,7 @@ class LinguisticEngine:
 
                 # 1. Specialized High-Frequency Idioms (figurative, non-compositional units)
                 KNOWN_IDIOMS = {
-                    "lone ranger", "hats off", "hat off", "pat on the back", 
+                    "hats off", "hat off", "pat on the back", 
                     "spill the beans", "break the ice", "piece of cake", 
                     "bite the bullet", "call it a day", "under the weather"
                 }
@@ -9306,8 +9426,6 @@ class LinguisticEngine:
 
                 if any(idiom in e_lower for idiom in KNOWN_IDIOMS):
                     formula = expr_clean
-                    if "lone ranger" in e_lower:
-                        formula = "lone ranger"
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
@@ -9383,8 +9501,9 @@ class LinguisticEngine:
                             expr_tokens = [t for t in doc if any(w.lower() in (t.text.lower(), t.lemma_.lower()) for w in words)]
 
                     first_tok = expr_tokens[0] if expr_tokens else None
+                    is_participial_amod = bool(first_tok and first_tok.dep_ == "amod" and first_tok.head.pos_ in ("NOUN", "PROPN"))
 
-                    if first_tok and first_tok.pos_ in ("VERB", "AUX"):
+                    if first_tok and first_tok.pos_ in ("VERB", "AUX") and not is_participial_amod:
                         v_lemma = first_tok.lemma_.lower()
                         last_tok = expr_tokens[-1]
                         
@@ -10041,6 +10160,18 @@ class LinguisticEngine:
                 "(Note: Conjoined predicates must maintain identical non-finite morphological forms)."
             )
         },
+        "antithesis_parallelism": {
+            "name": "Antithesis & Symmetrical Contrast (not... but...)",
+            "category": "Rhetoric & Emphasis",
+            "pattern_formula": "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]",
+            "pedagogical_function": "Contrasts two opposing elements directly using 'not... but...' to define what is truly meant.",
+            "imitation_example": "Great leaders value not personal acclaim, but genuine team success.",
+            "common_mistakes": (
+                "Grammar Warning (Antithesis Coordination): Learners frequently fail to maintain parallel syntactic structures across 'not... but...': "
+                "\"The organization values not [INCORRECT: profit, but rather to serve people -> CORRECT: personal profit, but public service].\" "
+                "(Note: Elements coordinated by 'not... but...' must share identical syntactic category and morphological status)."
+            )
+        },
         "fronted_negative_inversion": {
             "name": "Fronted Negative & Subject-Auxiliary Inversion",
             "category": "Rhetoric & Emphasis",
@@ -10123,6 +10254,18 @@ class LinguisticEngine:
                 "\"[INCORRECT: Having reviewed the telemetry data, the error became apparent -> CORRECT: Having reviewed the telemetry data, the engineers identified the error].\""
             )
         },
+        "participial_adjunct_post": {
+            "name": "Post-Positioned Participial Adjuncts",
+            "category": "Information Packaging",
+            "pattern_formula": "[Subject] + [VP], [V-ed / V-ing Phrase]",
+            "pedagogical_function": "Appends a concluding or subsequent action after the main clause using a participle, giving writing a smooth narrative flow.",
+            "imitation_example": "The ceremony concluded at noon, followed by an informal reception.",
+            "common_mistakes": (
+                "Grammar Warning (Participial Clauses): Learners frequently confuse active and passive participle forms in supplementary post-modifiers: "
+                "\"The meeting ended abruptly, [INCORRECT: following by -> CORRECT: followed by] a heated discussion.\" "
+                "(Note: Use past participle 'followed by' for passive/sequential attachment and present participle for simultaneous/resultant action)."
+            )
+        },
         "gerund_subject_nominalization": {
             "name": "Gerundial Subject Nominalization",
             "category": "Information Packaging",
@@ -10190,6 +10333,30 @@ class LinguisticEngine:
                 "Grammar Warning (Passive Voice): Learners frequently produce intransitive passives: "
                 "\"[INCORRECT: The accident was happened -> CORRECT: The accident happened].\""
             )
+        },
+        "conditional_clause_if": {
+            "name": "Conditional Adverbial Clauses (If-Conditionals)",
+            "category": "Logic & Stance",
+            "pattern_formula": "If + [Clause], [Subject] + [VP]",
+            "pedagogical_function": "Sets up hypothetical scenarios, logical prerequisites, or causal contingencies that govern subsequent outcomes.",
+            "imitation_example": "If researchers establish standardized protocols, laboratory teams can reproduce empirical outcomes reliably.",
+            "common_mistakes": (
+                "Grammar Warning (Conditional Clauses): Learners frequently produce incorrect future modal verbs inside the conditional protasis clause: "
+                "\"[INCORRECT: If you will send the report tomorrow -> CORRECT: If you send the report tomorrow], the committee can review it promptly.\" "
+                "(Note: In open present/future conditional clauses, the 'if'-clause requires present simple tense rather than 'will')."
+            )
+        },
+        "conditional_clause_as_long_as": {
+            "name": "Contingent Stipulation Clauses (As long as / Provided that)",
+            "category": "Logic & Stance",
+            "pattern_formula": "As long as + [Clause], [Subject] + [VP]",
+            "pedagogical_function": "Introduces an indispensable prerequisite or binding stipulation under which the main assertion holds true.",
+            "imitation_example": "As long as municipal regulations safeguard public transit corridors, commuters can adopt innovative mobility devices safely.",
+            "common_mistakes": (
+                "Grammar Warning (Stipulative Conjunctions): Learners frequently confuse conditional 'as long as' with extent/distance phrases: "
+                "\"[INCORRECT: As far as good rules regulate production -> CORRECT: As long as good rules regulate production], citizens can enjoy safe transit.\" "
+                "(Note: Use 'as long as' for condition/prerequisite constraints and 'as far as' for scope/knowledge limitations)."
+            )
         }
     }
 
@@ -10217,6 +10384,10 @@ class LinguisticEngine:
                 return cls.COBUILD_GRAMMAR_PROFILES["fronted_negative_inversion"]
             return cls.COBUILD_GRAMMAR_PROFILES["correlative_parallelism"]
 
+        # 2b. Antithesis Coordination: not... but...
+        if "not + [prepp/np], but" in f_lower or re.search(r",\s*not\b.*?\bbut\b", q_lower):
+            return cls.COBUILD_GRAMMAR_PROFILES["antithesis_parallelism"]
+
         # 3. Object Complement / Complex Transitive: make + Object + Adj
         if ("make +" in f_lower or "render +" in f_lower or "find +" in f_lower) and ("[adj]" in f_lower or "[object]" in f_lower):
             return cls.COBUILD_GRAMMAR_PROFILES["object_complement_adj"]
@@ -10228,11 +10399,11 @@ class LinguisticEngine:
             return cls.COBUILD_GRAMMAR_PROFILES["causative_bare_infinitive"]
 
         # 5. Non-restrictive / Sentential Relative Clauses
-        if ", which" in q_lower or "which + [interpretive" in f_lower:
+        if ", which" in q_lower or "which + [interpretive" in f_lower or "[np], which" in f_lower:
             return cls.COBUILD_GRAMMAR_PROFILES["relative_clause_elaborative"]
 
-        # 6. Restrictive Relative Clauses: [NP] + which/that + [VP]
-        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose")):
+        # 6. Restrictive Relative Clauses: [NP] + which/that/who + [VP]
+        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np] , which", "[np] , who")):
             return cls.COBUILD_GRAMMAR_PROFILES["relative_clause_restrictive"]
 
         # 7. Proportional Comparative
@@ -10244,6 +10415,8 @@ class LinguisticEngine:
             return cls.COBUILD_GRAMMAR_PROFILES["dummy_it_extraposition"]
 
         # 9. Participial Adjuncts
+        if "[subject] + [vp], [" in f_lower and ("v-ed" in f_lower or "v-ing" in f_lower):
+            return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct_post"]
         if "[v-ing phrase]" in f_lower or "[v-ed phrase]" in f_lower or "particip" in c_lower:
             return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct"]
 
@@ -10264,6 +10437,12 @@ class LinguisticEngine:
         # 13. Passive voice
         if "passive" in f_lower or "passive" in c_lower or ("[be/modal be]" in f_lower and "[v-ed]" in f_lower):
             return cls.COBUILD_GRAMMAR_PROFILES["passive_voice_agentless"]
+
+        # 14. Conditional clauses (if / as long as / unless)
+        if "as long as" in f_lower or "as long as" in q_lower:
+            return cls.COBUILD_GRAMMAR_PROFILES["conditional_clause_as_long_as"]
+        if f_lower.startswith("if +") or "if/unless" in f_lower or (q_lower.startswith("if ") or ", if " in q_lower or "so, if " in q_lower or "similarly, if " in q_lower):
+            return cls.COBUILD_GRAMMAR_PROFILES["conditional_clause_if"]
 
         # Dynamic Category-Aware Fallback (Prevents Unit 69 / Relative Clause Contamination)
         if c_lower == "rhetoric & emphasis":
@@ -10380,7 +10559,7 @@ class LinguisticEngine:
             # 2. LDOCE6 Authentic Grammar Alert & Don't Say diagnostics for common_mistakes
             try:
                 # Disallow generic function/connector words from hijacking dedicated profile warnings
-                STOP_WORDS_FOR_ALERTS = {"that", "not", "also", "it", "which", "this", "what", "there"}
+                STOP_WORDS_FOR_ALERTS = {"that", "not", "also", "it", "which", "this", "what", "there", "long", "like", "well", "such"}
                 GENERIC_PROFILES = {
                     "Syntactic Pattern",
                     "Rhetorical Emphasis & Contrast",
@@ -11574,8 +11753,8 @@ class LinguisticEngine:
             is_plural_noun = False
             plural_target = w_lower
             if canonical_pos == "noun":
-                spacy_doc = nlp(w_lower)
-                is_spacy_plural = any(tok.tag_ == "NNS" for tok in spacy_doc)
+                spacy_doc = nlp(f"these {w_lower}")
+                is_spacy_plural = any(tok.text.lower() == w_lower and tok.tag_ == "NNS" for tok in spacy_doc)
                 plural_tantum = {"goods", "customs", "clothes", "belongings", "surroundings", "fireworks", "premises", "congratulations"}
                 
                 # Also check authentic quote if the noun appeared in plural NNS form (e.g. fireworks)
@@ -11839,6 +12018,10 @@ class LinguisticEngine:
             # Note: best_pattern, ldoce_pattern_example, and anchor are already atomically
             # bound from the locked sense above (Sense-First Primacy).
 
+            if best_pattern and is_plural_noun:
+                # Symmetrically inflect pattern head noun to plural so LLM does not craft singular frame
+                best_pattern = re.sub(r"\b" + re.escape(w_lower) + r"\b", final_target, best_pattern, flags=re.IGNORECASE)
+
             # Streamlined Context Stem Directive (User Mandates: single blank, concise, ruling out distractors)
             cloze_slot_frame = None
             if best_pattern:
@@ -11849,27 +12032,58 @@ class LinguisticEngine:
                     best_pattern = None
                     p_clean = ""
                 else:
-                    # Replace target word (or its inflections / base form) with '____'
-                    target_forms = set(cls.inflected_forms(w_lower)) | {w_lower, final_target}
+                    # Replace target word (or its inflections / base form / lemma) with '____'
+                    w_lemma = nlp(w_lower)[0].lemma_.lower() if nlp else w_lower
+                    target_forms = set(cls.inflected_forms(w_lower)) | {w_lower, final_target, w_lemma}
+                    if w_lemma != w_lower:
+                        target_forms |= set(cls.inflected_forms(w_lemma))
                     t_pat = r"\b(?:" + "|".join(re.escape(f) for f in target_forms if f) + r")\b"
                     if re.search(t_pat, p_clean, re.IGNORECASE):
                         cloze_slot_frame = re.sub(t_pat, "____", p_clean, flags=re.IGNORECASE).strip()
+                        # If target is plural noun, strip ungrammatical indefinite article 'a/an' preceding ____ (e.g. 'in a ____' -> 'in ____')
+                        if is_plural_noun:
+                            cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "____", cloze_slot_frame, flags=re.IGNORECASE).strip()
                         if not cloze_slot_frame.startswith("...") and not cloze_slot_frame.lower().startswith("it "):
                             cloze_slot_frame = f"... {cloze_slot_frame}"
                     elif any(p_clean.lower().startswith(prep) for prep in ("on ", "in ", "at ", "for ", "with ", "about ", "under ", "from ", "to ", "by ")):
                         cloze_slot_frame = f"... {p_clean} ____"
+                        if is_plural_noun:
+                            cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "____", cloze_slot_frame, flags=re.IGNORECASE).strip()
                     elif any(p_clean.lower().endswith(" " + prep) for prep in ("on", "in", "at", "for", "with", "about", "under", "from", "to", "by", "of", "into")):
                         # e.g. 'serious about', 'message for' -> '... ____ about', '... ____ for'
                         m_end_prep = re.search(r"\b(on|in|at|for|with|about|under|from|to|by|of|into)$", p_clean.lower())
                         if m_end_prep:
                             cloze_slot_frame = f"... ____ {m_end_prep.group(1)}"
 
+            # Detect copular adjective frames (e.g. 'fell silent', 'became silent', 'remained silent')
+            is_copula_adj = False
+            if canonical_pos == "adj" and (cloze_slot_frame or anchor):
+                copula_lemmas = {"be", "become", "fall", "remain", "stay", "seem", "appear", "look", "sound", "smell", "taste", "feel", "get", "turn", "grow", "keep"}
+                check_tokens = re.findall(r"\b[a-zA-Z]+\b", (cloze_slot_frame or "") + " " + str(anchor or ""))
+                for t in check_tokens:
+                    doc_t = nlp(t)
+                    if any(tok.lemma_.lower() in copula_lemmas for tok in doc_t):
+                        is_copula_adj = True
+                        break
+
             if cloze_slot_frame:
                 stem_core = f"Fit into frame '{cloze_slot_frame}'."
+                if is_plural_noun:
+                    stem_core += f" (Plural noun slot required: the sentence must naturally fit plural nouns, e.g. '... {cloze_slot_frame}')."
+                elif is_copula_adj:
+                    stem_core += " (Complete predicate required: stem MUST include the linking verb so the adjective predicate is complete)."
             elif best_pattern:
                 stem_core = "Fit into the Pattern above."
+                if is_plural_noun:
+                    stem_core += " (Plural noun slot required: must fit plural nouns)."
+                elif is_copula_adj:
+                    stem_core += " (Complete predicate required: stem MUST include the linking verb)."
             else:
                 stem_core = "Write a natural sentence matching the Definition above."
+                if is_plural_noun:
+                    stem_core += " (Plural noun slot required: must fit plural nouns)."
+                elif is_copula_adj:
+                    stem_core += " (Complete predicate required: stem MUST include a linking/copular verb)."
 
             task_parts = [stem_core]
 

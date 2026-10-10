@@ -161,6 +161,22 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                     "LEMMA": {"IN": ["if", "unless", "provided", "providing"]},
                     "DEP": "mark"
                 }},
+            ],
+            [
+                {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
+                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
+                {"LEFT_ID": "sub_verb", "REL_OP": ">", "RIGHT_ID": "cond_as", "RIGHT_ATTRS": {
+                    "LOWER": "as",
+                    "DEP": "mark"
+                }},
+            ],
+            [
+                {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
+                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "cond_adv", "RIGHT_ATTRS": {
+                    "LOWER": "long",
+                    "DEP": "advmod"
+                }},
+                {"LEFT_ID": "cond_adv", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
             ]
         ]
     },
@@ -272,14 +288,14 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         "id": "non_restrictive_relative_clause",
         "category": "Information Packaging",
         "priority": 70,
-        "name": "Non-restrictive Relative Clause",
-        "formula": "[NP] , which/who + [VP]",
+        "name": "Relative Clause",
+        "formula": "[NP] + which/that/who + [VP]",
         "tree_patterns": [
             [
                 {"RIGHT_ID": "antecedent", "RIGHT_ATTRS": {"POS": {"IN": ["NOUN", "PROPN", "PRON"]}}},
                 {"LEFT_ID": "antecedent", "REL_OP": ">", "RIGHT_ID": "rel_verb", "RIGHT_ATTRS": {"DEP": "relcl"}},
                 {"LEFT_ID": "rel_verb", "REL_OP": ">", "RIGHT_ID": "rel_pron", "RIGHT_ATTRS": {
-                    "LEMMA": {"IN": ["which", "who", "whom", "whose"]},
+                    "LEMMA": {"IN": ["which", "who", "whom", "whose", "that"]},
                     "DEP": {"IN": ["nsubj", "nsubjpass", "dobj", "pobj"]}
                 }},
             ]
@@ -427,9 +443,24 @@ class GrammarPatternEngine:
                 else:
                     continue
 
-            # Semantic validation for nominative absolute:
-            # An absolute construction must NOT be introduced by a subordinating conjunction (mark),
-            # such as 'although', 'because', 'while', 'if', which would make it a standard subordinate clause.
+            # Semantic validation for nonfinite participial adjunct:
+            # Must NOT be introduced by interrogative/subordinating adverbs/marks like 'why', 'how', 'when', 'if', 'because'
+            # Must NOT be inside quotes as a gerund phrase, and must function as genuine non-finite modifier.
+            if string_id == "nonfinite_participial_adjunct":
+                tokens = [doc[i] for i in token_indices]
+                part_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
+                if part_v:
+                    has_subordinator = any(child.dep_ in ("mark", "advmod") and child.lemma_.lower() in ("why", "how", "when", "where", "if", "because", "although", "while") for child in part_v.children)
+                    # If part_v has a mark or adverbial subordinator, it is an adverbial/wh clause, not a bare participial adjunct
+                    if has_subordinator:
+                        continue
+                    # Also check if it's introduced by a 'why/how' attached to its head
+                    if part_v.head and any(c.lemma_.lower() in ("why", "how", "that") and c.i < part_v.i for c in part_v.head.children):
+                        continue
+
+            # Topological validation for absolute construction:
+            # The independent participial construction must NOT be introduced by subordinating conjunctions (mark)
+            # and should not have auxiliary verbs (like "was exhausted") which indicate a finite subordinate clause.
             if string_id == "absolute_construction":
                 tokens = [doc[i] for i in token_indices]
                 abs_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
@@ -468,6 +499,9 @@ class GrammarPatternEngine:
                 marker = next((t for t in tokens if t.dep_ in ("mark", "advmod")), tokens[0])
                 return f"{marker.text.capitalize()} + [Clause], [Subject] + [VP]"
             elif pattern_id == "conditional_clausal":
+                doc_text_low = doc.text.lower()
+                if "as long as" in doc_text_low:
+                    return "As long as + [Clause], [Subject] + [VP]"
                 marker = next((t for t in tokens if t.dep_ == "mark"), tokens[0])
                 return f"{marker.text.capitalize()} + [Clause], [Subject] + [VP]"
             elif pattern_id == "propositional_encapsulation_which":
@@ -482,6 +516,19 @@ class GrammarPatternEngine:
                 caus = next((t for t in tokens if t.pos_ in ("VERB", "AUX")), None)
                 v_lemma = caus.lemma_.lower() if caus else "make"
                 return f"[Subject] + {v_lemma} + [Object] + [Adj]"
+            elif pattern_id == "non_restrictive_relative_clause":
+                rel_pron = next((t for t in tokens if t.lemma_.lower() in ("which", "who", "whom", "whose", "that")), None)
+                pron_str = rel_pron.text.lower() if rel_pron else "which/who"
+                antecedent = next((t for t in tokens if t.dep_ != "relcl" and t.pos_ in ("NOUN", "PROPN", "PRON")), None)
+                has_comma = False
+                if rel_pron and rel_pron.i > 0:
+                    prev_tok = doc[rel_pron.i - 1]
+                    if prev_tok.text == ",":
+                        has_comma = True
+                if has_comma:
+                    return f"[NP], {pron_str} + [VP]"
+                else:
+                    return f"[NP] + {pron_str} + [VP]"
             elif pattern_id == "nonfinite_participial_adjunct":
                 part = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 if part:
