@@ -154,3 +154,32 @@ class TestBareParticlePattern:
         bare = L.sense_confidence(solo, quote="they lined up on the ridge",
                                   target_pos=None)["score"]
         assert framed > bare, (framed, bare)
+
+    def test_quantifier_of_normalization_to_classifier_sense(self):
+        """A quantifier like 'a piece of' or 'a kind of' should lock to its physical/classifier sense,
+        not to an unrelated idiom like 'a piece of the action'."""
+        # Without context, 'a piece of' resolves to the core 'piece of' pattern/definition
+        defn, ex, src = L.expression_definition_evidence("a piece of")
+        assert "separated" in defn or "amount" in defn or "single thing" in defn
+        assert "action" not in defn.lower()
+
+        # With classroom context 'wrote on a piece of paper'
+        ctx = "The student wrote the answer on a piece of paper."
+        defn_ctx, ex_ctx, _ = L.expression_definition_evidence("a piece of", context_sentence=ctx)
+        assert "single thing" in defn_ctx or "separated" in defn_ctx
+        assert "action" not in defn_ctx.lower()
+
+        # Real idioms like 'a piece of cake' must still resolve to their idiom sense
+        cake_defn, _, _ = L.expression_definition_evidence("a piece of cake")
+        assert "easy" in cake_defn.lower()
+
+    def test_pronominal_anaphora_unit_matching_for_tip(self):
+        """In 'The staff wore hats all week and tipped them toward the volunteers',
+        'tipped them' where pronoun 'them' refers to 'hats' should lock to Sense 20
+        ('touch or raise your hat as a greeting'), not Sense 14 ('tipped to do sth')."""
+        quote = "The staff wore hats all week and tipped them toward the volunteers as we saw them."
+        entry = L.get_ldoce_entry("tip")
+        idx, _score, _margin, _conf = L._lock_sense(entry, quote=quote, target_pos="verb", return_confidence=True)
+        assert idx is not None
+        locked_sense = entry["senses"][idx]
+        assert "hat" in locked_sense.get("definition", "").lower() or "greeting" in locked_sense.get("definition", "").lower()

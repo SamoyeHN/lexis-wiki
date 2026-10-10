@@ -386,6 +386,10 @@ class WikiProcessor:
         # Strip YAML frontmatter (metadata) so prompt body receives strictly pristine pedagogical prose
         clean_body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', clean_body, flags=re.DOTALL).strip()
 
+        # Strip blog/article metadata lines or parentheticals (e.g. '(Posted on 29 December, 2022 by Nazia Anderson)')
+        clean_body = re.sub(r'\s*\(\s*(?:posted|updated|published|written)\s+(?:on|by)\b[^\n\)]+\)', '', clean_body, flags=re.IGNORECASE)
+        clean_body = re.sub(r'(?m)^\s*(?:posted|updated|published|written)\s+(?:on|by)\b[^\n]+$', '', clean_body, flags=re.IGNORECASE).strip()
+
         # Backlog F6: Generic non-prose list detector & stripper.
         # Catches word lists or glossaries (e.g. at the bottom of texts or under arbitrary headings)
         # where lines are short (<= 3 words) without finite verbs, preventing them from being

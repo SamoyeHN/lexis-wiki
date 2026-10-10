@@ -1729,6 +1729,7 @@ class LinguisticEngine:
         headword_tokens = set(re.findall(r"\b[a-z]+\b", target_w_clean))
         target_inflections = set(cls.inflected_forms(target_w_clean)) | headword_tokens | {target_w_clean}
 
+        has_pron_obj = False
         # MiniLM embedding similarity between quote/phrase and candidate senses
         sim_scores: Dict[int, float] = {}
         if quote and len(senses) > 1:
@@ -1752,6 +1753,7 @@ class LinguisticEngine:
                             subtree_span = ''.join([t.text_with_ws for t in matching_toks[0].subtree]).strip()
                             if len(subtree_span.split()) >= 2:
                                 local_phrase = subtree_span
+                            has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in matching_toks[0].children)
                     except Exception:
                         pass
 
@@ -1949,7 +1951,10 @@ class LinguisticEngine:
                                     score += 45
                                     unit_matched = True
                                     break
-                            elif not is_formulaic_greeting and len(other_words) >= 2 and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in other_words):
+                            elif not is_formulaic_greeting and (
+                                (len(other_words) >= 2 and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in other_words))
+                                or (has_pron_obj and other_words and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in other_words))
+                            ):
                                 score += 40
                                 unit_matched = True
                                 break
@@ -2757,6 +2762,9 @@ class LinguisticEngine:
     EXPRESSION_SOURCE_TIERS = ("ldoce_entry", "phrasal_verb_block", "sense_pattern",
                                "phrase_row", "wordnet", "")
 
+    # Quantifier frame regex (e.g. 'a piece of', 'a kind of', 'a sort of', 'a bottle of')
+    _QUANTIFIER_OF_RE = re.compile(r'^(?:a|an)\s+([a-z]+)\s+of$', re.IGNORECASE)
+
     # The engine's own invented definitions (backlog F2).  No authoritative definition has this
     # shape, so a page can be gated on it without rejecting a real one.  Each pattern names the
     # line that produces it.
@@ -2900,6 +2908,13 @@ class LinguisticEngine:
         if not hosts:
             hosts = cls._phrase_headwords(key, headword)
 
+        if cls._QUANTIFIER_OF_RE.match(key):
+            m = cls._QUANTIFIER_OF_RE.match(key)
+            bare_q = f"{m.group(1).lower()} of"
+            bare_owner = cls._unit_owning_sense(bare_q, headword=m.group(1).lower())
+            if bare_owner:
+                return bare_owner
+
         rows = cls._unit_phrase_rows(key, headword)
         if not rows:
             licensed = {text for tier, text in cls.ldoce_phrase_hits(key, headword)
@@ -3024,7 +3039,6 @@ class LinguisticEngine:
         owned_pos = cls._pos_code(sense.get("pos"))
         idx, _score, margin, confidence = cls._lock_sense(
             entry,
-            definition=str(sense.get("definition") or ""),
             quote=context_sentence,
             target_pos=owned_pos or None,
             return_confidence=True,
@@ -3225,11 +3239,20 @@ class LinguisticEngine:
                 pool: List[str] = [str(e) for e in (sense.get("examples") or []) if e]
                 pool += [str(e) for _h, row in cls._unit_phrase_rows(key)
                          for e in (row.get("examples") or []) if e]
+                bare_q = None
+                if cls._QUANTIFIER_OF_RE.match(key):
+                    m = cls._QUANTIFIER_OF_RE.match(key)
+                    bare_q = f"{m.group(1).lower()} of"
+                    pool += [str(e) for _h, row in cls._unit_phrase_rows(bare_q)
+                             for e in (row.get("examples") or []) if e]
                 try:
                     pool += [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
                 except Exception:
                     pass
-                return (definition, cls._unit_example(key, pool), source)
+                found_ex = cls._unit_example(key, pool)
+                if not found_ex and bare_q:
+                    found_ex = cls._unit_example(bare_q, pool)
+                return (definition, found_ex, source)
 
 
         # Tier 3: WordNet, and only for the unit as a whole.
