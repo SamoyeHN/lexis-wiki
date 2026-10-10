@@ -9245,6 +9245,18 @@ class LinguisticEngine:
                         expr_clean = " ".join(words[1:])
                         words = expr_clean.split()
 
+                # Normalize over-extended prepositional prefixes (e.g. 'toward the end of' -> 'the end of')
+                m_prep = re.match(r"^(?:toward|towards|near)\s+(the\s+end\s+of\b.*)", expr_clean, re.IGNORECASE)
+                if m_prep:
+                    expr_clean = m_prep.group(1).strip()
+                    words = expr_clean.split()
+
+                # Normalize over-extended determiners/quantifiers for category frames (e.g. 'any type of' -> 'type of')
+                m_det = re.match(r"^(?:any|each|every|some|a|an)\s+((?:type|kind|sort)\s+of\b.*)", expr_clean, re.IGNORECASE)
+                if m_det:
+                    expr_clean = m_det.group(1).strip()
+                    words = expr_clean.split()
+
                 matched_sid = None
                 matched_sent = None
 
