@@ -1,4 +1,6 @@
-# Python artifacts
+# =============================================================================
+# 1. Python Build & Environment Artifacts
+# =============================================================================
 __pycache__/
 *.py[cod]
 *.class
@@ -8,33 +10,47 @@ build/
 .venv/
 env/
 venv/
+.pytest_cache/
 
-# Environment and IDE
+# =============================================================================
+# 2. Operating System & IDE Files
+# =============================================================================
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Scripts and test files
-scripts/
-
-# Lexicon databases and their snapshots - hundreds of MB each, rebuilt by
-# scripts/build_ldoce_db.py, never committed
+# =============================================================================
+# 3. Lexicon Databases & Heavy Binaries (Rebuilt offline)
+# =============================================================================
 *.db
+*.db-journal
 *.db.bak*
 
-# Execution logs
+# =============================================================================
+# 4. Runtime Logs & Temporary Output
+# =============================================================================
 logs/
 *.log
 
-# Exclude all user wiki content (users generate their own units via 'lexis init' / 'lexis compile')
+# =============================================================================
+# 5. User Wiki Data & Local Config
+# =============================================================================
 wiki/
-
-# Exclude config json
 wiki_config.json
 
-# Lexical source archives (keep compiled json only)
-scratch/
+# =============================================================================
+# 6. Proprietary & Offline Build Tools (Copyright Protected, Kept in Private Repo)
+# =============================================================================
+scripts/
+private_tools/
+internal/
+private_docs/
 
-# Throwaway diagnostic scripts and their captured output
+# =============================================================================
+# 7. Throwaway Diagnostic Scripts & Scratchpad
+# =============================================================================
+scratch/
 scratchs/
+*.diff
+*.patch

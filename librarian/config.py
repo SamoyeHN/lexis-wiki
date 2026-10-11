@@ -45,7 +45,9 @@ DEFAULT_CONFIG = {
     "judge_model": "",
     "num_ctx": 16384,
     "max_tokens": 8192,
-    "enable_authentic_cloze": True
+    "enable_authentic_cloze": True,
+    "disable_pedlex": False,
+    "disable_ldoce": False
 }
 
 class Config:

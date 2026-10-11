@@ -1500,6 +1500,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             # still be bound for translation / comprehension / comparative-translation items
             # or the shared item_passed computation below raises UnboundLocalError.
             no_cross_target_leak = True
+            no_scaffold_leak = True
             leaked_other_targets: List[str] = []
             no_verbatim_example = True
             verbatim_label = "dictionary example"
@@ -1527,6 +1528,18 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     is_single_blank = False
                     flags.append(
                         f"❌ Quiz item '{target}': Multiple blanks ({len(blanks)}) detected in question stem (only exactly ONE blank permitted)"
+                    )
+
+                # Scaffolding & Meta-Instruction Leakage Gate: stem cannot contain prompt template strings
+                scaffold_leak = re.search(
+                    r"\b(?:Fit into frame|Fit into the Pattern|Plural noun slot required|Complete predicate required|Write a natural sentence|Model:)\b",
+                    question,
+                    flags=re.IGNORECASE,
+                )
+                if scaffold_leak:
+                    no_scaffold_leak = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Prompt scaffolding leaked into question stem: '{scaffold_leak.group(0)}'"
                     )
 
                 # Target Stem Leakage Gate: target word/stem cannot leak into question outside the blank
@@ -1659,7 +1672,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
                 # Verbatim Copy Gate (P1-3): a stem may emulate a corpus model's syntax and
                 # register, but it may never reuse its wording. Both corpus models are checked —
-                # the LDOCE example and the curriculum quote that was strong enough to license
+                # the PedLex example and the curriculum quote that was strong enough to license
                 # evidence. Each source is compared twice: as written, and with the target word
                 # blanked out, because the classic shortcut is to mask the blueprint's own
                 # example and that hole otherwise breaks every 5-gram of a short example.
@@ -1848,6 +1861,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 has_blank_when_expected and
                 is_single_blank and
                 no_stem_leak and
+                no_scaffold_leak and
                 no_cross_target_leak and
                 no_article_leak and
                 no_verbatim_example and
@@ -1867,6 +1881,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not target_in_options: reasons.append(f"target '{target}' not matching options[{idx}]")
                 if not explanation: reasons.append("missing explanation")
                 if not question: reasons.append("missing question text")
+                if not no_scaffold_leak: reasons.append("prompt scaffolding leaked into question stem")
                 if not has_blank_when_expected: reasons.append("missing fill-in-the-blank slot (____)")
                 if not is_single_blank: reasons.append("multiple blanks detected in stem")
                 if not no_stem_leak: reasons.append("target word leaks into question stem")

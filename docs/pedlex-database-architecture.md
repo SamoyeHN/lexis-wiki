@@ -1,25 +1,25 @@
-# LDOCE 6th Edition Database & Linguistic Lexicon Architecture
+# Pedagogical Lexicon (PedLex) Database & Linguistic Architecture
 
-> **Purpose**: This document archives the database schema, storage layout, parsing mechanics, and query interfaces of the Longman Dictionary of Contemporary English 6th Edition (`ldoce6_essential.db`), which serves as the deterministic semantic truth foundation for Lexis Wiki.
+> **Purpose**: This document archives the database schema, storage layout, parsing mechanics, and query interfaces of the Pedagogical Lexicon (`pedlex.db`), which serves as the deterministic semantic truth foundation for Lexis Wiki.
 
 ---
 
 ## 1. Storage Overview
 
-The primary offline dictionary database resides at `librarian/data/ldoce6_essential.db`.
-An accompanying full-text search index resides at `librarian/data/ldoce6_fts.db`.
+The primary offline dictionary database resides at `librarian/data/pedlex.db`.
+An accompanying full-text search index resides at `librarian/data/pedlex_fts.db`.
 
-Both databases are purely local SQLite files queried synchronously by [`LinguisticEngine`](file:///E:/teacher-wiki/librarian/linguistics.py) with zero external network requests and <1ms latency per lookup.
+Both databases are purely local SQLite files queried synchronously by [`LinguisticEngine`](file:///librarian/linguistics.py) with zero external network requests and <1ms latency per lookup.
 
 ---
 
-## 2. Table Schemas (`ldoce6_essential.db`)
+## 2. Table Schemas (`pedlex.db`)
 
-### 2.1 Table: `ldoce`
+### 2.1 Table: `pedlex`
 Main lexical entries table. Contains primary headwords, derived run-ons, and alias redirects.
 
 ```sql
-CREATE TABLE ldoce (
+CREATE TABLE pedlex (
     word TEXT PRIMARY KEY,       -- Normalized lookup key (lowercase, stripped of punctuation)
     pos TEXT,                    -- Canonical primary part of speech ('noun', 'verb', 'adjective', etc.)
     pos_all TEXT,                -- Comma-separated list of all attested parts of speech across senses
@@ -29,25 +29,25 @@ CREATE TABLE ldoce (
 );
 ```
 
-### 2.2 Table: `ldoce_phrase_index` (Active Pedagogical Phrase & Distractor Index)
-Contains 106,738 authentic multi-word phrase patterns catalogued across LDOCE 6th Edition entries (covering 26,538 unique normalized phrase units in `_PHRASE_INDEX_CACHE`).
+### 2.2 Table: `pedlex_phrase_index` (Active Pedagogical Phrase & Distractor Index)
+Contains 106,738 authentic multi-word phrase patterns catalogued across Pedagogical Lexicon entries (covering 26,538 unique normalized phrase units in `_PHRASE_INDEX_CACHE`).
 
 ```sql
-CREATE TABLE ldoce_phrase_index (
+CREATE TABLE pedlex_phrase_index (
     phrase_key TEXT NOT NULL,    -- Normalized phrase lookup key
     tier TEXT NOT NULL,          -- Index tier: 'phrasal_verb' | 'phrase' | 'collocation'
-    host_word TEXT NOT NULL,     -- Host headword where this phrase is catalogued in LDOCE
+    host_word TEXT NOT NULL,     -- Host headword where this phrase is catalogued in PedLex
     sense_idx INTEGER,           -- Sense index under the host headword (if attached to a specific sense)
-    raw_phrase TEXT NOT NULL,    -- Exact raw title / pattern as printed in LDOCE (with slots like 'sb/sth')
+    raw_phrase TEXT NOT NULL,    -- Exact raw title / pattern as recorded in PedLex (with slots like 'sb/sth')
     PRIMARY KEY (phrase_key, tier, host_word, sense_idx, raw_phrase)
 );
 ```
 
-### 2.3 Table: `ldoce_sense_cue_index` (Sense-Collocation Reversing Lookup Index)
-Contains 813,805 cue-to-sense inverted mappings across all 48,960 LDOCE headwords. Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
+### 2.3 Table: `pedlex_sense_cue_index` (Sense-Collocation Reversing Lookup Index)
+Contains 813,805 cue-to-sense inverted mappings across all 48,960 PedLex headwords. Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
 
 ```sql
-CREATE TABLE ldoce_sense_cue_index (
+CREATE TABLE pedlex_sense_cue_index (
     host_word TEXT NOT NULL,     -- Target headword owning the sense
     cue_word TEXT NOT NULL,      -- Contextual cue token (signpost, pattern, example token, def keyword)
     sense_idx INTEGER NOT NULL,  -- 0-indexed sense position under the host headword
@@ -58,11 +58,11 @@ CREATE TABLE ldoce_sense_cue_index (
 
 > [!TIP]
 > **Active Role in Sub-Millisecond WSD & Reversing Lookup**:
-> Allows instant retrieval of sense candidates matching contextual tokens from the passage. Queries `SELECT host_word, sense_idx, weight FROM ldoce_sense_cue_index WHERE cue_word = ? AND host_word = ?` in sub-millisecond offline lookup without parsing full entries.
+> Allows instant retrieval of sense candidates matching contextual tokens from the passage. Queries `SELECT host_word, sense_idx, weight FROM pedlex_sense_cue_index WHERE cue_word = ? AND host_word = ?` in sub-millisecond offline lookup without parsing full entries.
 
 ---
 
-## 3. Data JSON Payload Structure (`ldoce.data_json`)
+## 3. Data JSON Payload Structure (`pedlex.data_json`)
 
 Every record's `data_json` contains a structured dictionary with the following core fields:
 
@@ -72,7 +72,7 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `pos` | `str` | Canonical part of speech (`noun`, `verb`, `adjective`, `adverb`, etc.). |
 | `kind` | `str` | `article` (independent entry), `derived` (run-on form), `alias` (cross-reference), `entity`. |
 | `base_word` | `str` \| `null` | Base lemma when derived from another headword. |
-| `payload_headword`| `str` | Exact headword text as rendered in LDOCE source. |
+| `payload_headword`| `str` | Exact headword text as rendered in PedLex source. |
 | `all_poses` | `list[str]` | All attested parts of speech across all senses. |
 | `homographs` | `list[dict]` | Information on distinct homograph numbers (e.g., *lead¹* vs *lead²*). |
 | `senses` | `list[dict]` | Itemized sense definitions, frequency markers, gram patterns, and examples. |
@@ -116,20 +116,20 @@ Every record's `data_json` contains a structured dictionary with the following c
 ## 4. Definition-Locked Word Sense Disambiguation (WSD) Engine
 
 ### 4.1 Multi-Feature Weighted Gating & Scoring (`LinguisticEngine._lock_sense`)
-When extracting vocabulary from source passages, `_lock_sense` grounds each headword to its authentic Longman sense at 0 token cost (<0.5ms):
+When extracting vocabulary from source passages, `_lock_sense` grounds each headword to its authentic pedagogical sense at 0 token cost (<0.5ms):
 
 1. **POS Hard Gate**: Filters candidate senses to match the target part of speech from spaCy POS tagging.
 2. **Formulaic Locution & Register Gating**: Detects and enforces conversational/spoken locution markers (`[spoken]`, `[greeting]`, etc.). If the target context is an isolated utterance or greeting (e.g., *"Hello, stranger!"*), formulaic senses take precedence; otherwise, formulaic senses are strictly excluded in expository/academic prose.
-3. **Pattern & Syntactic Slot Intersection (+3.0 pts)**: Lemmatizes context sentences and checks for exact matches against LDOCE `patterns` (e.g. `interest in`, `refrain from`, `abandon sb to sth`).
+3. **Pattern & Syntactic Slot Intersection (+3.0 pts)**: Lemmatizes context sentences and checks for exact matches against PedLex `patterns` (e.g. `interest in`, `refrain from`, `abandon sb to sth`).
 4. **Collocation Box Intersection (+2.5 pts)**: Searches `collocations` and `cross_collocations` for lexical overlap with passage context tokens.
 5. **Contextual Lemmatized Overlap (+1.0 pt per content word)**: Compares open-class passage lemmas with definition content words and authentic example sentences, applying stopword and quoted dialogue filtering.
-6. **Signpost & Frequency Hierarchy (+0.5 pt)**: Respects LDOCE canonical sense ordering when context features are evenly matched.
+6. **Signpost & Frequency Hierarchy (+0.5 pt)**: Respects PedLex canonical sense ordering when context features are evenly matched.
 
 ---
 
 ## 5. Authentic Multi-Word Phrase Distractor Generation
 
-[`LinguisticEngine.generate_phrase_distractors`](file:///E:/teacher-wiki/librarian/linguistics.py) harnesses `ldoce_phrase_index` to synthesize strictly symmetric, authentic distractors across 4 structural families:
+[`LinguisticEngine.generate_phrase_distractors`](file:///librarian/linguistics.py) harnesses `pedlex_phrase_index` to synthesize strictly symmetric, authentic distractors across 4 structural families:
 
 1. **Tail-Sharing Head Noun / Preposition Cluster**:
    - Matches candidate phrases sharing the same terminal preposition or head noun.
@@ -142,29 +142,29 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
    - Matches irreversible binomials and coordinated pairs (`A and B`).
    - Example: `pros and cons` $\rightarrow$ `['bits and pieces', 'back and forth', 'give and take']`
 4. **2-Word Phrasal Verbs**:
-   - Generates dual contrast pools: particle contrasts (e.g. `take off` vs `take in`, `take out`) and core verb contrasts (e.g. `take off` vs `set off`, `call off`). All candidates are strictly validated against `ldoce_phrase_index` existence.
+   - Generates dual contrast pools: particle contrasts (e.g. `take off` vs `take in`, `take out`) and core verb contrasts (e.g. `take off` vs `set off`, `call off`). All candidates are strictly validated against `pedlex_phrase_index` existence.
 
 ---
 
 ## 6. Derived Forms & Ingestion Invariants
 
 1. **Run-on Derivation Tracking**:
-   - Words such as `abandonment`, `punctuality`, and `abductor` are filed in LDOCE print editions as run-on derivations at the end of root entries (`abandon`, `punctual`, `abduct`).
-   - `build_ldoce_db.py` tags these entries as `kind='derived'` with `base_word` pointing to the root lemma.
+   - Words such as `abandonment`, `punctuality`, and `abductor` are filed in pedagogical lexicons as run-on derivations at the end of root entries (`abandon`, `punctual`, `abduct`).
+   - Database ingestion tags these entries as `kind='derived'` with `base_word` pointing to the root lemma.
 2. **Headword Example Alignment Gate**:
    - A derived row must **never** inherit an example sentence from the base lemma that fails to contain the derived headword (e.g. *abandonment* must not ship with *"How could she abandon her own child?"*).
-   - If no headword-bearing example exists in the LDOCE entry, [`LinguisticEngine`](file:///E:/teacher-wiki/librarian/linguistics.py) drops the misaligned example and falls back to the authentic passage sentence.
+   - If no headword-bearing example exists in the PedLex entry, [`LinguisticEngine`](file:///librarian/linguistics.py) drops the misaligned example and falls back to the authentic passage sentence.
 
 ---
 
 ## 7. Query Interfaces (`LinguisticEngine`)
 
-- `LinguisticEngine.get_ldoce_entry(word)`: Fetches parsed dictionary payload from SQLite.
-- `LinguisticEngine.get_ldoce_definition_and_example(word, target_pos, context_sentence)`: Retrieves sense-locked definition and headword-bearing example via `_lock_sense`.
-- `LinguisticEngine.find_ldoce_collocations(word, pos)`: Returns categorized collocation buckets.
-- `LinguisticEngine.find_ldoce_zero_collision_anchor(target_word, distractors, pos, quote)`: Deterministically selects an authentic collocation anchor matching only the target headword.
-- `LinguisticEngine.generate_phrase_distractors(target_phrase, pos, count)`: Generates 3 structurally symmetric distractors validated against `ldoce_phrase_index`.
-- `LinguisticEngine.get_ldoce_grammar_alert(word, quote)`: Returns targeted learner pitfall warnings.
+- `LinguisticEngine.get_pedlex_entry(word)`: Fetches parsed dictionary payload from SQLite.
+- `LinguisticEngine.get_pedlex_definition_and_example(word, target_pos, context_sentence)`: Retrieves sense-locked definition and headword-bearing example via `_lock_sense`.
+- `LinguisticEngine.find_pedlex_collocations(word, pos)`: Returns categorized collocation buckets.
+- `LinguisticEngine.find_pedlex_zero_collision_anchor(target_word, distractors, pos, quote)`: Deterministically selects an authentic collocation anchor matching only the target headword.
+- `LinguisticEngine.generate_phrase_distractors(target_phrase, pos, count)`: Generates 3 structurally symmetric distractors validated against `pedlex_phrase_index`.
+- `LinguisticEngine.get_pedlex_grammar_alert(word, quote)`: Returns targeted learner pitfall warnings.
 
 ---
 
@@ -185,7 +185,7 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
 - **考核特征与痛点**:
   - 核心成分不可倒置（*cons and pros* 不自然），整体作为一个不可分割的固定名/副词习语。
 - **拟定方案 (Pending)**:
-  - 已支持在 `ldoce_phrase_index` 中检索匹配同类双词并列作为全短语干扰项；
+  - 已支持在 `pedlex_phrase_index` 中检索匹配同类双词并列作为全短语干扰项；
   - 待拓展中心词挖空模式：题干提供 `pros and ____` 或 `ups and ____`，选项提供对称名词（如 `[cons, gains, evils, losses]` 或 `[downs, falls, lows, drops]`）。
 
 ### 8.3 动宾惯用固定搭配 (Idiomatic Verb-Noun Collocations)
@@ -194,7 +194,7 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
   - 包含轻动词 + 抽象核心名词 + 固定介词。
   - 挖空动词容易与其他同义动词混淆（如 *pay* vs *give/draw attention*），挖空名词容易与近义词混淆。
 - **拟定方案 (Pending)**:
-  - 依据 LDOCE 语法模式表，支持中心轻动词挖空（`____ attention to` $\rightarrow$ `[pay, draw, give, attract]`）或固定名词挖空（`pay ____ to` $\rightarrow$ `[attention, notice, care, focus]`），并在 Double-Key 门禁中注入动宾语义唯一性约束。
+  - 依据 PedLex 语法模式表，支持中心轻动词挖空（`____ attention to` $\rightarrow$ `[pay, draw, give, attract]`）或固定名词挖空（`pay ____ to` $\rightarrow$ `[attention, notice, care, focus]`），并在 Double-Key 门禁中注入动宾语义唯一性约束。
 
 ### 8.4 复合介词与介词短语框架 (Prepositional Frame Phrases)
 - **典型短语**: `in terms of`, `by means of`, `in spite of`, `on behalf of`, `with regard to`, `in front of`
@@ -210,11 +210,10 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
   - **决定成败的前提**：代码端（0 Token）生成的候选池**必须 100% 合格**，绝对不能夹带不合规杂质（严防错漏）。
 - **待沉淀与强化的代码级硬门禁 (Hard Invariants)**:
   1. **词义锁定 (Sense Lock Invariant)**：
-     - 单纯按词头查同反义词必然导致多义词漂移（如 `stamp` 漂移成印章/粘土、`interest` 漂移成利息）。必须以课文原句 (`quoted_sentence`) 和词汇表释义 (`definition`) 输入 `_lock_sense`，锁定目标义项对应的 Longman Thesaurus 与 WordNet 同义位。
+     - 单纯按词头查同反义词必然导致多义词漂移（如 `stamp` 漂移成印章/粘土、`interest` 漂移成利息）。必须以课文原句 (`quoted_sentence`) 和词汇表释义 (`definition`) 输入 `_lock_sense`，锁定目标义项对应的 PedLex Thesaurus 与 WordNet 同义位。
   2. **词性一致性硬门禁 (POS Symmetrical Gate)**：
-     - 彻底杜绝名动同形词的跨词性污染。候选词必须通过 LDOCE 主词性校验（如目标词是抽象名词 `control` 时，坚决过滤掉具有明显动词倾向的 `run`, `supervise`；目标词是副词 `closely` 时，坚决过滤掉形容词或名词）。
+     - 彻底杜绝名动同形词的跨词性污染。候选词必须通过 PedLex 主词性校验（如目标词是抽象名词 `control` 时，坚决过滤掉具有明显动词倾向的 `run`, `supervise`；目标词是副词 `closely` 时，坚决过滤掉形容词或名词）。
   3. **目标词防篡改与唯一解校验 (Target Word Usurpation Defense)**：
      - Prompt 与 Level 1 Code Gate 强力保证：目标词必须作为唯一的正确答案参与选项，严禁模型挑选候选池里的近义词直接替换目标词作为答案。
   4. **CEFR 与 Zipf 难度天花板过滤 (Ceiling & Frequency Gate)**：
      - 候选干扰词必须经过 `cefrpy` + Zipf 频率门禁（A1/A2 不得选入 C1/C2 生僻偏词），确保与目标词处于同等认知难度梯度。
-

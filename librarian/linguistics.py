@@ -674,12 +674,19 @@ class LinguisticEngine:
 
     @classmethod
     def _ldoce_db_path(cls) -> Path:
-        """The dictionary database in use. LDOCE_DB overrides it - that is how a
-        rebuilt shadow database is validated before it replaces the production one."""
-        override = os.environ.get("LDOCE_DB", "").strip()
+        """The pedagogical lexicon database in use. PEDLEX_DB (or legacy LDOCE_DB) overrides it.
+        Defaults to pedlex.db, falling back to legacy ldoce6_essential.db if not present."""
+        override = os.environ.get("PEDLEX_DB", "").strip() or os.environ.get("LDOCE_DB", "").strip()
         if override:
             return Path(override).expanduser()
+        primary = Path(__file__).resolve().parent / "data" / "pedlex.db"
+        if primary.exists():
+            return primary
         return Path(__file__).resolve().parent / "data" / "ldoce6_essential.db"
+
+    @classmethod
+    def _pedlex_db_path(cls) -> Path:
+        return cls._ldoce_db_path()
 
     @classmethod
     def _ldoce_table_exists(cls, name: str) -> bool:
@@ -703,11 +710,38 @@ class LinguisticEngine:
         return data
 
     @classmethod
+    def _is_pedlex_disabled(cls) -> bool:
+        """Checks if Pedagogical Lexicon is disabled via config (wiki_config.json) or environment variable."""
+        for env_var in ("DISABLE_PEDLEX", "DISABLE_LDOCE"):
+            if os.environ.get(env_var, "").lower() in ("1", "true", "yes"):
+                return True
+        try:
+            from .config import config
+            if config.get("disable_pedlex", False) or config.get("disable_ldoce", False):
+                return True
+        except Exception:
+            pass
+        return False
+
+    @classmethod
+    def _is_ldoce_disabled(cls) -> bool:
+        return cls._is_pedlex_disabled()
+
+    @classmethod
     def _ensure_ldoce_conn(cls) -> bool:
-        """Ensures the SQLite connection to ldoce6_essential.db is open and returns True if available."""
+        """Ensures the SQLite connection to pedlex.db is open and returns True if available."""
+        if cls._is_pedlex_disabled():
+            if cls._ldoce_conn is not None:
+                try:
+                    cls._ldoce_conn.close()
+                except Exception:
+                    pass
+                cls._ldoce_conn = None
+            return False
+
         if cls._ldoce_conn is not None:
             return True
-        db_path = cls._ldoce_db_path()
+        db_path = cls._pedlex_db_path()
         if not db_path.exists():
             return False
         try:
@@ -718,12 +752,22 @@ class LinguisticEngine:
             return False
 
     @classmethod
+    def get_pedlex_entry(cls, word: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves full pedagogical lexicon entry for the given headword from SQLite.
+        Cached in-memory for instant <0.1ms access.
+        """
+        return cls.get_ldoce_entry(word)
+
+    @classmethod
     def get_ldoce_entry(cls, word: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieves full LDOCE 6th Edition entry for the given headword from SQLite.
+        Retrieves full pedagogical lexicon entry for the given headword from SQLite.
         Cached in-memory for instant <0.1ms access.
         """
         if not word:
+            return None
+        if cls._is_ldoce_disabled():
             return None
         w_clean = word.strip().lower()
         if w_clean in cls._ldoce_cache:
@@ -6030,12 +6074,21 @@ class LinguisticEngine:
         "rise": ("rose", "risen", "rising", "rises"),
         "shake": ("shook", "shaken", "shaking", "shakes"),
         "ride": ("rode", "ridden", "riding", "rides"),
-        "drive": ("drove", "driven", "driving", "drives"),
-        "choose": ("chose", "chosen", "choosing", "chooses"),
         "freeze": ("froze", "frozen", "freezing", "freezes"),
-        "speak": ("spoke", "spoken", "speaking", "speaks"),
-        "break": ("broke", "broken", "breaking", "breaks"),
-        "steal": ("stole", "stolen", "stealing", "steals"),
+        "buy": ("bought", "bought", "buying", "buys"),
+        "teach": ("taught", "taught", "teaching", "teaches"),
+        "feel": ("felt", "felt", "feeling", "feels"),
+        "lose": ("lost", "lost", "losing", "loses"),
+        "sleep": ("slept", "slept", "sleeping", "sleeps"),
+        "shine": ("shone", "shone", "shining", "shines"),
+        "light": ("lit", "lit", "lighting", "lights"),
+        "bend": ("bent", "bent", "bending", "bends"),
+        "cut": ("cut", "cut", "cutting", "cuts"),
+        "hit": ("hit", "hit", "hitting", "hits"),
+        "hurt": ("hurt", "hurt", "hurting", "hurts"),
+        "shut": ("shut", "shut", "shutting", "shuts"),
+        "spread": ("spread", "spread", "spreading", "spreads"),
+        "cost": ("cost", "cost", "costing", "costs"),
     }
 
     @classmethod
@@ -6441,9 +6494,13 @@ class LinguisticEngine:
             return True
         if len(w) < 3:
             return False
-        if w[-1] in "aeiouwxy":
+        # Do not double vowels, semivowels, or consonants that do not double in English
+        if w[-1] in "aeiouwxyjqzvh":
             return False
         if w[-2] not in "aeiou":
+            return False
+        # Do not double if preceded by another vowel (e.g. 'feel', 'sleep', 'spread', 'rain')
+        if len(w) >= 3 and w[-3] in "aeiou":
             return False
         return len(re.findall(r"[aeiou]+", w)) == 1 and len(w) <= 8
 
@@ -6471,6 +6528,10 @@ class LinguisticEngine:
                 return w + w[-1] + "ed"
             return w + "ed"
         if tag == "VBN":
+            if w.endswith("ie"):
+                return w[:-2] + "ied"
+            if len(w) > 2 and w.endswith("y") and w[-2] not in "aeiou":
+                return w[:-1] + "ied"
             if w.endswith("e"):
                 return w + "d"
             if cls._doubles_final_consonant(w):
@@ -6633,11 +6694,11 @@ class LinguisticEngine:
         """
         Is this surface form an actual English word form?
 
-        WordNet stores lemmas, not inflections - wn.words('buses') is empty even though
-        'buses' is perfectly good English - so a form is also accepted when spaCy resolves
-        it to a WordNet-attested lemma AND the deterministic generator agrees that is how
-        that lemma inflects. The second half is what rejects 'choosed': spaCy may guess the
-        lemma 'choose', but inflected_forms('choose') yields 'chose'/'chosen', never 'choosed'.
+        Grounds on WordNet and LDOCE 6th Edition (SQLite `ldoce` table). If the form
+        is attested in WordNet or directly in the LDOCE database, it is accepted immediately.
+        Otherwise, resolves lemma via spaCy and verifies that the lemma is attested in WordNet
+        or LDOCE and that the form legitimately derives from that lemma (e.g. regular noun plural
+        or verb inflection).
         """
         f = (form or "").strip().lower()
         if not f:
@@ -6647,11 +6708,43 @@ class LinguisticEngine:
         verdict = False
         try:
             wn = cls.get_wordnet()
-            if wn.words(f):
+            if wn and wn.words(f):
                 verdict = True
-            else:
+            elif cls._ensure_ldoce_conn():
+                cur = cls._ldoce_conn.cursor()
+                cur.execute("SELECT 1 FROM ldoce WHERE word = ? LIMIT 1", (f,))
+                if cur.fetchone() is not None:
+                    verdict = True
+
+            if not verdict:
                 lemma = cls._surface_lemma(f)
-                verdict = bool(lemma) and bool(wn.words(lemma)) and f in cls.inflected_forms(lemma)
+                if lemma:
+                    # Lemma must be a real attested word in WordNet or LDOCE
+                    lemma_attested = False
+                    if wn and wn.words(lemma):
+                        lemma_attested = True
+                    elif cls._ensure_ldoce_conn():
+                        cur = cls._ldoce_conn.cursor()
+                        cur.execute("SELECT 1 FROM ldoce WHERE word = ? LIMIT 1", (lemma,))
+                        if cur.fetchone() is not None:
+                            lemma_attested = True
+
+                    if lemma_attested:
+                        # Guard against lemma being an inflected form alias in LDOCE (e.g. 'spake' -> 'a past tense of speak', 'chose' -> 'past tense of choose')
+                        entry = cls.get_ldoce_entry(lemma) if cls._ensure_ldoce_conn() else None
+                        is_inflected_alias = False
+                        if entry:
+                            for s in entry.get("senses", []):
+                                d = (s.get("definition") or "").lower()
+                                if re.search(r"\b(?:past tense|past participle|plural of)\b", d):
+                                    is_inflected_alias = True
+                                    break
+                        if not is_inflected_alias:
+                            # Check if f is the legitimate plural or inflected verb form of this attested lemma
+                            if cls.pluralize_noun(lemma) == f:
+                                verdict = True
+                            elif any(cls._inflect_verb(lemma, tag) == f for tag in ("VBZ", "VBD", "VBN", "VBG")):
+                                verdict = True
         except Exception:
             verdict = False
         cls._attested_form_cache[f] = verdict
@@ -12102,6 +12195,22 @@ class LinguisticEngine:
             # Note: best_pattern, ldoce_pattern_example, and anchor are already atomically
             # bound from the locked sense above (Sense-First Primacy).
 
+            if best_pattern:
+                # P4: Strip LDOCE regional/register labels (e.g. 'American English', 'formal', 'spoken')
+                best_pattern = re.sub(
+                    r"\b(?:American|British|Australian|North American)\s+English\b",
+                    "",
+                    best_pattern,
+                    flags=re.IGNORECASE,
+                )
+                best_pattern = re.sub(
+                    r"\b(?:formal|informal|spoken|written|technical|literary|dialect)\b",
+                    "",
+                    best_pattern,
+                    flags=re.IGNORECASE,
+                )
+                best_pattern = re.sub(r"\s+", " ", best_pattern).strip()
+
             if best_pattern and is_plural_noun:
                 # Symmetrically inflect pattern head noun to plural so LLM does not craft singular frame
                 best_pattern = re.sub(r"\b" + re.escape(w_lower) + r"\b", final_target, best_pattern, flags=re.IGNORECASE)
@@ -12139,6 +12248,10 @@ class LinguisticEngine:
                         if m_end_prep:
                             cloze_slot_frame = f"... ____ {m_end_prep.group(1)}"
 
+            # P3: Discard cloze frame if it has more than one blank or empty tokens
+            if cloze_slot_frame and len(re.findall(r"_{2,}", cloze_slot_frame)) > 1:
+                cloze_slot_frame = None
+
             # Detect copular adjective frames (e.g. 'fell silent', 'became silent', 'remained silent')
             is_copula_adj = False
             if canonical_pos == "adj" and (cloze_slot_frame or anchor):
@@ -12150,31 +12263,46 @@ class LinguisticEngine:
                         is_copula_adj = True
                         break
 
+            # P5: If best_pattern does not contain target word or its forms, discard it so we do not issue 'Fit into the Pattern above'
+            if best_pattern and not cloze_slot_frame:
+                w_lemma = nlp(w_lower)[0].lemma_.lower() if nlp else w_lower
+                target_forms = set(cls.inflected_forms(w_lower)) | {w_lower, final_target, w_lemma}
+                if not any(re.search(rf"\b{re.escape(f)}\b", best_pattern, re.IGNORECASE) for f in target_forms if f):
+                    best_pattern = None
+
             if cloze_slot_frame:
                 stem_core = f"Fit into frame '{cloze_slot_frame}'."
+                # P1: Avoid duplicating frame inside plural gloss
                 if is_plural_noun:
-                    stem_core += f" (Plural noun slot required: the sentence must naturally fit plural nouns, e.g. '... {cloze_slot_frame}')."
+                    stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb so the adjective predicate is complete)."
             elif best_pattern:
                 stem_core = "Fit into the Pattern above."
                 if is_plural_noun:
-                    stem_core += " (Plural noun slot required: must fit plural nouns)."
+                    stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb)."
             else:
                 stem_core = "Write a natural sentence matching the Definition above."
                 if is_plural_noun:
-                    stem_core += " (Plural noun slot required: must fit plural nouns)."
+                    stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include a linking/copular verb)."
 
             task_parts = [stem_core]
 
             # Model Example Scaffold (single concise sentence, no boilerplate)
+            # P2: Suppress Model sentence if there is an irreconcilable singular/plural mismatch for nouns
             if ldoce_pattern_example:
                 ex_clean = ldoce_pattern_example.strip()
-                task_parts.append(f'Model: "{ex_clean}"')
+                skip_model = False
+                if is_plural_noun and canonical_pos == "noun":
+                    # If Model sentence only contains singular form and no plural form of target noun
+                    if re.search(rf"\b{re.escape(w_lower)}\b", ex_clean, re.IGNORECASE) and not re.search(rf"\b{re.escape(final_target)}\b", ex_clean, re.IGNORECASE):
+                        skip_model = True
+                if not skip_model:
+                    task_parts.append(f'Model: "{ex_clean}"')
 
             # Data-Driven Semantic Discriminator (LDOCE Thesaurus & Language Activator)
             target_base = quant_head_noun if is_quantifier_frame else w_lower

@@ -2178,7 +2178,7 @@ class WikiProcessor:
                     e = LinguisticEngine.get_ldoce_entry(item)
                     has_ldoce = bool(e and e.get("senses"))
                     if not has_ldoce:
-                        logger.info(f"🚫 [Lexicon Gate] Dropped syllabus candidate '{item}' because it has no standalone LDOCE entry.")
+                        logger.info(f"🚫 [Lexicon Gate] Dropped syllabus candidate '{item}' because it has no standalone Pedagogical Lexicon entry.")
                         continue
 
                     # Textual presence check in source text sentence_pool.
@@ -2388,10 +2388,10 @@ class WikiProcessor:
             run_expressions = True
             run_grammar = True
 
-        # Deterministic Vocabulary Extraction (0 Tokens, Pure Computational Linguistic & LDOCE Lookup)
+        # Deterministic Vocabulary Extraction (0 Tokens, Pure Computational Linguistic & Pedagogical Lexicon Lookup)
         det_vocab_data = None
         if run_vocab:
-            logger.info(f"⚡ Deterministic Vocabulary Extraction executing locally via spaCy & LDOCE 6 (0 tokens)...")
+            logger.info(f"⚡ Deterministic Vocabulary Extraction executing locally via spaCy & Pedagogical Lexicon (0 tokens)...")
             from .schemas import VocabularyExtraction, VocabularyItem
             raw_v_items = LinguisticEngine.extract_deterministic_vocabulary(
                 raw_source_text,
@@ -2414,10 +2414,10 @@ class WikiProcessor:
                 vocabulary=v_items_list
             )
 
-        # Deterministic Expressions Extraction (0 Tokens, Pure ACL + spaCy + LDOCE + WordNet)
+        # Deterministic Expressions Extraction (0 Tokens, Pure ACL + spaCy + Pedagogical Lexicon + WordNet)
         det_expressions_data = None
         if run_expressions:
-            logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & LDOCE/WordNet (0 tokens)...")
+            logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & Pedagogical Lexicon/WordNet (0 tokens)...")
             from .schemas import ExpressionsExtraction, ExpressionItem
             raw_e_items = LinguisticEngine.extract_deterministic_expressions(
                 raw_source_text,
@@ -2430,7 +2430,7 @@ class WikiProcessor:
                 # If an item was explicitly declared in syllabus_expressions but the strict multi-word cascade
                 # returned no definition (e.g. 'toward the end of' -> sub-phrase 'the end of', or
                 # 'show thanks to' -> head noun 'thanks' sense 2), perform deterministic fallback grounding
-                # directly against LDOCE to ensure declared syllabus requirements are 100% fulfilled.
+                # directly against Pedagogical Lexicon to ensure declared syllabus requirements are 100% fulfilled.
                 if not str(it.get("definition", "")).strip() and syllabus_expressions:
                     w_raw = it.get("word", "")
                     clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w_raw).strip().lower()
@@ -4915,6 +4915,8 @@ class WikiProcessor:
             }
 
         elif quiz_type in ["video", "listening"]:
+            video_url = ""
+            video_type = ""
             # For listening quiz, we check if there's an active media file first
             from .config import normalize_name
             normalized_core = normalize_name(core_name)
@@ -5010,22 +5012,20 @@ class WikiProcessor:
                 else:
                     video_type = "youtube"  # default fallback if URL exists
 
-            # If video_url is still empty and file is inside the media folder, resolve local companion or fallback
+            # If video_url is still empty and file is inside the media folder, resolve local companion
             if not video_url and ("media" in source_path.parts or (active_media_name and source_path.name == active_media_name)):
                 parent_dir = source_path.parent
-                found_companion = False
                 for ext in [".mp4", ".mp3", ".webm", ".ogg", ".wav"]:
                     companion = parent_dir / f"{source_path.stem}{ext}"
                     if companion.exists():
                         video_url = f"/wiki/{core_name}/sources/media/{companion.name}"
                         video_type = "local"
-                        found_companion = True
                         break
-                if not found_companion:
-                    # Fallback default local video url pointing to standard stem
-                    video_url = f"/wiki/{core_name}/sources/media/{source_path.stem}.mp4"
-                    video_type = "local"
             
+            # For video quiz, if there is no valid video_url, skip video quiz gracefully rather than emitting 404 target
+            if quiz_type == "video" and not video_url:
+                return None
+
             # Rewrite local video URL to point to /wiki/<UnitName>/sources/media/
             if video_type == "local" and video_url:
                 import os

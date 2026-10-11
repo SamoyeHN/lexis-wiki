@@ -511,7 +511,7 @@ class ExpressionPatternEngine:
                 p_text = particle.text.lower()
                 prep_text = prep.text.lower()
                 cand_phrase = f"{v_lemma} {p_text} {prep_text}"
-                # Must be attested in LDOCE as a true phrasal verb unit or explicit pattern
+                # Must be attested in Pedagogical Lexicon as a true phrasal verb unit or explicit pattern
                 # to prevent incidental adjunct prepositions (e.g. 'show up on time') from hijacking
                 try:
                     from librarian.linguistics import LinguisticEngine

@@ -7,11 +7,11 @@
 
 ### 1.1 Separation of Responsibilities (Neuro-Symbolic Quad-Tier Architecture)
 - **Symbolic Grounding & Lexical Corpus (NLP & Lexicons = Semantic Truth & Constraints)**:
-  - `LinguisticEngine` combines offline computational NLP (spaCy syntactic dependency trees, POS tagging, morphological inflection lemmatization) with authoritative lexical databases (WordNet taxonomy, Longman Dictionary of Contemporary English 6th Edition / LDOCE).
-  - **Absolute Grounding in LDOCE 6th Edition (Semantic Truth & Pedagogical Collocation Engine)**:
-    - The engine is 100% grounded in LDOCE 6th Edition (`ldoce6_essential.db`), whose collocation boxes, syntactic patterns, and sense structures are semantically prioritized by authentic pedagogical salience and frequency. Obscure, physiologically biased, or non-pedagogical mechanical collocations are eliminated.
+  - `LinguisticEngine` combines offline computational NLP (spaCy syntactic dependency trees, POS tagging, morphological inflection lemmatization) with authoritative lexical databases (WordNet taxonomy, Pedagogical Lexicon / PedLex).
+  - **Absolute Grounding in Pedagogical Lexicon (PedLex: Semantic Truth & Pedagogical Collocation Engine)**:
+    - The engine is 100% grounded in the offline Pedagogical Lexicon (`pedlex.db`), whose collocation boxes, syntactic patterns, and sense structures are semantically prioritized by authentic pedagogical salience and frequency. Obscure, physiologically biased, or non-pedagogical mechanical collocations are eliminated.
     - Deterministically pre-computes single-fit collocational anchors and 3 zero-collision distractors at zero token cost (<1ms).
-    - Pre-binds parallel inflectional morphology and CRC32 deterministic option positions, generating itemized `🎯 Micro-Task for LLM` constraint blueprints. *(Details see: [docs/ldoce6-database-architecture.md](file:///E:/teacher-wiki/docs/ldoce6-database-architecture.md))*.
+    - Pre-binds parallel inflectional morphology and CRC32 deterministic option positions, generating itemized `🎯 Micro-Task for LLM` constraint blueprints. *(Details see: [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md))*.
 - **Code = Invariant Enforcement & Physical Gate**:
   - Deterministic Python logic (`evaluator.py`, `processor.py`) enforces physical invariants, string normalization, blank constraints (`re.findall(r'_{2,}', stem) == 1`), atomic option remapping, and bounds at zero token cost.
   - Acts as the Level 1 Deterministic Code Gate to instantly filter, remap, or self-heal structural defects without burning LLM retry tokens.
@@ -35,14 +35,14 @@
 ### 1.3 Deterministic Code-Driven Extraction Architecture (Source-to-Wiki Paradigm Shift)
 - **Vocabulary & Expressions: Complete Migration from LLM to Deterministic Code Extraction (已完成代码化提取)**:
   - **Historical Defect of LLM Extraction**: Prompting LLMs to extract vocabulary and multi-word expressions suffered from severe hallucinations, omission of core curricular headwords, misaligned part-of-speech labeling, and ungrounded CEFR ratings, while consuming thousands of unnecessary generation tokens.
-  - **Deterministic Pipeline (`LinguisticEngine` + `cefrpy` + LDOCE 6th Edition)**:
-    - **Single-Word Vocabulary**: spaCy POS-tagging, lemmatization, and syntax dependency trees extract candidate content headwords directly from the passage text. Headwords are filtered and calibrated against the CEFR lexical database and LDOCE 6th Edition at 0 token cost, guaranteeing 100% lexical fidelity and exact syntactic alignment.
+  - **Deterministic Pipeline (`LinguisticEngine` + `cefrpy` + Pedagogical Lexicon / PedLex)**:
+    - **Single-Word Vocabulary**: spaCy POS-tagging, lemmatization, and syntax dependency trees extract candidate content headwords directly from the passage text. Headwords are filtered and calibrated against the CEFR lexical database and the Pedagogical Lexicon at 0 token cost, guaranteeing 100% lexical fidelity and exact syntactic alignment.
     - **Multi-Word Expressions & Phrasal Idioms**: Deterministically parsed and mined using dependency trees (verb-particle combinations, prepositional verbs, fixed idioms) and dictionary index lookups, completely eliminating arbitrary or fragmented chunking.
-    - **Expression-Type Labelling**: A multi-word headword is never labelled with the part of speech of one of its tokens ('tap into' is not a 'verb'). `LinguisticEngine.classify_expression_type` reads Longman's own filing first (a phrasal-verb block or a PHRASES entry named exactly that unit, slots and slash groups expanded), then a frame opened by a closed-class word, then verb + particle adjacency, and returns one of `phrasal verb`, `collocation`, `set phrase`, `idiom`. The evaluator, the LLM healing pass and the Markdown writer each re-type any plain part of speech that arrives on a multi-word row.
+    - **Expression-Type Labelling**: A multi-word headword is never labelled with the part of speech of one of its tokens ('tap into' is not a 'verb'). `LinguisticEngine.classify_expression_type` reads the pedagogical lexicon filing first (a phrasal-verb block or a PHRASES entry named exactly that unit, slots and slash groups expanded), then a frame opened by a closed-class word, then verb + particle adjacency, and returns one of `phrasal verb`, `collocation`, `set phrase`, `idiom`. The evaluator, the LLM healing pass and the Markdown writer each re-type any plain part of speech that arrives on a multi-word row.
 - **Grammar Extraction: Deterministic Code-Driven Extraction (方案 A：务实推荐已落地)**:
   - **Current Status**: Structural pattern matching and syntactic formulas (COBUILD formulas, clausal dependency trees, non-finite adjuncts, cleft sentences, inversion, complex transitives, and extraposition) are deterministically extracted at 0 token cost via `LinguisticEngine.extract_deterministic_grammar()`.
   - **Scheme A Implementation Policy (方案 A 务实落地)**:
-    - 统一所有语法警告前缀为 `Grammar Warning (<TOPIC>): ...`，彻底清除与禁止任何带来源偏见或空洞的 `COBUILD Warning` / `LDOCE Grammar Alert` 区分与显示。
+    - 统一所有语法警告前缀为 `Grammar Warning (<TOPIC>): ...`，彻底清除与禁止任何带来源偏见或空洞的特定词典前缀区分与显示。
     - 公式字面词绝对优先于引文兜底词，避免 `want` 劫持 `but` 等并列转折结构；复合宾语消除假死条件，自适应动词匹配。
     - 保持结构公式与原句句式真实对应，剔除空洞/不符原句结构的无意义后缀。
   - **Ongoing Refinement**: 持续基于大样本回归测试积累句法模式规则，进一步完善复杂修辞层与篇章衔接边界的覆盖。
@@ -99,18 +99,18 @@
   - **Adjective Valency Cascade**: Prepositional adjectives prioritize bound prepositions (`prep` $\gg$ `modified_noun` $\gg$ `adv_mod`); descriptive adjectives prioritize characteristic head nouns (`modified_noun` $\gg$ `adv_mod` $\gg$ `prep`).
   - **Adverb Modification Cascade**: Evaluative/degree adverbs bind scalar adjectives (`modifies_adj` $\gg$ `modifies_verb`); manner/frequency adverbs bind action verbs (`modifies_verb` $\gg$ `modifies_adj`).
   - **Closed-Class Function Words**: Syntactic complement contrast (clausal vs. prepositional complement constraint) guarantees mathematically absolute single-fit discrimination on connectors (*despite* vs. *although*).
-- *(Details see: [docs/vocabulary-selection-and-distractor-methodology.md](file:///E:/teacher-wiki/docs/vocabulary-selection-and-distractor-methodology.md))*.
+- *(Details see: [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md))*.
 
 ### 1.7 Definition-Locked Word Sense Disambiguation (WSD) & Authentic Multi-Word Phrase Distractors
 - **Definition-Locked WSD Engine (`LinguisticEngine._lock_sense`)**:
   - Offline multi-feature weighted disambiguation (<0.5ms): POS hard gate $\rightarrow$ conversational/spoken formulaic locution gate (`[spoken]`, `[greeting]`) $\rightarrow$ pattern & collocation syntactic intersection $\rightarrow$ contextual lemma overlap.
-  - Pins the extracted headword strictly to its authoritative Longman definition, grammatical pattern slot, register label, and sense-specific opposites/collocations.
+  - Pins the extracted headword strictly to its authoritative pedagogical definition, grammatical pattern slot, register label, and sense-specific opposites/collocations.
 - **Authentic Multi-Word Phrase Distractor Generation (`LinguisticEngine.generate_phrase_distractors`)**:
-  - Fully connects the 106,738 entries in `ldoce_phrase_index` to assessment distractor synthesis, eliminating arbitrary hallucinated distractors.
+  - Fully connects the 106,738 entries in the pedagogical phrase index (`pedlex_phrase_index`) to assessment distractor synthesis, eliminating arbitrary hallucinated distractors.
   - Generates strictly symmetric, authentic distractors across structural families (tail-sharing clusters, light-verb constructs, binomial coordinate matches, and 2-word phrasal verb particle/verb contrasts).
   - **Quantifier Frames (`a piece/bit/slice of`)**: Implements Scheme 2 (Head Blanking) with quantifier sibling candidate generation (`[piece, bit, slice, sheet]`) and blank frame alignment (`a ____ of [Uncountable Noun]`).
-  - **Pending Special Phrase Families**: Correlative connectors, irreversible binomials, light verb-noun collocations, and prepositional frames recorded in [docs/ldoce6-database-architecture.md#8-pending-work-special-collocational--multi-word-phrase-constructions-待办清单](file:///E:/teacher-wiki/docs/ldoce6-database-architecture.md#8-pending-work-special-collocational--multi-word-phrase-constructions-%E5%BE%85%E5%8A%9E%E6%B8%85%E5%8D%95).
-- *(Full specifications, scoring weights, and database schemas see: [docs/ldoce6-database-architecture.md](file:///E:/teacher-wiki/docs/ldoce6-database-architecture.md))*.
+  - **Pending Special Phrase Families**: Correlative connectors, irreversible binomials, light verb-noun collocations, and prepositional frames recorded in internal linguistic roadmap.
+- *(Full public distractor and valency cascade methodology see: [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md))*.
 
 ### 1.8 Architectural Discipline & Anti-Patching Escalation Principle
 - **Anti-Patching Mandate (Zero Tolerate for Band-Aid Bloat)**:
@@ -126,9 +126,9 @@
   - Assessment generation (`vocabulary_quiz`, `translation_quiz`, etc.) **MUST NEVER** treat `extractions/*.md` as authoritative semantic or lexical truth. Relying on downstream markdown risks ingesting stale, incomplete, or user-altered data (e.g. definitions modified to Chinese, tampered POS, or broken examples), which fatally contaminates quiz items.
 - **Mandatory Fresh Deterministic Extraction at Quiz Generation**:
   - For both `vocabulary_quiz` and `translation_quiz`, generation pipelines must ground directly on the authentic primary source text (`sources/<Unit>.md`) and its syllabus items.
-  - The pipeline runs a fresh, zero-token deterministic extraction pass (`LinguisticEngine` + `all-MiniLM-L6-v2` + LDOCE 6 SQLite) directly against authentic source sentences.
+  - The pipeline runs a fresh, zero-token deterministic extraction pass (`LinguisticEngine` + `all-MiniLM-L6-v2` + PedLex SQLite) directly against authentic source sentences.
   - **Atomic Semantic Cohesion (`Sense` Primacy)**:
-    - `all-MiniLM-L6-v2` embedding similarity dynamically locks the headword to its authoritative Longman `Sense` using the authentic sentence context.
+    - `all-MiniLM-L6-v2` embedding similarity dynamically locks the headword to its authoritative pedagogical `Sense` using the authentic sentence context.
     - The locked `Sense` acts as the single invariant binding `part_of_speech`, `definition`, `patterns`, `collocational anchors`, and pre-computed zero-collision distractors into an unbreakable, atomic blueprint. This permanently eliminates pos-definition desync (e.g. verb distractors with noun definitions).
   - **Translation Quiz Alignment**:
     - `translation_quiz` follows the identical rule: core grammatical patterns, key headwords, and clause structures are freshly extracted and calibrated from `sources/<Unit>.md`, ensuring target bilingual translations strictly represent authentic passage pedagogy rather than edited extraction notes.
@@ -137,7 +137,7 @@
 - **绝对禁止“两套逻辑”与“脱节漫游”**:
   - 提取阶段（Extraction）与命题生成阶段（Quiz Blueprint）必须使用**完全统一的单一套 Sense-First 核心逻辑**，严禁提取一套规则、Quiz 阶段又脱离 Sense 去全库自由漫游。
   - **Sense（义项）是唯一的真理源头与第一公民**：
-    - 进入生成前，第一步**必须且只能是执行 Sense-Locking**，锁定目标词在课文真实语境下的权威 LDOCE Sense 对象。
+    - 进入生成前，第一步**必须且只能是执行 Sense-Locking**，锁定目标词在课文真实语境下的权威 Pedagogical Sense 对象。
     - 严禁在 Sense 锁定之前使用词条级别的全局搭配库或全库例句进行无义项归属的检索（例如为 `pay` 跨义项搜 `money` 导致引入毫无关联的 `pay for` 句子）。
 - **Pattern 与 Example 的原子闭环绑定 (Atomic Binding)**:
   - 选定 Sense 后，该 Sense 原生自带的 `definition`、`patterns`、`examples` 和 `collocations` 即构成不可分割的原子集合。
@@ -256,75 +256,54 @@ All lookups use `normalize_name()` (case-insensitive, ignoring spaces and specia
 
 ---
 
-## 6. To-Do List
+---
+
+## 6. Project Documentation Index (`docs/`)
+
+Authoritative technical specifications and architectural deep dives:
+- **[docs/pedlex-database-architecture.md]**: Pedagogical Lexicon (PedLex) SQLite schema, 106k phrase inverted index, Definition-Locked WSD scoring, and phrase distractor algorithms.
+- **[docs/vocabulary-selection-and-distractor-methodology.md]**: Pedagogical lexical selection, Valency cascades (verb/adj/noun/adv), single-fit collocational anchors, and distractor generation methodology.
+- **[docs/audit-scores-guide.md]**: Level 1 deterministic code gate and Level 2 expert evaluator scoring rubrics and triage thresholds.
+- **[docs/cli.md]**: CLI commands, compilation parameters, and dashboard orchestration workflows.
+
+---
+
+## 7. To-Do List
 
 > ✅ Complete | 🔄 In Progress | ⬜ Pending
 
-### Completed
-- [x] Embed raw audio data (Base64) into HTML handouts
-- [x] Unit Dependency Graph visualization
-- [x] Video Quiz Extension (Bilibili/MP4 via Whisper)
-- [x] pyproject.toml dependency management
-- [x] Two-turn decoupled Prose-to-JSON quiz generation pipeline
-- [x] Level 1 Deterministic Code Gate and Level 2 Expert Model Semantic Audit across all quiz modalities
-- [x] Psychometric targeted healing (selective item regeneration and surgical splicing)
-- [x] Display layer decoupling (display titles decoupled from physical slugs)
-- [x] Live configuration hot-reloading via filesystem mtime tracking
-- [x] Clean prompt & schema separation (removal of code variables and formatting from prompts)
-- [x] Elimination of example contamination (pure syntactic definitions replacing concrete prompt examples)
-- [x] Four Macro Functional Domains & Triad Quality Architecture for grammar extraction
-- [x] Deterministic grammar category auto-remap with soft penalty scoring
-- [x] Expanded tense and inflection support for interpretive verbs (`meant`, `suggested`, `indicated`, `showed`)
-- [x] Dual-Track Assessment Track 1: Authentic Passage Cloze (0-token authentic stem masking and precomputed zero-collision distractors)
-- [x] In-place deterministic slot standardization (`[sb]`, `[sth]`, `[one's]`) with spaCy `poss` dependency binding
-- [x] Streamed intra-paragraph sentence tokenization (`[S-ID]`) preserving authentic markdown paragraph boundaries
-- [x] Elimination of redundant candidate quotes in target skeletons; inverted cognitive flow (Passage first, Targets second)
-- [x] Restored authentic full sentence requirement for `quoted_sentence` and `quote`, restricting `[S-ID]` exclusively to `design_audit` tag chains
-- [x] Level 1 deterministic self-healing for unoriginal/copied `example_usage` and empty extraction fallback from sentence pool
-- [x] Quiz prompt lean refactor: tag-chain `design_audit` across all 5 quiz modalities (reading, listening, vocab, translation, video)
-- [x] Fixed grammar extraction prompt variable leakage (P0-1) across deterministic pattern targets
-- [x] Deterministic Target Coverage Gate & Formula Grounding in Evaluator (P0-2: proportionate score scaling, incomplete coverage fatal flag, and formula-quote physical grounding)
-- [x] Unified Transparent Delivery & Frontmatter Safety Blocking (P0-3: 3-tier status triage, frontmatter-only error reporting with body safety blocking on failed extractions, elimination of quarantine directory confusion)
-- [x] COBUILD slot formula deterministic generation via spaCy dependency trees (`generate_cobuild_formula`)
-- [x] Distractor sanitization & position shuffling with atomic key synchronization (`_shuffle_quiz_options`)
-- [x] Quote boundary magnetic snapping to indexed sentence pool (`snap_to_sentence_pool`)
-- [x] Canonical headword lemmatization & in-place self-healing (`lemmatize_headword`)
-- [x] Elimination of multi-turn QA retries in production mode (One-Shot default established)
-- [x] Full Purge of Oxford Collocations Dictionary (OCD) and complete migration to LDOCE 6th Edition semantic ordering
-- [x] Complete Migration of Vocabulary & Expressions Extraction from LLM to Deterministic Code Extraction (`LinguisticEngine` + `cefrpy` + LDOCE 6th Edition)
-- [x] Adjective Distractor Quadruple Transformation (WordNet bipolar cluster harvesting, opposite satellite antonym tracing, modified noun collocation clash, preposition valency gate, and academic adjective families)
-- [x] CEFR Distractor Difficulty Ceiling & Offline Frequency Gate (P0: eliminated super-advanced/obscure distractors on foundational texts via `cefrpy` + Zipf frequency filtering)
-- [x] Reading Assessment CEFR Difficulty Adaptation & L1 Code Gate (P2 Step 1 & 2: dynamic prompt interpolation of difficulty matrix, option length limit, and C1/C2 difficulty ceiling gate)
-- [x] LDOCE Zero-Collision Anchor Fallback & Semantic Valency Cascade (`find_ldoce_zero_collision_anchor`)
-- [x] CEFR Assessment Difficulty Calibration across All Remaining Modalities (Translation, Listening, Video with CEFR matrices, option length limits, and L1 code gates)
-- [x] Full-Pipeline Cross-Stage Defect Alignment (decoupled comprehension quiz prompts, evaluator retry logic, reading context sentences, and slotted expression cloze cleanup)
-- [x] Fixed Phrase Artificial Decomposition Prevention & Vocabulary Fragmentation Auto-Pruning
-- [x] Markdown Extraction Formatting Standardization (`Part of Speech` & `Word CEFR Level`)
-- [x] Option Morphological Symmetry & Plurale Tantum Invariant (100% symmetric inflections across target and distractors)
-- [x] Definition-Locked Word Sense Disambiguation (WSD) & Authentic Sense Alignment (`_lock_sense` with POS gating, pattern/collocation overlap scoring, register/grammatical label filtering, and formulaic locution gating)
-- [x] Multi-Word Phrase Symmetrical Distractors grounded in `ldoce_phrase_index` (26k+ LDOCE phrases index memory cache, tail-sharing head nouns, coordinate binomial pairs, light-verb constructs, and 2-word phrasal verb particle/verb contrast pools)
+### Completed (Milestones & Architectural Core)
+- [x] **Dual-Distribution Adapter & Zero-Leakage Open Sourcing (核心合规与双架构适配器已落地)**:
+  - Clean separation of Public vs. Corpus-Powered modes: all `.db`, `.sqlite`, `.mdx` binaries isolated in `.gitignore`.
+  - Automatic environment detection (`db_path.exists()`, config `disable_pedlex` switch, `DISABLE_PEDLEX` env var): smoothly falls back to spaCy + cefrpy + WordNet (oewn:2025+) without crashes.
+- [x] **Syntactic Pattern Exclusion for Single-Fit Distractors (句型模式互斥干扰项升级已落地)**:
+  - Extracted pedagogical pattern slots (`to_inf`, `gerund`, `sb_to_do`, `that_clause`, `wh_clause`).
+  - Integrated `double_key_pattern` collision gate into distractor candidate filtering, guaranteeing absolute grammatical exclusion and single-fit discrimination.
+- [x] **Deterministic Extraction Architecture**:
+  - Full migration of Vocabulary, Expressions, and Grammar extraction from LLM to 100% deterministic Python/NLP logic (`LinguisticEngine` + `cefrpy` + Pedagogical Lexicon / WordNet + spaCy).
+  - 0 token cost, 0 hallucinations, and eliminated secondary-turn drift.
+- [x] **Sense-First Unified Architecture & Atomic Pattern-Example Binding**:
+  - Headwords contextually locked to authoritative pedagogical senses via `all-MiniLM-L6-v2` embeddings / WSD scoring.
+  - Linked native definition, patterns, collocations, and attested examples into unbreakable atomic blueprints.
+- [x] **Level 1 Deterministic Code Gate & Level 2 Expert Model Semantic Audit**:
+  - Two-level quality audit architecture across all 5 quiz modalities (vocabulary, reading, translation, listening, video).
+  - Physical invariant validation, target coverage gating, automatic category re-mapping, and option shuffling.
+- [x] **Unified One-Shot Direct JSON Structured Output**:
+  - Thoroughly validated across 11 benchmark models; complete elimination of prose-to-JSON and multi-turn drift.
+- [x] **CEFR Deterministic Grounding & Calibration**:
+  - Statistically computed text-level ceilings via `cefrpy`; offline Zipf distractor frequency gates; dynamic prompt parameter interpolation.
 
 ### In Progress
-- **Grammar Code-Driven Extraction Optimization (语法代码化提取完善中)**:
-  - Migrate remaining syntactic pattern matching and COBUILD slot formulas from prompt inference to deterministic spaCy rule gates.
-  - Strengthen discourse-level clause boundary detection, rhetorical functional scoping (Four Macro Functional Domains), and stance/hedging classification.
+- **Grammar Code-Driven Extraction Optimization (语法代码化提取深化与回归覆盖)**:
+  - Continue refining structural pattern rules and COBUILD formulas across complex rhetorical layers and discourse transitions.
+  - Strengthen discourse-level clause boundary detection and stance/hedging classification.
 
-### Pending / Next Improvement Directions (后续演化与改善方向 - 优先攻坚)
-- **0. 核心合规与双架构适配器（P0: Dual-Distribution Adapter Architecture - 最先解决，再 Push）**:
-  - **版权安全与零门槛开源分发**：确立开源版（Public）与高精语料版（Corpus-Powered）的平滑共存架构，杜绝双分支（Two-Branch）维护分裂。
-  - **可插拔特征探测与优雅降级（Graceful Fallback）**：
-    - 在单分支代码中实现环境自动探测：当检测到本地存在私有 `ldoce6_essential.db` 时，自动激活毫秒级精准搭配骨架、4阶词典干扰项与 0-token 代码化提取；
-    - 当未挂载词典数据库时，系统自动无缝降级为**纯 LLM 提示词工程 + WordNet + spaCy 开源库**的纯软件轻量模式。
-    - 仓库彻底将所有 `*.db`, `*.sqlite`, `*.mdx` 列入 `.gitignore`，GitHub 公开仓库零侵权把柄、零受限数据文件。
-- **2. 句型模式互斥干扰项升级（Syntactic Pattern Exclusion for Single-Fit Distractors）**:
-  - 释放 LDOCE 6th Edition `patterns` 核心价值（如 `[+ to do]`, `[+ on doing]`, `[+ that]`，及物/不及物）。
-  - 在生成干扰项时引入句法槽位互斥判定作为高优先级权重，不仅确保“主题/语义相关”，更在“语法槽位上形成绝对排斥”，从根源上杜绝双答案（Double-key）缺陷。
-- **3. 多词表达式代码化提取务实演化（Expressions & Phrasal Verbs Dual-Track Grounding）**:
-  - **短语倒排索引对齐（ldoce_phrase_index）**：
+### Pending / Next Improvement Directions (后续演化方向)
+- **1. 多词表达式代码化提取双轨制演化（Expressions & Phrasal Verbs Dual-Track Grounding）**:
+  - **短语倒排索引对齐（pedlex_phrase_index）**：
     - 采用“双轨制索引 + 规范形态学归一化（Dual-Track Normalization）”消除单纯去标点造成的语义误判（如 `don't` vs `dont`，占位符 `[sb]`/`[sth]` 规范化）。
     - 建立三级渐进漏斗检索机制：一级精确字面原貌匹配（100% 置信度） ➔ 二级规范骨架插槽匹配（95% 置信度） ➔ 三级词形还原与语法容差回退。
-  - **基于内存与条目结构的轻量互补提取**：继续依托 `LinguisticEngine` 现有的 `_phrase_evidence_cache` 与条目 `data_json`（senses、collocations）原生结构，配合 spaCy 语法依存与词形还原，实现动介短语、习语的精准识别与类型推断。
-- **4. 教学法与 Markdown 卡片演化（Source-to-Wiki Enrichment）**:
-  - Markdown 词汇卡片自动注入 Longman 经典搭配列表（0 Token 消耗）。
-  - 优质错题本模板与知识图谱交互可视化。
-- Add Bipolar Antonym distractors such as truth/peace/life/love/success/begin 
+  - **基于内存与条目结构的轻量互补提取**：依托 `_phrase_evidence_cache` 与条目原生结构，配合 spaCy 语法依存与词形还原，实现动介短语、习语的精准识别与类型推断。
+- **2. 教学法与 Markdown 卡片演化（Source-to-Wiki Enrichment）**:
+  - Markdown 词汇卡片自动注入权威教学级搭配列表（0 Token 消耗）。
+  - 优质错题本模板与知识图谱交互可视化。 

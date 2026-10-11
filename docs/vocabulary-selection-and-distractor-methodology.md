@@ -8,8 +8,8 @@
 
 Candidate words extracted from authentic lesson passages must satisfy a dual-gate architecture before entering the syllabus vocabulary pool:
 
-1. **Lexicon Gate (LDOCE 6th Edition Grounding)**:
-   - The headword must have an independent, fully-formed entry in `ldoce6_essential.db` with valid definitions and senses.
+1. **Lexicon Gate (Pedagogical Lexicon Grounding)**:
+   - The headword must have an independent, fully-formed entry in `pedlex.db` with valid definitions and senses.
    - Suffix-derived words or nominalizations that lack standalone definitions in the dictionary are excluded rather than force-converted.
 2. **Textual Gate (Authentic Textual Grounding)**:
    - The headword (or its exact inflected surface form) must physically occur in the lesson sentence pool.
@@ -21,7 +21,7 @@ Candidate words extracted from authentic lesson passages must satisfy a dual-gat
 
 ## 2. Unified POS Resolution Protocol (`resolve_item_pos`)
 
-To prevent discrepancies between manual teacher edits in markdown notes and the automated quiz generator, part-of-speech resolution is standardized through [`LinguisticEngine.resolve_item_pos`](file:///E:/teacher-wiki/librarian/linguistics.py):
+To prevent discrepancies between manual teacher edits in markdown notes and the automated quiz generator, part-of-speech resolution is standardized through [`LinguisticEngine.resolve_item_pos`](../librarian/linguistics.py):
 
 ```
                        [ Input: word, quote, manual_pos ]
@@ -39,7 +39,7 @@ To prevent discrepancies between manual teacher edits in markdown notes and the 
                      - Nominal head or object argument?
                                        │
                                        ▼
-                     [ LDOCE Lexical POS Attestation ]
+                     [ PedLex Lexical POS Attestation ]
                      - Cross-reference with entry senses & all_poses
                                        │
                                        ▼
@@ -96,10 +96,10 @@ Organized into discourse families (`concession`, `cause`, `condition`, `time`, `
 
 Distractors are generated deterministically at zero token cost (<1ms) via a four-tier pipeline:
 
-1. **LDOCE Language Activator & Topic Lexicon**:
+1. **PedLex Topic & Activator Lexicon**:
    - Harvests semantic neighbors and concept cluster members.
    - Applies **Cluster Throttling** (maximum 1 candidate per cluster/phrase) and word-family deduplication (`are_same_word_family`) to avoid near-identical variants (e.g. *businessman* vs *businessperson*).
-2. **LDOCE Thesaurus Synonyms & Antonyms**:
+2. **PedLex Thesaurus Synonyms & Antonyms**:
    - Secondary source for taxonomically related content words.
 3. **WordNet Taxonomic Filtering**:
    - Bipolar cluster harvesting and coordinate sisters within the same POS and semantic field.
