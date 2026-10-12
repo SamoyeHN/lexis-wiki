@@ -1111,8 +1111,11 @@ class LinguisticEngine:
         elem_parts = [slot_elem, particle_elem]
         if allow_modifier:
             # Allow intervening single modifier word (adverb / degree adverb, 2-15 letters)
-            elem_parts.append(r"[a-z]{2,15}")
-        elem = rf"(?:{'|'.join(elem_parts)})"
+            # Particles are strictly excluded so a phrasal verb particle (e.g. 'up' in 'make up the time')
+            # cannot masquerade as an intervening modifier for a simpler frame ('make time').
+            mod_word = rf"(?!(?:{particles})\b)[a-z]{{2,15}}"
+            elem_parts.append(mod_word)
+        elem = "(?:" + "|".join(elem_parts) + ")"
         gap_run = rf"{elem}(?:\s+{elem})*\s*"
         gap = rf"\s+(?:{gap_run}){{0,{max_gap}}}"
         return r"(?<!\w)" + gap.join(parts) + r"(?!\w)"
@@ -1528,7 +1531,7 @@ class LinguisticEngine:
     _SENSE_POS_CODES = {
         "noun": "n", "noun count": "n", "noun mass": "n", "number": "n",
         "ordinal number": "n", "cardinal number": "n",
-        "verb": "v", "modal verb": "v",
+        "verb": "v", "modal verb": "v", "phrasal verb": "v",
         "adjective": "adj", "adverb": "adv",
         "preposition": "prep", "conjunction": "conj",
         "pronoun": "pron", "determiner": "det", "predeterminer": "det",
@@ -1588,7 +1591,8 @@ class LinguisticEngine:
 
     # Words a pattern line uses as placeholders, never as evidence of a frame.
     _PATTERN_FUNCTION_WORDS = ("the", "a", "an", "one", "someone", "somebody", "something",
-                               "sb", "sth", "etc", "some", "his", "her", "their", "its")
+                               "sb", "sth", "etc", "some", "his", "her", "their", "its",
+                               "him", "me", "us", "them", "you", "your", "my", "our")
 
     # Longman's stand-ins for 'any noun phrase'.
     _PATTERN_PLACEHOLDERS = ("somebody", "something", "someone", "anything", "everything",
@@ -1684,6 +1688,27 @@ class LinguisticEngine:
             return {}
 
     @classmethod
+    def clean_and_expand_pattern_slashes(cls, pat: str) -> List[str]:
+        """
+        Cleanly expands slash-alternatives in grammatical patterns.
+        Handles both single-word alternates (e.g. 'become/grow/get accustomed to something')
+        and multi-word / trailing alternates (e.g. 'come in/into/out of etc', 'turn around/round/away').
+        Returns a list of clean, fully expanded pattern strings.
+        """
+        if not pat:
+            return []
+        pat_clean = re.sub(r"\betc\.?\b", "", pat.lower()).strip()
+        slash_match = re.search(r"([a-zA-Z]+(?:\s+[a-zA-Z]+)*(?:/[a-zA-Z]+(?:\s+[a-zA-Z]+)*)+)", pat_clean)
+        if slash_match:
+            full_span = slash_match.group(1)
+            alts = full_span.split("/")
+            pre_p = pat_clean[:slash_match.start()]
+            post_p = pat_clean[slash_match.end():]
+            branches = [f"{pre_p}{alt.strip()}{post_p}".strip() for alt in alts if alt.strip()]
+            return branches if branches else [pat_clean]
+        return [pat_clean]
+
+    @classmethod
     def _lock_sense(
         cls,
         entry: Dict[str, Any],
@@ -1773,6 +1798,8 @@ class LinguisticEngine:
         target_w_clean = (entry.get("word") or "").lower()
         headword_tokens = set(re.findall(r"\b[a-z]+\b", target_w_clean))
         target_inflections = set(cls.inflected_forms(target_w_clean)) | headword_tokens | {target_w_clean}
+        for hw_t in headword_tokens:
+            target_inflections.update(cls.inflected_forms(hw_t))
 
         has_pron_obj = False
         # MiniLM embedding similarity between quote/phrase and candidate senses
@@ -1896,19 +1923,77 @@ class LinguisticEngine:
                 target_w_clean = entry.get("word", "").lower()
                 for pat in s.get("patterns", []):
                     pat_clean = pat.lower().strip()
-                    # Cleanly expand slash combinations like "become/grow/get accustomed to something"
-                    slash_match = re.search(r"([a-zA-Z]+(?:/[a-zA-Z]+)+)", pat_clean)
-                    if slash_match:
-                        full_span = slash_match.group(1)
-                        alts = full_span.split("/")
-                        pre_p = pat_clean[:slash_match.start()]
-                        post_p = pat_clean[slash_match.end():]
-                        branches = [f"{pre_p}{alt}{post_p}".strip() for alt in alts]
-                    else:
-                        branches = [pat_clean]
+                    branches = cls.clean_and_expand_pattern_slashes(pat)
 
                     matched_pat = False
                     for br in branches:
+                        # Check separable/transitive phrasal patterns: if pattern specifies 'somebody ↔ ...' or 'something ↔ ...',
+                        # it requires an explicit transitive direct object governed by the target verb in the clause context.
+                        is_separable_transitive = "\u2194" in br or "<->" in br or "somebody" in br or "something" in br or " sb " in f" {br} " or " sth " in f" {br} "
+                        if is_separable_transitive and quote:
+                            try:
+                                nlp = cls.get_spacy()
+                                doc_q = nlp(quote)
+                                # Locate head verb tokens in quote
+                                head_cand_lemmas = {target_w_clean.split()[0]} if target_w_clean else set()
+                                v_toks = [t for t in doc_q if t.lemma_.lower() in head_cand_lemmas or t.text.lower() in head_cand_lemmas]
+                                if not v_toks:
+                                    v_toks = [t for t in doc_q if t.pos_ in ("VERB", "AUX")]
+                                
+                                # Check if any matching verb governs a direct object
+                                governing_objs = [c for v in v_toks for c in v.children if c.dep_ in ("dobj", "obj")]
+                                if not governing_objs:
+                                    # Passive check: if passive subject exists ('if you are found out'), treat as matched
+                                    has_passive_subj = any(c.dep_ in ("nsubjpass", "nsubj:pass") for v in v_toks for c in v.children)
+                                    if not has_passive_subj:
+                                        continue
+                                else:
+                                    # Enforce selectional restrictions: human vs inanimate
+                                    has_sb = "somebody" in br or " sb " in f" {br} "
+                                    has_sth = "something" in br or " sth " in f" {br} "
+                                    if has_sb and not has_sth:
+                                        # Requires human object
+                                        is_human = any(
+                                            c.text.lower() in ("him", "her", "them", "me", "us", "someone", "somebody", "person", "people", "man", "woman", "child", "friend", "player")
+                                            or c.ent_type_ == "PERSON"
+                                            for c in governing_objs
+                                        )
+                                        if not is_human:
+                                            continue
+                                    elif has_sth and not has_sb:
+                                        # Requires non-human/inanimate object
+                                        is_pure_human = any(
+                                            c.text.lower() in ("him", "her", "them", "me", "us", "someone", "somebody")
+                                            or c.ent_type_ == "PERSON"
+                                            for c in governing_objs
+                                        )
+                                        if is_pure_human:
+                                            continue
+                            except Exception:
+                                pass
+
+                        # If pattern explicitly specifies 'to do', require that the sentence contains
+                        # an authentic infinitive verbal complement (e.g. xcomp/ccomp with 'to', or prep 'to' governing a verb/pcomp)
+                        # rather than a prepositional noun phrase (e.g. 'to a new level').
+                        has_to_do_in_pat = bool(re.search(r"\bto\s+do\b", br))
+                        if has_to_do_in_pat and quote:
+                            try:
+                                nlp = cls.get_spacy()
+                                doc_q = nlp(quote)
+                                head_cand_lemmas = {target_w_clean.split()[0]} if target_w_clean else set()
+                                v_toks = [t for t in doc_q if t.lemma_.lower() in head_cand_lemmas or t.text.lower() in head_cand_lemmas]
+                                if not v_toks:
+                                    v_toks = [t for t in doc_q if t.pos_ in ("VERB", "AUX")]
+                                has_infinitive_xcomp = any(
+                                    (c.dep_ in ("xcomp", "ccomp") and any(gc.lemma_.lower() == "to" for gc in c.children))
+                                    or (c.dep_ == "prep" and c.lemma_.lower() == "to" and any(gc.dep_ in ("pcomp", "xcomp") or gc.pos_ == "VERB" for gc in c.children))
+                                    for v in v_toks for c in v.children
+                                )
+                                if not has_infinitive_xcomp:
+                                    continue
+                            except Exception:
+                                pass
+
                         words_in_pat = cls._pattern_words(br)
                         if len(words_in_pat) >= 2 and cls._quote_has_frame(q_seq, words_in_pat):
                             score += 40
@@ -1973,7 +2058,7 @@ class LinguisticEngine:
                     is_formulaic_greeting = ("!" in u_clean) or any(k in str(s.get("definition", "")).lower() for k in ("used to greet", "exclamation", "used when someone is leaving"))
                     for br in branches:
                         # 'do' in 'to do something' is a placeholder for any action verb
-                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if w not in ("the", "a", "an", "somebody", "something", "your", "his", "her", "their", "my", "its", "one", "oneself", "sb", "sth")]
+                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if w not in ("the", "a", "an", "somebody", "something", "your", "his", "her", "their", "my", "its", "one", "oneself", "sb", "sth", "etc", "eg", "ie")]
                         if len(words) >= 2:
                             unit_demanded = True
                             other_words = [w for w in words if not cls.form_matches(w, target_w_clean) and w not in headword_tokens]
@@ -2101,11 +2186,23 @@ class LinguisticEngine:
                                           cls.form_matches(t_txt, target_w_clean) or
                                           cls.form_matches(t_lem, target_w_clean) or
                                           (headword_tokens and (t_lem in headword_tokens or t_txt in headword_tokens)))
+                        
+                        # Support hyphenated compound adjectives (e.g. 'well-kept', 'short-term') parsed by spaCy as separate tokens
+                        is_hyphen_adj = False
+                        if "-" in target_w_clean and tok.i >= 2:
+                            parts = target_w_clean.split("-")
+                            if len(parts) == 2:
+                                prev1 = q_doc[tok.i - 1]
+                                prev2 = q_doc[tok.i - 2]
+                                if prev1.text == "-" and (prev2.lemma_.lower() == parts[0] or prev2.text.lower() == parts[0]) and (cls.form_matches(tok.lemma_.lower(), parts[1]) or cls.form_matches(tok.text.lower(), parts[1])):
+                                    is_hyphen_adj = True
+                                    matches_target = True
+
                         if not matches_target:
                             continue
 
                         # If target is an adjective, check its modified noun or copula subject against sense patterns & examples
-                        if tok.pos_ == "ADJ":
+                        if tok.pos_ == "ADJ" or is_hyphen_adj:
                             mod_noun = ""
                             if tok.head and tok.head.pos_ in ("NOUN", "PROPN"):
                                 mod_noun = tok.head.lemma_.lower()
@@ -2124,6 +2221,15 @@ class LinguisticEngine:
                                 # Semantic alignment for style/practice/method with conventional / standard senses
                                 if mod_noun in ("style", "practice", "method", "way", "approach") and any(term in s_def_tokens for term in ("method", "practice", "way", "usual", "normal")):
                                     score += 25
+                                # Specific alignment for well-kept / well-maintained: if modified noun is not a 'secret', penalize the secret sense
+                                if "well-kept secret" in s_defn:
+                                    if mod_noun != "secret":
+                                        score -= 30
+                                    else:
+                                        score += 40
+                                elif any(k in s_defn for k in ("well cared for", "neat and clean", "maintained", "in good condition")):
+                                    if mod_noun in ("garden", "gardens", "building", "buildings", "house", "grounds", "lawn", "schedule", "schedules", "record", "records", "room"):
+                                        score += 35
 
                             # Check modifier siblings under noun (e.g. "driving" in "internal driving force")
                             if tok.head and tok.head.pos_ == "NOUN":
@@ -2136,7 +2242,7 @@ class LinguisticEngine:
                                             score += 25
 
                         # If target is a noun, check compound head noun and dependency relations
-                        elif tok.pos_ == "NOUN":
+                        elif tok.pos_ == "NOUN" and target_p != "v":
                             gram_l = (s.get("grammar") or "").lower()
                             if tok.tag_ == "NNS":
                                 if ("[uncountable]" in gram_l or "[singular]" in gram_l) and "countable" not in gram_l:
@@ -2273,13 +2379,38 @@ class LinguisticEngine:
                                                 score += 15
 
                         # If target is a verb, check transitivity and arguments
-                        elif tok.pos_ == "VERB":
+                        elif tok.pos_ == "VERB" or (target_p == "v" and (tok.dep_ in ("ROOT", "conj", "advcl", "relcl", "ccomp", "xcomp") or any(ch.dep_ in ("nsubj", "nsubjpass", "csubj") for ch in tok.children))):
                             has_obj = any(ch.dep_ in ("dobj", "obj") for ch in tok.children)
                             gram_l = (s.get("grammar") or "").lower()
-                            if not has_obj and "[intransitive]" in gram_l and "[transitive]" not in gram_l:
-                                score += 20
-                            elif has_obj and "[transitive]" in gram_l:
-                                score += 15
+                            s_units = [u.lower() for u in (s.get("units") or [])]
+                            s_pats = [p.lower() for p in (s.get("patterns") or [])]
+                            # Distinguish direct object requirement from non-finite verbal complement (e.g. 'to do sth', 'and do sth')
+                            # or optional bracketed objects (e.g. '(sb/sth)')
+                            def _requires_direct_object(txt: str) -> bool:
+                                t_clean = re.sub(r"\(.*?\)", "", txt)
+                                t_clean = re.sub(r"\b(?:to|and)\s+(?:do|make|have)\s+(?:something|sth|somebody|sb)\b", "", t_clean)
+                                return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean))
+
+                            requires_obj = (
+                                "[transitive]" in gram_l or
+                                any(_requires_direct_object(u) for u in s_units) or
+                                any(_requires_direct_object(p) for p in s_pats)
+                            )
+                            is_pure_intransitive = (
+                                ("[intransitive]" in gram_l and "[transitive]" not in gram_l) or
+                                not requires_obj
+                            )
+                            if not has_obj:
+                                if is_pure_intransitive and not requires_obj:
+                                    score += 25
+                                elif requires_obj:
+                                    # Penalize transitive senses when sentence has no direct object
+                                    score -= 80
+                            else:
+                                if requires_obj:
+                                    score += 25
+                                elif "[intransitive]" in gram_l and "[transitive]" not in gram_l:
+                                    score -= 50
 
                             # Direct object argument matching (e.g. conduct activities/research/survey)
                             for ch in tok.children:
@@ -2292,21 +2423,47 @@ class LinguisticEngine:
                                     elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in s.get("patterns", [])):
                                         score += 30
 
-                            # Prepositional complement / adverbial phrase matching (Method 1: e.g. 'recognize sb by doing / for sth')
+                            # Prepositional complement / adverbial phrase / particle matching (e.g. 'recognize sb by doing', 'come in', 'sit down', 'turn around')
                             for ch in tok.children:
-                                if ch.dep_ == "prep":
+                                if ch.dep_ in ("prep", "prt", "advmod"):
                                     p_txt = ch.text.lower()
                                     p_lem = ch.lemma_.lower()
-                                    # Check if preposition is explicitly in sense patterns (e.g. 'for', 'by', 'as')
-                                    # If pattern contains content words (e.g. 'appear in a film'), they must also be present
+                                    # Check if preposition / particle is explicitly in sense patterns (e.g. 'for', 'by', 'in', 'around', 'down', 'back', 'away')
+                                    # If pattern contains content words or wh-markers (e.g. 'appear in a film', 'where somebody is coming from'), they must also be present
+                                    pat_matched = False
                                     for pat in s.get("patterns", []):
-                                        pat_l = pat.lower()
-                                        if f" {p_txt} " in f" {pat_l} " or f" {p_lem} " in f" {pat_l} ":
-                                            pw = cls._pattern_words(pat_l)
-                                            content_pw = [w for w in pw if w not in cls._PATTERN_PREPS and w not in cls._PATTERN_FUNCTION_WORDS and w not in ("be", "become", "get", "grow") and w not in target_inflections]
-                                            if not content_pw or any(any(cls.form_matches(tok_q, cpw) for tok_q in q_seq) for cpw in content_pw):
-                                                score += 35
-                                                break
+                                        branches = cls.clean_and_expand_pattern_slashes(pat)
+                                        for br in branches:
+                                            br_tokens = br.split()
+                                            if (f" {p_txt} " in f" {br} " or f" {p_lem} " in f" {br} " or
+                                                p_txt in br_tokens or p_lem in br_tokens):
+                                                pw = cls._pattern_words(br)
+                                                # Wh-markers / complementizers in pattern (e.g. 'where somebody is coming from') MUST match in context
+                                                wh_markers = [w for w in pw if w in ("where", "when", "why", "how", "what", "who", "whom", "whose")]
+                                                if wh_markers and not any(w in q_seq for w in wh_markers):
+                                                    continue
+                                                # Selectional restriction: if pattern requires person object (e.g. 'coming from him/her/you etc')
+                                                # and context prepositional object is inanimate / non-person, skip this pattern
+                                                has_person_constraint = any(w in ("him", "her", "you", "someone", "somebody", "sb") for w in pw) and not any(w in ("something", "sth", "what") for w in pw)
+                                                if has_person_constraint:
+                                                    p_objs = [pc for pc in ch.children if pc.dep_ in ("pobj", "pcomp")]
+                                                    if p_objs:
+                                                        is_pobj_person = any(
+                                                            pc.pos_ == "PRON" and pc.lemma_.lower() in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody", "him", "her", "me", "us", "them")
+                                                            or (pc.pos_ in ("NOUN", "PROPN") and pc.ent_type_ in ("PERSON", "ORG"))
+                                                            or pc.lemma_.lower() in ("person", "people", "man", "woman", "child", "staff", "employee", "worker", "friend", "parent")
+                                                            for pc in p_objs
+                                                        )
+                                                        if not is_pobj_person:
+                                                            continue
+                                                content_pw = [w for w in pw if w not in cls._PATTERN_PREPS and w not in cls._PATTERN_FUNCTION_WORDS and w not in ("be", "become", "get", "grow") and w not in target_inflections]
+                                                if not content_pw or any(any(cls.form_matches(tok_q, cpw) for tok_q in q_seq) for cpw in content_pw):
+                                                    # When particle exactly matches pattern (e.g. 'turn around', 'come in', 'sit down')
+                                                    score += 40
+                                                    pat_matched = True
+                                                    break
+                                        if pat_matched:
+                                            break
                                     # Check prepositional objects or complement verbs
                                     has_action_pcomp = False
                                     p_objs_expanded = []
@@ -2368,21 +2525,77 @@ class LinguisticEngine:
                             for ch in tok.children:
                                 if ch.dep_ in ("nsubj", "nsubjpass", "csubj"):
                                     subj_lem = ch.lemma_.lower()
-                                    if subj_lem in s_def_tokens or any(re.search(rf"\b{re.escape(subj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
-                                        score += 25
+                                    # Closed-class personal pronouns ('you', 'i', 'he', etc.) appear ubiquitously in dictionary examples
+                                    # and must not be used to award generic token-overlap bonus unless the head noun/pronoun is lexical
+                                    if subj_lem not in stopwords:
+                                        if subj_lem in s_def_tokens or any(re.search(rf"\b{re.escape(subj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
+                                            score += 25
                                     # Human vs non-human subject differentiation for verbs with 'effective/successful' or job/activity senses (e.g. work)
                                     is_human_subj = (ch.pos_ == "PRON" and subj_lem in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody")) or (
                                         ch.pos_ in ("NOUN", "PROPN") and subj_lem in ("person", "people", "man", "woman", "child", "staff", "employee", "worker", "doctor", "lawyer", "teacher", "mentor", "volunteer")
                                     )
-                                    if not is_human_subj:
-                                        if any(k in s_defn for k in ("effective", "successful", "function", "operate")):
+                                    if is_human_subj:
+                                        # Human subject + 'from' preposition specifying origin/birth/culture/background
+                                        # (e.g. 'come from a culture/country/place', 'hail from ...')
+                                        prep_from_objs = [
+                                            pc.lemma_.lower()
+                                            for p_ch in tok.children if p_ch.dep_ == "prep" and p_ch.lemma_.lower() == "from"
+                                            for pc in p_ch.children if pc.dep_ in ("pobj", "pcomp")
+                                        ]
+                                        if any(po in ("culture", "country", "place", "background", "family", "city", "town", "region", "society", "nation", "area") for po in prep_from_objs):
+                                            if any(k in s_defn for k in ("born there", "lived there", "from a place", "place, you were", "family or background", "belong to")):
+                                                score += 40
+                                            elif any(k in s_defn for k in ("attitude or opinion", "basic attitude")):
+                                                score -= 30
+
+                                        # Human subject vs vehicle arriving / landing sense (e.g. 'train, bus, plane, or ship comes in')
+                                        if any(k in s_defn for k in ("train, bus, plane", "plane, or ship", "train arrives", "plane arrives", "ship arrives")):
+                                            score -= 40
+                                    else:
+                                        # First-principles invariant: non-human subjects only boost 'effective/successful' for verbs of functioning/operating (e.g. work, operate, run, function)
+                                        is_functioning_verb = tok.lemma_.lower() in ("work", "function", "operate", "run", "act", "serve") or any(k in target_w_clean for k in ("work", "function", "operate"))
+                                        if is_functioning_verb and any(k in s_defn for k in ("effective", "successful", "function", "operate")):
                                             score += 45
                                         elif any(k in s_defn for k in ("paid", "job", "salary", "employer")):
                                             score -= 25
-                                        # Specific domain check for art/writing/painting (e.g. work sense 8)
-                                        if any(k in s_defn for k in ("painting", "design", "piece of writing", "drawing", "novel", "poem", "sculpture")):
-                                            if not any(k in q_low_all for k in ("paint", "design", "write", "writing", "art", "book", "scene", "poem", "novel", "picture", "colour", "color")):
-                                                score -= 30
+                                        # Specific domain check for acoustic/sound vs quantity/amount increase
+                                        is_sound_subj = subj_lem in ("music", "sound", "noise", "applause", "cheer", "chorus", "song", "shout", "cry")
+                                        if is_sound_subj and any(k in s_defn for k in ("loud", "sound", "noise", "hear")):
+                                            score += 40
+                                        elif not is_sound_subj and any(k in s_defn for k in ("become louder", "louder")):
+                                            score -= 30
+
+                                        is_qty_subj = subj_lem in ("number", "amount", "membership", "population", "crowd", "rank", "ranks", "size", "volume", "figure", "total")
+                                        if is_qty_subj and any(k in s_defn for k in ("amount", "number", "increase in", "grow in number")):
+                                            score += 40
+
+                                        # Liquid / fluid subject alignment (e.g. 'Tears were running down her face', 'Water was running')
+                                        is_liquid_subj = subj_lem in ("tear", "tears", "water", "sweat", "blood", "river", "rain", "liquid", "stream", "fluid", "droplet")
+                                        if is_liquid_subj and (any(k in s_defn for k in ("flow in", "flow", "liquid")) or (s.get("signpost") or "").lower() == "flow"):
+                                            score += 50
+                                        elif is_liquid_subj and any(k in s_defn for k in ("using your legs", "kill or injure", "criticize", "manage", "business")):
+                                            score -= 40
+
+                                        # Origin / derivation vs birth / youth place differentiation:
+                                        # Non-human subjects (words, culture, craft, coffee, etc.) originate/derive from a place/source;
+                                        # they are not born or lived there when young.
+                                        is_origin_defn = any(k in s_defn for k in ("obtained from", "start or be made", "originate", "derive"))
+                                        is_birth_defn = any(k in s_defn for k in ("born there", "lived there when you were young", "grow up"))
+                                        if is_birth_defn:
+                                            score -= 30
+                                        elif is_origin_defn:
+                                            score += 30
+
+                            # Discourse/deliberative forum context alignment (e.g. 'Go to shareholder meetings and speak up')
+                            has_forum_context = any(
+                                t_ctx.lemma_.lower() in ("meeting", "conference", "assembly", "shareholder", "debate", "discussion", "hearing", "forum", "session", "council", "parliament", "board")
+                                for t_ctx in q_doc
+                            )
+                            if has_forum_context:
+                                if any(k in s_defn for k in ("express your opinion", "express their opinion", "say what you think", "say what they think", "opinion")):
+                                    score += 35
+                                elif re.match(r"^(?:used\s+to\s+(?:ask|say|tell|show|express)|spoken\b)", s_defn, re.I):
+                                    score -= 20
 
                             # Check for xcomp infinitive complement (e.g. tend to do / think)
                             has_xcomp = any(ch.dep_ == "xcomp" for ch in tok.children)
@@ -2523,30 +2736,33 @@ class LinguisticEngine:
         if not key_tokens:
             return []
 
-        # Find anchor word to load entry
-        anchor_word = near_match.group(1).lower() if near_match else key_tokens[0]
-        entry = cls.get_ldoce_entry(anchor_word)
-        if not entry and len(key_tokens) > 1:
-            entry = cls.get_ldoce_entry(key_tokens[1])
-        if not entry:
+        # Find anchor words to load entries (scan key tokens to capture collocations stored across headwords)
+        anchor_words = [near_match.group(1).lower()] if near_match else key_tokens[:2]
+        entries = []
+        for aw in anchor_words:
+            ent = cls.get_ldoce_entry(aw)
+            if ent and ent not in entries:
+                entries.append(ent)
+        if not entries:
             return []
 
         pool: List[str] = []
-        # 1. Sense examples
-        for s in entry.get("senses", []):
-            pool.extend(s.get("examples", []) or [])
-        # 2. Grammar boxes examples
-        for gb in entry.get("grammar_boxes", []):
-            pool.extend(gb.get("examples", []) or [])
-        # 3. Collocations examples
-        for cat_k, items in entry.get("collocations", {}).items():
-            for it in items:
-                if isinstance(it, dict) and it.get("example"):
-                    pool.append(it["example"])
-        # 4. Cross collocations examples
-        for cc in entry.get("cross_collocations", []):
-            if isinstance(cc, dict) and cc.get("example"):
-                pool.append(cc["example"])
+        for entry in entries:
+            # 1. Sense examples
+            for s in entry.get("senses", []):
+                pool.extend(s.get("examples", []) or [])
+            # 2. Grammar boxes examples
+            for gb in entry.get("grammar_boxes", []):
+                pool.extend(gb.get("examples", []) or [])
+            # 3. Collocations examples
+            for cat_k, items in entry.get("collocations", {}).items():
+                for it in items:
+                    if isinstance(it, dict) and it.get("example"):
+                        pool.append(it["example"])
+            # 4. Cross collocations examples
+            for cc in entry.get("cross_collocations", []):
+                if isinstance(cc, dict) and cc.get("example"):
+                    pool.append(cc["example"])
 
         res: List[str] = []
         for cand in pool:
@@ -2558,9 +2774,11 @@ class LinguisticEngine:
                 cand_clean = re.sub(r'\s+', ' ', cand_clean).strip()
                 if cand_clean and len(cand_clean) > 8 and cand_clean not in res:
                     res.append(cand_clean)
-                    if len(res) >= limit:
-                        break
-        return res
+
+        # Prioritize candidates that match the multi-word unit phrase
+        unit_matches = [c for c in res if cls._unit_example(clean_q, [c])]
+        other_matches = [c for c in res if c not in unit_matches]
+        return (unit_matches + other_matches)[:limit]
 
     @classmethod
     def get_ldoce_grammar_alert(
@@ -2705,6 +2923,12 @@ class LinguisticEngine:
         # shipping whichever sense happens to be printed first.
         if require_sense_confidence and lock_confidence == "low":
             return ("", "")
+
+        target_p = cls._pos_code(target_pos)
+        if target_p:
+            entry_poses = {cls._pos_code(s.get("pos")) for s in senses}
+            if target_p not in entry_poses and locked_idx is None:
+                return ("", "")
 
         if locked_idx is not None and locked_idx < len(senses):
             chosen_sense = senses[locked_idx]
@@ -3150,6 +3374,13 @@ class LinguisticEngine:
             examples = [str(e) for e in (row.get("examples") or []) if e]
             if examples and cls._unit_example(key, examples):
                 pool.extend(examples)
+        # Entry collocations: authoritative collocation examples matching this unit
+        for _cat, c_items in (entry.get("collocations") or {}).items():
+            for it in (c_items or []):
+                if isinstance(it, dict) and it.get("example"):
+                    ex_str = str(it["example"]).strip()
+                    if ex_str and cls._unit_example(key, [ex_str]):
+                        pool.append(ex_str)
         return pool
 
     # The strictest passage the cascade can be run on.  Its text ceiling is the one every
@@ -3215,20 +3446,58 @@ class LinguisticEngine:
         key = cls._unit_key(clean_phrase)
         is_multiword = len(key.split()) >= 2
 
-        # When expr_type is explicitly a phrasal verb, check Longman's phrasal-verb block first
+        # When expr_type is explicitly a phrasal verb or verbal multiword, check Longman's phrasal-verb block first
         # to prevent noun homographs (e.g. 'cutout' for 'cut out') from hijacking the unit.
-        if expr_type == "phrasal verb" and is_multiword:
+        is_phrasal_v = is_multiword and (
+            expr_type in ("phrasal verb", "v", "verb") or
+            cls.determine_contextual_pos(key.split()[0], context_sentence) == "verb"
+        )
+        if is_phrasal_v:
             for block in cls._unit_blocks(key):
                 b_senses = cls._unit_senses(block, key)
                 if b_senses:
-                    mock_entry = {"word": key, "senses": b_senses}
-                    idx = cls._lock_sense(mock_entry, quote=context_sentence, target_pos="verb")
-                    if idx is not None and idx < len(b_senses):
-                        chosen = b_senses[idx]
-                        defn = str(chosen.get("definition") or "").strip()
+                    base_verb = key.split()[0]
+                    other_tokens = key.split()[1:]
+                    cand_base_senses = []
+                    v_entry = cls.get_ldoce_entry(base_verb)
+                    if v_entry and context_sentence:
+                        for s in v_entry.get("senses", []):
+                            for p in (s.get("patterns") or []):
+                                norm_p = cls._entry_text_normalizer(p)
+                                if all(re.search(r'(?<!\w)' + re.escape(tok) + r'(?!\w)', norm_p) for tok in other_tokens):
+                                    cand_base_senses.append(s)
+                                    break
+
+                    # Construct unified candidate pool: base senses + phrasal verb block senses
+                    # Ensure phrasal verb senses without patterns receive a default pattern matching the key,
+                    # so they can fairly participate in syntactic particle/preposition binding.
+                    prepared_b_senses = []
+                    for s in b_senses:
+                        s_copy = dict(s)
+                        if not s_copy.get("patterns"):
+                            s_copy["patterns"] = [key]
+                        prepared_b_senses.append(s_copy)
+
+                    candidates = []
+                    for s in cand_base_senses:
+                        candidates.append((s, "sense_pattern"))
+                    for s in prepared_b_senses:
+                        candidates.append((s, "phrasal_verb_block"))
+
+                    mock_entry = {"word": base_verb, "senses": [c[0] for c in candidates]}
+                    idx, best_score, _margin, _conf = cls._lock_sense(
+                        mock_entry, quote=context_sentence, target_pos="verb", return_confidence=True
+                    )
+                    if idx is not None and idx < len(candidates):
+                        chosen_sense, chosen_source = candidates[idx]
+                        defn = cls.format_ldoce_definition(chosen_sense) or str(chosen_sense.get("definition") or "").strip()
                         if defn:
-                            ex = cls._unit_example(key, list(chosen.get("examples") or []))
-                            return (defn, ex, "phrasal_verb_block")
+                            ex = cls._unit_example(key, list(chosen_sense.get("examples") or []))
+                            if not ex and chosen_source == "sense_pattern":
+                                ex = cls._relaxed_unit_example(
+                                    key, cls._arbitrated_example_pool(base_verb, chosen_sense, key)
+                                )
+                            return (defn, ex, chosen_source)
 
         # Tier 1: the unit is a headword row of its own ('climate change').
         defn, ex = cls.get_ldoce_definition_and_example(
@@ -3320,6 +3589,41 @@ class LinguisticEngine:
                 if not found_ex and bare_q:
                     found_ex = cls._unit_example(bare_q, pool)
                 return (definition, found_ex, source)
+
+        # Tier 2c: Verb base senses matching for verb multi-word units (e.g. 'turn around', 'push up')
+        # When a verb + particle/preposition unit does not match a dedicated headword or whose phrasal-verb
+        # block represents specialized metaphorical extensions (or is empty), check the base senses of the host verb.
+        tokens = key.split()
+        if tokens and expr_type in ("verb", "phrasal verb"):
+            v_host = tokens[0]
+            v_entry = cls.get_ldoce_entry(v_host)
+            if v_entry:
+                other_toks = tokens[1:]
+                cand_senses = []
+                for s in v_entry.get("senses", []):
+                    s_pos = cls._pos_code(s.get("pos"))
+                    if s_pos != "v":
+                        continue
+                    pats = s.get("patterns", [])
+                    exs = s.get("examples", [])
+                    matches_pat = any(
+                        all(re.search(r'(?<!\w)' + re.escape(tok) + r'(?!\w)', cls._entry_text_normalizer(p)) for tok in other_toks)
+                        for p in pats
+                    )
+                    matches_ex = any(cls._unit_example(key, [ex]) for ex in exs)
+                    if matches_pat or matches_ex:
+                        cand_senses.append(s)
+                if cand_senses:
+                    mock_entry = {"word": key, "senses": cand_senses}
+                    idx = cls._lock_sense(mock_entry, quote=context_sentence, target_pos="verb")
+                    if idx is not None and idx < len(cand_senses):
+                        chosen = cand_senses[idx]
+                        defn = cls.format_ldoce_definition(chosen) or str(chosen.get("definition") or "").strip()
+                        if defn:
+                            ex = cls._unit_example(key, list(chosen.get("examples") or []))
+                            if not ex:
+                                ex = cls._relaxed_unit_example(key, cls._arbitrated_example_pool(v_host, chosen, key))
+                            return (defn, ex, "sense_pattern")
 
 
         # Tier 3: WordNet, and only for the unit as a whole.
@@ -8031,8 +8335,24 @@ class LinguisticEngine:
         w_toks = clean_w.split()
         target_tok = w_toks[0] if w_toks else clean_w
 
-        # 0. High-priority compound WordNet lookup: ONLY for genuine multi-word or hyphenated compounds
-        # (Do NOT run on single words like 'firm' or 'log', where WordNet default sense overrides contextual dependency)
+        # 0. High-priority compound lookup: check LDOCE first for authentic pedagogical POS, then WordNet
+        # ONLY for genuine multi-word or hyphenated compounds
+        # (Do NOT run on single words like 'firm' or 'log', where default sense overrides contextual dependency)
+        if "-" in clean_w or " " in clean_w:
+            ld_cands = [clean_w, clean_w.replace("-", ""), clean_w.replace(" ", ""), clean_w.replace("-", " "), clean_w.replace(" ", "-")]
+            for c_cand in ld_cands:
+                ld_c_entry = cls.get_ldoce_entry(c_cand)
+                if ld_c_entry:
+                    c_poses = ld_c_entry.get("all_poses", [ld_c_entry.get("pos", "")])
+                    if any("noun" in p for p in c_poses):
+                        return "noun"
+                    if any("adj" in p for p in c_poses):
+                        return "adjective"
+                    if any("verb" in p for p in c_poses):
+                        return "verb"
+                    if any("adv" in p for p in c_poses):
+                        return "adverb"
+
         wn = cls.get_wordnet()
         if wn and ("-" in clean_w or " " in clean_w):
             compound_cands = [clean_w, clean_w.replace(" ", "-"), clean_w.replace("-", " "), clean_w.replace("-", "_")]
@@ -8070,12 +8390,16 @@ class LinguisticEngine:
                         else:
                             return "verb"
                     return "adjective"
-                # Participle adjective / predicate adjective check:
+                # Participle adjective / predicate adjective check vs Passive Voice:
                 # E.g. 'we are done', 'we are finished', 'it is broken', 'he is tired', 'they were annoyed'
-                # If tagged as VBN/VERB governed by aux/cop 'be', check if dictionary lists it as an adjective
+                # If tagged as VBN/VERB governed by aux/cop 'be':
+                # First-principles invariant: passive voice (auxpass) is strictly a VERB predicate!
+                # Only copular 'be' (cop) without passive agency may be evaluated as an adjective.
                 if tok.tag_ == "VBN" or tok.pos_ == "VERB":
-                    # Check if preceded or governed by form of 'be'
-                    has_be_gov = any(c.lemma_ == "be" for c in tok.children if c.dep_ in ("aux", "auxpass", "cop")) or (tok.head.lemma_ == "be")
+                    has_auxpass = any(c.dep_ == "auxpass" for c in tok.children) or (tok.dep_ == "auxpass")
+                    if has_auxpass:
+                        return "verb"
+                    has_be_gov = any(c.lemma_ == "be" for c in tok.children if c.dep_ in ("aux", "cop")) or (tok.head.lemma_ == "be")
                     if has_be_gov:
                         surf = tok.text.lower()
                         ld_entry = cls.get_ldoce_entry(surf)
@@ -8090,20 +8414,35 @@ class LinguisticEngine:
                             if ld_target and not any("adj" in p for p in ld_target.get("all_poses", [])) and any("verb" in p for p in ld_target.get("all_poses", [])):
                                 return "verb"
                             return "adjective"
-                # Quotation / Direct-speech coordination repair:
-                # E.g. "I simply draw around ..., print 'Here's a pat...', then copy it..."
-                # spaCy misclassifies 'print' as NOUN (dobj of draw) because the subsequent quoted speech
-                # is misparsed as an acl/relcl of the noun.
-                # When a candidate is tagged as NOUN/PROPN, immediately introduces quoted speech, has a preceding
-                # and/or subsequent action verb, and is attested as a verb in LDOCE, classify as 'verb'.
+
+                # Syntactic dependency repair for misparsed NOUN/PROPN (e.g. ROOT/predicate verbs like 'trap energy', 'swells'):
+                # When spaCy misclassifies a main predicate verb as NOUN, check syntactic evidence:
+                # 1. Direct object (dobj / obj) governed by tok -> strictly a verb!
+                # 2. Quotation / Direct-speech coordination repair
+                # 3. ROOT node with subject child (nsubj) and no other finite verb in the clause
                 if tok.pos_ in ("NOUN", "PROPN"):
-                    quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
-                    quote_followed = (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars)) or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
-                    if quote_followed:
-                        ld_entry = cls.get_ldoce_entry(clean_w) or cls.get_ldoce_entry(tok.lemma_.lower())
-                        if ld_entry and any("verb" in p for p in ld_entry.get("all_poses", [])):
+                    ld_entry = cls.get_ldoce_entry(clean_w) or cls.get_ldoce_entry(tok.lemma_.lower())
+                    has_verb_entry = bool(ld_entry and any("verb" in p for p in ld_entry.get("all_poses", [])))
+                    if not has_verb_entry and wn:
+                        has_verb_entry = bool(wn.synsets(clean_w, pos="v") or wn.synsets(tok.lemma_.lower(), pos="v"))
+
+                    if has_verb_entry:
+                        has_dobj = any(c.dep_ in ("dobj", "obj") for c in tok.children)
+                        has_nsubj_child = any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
+                        if has_dobj or has_nsubj_child:
+                            return "verb"
+
+                        quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
+                        quote_followed = (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars)) or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
+                        if quote_followed:
                             has_coord_verb = any(t.pos_ == "VERB" for t in doc if t.i != tok.i)
                             if has_coord_verb:
+                                return "verb"
+
+                        if tok.dep_ == "ROOT":
+                            has_nsubj = any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
+                            has_other_verb = any(t.pos_ == "VERB" and t.i != tok.i for t in doc)
+                            if has_nsubj and not has_other_verb:
                                 return "verb"
 
                 return VALID_POS_MAP.get(tok.pos_, "noun")
@@ -8194,6 +8533,21 @@ class LinguisticEngine:
         ld_poses = []
         if ld_entry:
             ld_poses = [p.lower() for p in ld_entry.get("all_poses", [ld_entry.get("pos", "")])]
+
+        # 2b. Lexicon POS Hard Gate:
+        # If the headword in LDOCE has entries and strictly NO verb entry (e.g. 'emblem', 'climate', 'table'),
+        # it can never be classified as a verb regardless of spaCy misparses or manual hints.
+        if ld_poses and not any("verb" in p for p in ld_poses):
+            wn = cls.get_wordnet()
+            if not wn or not wn.synsets(w_clean, pos="v"):
+                if contextual_pos in ("adjective", "adverb") and any(contextual_pos[:3] in p for p in ld_poses):
+                    return contextual_pos
+                if norm_manual in ("adjective", "adverb") and any(norm_manual[:3] in p for p in ld_poses):
+                    return norm_manual
+                if any("noun" in p for p in ld_poses):
+                    return "noun"
+                if any("adj" in p for p in ld_poses):
+                    return "adjective"
 
         # Contextual Predicate / Finite Verb Primacy:
         # If sentence context clearly marks the word as a predicate/finite verb (e.g. 'You may shrug your shoulders')
@@ -10369,7 +10723,8 @@ class LinguisticEngine:
             "imitation_example": "Students joined activities that helped the local community.",
             "common_mistakes": (
                 "Grammar Warning (Relative Clauses): Learners frequently retain redundant object pronouns in relative clauses: "
-                "\"This is the paper which we reviewed [INCORRECT: it -> CORRECT: ] yesterday.\""
+                "\"This is the paper which we reviewed [INCORRECT: it yesterday -> CORRECT: yesterday].\" "
+                "(Note: The relative pronoun 'which' already functions as the object of 'reviewed', so the resumptive pronoun 'it' must be omitted)."
             )
         },
         "relative_clause_elaborative": {

@@ -136,6 +136,7 @@ NOUN_DEPENDENT_PREPS: Dict[str, str] = {
     "key": "to",
     "threat": "to",
     "contribution": "to",
+    "commitment": "to",
     "damage": "to",
     "resistance": "to",
     "introduction": "to",
@@ -664,6 +665,13 @@ class ExpressionPatternEngine:
 
         # 7. Intransitive prepositional verb (e.g. rely on, focus on, consist of)
         elif pattern_id == "verb_intransitive_dependent_preposition":
+            # Exclude copular/auxiliary verbs (e.g. 'be') from forming spurious prepositional verbs
+            if v_lemma in ("be", "have", "do"):
+                return None
+            # If the verb is an adjectival clause / reduced participle modifying a noun (e.g. 'the commitment made to sb'),
+            # the head noun is the underlying patient/object of the verb; do not treat it as an intransitive prep verb.
+            if root_verb.dep_ in ("acl", "relcl") and root_verb.head.pos_ in ("NOUN", "PROPN"):
+                return None
             prep = next((t for t in tokens if t.dep_ == "prep" and t.i > root_verb.i), None)
             if not prep or (prep.i - root_verb.i > 2):
                 return None

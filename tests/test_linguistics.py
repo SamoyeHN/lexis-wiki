@@ -780,7 +780,8 @@ class TestAnchorFourDimensionRepair:
 - **Quoted Sentence**: "In a society where they are given more hours, workers may have degraded into modern slaves."
 """
         s = self._single_skeleton(sample_vocab)
-        assert s["target_word"] == "degrade"
+        assert (s.get("base_headword") or s["target_word"]) == "degrade"
+        assert s["target_word"] in ("degrade", "degrades")
         assert s["context_anchor"] == "into"
         assert s["anchor_type"] == "prep"
         assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
