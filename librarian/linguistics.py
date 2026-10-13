@@ -1444,6 +1444,98 @@ class LinguisticEngine:
         return None
 
     @classmethod
+    def lookup_ldoce_phrase_candidates(
+        cls,
+        phrase: str,
+        headword: Optional[str] = None
+    ) -> List[Tuple[str, Optional[int], str, str]]:
+        """
+        Retrieves all attested candidate matches from ldoce_phrase_index without LIMIT 1 truncation.
+        Returns list of (host_word, sense_idx, tier, raw_phrase) tuples.
+        """
+        if not phrase or not cls._ensure_ldoce_conn():
+            return []
+
+        raw = str(phrase).strip()
+        if not raw:
+            return []
+
+        cursor = cls._ldoce_conn.cursor()
+        results: List[Tuple[str, Optional[int], str, str]] = []
+        seen = set()
+
+        # Track 1: Exact literal match
+        exact_clean = raw.lower().replace("\u2019", "'").replace("\u2018", "'")
+        exact_clean = re.sub(r"[!?,.]+$", "", exact_clean).strip()
+        if exact_clean:
+            try:
+                rows = cursor.execute(
+                    """
+                    SELECT host_word, sense_idx, tier, raw_phrase
+                    FROM ldoce_phrase_index
+                    WHERE raw_phrase = ? COLLATE NOCASE OR raw_phrase = ? COLLATE NOCASE
+                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
+                    """,
+                    (exact_clean, exact_clean + "!")
+                ).fetchall()
+                for r in rows:
+                    sig = (r[0], r[1], r[2])
+                    if sig not in seen:
+                        seen.add(sig)
+                        results.append((r[0], r[1], r[2], r[3]))
+            except Exception:
+                pass
+
+        # Track 2: Canonical slot/token match via _unit_tokens
+        canon_key = " ".join(cls._unit_tokens(raw))
+        if canon_key:
+            try:
+                rows = cursor.execute(
+                    """
+                    SELECT host_word, sense_idx, tier, raw_phrase
+                    FROM ldoce_phrase_index
+                    WHERE phrase_key = ?
+                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
+                    """,
+                    (canon_key,)
+                ).fetchall()
+                for r in rows:
+                    sig = (r[0], r[1], r[2])
+                    if sig not in seen:
+                        seen.add(sig)
+                        results.append((r[0], r[1], r[2], r[3]))
+            except Exception:
+                pass
+
+        # Track 3: Lemmatized headword/verb fallback
+        words = raw.split()
+        if words:
+            lemmatized_head = cls._surface_lemma(words[0]) or cls.lemmatize_headword(words[0])
+            if lemmatized_head and lemmatized_head != words[0]:
+                lemmatized_phrase = " ".join([lemmatized_head] + words[1:])
+                lemmatized_key = " ".join(cls._unit_tokens(lemmatized_phrase))
+                if lemmatized_key and lemmatized_key != canon_key:
+                    try:
+                        rows = cursor.execute(
+                            """
+                            SELECT host_word, sense_idx, tier, raw_phrase
+                            FROM ldoce_phrase_index
+                            WHERE phrase_key = ?
+                            ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
+                            """,
+                            (lemmatized_key,)
+                        ).fetchall()
+                        for r in rows:
+                            sig = (r[0], r[1], r[2])
+                            if sig not in seen:
+                                seen.add(sig)
+                                results.append((r[0], r[1], r[2], r[3]))
+                    except Exception:
+                        pass
+
+        return results
+
+    @classmethod
     def _frame_object_position(cls, frame: str, particle: str) -> str:
         """Where this frame puts its object relative to the particle: 'before', 'after' or
         'unknown'.
@@ -1612,6 +1704,202 @@ class LinguisticEngine:
         if len(words) < len(raw):
             words = [w for w in words if w != "do"]
         return words
+    @classmethod
+    def get_wordnet_supersenses(cls, word: str, pos: str = "n") -> Set[str]:
+        """
+        Extract WordNet supersenses (lexicographer files e.g. 'noun.person', 'noun.artifact')
+        for a given word and POS tag. Zero-token, offline semantic primitive classification.
+        """
+        supersenses: Set[str] = set()
+        try:
+            wn = cls.get_wordnet()
+            if wn is None:
+                return supersenses
+            for s in wn.synsets(word, pos=pos):
+                lf = s.lexfile()
+                if lf:
+                    supersenses.add(lf)
+                meta = s.metadata()
+                if meta and "subject" in meta:
+                    supersenses.add(meta["subject"])
+        except Exception:
+            pass
+        return supersenses
+
+    @classmethod
+    def get_wordnet_synsets(cls, word: str, pos: Optional[str] = None) -> List[Any]:
+        """
+        Retrieve WordNet synsets for a target word with strict POS mapping and deduplication.
+        Maps canonical linguistic POS ('noun', 'verb', 'adjective', 'adverb', etc.)
+        to WordNet POS characters:
+          'noun' -> ['n']
+          'verb' -> ['v']
+          'adjective' -> ['a', 's']
+          'adverb' -> ['r']
+        Deduplicates across EWN and OEWN lexicons while preserving canonical order.
+        """
+        wn = cls.get_wordnet()
+        if not wn or not word:
+            return []
+
+        w_clean = word.strip().lower()
+        clean_variants = [w_clean]
+        if " " in w_clean:
+            clean_variants.append(w_clean.replace(" ", "_"))
+            clean_variants.append(w_clean.replace(" ", "-"))
+        elif "-" in w_clean:
+            clean_variants.append(w_clean.replace("-", " "))
+            clean_variants.append(w_clean.replace("-", "_"))
+
+        wn_poses: Optional[List[str]] = None
+        if pos:
+            p_low = pos.strip().lower()
+            if p_low in ("n", "noun"):
+                wn_poses = ["n"]
+            elif p_low in ("v", "verb"):
+                wn_poses = ["v"]
+            elif p_low in ("a", "s", "adj", "adjective"):
+                wn_poses = ["a", "s"]
+            elif p_low in ("r", "adv", "adverb"):
+                wn_poses = ["r"]
+
+        all_syns: List[Any] = []
+        for variant in clean_variants:
+            if wn_poses:
+                for wp in wn_poses:
+                    try:
+                        all_syns.extend(wn.synsets(variant, pos=wp))
+                    except Exception:
+                        pass
+            else:
+                try:
+                    all_syns.extend(wn.synsets(variant))
+                except Exception:
+                    pass
+
+        # Deduplicate while preserving order (by synset ID or definition + pos)
+        seen_keys = set()
+        dedup_synsets: List[Any] = []
+        for s in all_syns:
+            s_key = (getattr(s, "id", None) or (s.pos, s.definition()))
+            # Also collapse duplicate ewn vs oewn with identical definition and pos
+            semantic_key = (s.pos, s.definition())
+            if semantic_key not in seen_keys:
+                seen_keys.add(semantic_key)
+                dedup_synsets.append(s)
+
+        return dedup_synsets
+
+    @classmethod
+    def disambiguate_wordnet_synset(
+        cls,
+        word: str,
+        pos: Optional[str] = None,
+        context_sentence: Optional[str] = None,
+        candidate_synsets: Optional[List[Any]] = None
+    ) -> Optional[Any]:
+        """
+        Disambiguate candidate WordNet synsets using POS filtering, token overlap,
+        and MiniLM neural embedding similarity.
+        Eliminates historical blind syns[0] selection of obsolete/technical senses.
+        """
+        syns = candidate_synsets if candidate_synsets is not None else cls.get_wordnet_synsets(word, pos=pos)
+        if not syns:
+            return None
+        if len(syns) == 1:
+            return syns[0]
+
+        # Filter by POS if candidate_synsets was provided without filtering
+        if pos:
+            p_low = pos.strip().lower()
+            allowed_poses = set()
+            if p_low in ("n", "noun"):
+                allowed_poses = {"n"}
+            elif p_low in ("v", "verb"):
+                allowed_poses = {"v"}
+            elif p_low in ("a", "s", "adj", "adjective"):
+                allowed_poses = {"a", "s"}
+            elif p_low in ("r", "adv", "adverb"):
+                allowed_poses = {"r"}
+            if allowed_poses:
+                pos_filtered = [s for s in syns if getattr(s, "pos", "") in allowed_poses]
+                if pos_filtered:
+                    syns = pos_filtered
+
+        if len(syns) == 1:
+            return syns[0]
+
+        # If no context_sentence provided, check if any synset is an obsolete/technical outlier
+        # and prioritize general high-frequency senses
+        if not context_sentence or not context_sentence.strip():
+            # Penalize known railroad/nautical/rare technical domain synsets in absence of domain context
+            non_rare = []
+            for s in syns:
+                d_low = (s.definition() or "").lower()
+                if "railroad" in d_low or "railway" in d_low or "nautical" in d_low:
+                    continue
+                non_rare.append(s)
+            return non_rare[0] if non_rare else syns[0]
+
+        # Step 1: Lexical token overlap (Lesk-style)
+        sent_clean = context_sentence.strip()
+        anchor_stopwords = getattr(cls, "_ANCHOR_STOPWORDS", set()) | {
+            "the", "and", "for", "with", "that", "this", "from", "have", "were", "been", "will",
+            "would", "could", "should", "some", "someone", "something", "used", "make", "part"
+        }
+        sent_toks = set(re.findall(r"\b[a-zA-Z]{3,}\b", sent_clean.lower())) - anchor_stopwords
+
+        candidate_texts = []
+        token_overlap_scores = []
+        for s in syns:
+            d = (s.definition() or "").strip()
+            # For neural embedding, pure definition provides clean, uncontaminated semantic signal
+            candidate_texts.append(d)
+
+            # For token overlap, include both definition and authentic examples
+            egs = s.examples() if hasattr(s, "examples") else []
+            full_text = f"{d} {' '.join(egs)}".strip()
+            s_toks = set(re.findall(r"\b[a-zA-Z]{3,}\b", full_text.lower())) - anchor_stopwords
+            # Remove target word itself from overlap count
+            s_toks.discard(word.strip().lower())
+            overlap = len(sent_toks & s_toks)
+
+            # Penalize specialized railroad / technical if context lacks triggers
+            d_low = d.lower()
+            if ("railroad" in d_low or "railway" in d_low) and not any(t in sent_toks for t in ("train", "railroad", "railway", "track")):
+                overlap -= 5
+
+            token_overlap_scores.append(overlap)
+
+        # Step 2: MiniLM Neural Embedding Similarity
+        try:
+            from librarian.embedder import get_embedder
+            embedder = get_embedder()
+            if embedder:
+                sims = embedder.similarity(sent_clean, candidate_texts)
+                # Combine embedding score with normalized token overlap
+                best_idx = 0
+                best_combined = -999.0
+                for idx, (s, sim, ov) in enumerate(zip(syns, sims, token_overlap_scores)):
+                    # sim is cosine similarity [-1, 1], typically [0.0, 0.6]
+                    # ov is integer overlap of informative non-stopwords
+                    score = float(sim) + (0.20 * ov)
+                    if score > best_combined:
+                        best_combined = score
+                        best_idx = idx
+                return syns[best_idx]
+        except Exception:
+            pass
+
+        # Fallback to token overlap if embedder unavailable
+        best_idx = 0
+        best_score = -999
+        for idx, ov in enumerate(token_overlap_scores):
+            if ov > best_score:
+                best_score = ov
+                best_idx = idx
+        return syns[best_idx]
+
     # B1: the shortest passage sentence that can serve as an anchor's physical evidence.
     ANCHOR_MIN_WORDS = 6
 
@@ -1691,22 +1979,47 @@ class LinguisticEngine:
     def clean_and_expand_pattern_slashes(cls, pat: str) -> List[str]:
         """
         Cleanly expands slash-alternatives in grammatical patterns.
-        Handles both single-word alternates (e.g. 'become/grow/get accustomed to something')
-        and multi-word / trailing alternates (e.g. 'come in/into/out of etc', 'turn around/round/away').
+        Handles both single-word alternates (e.g. 'become/grow/get accustomed to something',
+        'expect somebody/something to do something') and multi-word alternates
+        (e.g. 'be high on the agenda/be top of the agenda', 'turn around/round/away').
         Returns a list of clean, fully expanded pattern strings.
         """
         if not pat:
             return []
         pat_clean = re.sub(r"\betc\.?\b", "", pat.lower()).strip()
-        slash_match = re.search(r"([a-zA-Z]+(?:\s+[a-zA-Z]+)*(?:/[a-zA-Z]+(?:\s+[a-zA-Z]+)*)+)", pat_clean)
-        if slash_match:
-            full_span = slash_match.group(1)
-            alts = full_span.split("/")
-            pre_p = pat_clean[:slash_match.start()]
-            post_p = pat_clean[slash_match.end():]
-            branches = [f"{pre_p}{alt.strip()}{post_p}".strip() for alt in alts if alt.strip()]
-            return branches if branches else [pat_clean]
-        return [pat_clean]
+        if "/" not in pat_clean:
+            return [pat_clean]
+
+        # 1. Parenthesized alternatives: e.g. 'turn (your head/face) to do something'
+        # Recursively expand parenthesized slash options into complete parenthesized variants
+        m_paren = re.search(r"\(([^()]*?/[^()]*?)\)", pat_clean)
+        if m_paren:
+            sub_alts = [a.strip() for a in m_paren.group(1).split("/") if a.strip()]
+            res = []
+            for alt in sub_alts:
+                res.extend(cls.clean_and_expand_pattern_slashes(pat_clean[:m_paren.start()] + f"({alt})" + pat_clean[m_paren.end():]))
+            return res
+
+        # 2. Full multi-word phrase alternatives: e.g. 'be high on the agenda/be top of the agenda'
+        parts = [p.strip() for p in pat_clean.split("/") if p.strip()]
+        if len(parts) >= 2 and all(len(p.split()) >= 3 for p in parts):
+            return parts
+
+        # 3. Token-level slash expansion (preserves parentheses and placeholders):
+        tokens = pat_clean.split()
+        results = [""]
+        for t in tokens:
+            if "/" in t:
+                alts = [a.strip() for a in t.split("/") if a.strip()]
+                new_res = []
+                for r in results:
+                    for a in alts:
+                        new_res.append(f"{r} {a}".strip())
+                results = new_res
+            else:
+                results = [f"{r} {t}".strip() for r in results]
+        return results if results else [pat_clean]
+
 
     @classmethod
     def _lock_sense(
@@ -1754,6 +2067,7 @@ class LinguisticEngine:
             'when', 'where', 'why', 'how', 'which', 'what', 'who', 'whom', 'whose',
             'of', 'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after',
             'above', 'below', 'to', 'from', 'up', 'upon', 'down', 'in', 'out', 'on', 'off', 'over', 'under',
+            'around', 'round', 'away', 'back', 'along', 'across', 'through', 'into', 'past', 'onto', 'alongside', 'behind',
             'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does', 'did', 'doing',
             'would', 'should', 'could', 'ought', 'can', 'may', 'might', 'will', 'shall', 'must',
             'i', 'you', 'he', 'she', 'it', 'we', 'they', 'them', 'their', 'theirs',
@@ -1802,6 +2116,7 @@ class LinguisticEngine:
             target_inflections.update(cls.inflected_forms(hw_t))
 
         has_pron_obj = False
+        target_tok_morph_number = None
         # MiniLM embedding similarity between quote/phrase and candidate senses
         sim_scores: Dict[int, float] = {}
         if quote and len(senses) > 1:
@@ -1826,6 +2141,8 @@ class LinguisticEngine:
                             if len(subtree_span.split()) >= 2:
                                 local_phrase = subtree_span
                             has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in matching_toks[0].children)
+                            if matching_toks[0].pos_ == 'NOUN':
+                                target_tok_morph_number = matching_toks[0].morph.get('Number')
                     except Exception:
                         pass
 
@@ -1860,6 +2177,25 @@ class LinguisticEngine:
             except Exception:
                 pass
 
+        # Query pedagogical sense cue index for authoritative contextual domain clues
+        cue_scores: Dict[int, float] = {}
+        if quote and target_w_clean:
+            cue_query_tokens = (q_tokens - stopwords) - target_inflections
+            if cue_query_tokens:
+                cue_scores = cls.get_sense_cue_scores(target_w_clean, cue_query_tokens)
+
+        # Map phrasal verb senses to their mandatory phrasal particles/words (e.g. 'pay back' -> ['back'])
+        pv_sense_map: Dict[int, List[str]] = {}
+        for pv in entry.get("phrasal_verbs") or []:
+            phr = pv.get("phrase", "")
+            p_words = [w for w in phr.lower().split() if w != target_w_clean]
+            if p_words:
+                for pvs in pv.get("senses") or []:
+                    p_defn = pvs.get("definition")
+                    for s_idx, s_cand in enumerate(senses):
+                        if s_cand.get("definition") == p_defn:
+                            pv_sense_map[s_idx] = p_words
+
         for i, s in enumerate(senses):
             s_pos = cls._pos_code(s.get("pos"))
             if target_p and s_pos != target_p:
@@ -1873,6 +2209,48 @@ class LinguisticEngine:
             # block, instead of losing to whichever sense happens to come first.
             if target_p and block_pos.get(s.get("homograph_num")) == target_p:
                 score += 10
+
+            # 0a. Phrasal Verb Particle Gate:
+            # If this sense belongs to a phrasal verb block with a mandatory particle (e.g. 'pay back' -> 'back', 'pay off' -> 'off', 'pay out' -> 'out'),
+            # the quote MUST contain the particle; otherwise this phrasal sense cannot hijack base verb usages.
+            if i in pv_sense_map:
+                req_particles = pv_sense_map[i]
+                if not all(any(cls.form_matches(tok, rp) for tok in q_seq) for rp in req_particles):
+                    score -= 60
+
+            # 0b. Morphological Number / Countability Gate:
+            # If target noun in quote is physically plural ('causes', 'customs'),
+            # it cannot match an exclusively [uncountable] sense if a [countable] sense is available.
+            if target_tok_morph_number and "Plur" in target_tok_morph_number:
+                s_gram = (s.get("grammar") or "").lower()
+                if "[uncountable]" in s_gram and "[countable]" not in s_gram:
+                    score -= 50
+
+            # 0c. Spoken Register Invariant Gate:
+            # If sense is marked as [spoken] / conversational formula, penalize in standard narrative or exposition
+            # unless the quote is explicitly in quotation marks or dialogue.
+            if (s.get("register") == "spoken" or "[spoken]" in (s.get("grammar") or "").lower()):
+                is_direct_speech = any(q_char in quote for q_char in ('"', "'", "“", "”", "‘", "’")) if quote else False
+                if not is_direct_speech:
+                    score -= 50
+
+            # 0d. Rare / Technical Domain Gate (Medical / Law):
+            # Penalize highly technical domain senses (e.g. 'illness/symptom' for present, legal technicalities)
+            # unless the context quote actually contains relevant domain lexical triggers.
+            s_reg = (s.get("register") or "").lower()
+            s_signpost = (s.get("signpost") or "").lower()
+            s_gram_str = (s.get("grammar") or "").lower()
+            is_med_sense = s_reg == "medical" or "[medical]" in s_gram_str or s_signpost in ("illness", "medical", "disease")
+            if is_med_sense:
+                has_med_trigger = any(w in q_low_all for w in ("illness", "disease", "symptom", "patient", "doctor", "hospital", "medicine", "syndrome", "fever", "pain", "clinic", "clinical", "infection", "treatment"))
+                if not has_med_trigger:
+                    score -= 50
+
+            is_law_sense = s_reg in ("law", "legal") or "[law]" in s_gram_str or "[legal]" in s_gram_str or s_signpost in ("law", "legal", "court")
+            if is_law_sense:
+                has_law_trigger = any(w in q_low_all for w in ("court", "judge", "jury", "trial", "lawyer", "attorney", "lawsuit", "legal", "statute", "prosecution", "defendant", "verdict"))
+                if not has_law_trigger:
+                    score -= 50
 
             # 1. Quote token overlap against sense examples & patterns
             ex_tokens = set()
@@ -1942,6 +2320,11 @@ class LinguisticEngine:
                                 
                                 # Check if any matching verb governs a direct object
                                 governing_objs = [c for v in v_toks for c in v.children if c.dep_ in ("dobj", "obj")]
+                                if not governing_objs:
+                                    governing_objs = [
+                                        gc for v in v_toks for c in v.children if c.dep_ in ("ccomp", "xcomp")
+                                        for gc in c.children if gc.dep_ in ("nsubj", "dobj", "obj")
+                                    ]
                                 if not governing_objs:
                                     # Passive check: if passive subject exists ('if you are found out'), treat as matched
                                     has_passive_subj = any(c.dep_ in ("nsubjpass", "nsubj:pass") for v in v_toks for c in v.children)
@@ -2378,50 +2761,160 @@ class LinguisticEngine:
                                                 # If no other sense claims this collocation, grant general bonus
                                                 score += 15
 
-                        # If target is a verb, check transitivity and arguments
+                        # If target is a verb, check transitivity, complex complements and arguments
                         elif tok.pos_ == "VERB" or (target_p == "v" and (tok.dep_ in ("ROOT", "conj", "advcl", "relcl", "ccomp", "xcomp") or any(ch.dep_ in ("nsubj", "nsubjpass", "csubj") for ch in tok.children))):
-                            has_obj = any(ch.dep_ in ("dobj", "obj") for ch in tok.children)
+                            # Section 7.3: Deep Passive Projection
+                            # In passive voice, the surface subject (nsubjpass) is the underlying semantic object (deep_dobj),
+                            # and the prepositional 'by' agent is the underlying semantic subject (deep_nsubj).
+                            is_passive = (
+                                any(c.dep_ in ("auxpass", "aux:pass") for c in tok.children) or
+                                any(c.dep_ in ("nsubjpass", "nsubj:pass") for c in tok.children)
+                            )
+
+                            surface_dobjs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj")]
+                            passive_dobjs = [ch for ch in tok.children if ch.dep_ in ("nsubjpass", "nsubj:pass")] if is_passive else []
+                            deep_dobj_tokens = surface_dobjs + passive_dobjs
+                            has_direct_obj = bool(deep_dobj_tokens)
+
+                            # Locate by-agent for passive voice
+                            by_agents = []
+                            if is_passive:
+                                for c in tok.children:
+                                    if c.dep_ in ("agent", "prep") and c.lemma_.lower() == "by":
+                                        for gc in c.children:
+                                            if gc.dep_ in ("pobj", "pcomp"):
+                                                by_agents.append(gc)
+                                if not by_agents:
+                                    # Handle nested prepositional attachment (e.g. 'to the winner by the mayor')
+                                    for c in tok.children:
+                                        if c.dep_ == "prep":
+                                            for gc in c.subtree:
+                                                if gc != c and gc.dep_ == "prep" and gc.lemma_.lower() == "by":
+                                                    for ggc in gc.children:
+                                                        if ggc.dep_ in ("pobj", "pcomp"):
+                                                            by_agents.append(ggc)
+
+                            surface_nsubjs = [ch for ch in tok.children if ch.dep_ in ("nsubj", "csubj")]
+                            deep_nsubj_tokens = by_agents if (is_passive and by_agents) else surface_nsubjs
+
+                            # Complex clausal complement with infinitive: e.g. [V] + [NP] + [to-inf]
+                            # spaCy can parse this either as v -> ccomp (inf) with nsubj/dobj and aux:to,
+                            # or as v -> dobj (NP) and xcomp (inf) with aux:to.
+                            has_clausal_inf = any(
+                                (c.dep_ in ("ccomp", "xcomp") and any(gc.lemma_.lower() == "to" for gc in c.children))
+                                for c in tok.children
+                            )
+                            has_complex_comp = (
+                                (has_direct_obj and any(c.dep_ == "xcomp" and any(gc.lemma_.lower() == "to" for gc in c.children) for c in tok.children))
+                                or any(
+                                    c.dep_ in ("ccomp", "xcomp") and any(gc.dep_ in ("nsubj", "dobj", "obj") for gc in c.children)
+                                    and any(gc.lemma_.lower() == "to" for gc in c.children)
+                                    for c in tok.children
+                                )
+                            )
+                            has_effective_obj = has_direct_obj or has_clausal_inf
+
                             gram_l = (s.get("grammar") or "").lower()
                             s_units = [u.lower() for u in (s.get("units") or [])]
                             s_pats = [p.lower() for p in (s.get("patterns") or [])]
-                            # Distinguish direct object requirement from non-finite verbal complement (e.g. 'to do sth', 'and do sth')
-                            # or optional bracketed objects (e.g. '(sb/sth)')
+                            all_pat_units = s_units + s_pats
+
+                            def _has_cc_structure(txt: str) -> bool:
+                                t_clean = re.sub(r"\(.*?\)", "", txt)
+                                return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\s+to\s+(?:do|make|have|be)\b", t_clean))
+
+                            # Distinguish direct object requirement from complex complements or non-finite verbal complements
                             def _requires_direct_object(txt: str) -> bool:
                                 t_clean = re.sub(r"\(.*?\)", "", txt)
+                                t_clean = re.sub(r"\b(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\s+to\s+(?:do|make|have|be)\s+(?:something|sth|somebody|sb)?\b", "", t_clean)
                                 t_clean = re.sub(r"\b(?:to|and)\s+(?:do|make|have)\s+(?:something|sth|somebody|sb)\b", "", t_clean)
                                 return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean))
 
+                            # Check if definition shows ergative (both intransitive and transitive):
+                            # e.g. 'if a situation, game etc turns around, or if someone turns it around'
+                            is_ergative_defn = bool(re.search(r"\bor\s+if\s+someone\s+\w+\s+(?:it|them)\b", s_defn))
+
+                            # Check if sense allows intransitive usage:
+                            # 1) explicit 'intransitive' in grammar tag (e.g. '[intransitive, transitive]')
+                            # 2) sense declares patterns that do not require a direct object (e.g. 'pay for', 'pay in cash')
+                            has_intrans_gram = "[intransitive]" in gram_l
+                            has_trans_gram = bool(re.search(r"(?<!in)transitive", gram_l))
+                            has_intransitive_pattern = any(not _requires_direct_object(p) for p in s_pats) if s_pats else False
+                            allows_intransitive = has_intrans_gram or (not has_trans_gram and has_intransitive_pattern)
+
+                            sense_has_cc = any(_has_cc_structure(p) for p in all_pat_units)
                             requires_obj = (
-                                "[transitive]" in gram_l or
-                                any(_requires_direct_object(u) for u in s_units) or
-                                any(_requires_direct_object(p) for p in s_pats)
+                                not is_ergative_defn and not allows_intransitive and (
+                                    has_trans_gram or
+                                    sense_has_cc or
+                                    any(_requires_direct_object(u) for u in s_units) or
+                                    any(_requires_direct_object(p) for p in s_pats)
+                                )
                             )
                             is_pure_intransitive = (
-                                ("[intransitive]" in gram_l and "[transitive]" not in gram_l) or
+                                (has_intrans_gram and not has_trans_gram) or
                                 not requires_obj
                             )
-                            if not has_obj:
+
+                            # Complex Complement Structure Gate:
+                            # If context has [V] + [NP] + [to-inf] (e.g. 'expect anyone to feel surprised', 'wants you to stay'),
+                            # award strong alignment bonus to senses declaring this pattern;
+                            # if other senses declare specific patterns that contradict this structure, discount them.
+                            if has_complex_comp:
+                                if sense_has_cc:
+                                    score += 55
+                                else:
+                                    score -= 65
+
+                            if not has_effective_obj:
                                 if is_pure_intransitive and not requires_obj:
                                     score += 25
                                 elif requires_obj:
-                                    # Penalize transitive senses when sentence has no direct object
+                                    # Penalize transitive senses when sentence has no direct object or clausal complement
                                     score -= 80
                             else:
-                                if requires_obj:
+                                if requires_obj or "[transitive]" in gram_l or is_ergative_defn:
                                     score += 25
                                 elif "[intransitive]" in gram_l and "[transitive]" not in gram_l:
                                     score -= 50
 
-                            # Direct object argument matching (e.g. conduct activities/research/survey)
-                            for ch in tok.children:
-                                if ch.dep_ in ("dobj", "obj"):
-                                    obj_lem = ch.lemma_.lower()
-                                    if obj_lem in s_def_tokens:
-                                        score += 35
-                                    elif any(re.search(rf"\b{re.escape(obj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
-                                        score += 30
-                                    elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in s.get("patterns", [])):
-                                        score += 30
+                                # Transitive valency alignment: if an explicit direct object is present,
+                                # senses providing explicit transitive patterns (e.g. 'attach something to something', 'pay somebody something')
+                                # strongly match the syntactic frame; senses whose patterns are strictly intransitive (e.g. 'attach to')
+                                # receive a discount.
+                                has_trans_pat = any(
+                                    ("something" in p.lower() or "somebody" in p.lower() or " sb " in f" {p.lower()} " or " sth " in f" {p.lower()} ")
+                                    for p in s_pats
+                                )
+                                has_strictly_intrans_prep_pat = any(
+                                    not ("something" in p.lower() or "somebody" in p.lower() or " sb " in f" {p.lower()} " or " sth " in f" {p.lower()} ")
+                                    and any(prep in p.lower().split() for prep in cls._PATTERN_PREPS)
+                                    for p in s_pats
+                                )
+                                if has_trans_pat:
+                                    score += 35
+                                elif has_strictly_intrans_prep_pat and not has_trans_pat:
+                                    score -= 30
+
+                            # Direct object argument matching (governs deep_dobj_tokens, supporting passive projection)
+                            for ch in deep_dobj_tokens:
+                                obj_lem = ch.lemma_.lower()
+                                if obj_lem in s_def_tokens:
+                                    score += 35
+                                elif any(re.search(rf"\b{re.escape(obj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
+                                    score += 30
+                                elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in s.get("patterns", [])):
+                                    score += 30
+
+                                # Supersenses selectional restrictions for dobj:
+                                obj_supersenses = cls.get_wordnet_supersenses(obj_lem, pos="n")
+                                if obj_supersenses:
+                                    if "noun.communication" in obj_supersenses or "noun.possession" in obj_supersenses:
+                                        if any(k in s_defn for k in ("give", "award", "prize", "gift", "medal", "money", "present", "degree")):
+                                            score += 40
+                                    if "noun.person" in obj_supersenses:
+                                        if any(k in s_defn for k in ("introduce someone", "formally introduce")):
+                                            score += 35
 
                             # Prepositional complement / adverbial phrase / particle matching (e.g. 'recognize sb by doing', 'come in', 'sit down', 'turn around')
                             for ch in tok.children:
@@ -2452,6 +2945,7 @@ class LinguisticEngine:
                                                             pc.pos_ == "PRON" and pc.lemma_.lower() in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody", "him", "her", "me", "us", "them")
                                                             or (pc.pos_ in ("NOUN", "PROPN") and pc.ent_type_ in ("PERSON", "ORG"))
                                                             or pc.lemma_.lower() in ("person", "people", "man", "woman", "child", "staff", "employee", "worker", "friend", "parent")
+                                                            or "noun.person" in cls.get_wordnet_supersenses(pc.lemma_.lower(), pos="n")
                                                             for pc in p_objs
                                                         )
                                                         if not is_pobj_person:
@@ -2476,6 +2970,9 @@ class LinguisticEngine:
                                         p_child_lem = p_child.lemma_.lower()
                                         if p_child.dep_ == "pcomp" or p_child.pos_ == "VERB":
                                             has_action_pcomp = True
+                                        # Generic words / time adverbials (e.g. 'time', 'people', 'thing') carry no specific collocational evidence
+                                        if p_child_lem in meta_stopwords:
+                                            continue
                                         # Match against definition tokens or example tokens (word boundary enforced)
                                         if p_child_lem in s_def_tokens:
                                             score += 30
@@ -2488,10 +2985,50 @@ class LinguisticEngine:
                                         if not any(k in s_defn for k in ("film", "play", "court", "television", "print", "newspaper")):
                                             score += 30
 
+                                    # Universal verb-preposition valency frame agreement:
+                                    # If the verb in context governs a preposition (e.g. 'function as', 'look into', 'depend on', 'succeed in'),
+                                    # check if this verb+prep frame is explicitly articulated in the sense definition or examples.
+                                    target_lemmas = {target_w_clean} | cls.inflected_forms(target_w_clean) | {tok.lemma_.lower()}
+                                    v_prep_pat = r"\b(?:" + "|".join(re.escape(f) for f in target_lemmas) + r")(?:\s+\w+)?\s+(?:" + re.escape(p_lem) + r"|" + re.escape(p_txt) + r")\b"
+                                    if re.search(v_prep_pat, s_defn):
+                                        score += 45
+                                    elif any(re.search(v_prep_pat, ex.lower()) for ex in s.get("examples", [])):
+                                        score += 40
+
+                                    # Selectional restrictions on prepositional complements:
+                                    # Distinguish commercial/financial exchange ('pay for dinner/tickets/lessons', 'pay in cash/dollars')
+                                    # from punitive suffering/penalty ('pay for mistakes/crimes/sins').
+                                    if p_lem in ("for", "in", "by"):
+                                        for p_child in p_objs_expanded:
+                                            p_ch_lem = p_child.lemma_.lower()
+                                            p_supersenses = cls.get_wordnet_supersenses(p_ch_lem, pos="n")
+                                            is_financial_or_goods = (
+                                                p_ch_lem in ("dollar", "dollars", "euro", "euros", "pound", "pounds", "cash", "credit", "card", "cheque", "check", "coin", "cent", "bill", "dinner", "ticket", "tickets", "meal", "lunch", "drink", "food", "rent", "tax", "fare", "fee", "goods", "service", "lesson", "lessons", "car")
+                                                or (p_supersenses and any(ss in p_supersenses for ss in ("noun.possession", "noun.food", "noun.artifact")))
+                                            )
+                                            is_wrongdoing_or_penalty = (
+                                                p_ch_lem in ("mistake", "mistakes", "crime", "crimes", "sin", "sins", "error", "errors", "fault", "wrong", "damage", "foolishness", "carelessness", "neglect", "misdeed", "offense", "offence")
+                                                or (p_supersenses and "noun.cognition" in p_supersenses and any(k in s_defn for k in ("punish", "suffer", "wrong", "penalty")))
+                                            )
+                                            if is_financial_or_goods:
+                                                if any(k in s_defn for k in ("money", "buy", "service", "cost", "owe", "salary", "wage")):
+                                                    score += 55
+                                                elif any(k in s_defn for k in ("punish", "suffer", "wrong", "penalty")):
+                                                    score -= 75
+                                                # Currency bonus: 'pay in dollars/euros/cash' directly matches currency patterns/examples
+                                                if p_lem == "in" and p_ch_lem in ("dollar", "dollars", "euro", "euros", "pound", "pounds", "cash", "currency"):
+                                                    if any(k in s_defn or any(k in ex.lower() for ex in s.get("examples", [])) or any(k in pat.lower() for pat in s.get("patterns", [])) for k in ("dollar", "euro", "cash", "currency")):
+                                                        score += 40
+                                            elif is_wrongdoing_or_penalty:
+                                                if any(k in s_defn for k in ("punish", "suffer", "wrong", "penalty", "unpleasant")):
+                                                    score += 65
+                                                elif any(k in s_defn for k in ("money", "buy", "service", "cost")):
+                                                    score -= 40
+
                                     # Generalized semantic valency: 'by [doing]' or 'for [doing/NP]' as instrument/reward/cause
-                                    # For verbs denoting appraisal, thank, reward, praise, recognition, honor, punish
+                                    # For verbs denoting appraisal, thank, reward, praise, recognition, honor
                                     if p_lem in ("by", "for"):
-                                        is_appraisal = any(k in s_defn for k in ("thank", "honour", "honor", "reward", "praise", "punish", "award", "appreciat", "respect"))
+                                        is_appraisal = any(k in s_defn for k in ("thank", "honour", "honor", "reward", "praise", "award", "appreciat", "respect"))
                                         if is_appraisal:
                                             # Strong alignment for rewarding/thanking/honoring actions:
                                             # e.g. 'recognize volunteers by taking them...', 'recognized for having saved...'
@@ -2521,70 +3058,106 @@ class LinguisticEngine:
                                         if any(k in s_defn for k in ("thank", "honour", "honor", "reward", "praise", "appreciat", "respect")):
                                             score += 30
 
-                            # Check subject token
-                            for ch in tok.children:
-                                if ch.dep_ in ("nsubj", "nsubjpass", "csubj"):
-                                    subj_lem = ch.lemma_.lower()
-                                    # Closed-class personal pronouns ('you', 'i', 'he', etc.) appear ubiquitously in dictionary examples
-                                    # and must not be used to award generic token-overlap bonus unless the head noun/pronoun is lexical
-                                    if subj_lem not in stopwords:
-                                        if subj_lem in s_def_tokens or any(re.search(rf"\b{re.escape(subj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
-                                            score += 25
-                                    # Human vs non-human subject differentiation for verbs with 'effective/successful' or job/activity senses (e.g. work)
-                                    is_human_subj = (ch.pos_ == "PRON" and subj_lem in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody")) or (
-                                        ch.pos_ in ("NOUN", "PROPN") and subj_lem in ("person", "people", "man", "woman", "child", "staff", "employee", "worker", "doctor", "lawyer", "teacher", "mentor", "volunteer")
+                            # Check semantic subject tokens (governs deep_nsubj_tokens, supporting passive by-agent)
+                            for ch in deep_nsubj_tokens:
+                                subj_lem = ch.lemma_.lower()
+                                # Closed-class personal pronouns ('you', 'i', 'he', etc.) appear ubiquitously in dictionary examples
+                                # and must not be used to award generic token-overlap bonus unless the head noun/pronoun is lexical
+                                if subj_lem not in stopwords:
+                                    if subj_lem in s_def_tokens or any(re.search(rf"\b{re.escape(subj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
+                                        score += 25
+                                # Human vs non-human subject differentiation for verbs with 'effective/successful' or job/activity senses (e.g. work)
+                                subj_supersenses = cls.get_wordnet_supersenses(subj_lem, pos="n")
+                                is_human_subj = (
+                                    (ch.pos_ == "PRON" and subj_lem in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody")) or
+                                    (ch.pos_ in ("NOUN", "PROPN") and (
+                                        subj_lem in ("person", "people", "man", "woman", "child", "staff", "employee", "worker", "doctor", "lawyer", "teacher", "mentor", "volunteer", "mayor", "president", "director", "manager", "king", "queen", "winner") or
+                                        ch.ent_type_ in ("PERSON", "ORG") or
+                                        "noun.person" in subj_supersenses
+                                    ))
+                                )
+                                if is_human_subj:
+                                    # Human subject + 'from' preposition specifying origin/birth/culture/background
+                                    # (e.g. 'come from a culture/country/place', 'hail from ...')
+                                    prep_from_objs = [
+                                        pc.lemma_.lower()
+                                        for p_ch in tok.children if p_ch.dep_ == "prep" and p_ch.lemma_.lower() == "from"
+                                        for pc in p_ch.children if pc.dep_ in ("pobj", "pcomp")
+                                    ]
+                                    if any(po in ("culture", "country", "place", "background", "family", "city", "town", "region", "society", "nation", "area") for po in prep_from_objs):
+                                        if any(k in s_defn for k in ("born there", "lived there", "from a place", "place, you were", "family or background", "belong to")):
+                                            score += 40
+                                        elif any(k in s_defn for k in ("attitude or opinion", "basic attitude")):
+                                            score -= 30
+
+                                    # Human subject vs vehicle arriving / landing sense (e.g. 'train, bus, plane, or ship comes in')
+                                    if any(k in s_defn for k in ("train, bus, plane", "plane, or ship", "train arrives", "plane arrives", "ship arrives")):
+                                        score -= 40
+
+                                    # Human subject physical body movement / posture alignment vs situation/business turnaround
+                                    # (e.g. 'She turned around and walked away', 'The student turned around and smiled')
+                                    if any(k in sp or k in s_defn for k in ("your body", "body", "look in a different direction", "move your body", "posture")):
+                                        score += 45
+                                    elif any(k in s_defn for k in ("if a situation", "if a business", "if a shop or business")):
+                                        score -= 40
+                                else:
+                                    # Non-human / abstract subject alignment (e.g. situation / crisis / event vs business / corporate)
+                                    is_business_subj = (
+                                        subj_lem in ("business", "company", "firm", "department", "division", "corporation", "organization", "enterprise", "airline", "bank", "shop", "store", "factory") or
+                                        "noun.group" in subj_supersenses
                                     )
-                                    if is_human_subj:
-                                        # Human subject + 'from' preposition specifying origin/birth/culture/background
-                                        # (e.g. 'come from a culture/country/place', 'hail from ...')
-                                        prep_from_objs = [
-                                            pc.lemma_.lower()
-                                            for p_ch in tok.children if p_ch.dep_ == "prep" and p_ch.lemma_.lower() == "from"
-                                            for pc in p_ch.children if pc.dep_ in ("pobj", "pcomp")
-                                        ]
-                                        if any(po in ("culture", "country", "place", "background", "family", "city", "town", "region", "society", "nation", "area") for po in prep_from_objs):
-                                            if any(k in s_defn for k in ("born there", "lived there", "from a place", "place, you were", "family or background", "belong to")):
-                                                score += 40
-                                            elif any(k in s_defn for k in ("attitude or opinion", "basic attitude")):
-                                                score -= 30
+                                    is_situation_subj = (
+                                        subj_lem in ("situation", "crisis", "problem", "event", "condition", "economy", "market", "game", "match", "trend", "matter", "affair", "life") or
+                                        bool(subj_supersenses & {"noun.state", "noun.event"})
+                                    ) and not is_business_subj
 
-                                        # Human subject vs vehicle arriving / landing sense (e.g. 'train, bus, plane, or ship comes in')
-                                        if any(k in s_defn for k in ("train, bus, plane", "plane, or ship", "train arrives", "plane arrives", "ship arrives")):
-                                            score -= 40
-                                    else:
-                                        # First-principles invariant: non-human subjects only boost 'effective/successful' for verbs of functioning/operating (e.g. work, operate, run, function)
-                                        is_functioning_verb = tok.lemma_.lower() in ("work", "function", "operate", "run", "act", "serve") or any(k in target_w_clean for k in ("work", "function", "operate"))
-                                        if is_functioning_verb and any(k in s_defn for k in ("effective", "successful", "function", "operate")):
-                                            score += 45
-                                        elif any(k in s_defn for k in ("paid", "job", "salary", "employer")):
-                                            score -= 25
-                                        # Specific domain check for acoustic/sound vs quantity/amount increase
-                                        is_sound_subj = subj_lem in ("music", "sound", "noise", "applause", "cheer", "chorus", "song", "shout", "cry")
-                                        if is_sound_subj and any(k in s_defn for k in ("loud", "sound", "noise", "hear")):
-                                            score += 40
-                                        elif not is_sound_subj and any(k in s_defn for k in ("become louder", "louder")):
-                                            score -= 30
+                                    if is_business_subj:
+                                        if any(k in s_defn for k in ("business", "department", "company", "starts to be successful")):
+                                            score += 55
+                                    elif is_situation_subj:
+                                        if any(k in s_defn for k in ("situation", "game", "develop in the way you want", "changes and starts")):
+                                            score += 55
+                                        elif any(k in s_defn for k in ("business, department", "business or department")):
+                                            score -= 20
 
-                                        is_qty_subj = subj_lem in ("number", "amount", "membership", "population", "crowd", "rank", "ranks", "size", "volume", "figure", "total")
-                                        if is_qty_subj and any(k in s_defn for k in ("amount", "number", "increase in", "grow in number")):
-                                            score += 40
+                                    # First-principles invariant: non-human subjects only boost 'effective/successful' for verbs of functioning/operating (e.g. work, operate, run, function)
+                                    is_functioning_verb = tok.lemma_.lower() in ("work", "function", "operate", "run", "act", "serve") or any(k in target_w_clean for k in ("work", "function", "operate"))
+                                    if is_functioning_verb and any(k in s_defn for k in ("effective", "successful", "function", "operate")):
+                                        score += 45
+                                    elif any(k in s_defn for k in ("paid", "job", "salary", "employer")):
+                                        score -= 25
+                                    # Specific domain check for acoustic/sound vs quantity/amount increase
+                                    is_sound_subj = subj_lem in ("music", "sound", "noise", "applause", "cheer", "chorus", "song", "shout", "cry")
+                                    if is_sound_subj and any(k in s_defn for k in ("loud", "sound", "noise", "hear")):
+                                        score += 40
+                                    elif not is_sound_subj and any(k in s_defn for k in ("become louder", "louder")):
+                                        score -= 30
 
-                                        # Liquid / fluid subject alignment (e.g. 'Tears were running down her face', 'Water was running')
-                                        is_liquid_subj = subj_lem in ("tear", "tears", "water", "sweat", "blood", "river", "rain", "liquid", "stream", "fluid", "droplet")
-                                        if is_liquid_subj and (any(k in s_defn for k in ("flow in", "flow", "liquid")) or (s.get("signpost") or "").lower() == "flow"):
-                                            score += 50
-                                        elif is_liquid_subj and any(k in s_defn for k in ("using your legs", "kill or injure", "criticize", "manage", "business")):
-                                            score -= 40
+                                    is_qty_subj = subj_lem in ("number", "amount", "membership", "population", "crowd", "rank", "ranks", "size", "volume", "figure", "total")
+                                    if is_qty_subj and any(k in s_defn for k in ("amount", "number", "increase in", "grow in number")):
+                                        score += 40
 
-                                        # Origin / derivation vs birth / youth place differentiation:
-                                        # Non-human subjects (words, culture, craft, coffee, etc.) originate/derive from a place/source;
-                                        # they are not born or lived there when young.
-                                        is_origin_defn = any(k in s_defn for k in ("obtained from", "start or be made", "originate", "derive"))
-                                        is_birth_defn = any(k in s_defn for k in ("born there", "lived there when you were young", "grow up"))
-                                        if is_birth_defn:
-                                            score -= 30
-                                        elif is_origin_defn:
-                                            score += 30
+                                    # Liquid / fluid subject alignment (e.g. 'Tears were running down her face', 'Water was running')
+                                    is_liquid_subj = subj_lem in ("tear", "tears", "water", "sweat", "blood", "river", "rain", "liquid", "stream", "fluid", "droplet")
+                                    if is_liquid_subj and (any(k in s_defn for k in ("flow in", "flow", "liquid")) or (s.get("signpost") or "").lower() == "flow"):
+                                        score += 50
+                                    elif is_liquid_subj and any(k in s_defn for k in ("using your legs", "kill or injure", "criticize", "manage", "business")):
+                                        score -= 40
+
+                                    # Origin / derivation vs birth / youth place differentiation:
+                                    # Non-human subjects (words, culture, craft, coffee, etc.) originate/derive from a place/source;
+                                    # they are not born or lived there when young.
+                                    is_origin_defn = any(k in s_defn for k in ("obtained from", "start or be made", "originate", "derive"))
+                                    is_birth_defn = any(k in s_defn for k in ("born there", "lived there when you were young", "grow up"))
+                                    if is_birth_defn:
+                                        score -= 30
+                                    # Selectional restriction: physical body movement senses (signpost 'your body' or definition 'move your body')
+                                    # require human/animate subjects. Non-human/abstract/corporate subjects (company, economy, market, crisis, etc.)
+                                    # cannot perform physical body movements unless explicit body parts are mentioned.
+                                    is_body_movement_sense = "your body" in (s.get("signpost") or "").lower() or any(k in s_defn for k in ("move your body", "using your body", "part of your body"))
+                                    has_body_part_in_quote = any(bw in q_low_all for bw in ("body", "head", "face", "neck", "shoulder", "arm", "leg", "eye", "eyes", "heel", "back"))
+                                    if is_body_movement_sense and not has_body_part_in_quote:
+                                        score -= 40
 
                             # Discourse/deliberative forum context alignment (e.g. 'Go to shareholder meetings and speak up')
                             has_forum_context = any(
@@ -2641,6 +3214,10 @@ class LinguisticEngine:
                 sim_val = sim_scores[i]
                 if sim_val > 0.05:
                     score += sim_val * 40.0
+
+            # 9. Contextual Pedagogical Sense Cue Index bonus
+            if i in cue_scores:
+                score += cue_scores[i]
 
             # Tie-break slightly favors primary head senses
             score -= i * 0.5
@@ -2908,6 +3485,13 @@ class LinguisticEngine:
         senses = entry.get("senses", [])
         if not senses:
             return ("", "")
+
+        # Syntactic POS Resolution: when target_pos is omitted but a context sentence is available,
+        # ground the part of speech deterministically via spaCy rather than defaulting to entry order.
+        if not target_pos and context_sentence:
+            inferred_pos = cls.determine_contextual_pos(word, context_sentence)
+            if inferred_pos:
+                target_pos = inferred_pos
 
         # Use _lock_sense to pick the contextually aligned sense
         locked_idx, lock_score, lock_margin, lock_confidence = cls._lock_sense(
@@ -3184,7 +3768,8 @@ class LinguisticEngine:
 
     @classmethod
     def _unit_owning_sense(cls, key: str,
-                           headword: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any], str]]:
+                           headword: Optional[str] = None,
+                           context_sentence: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any], str]]:
         """(host, sense, source) for the sense Longman files `key` under.
 
         First the sense whose own grammar pattern reads as this unit: 'long for
@@ -3202,7 +3787,7 @@ class LinguisticEngine:
         if cls._QUANTIFIER_OF_RE.match(key):
             m = cls._QUANTIFIER_OF_RE.match(key)
             bare_q = f"{m.group(1).lower()} of"
-            bare_owner = cls._unit_owning_sense(bare_q, headword=m.group(1).lower())
+            bare_owner = cls._unit_owning_sense(bare_q, headword=m.group(1).lower(), context_sentence=context_sentence)
             if bare_owner:
                 return bare_owner
 
@@ -3275,18 +3860,36 @@ class LinguisticEngine:
                 if cls._unit_example(key, list(sense.get("examples") or [])):
                     return (host, sense, "phrase_row")
 
-        # Direct index lookup fallback via ldoce_phrase_index
-        direct_hit = cls.lookup_ldoce_phrase(key, headword)
-        if direct_hit:
-            d_host, d_sense_idx, d_tier, _d_raw = direct_hit
-            if d_sense_idx is not None:
-                d_entry = cls.get_ldoce_entry(d_host)
-                if d_entry:
-                    d_senses = d_entry.get("senses") or []
-                    if 0 <= d_sense_idx < len(d_senses):
-                        cand_s = d_senses[d_sense_idx]
-                        if isinstance(cand_s, dict) and (cand_s.get("definition") or cand_s.get("sub_senses")):
-                            return (d_host, cand_s, "phrase_row")
+        # Direct index lookup fallback via ldoce_phrase_index without LIMIT 1 truncation
+        candidates = cls.lookup_ldoce_phrase_candidates(key, headword)
+        if candidates:
+            # Collect valid candidate (host, sense) pairs
+            valid_cands = []
+            for c_host, c_sense_idx, c_tier, _c_raw in candidates:
+                if c_sense_idx is not None:
+                    c_entry = cls.get_ldoce_entry(c_host)
+                    if c_entry:
+                        c_senses = c_entry.get("senses") or []
+                        if 0 <= c_sense_idx < len(c_senses):
+                            cand_s = c_senses[c_sense_idx]
+                            if isinstance(cand_s, dict) and (cand_s.get("definition") or cand_s.get("sub_senses")):
+                                valid_cands.append((c_host, cand_s))
+
+            if len(valid_cands) == 1:
+                return (valid_cands[0][0], valid_cands[0][1], "phrase_row")
+            elif len(valid_cands) > 1:
+                if context_sentence:
+                    # Disambiguate among valid candidates using context sentence
+                    mock_senses = [s for _h, s in valid_cands]
+                    mock_entry = {"word": valid_cands[0][0], "senses": mock_senses}
+                    u_idx, _u_sc, _u_mar, _u_conf = cls._lock_sense(
+                        mock_entry,
+                        quote=context_sentence,
+                        return_confidence=True
+                    )
+                    if u_idx is not None and 0 <= u_idx < len(valid_cands):
+                        return (valid_cands[u_idx][0], valid_cands[u_idx][1], "phrase_row")
+                return (valid_cands[0][0], valid_cands[0][1], "phrase_row")
 
         for host in ordered:
             entry = cls.get_ldoce_entry(host)
@@ -3328,6 +3931,26 @@ class LinguisticEngine:
         if not cls._unit_example(key, [context_sentence], allow_modifier=True):
             return None
         owned_pos = cls._pos_code(sense.get("pos"))
+        keys = {key} | cls._declared_unit_spellings(key)
+        unit_sibling_senses = [
+            s for s in senses
+            if any(bool(keys & cls._declared_unit_spellings(u)) for u in (s.get("units") or []))
+        ]
+        # When multiple senses explicitly share this unit (e.g. 'at hand' in sense 13, 14, 15),
+        # perform disambiguation restricted to this exact candidate set.
+        if len(unit_sibling_senses) >= 2:
+            mock_entry = {"word": host, "senses": unit_sibling_senses}
+            u_idx, _u_sc, u_margin, u_conf = cls._lock_sense(
+                mock_entry,
+                quote=context_sentence,
+                target_pos=owned_pos or None,
+                return_confidence=True
+            )
+            if u_idx is not None and u_idx < len(unit_sibling_senses):
+                chosen_sibling = unit_sibling_senses[u_idx]
+                if chosen_sibling is not sense and str(chosen_sibling.get("definition") or "").strip():
+                    return chosen_sibling
+
         idx, _score, margin, confidence = cls._lock_sense(
             entry,
             quote=context_sentence,
@@ -3520,7 +4143,7 @@ class LinguisticEngine:
 
         # Tier 2b: the sense that owns the unit - as its own grammar pattern, or as the
         # sense a PHRASES row named for it was filed under.
-        owner = cls._unit_owning_sense(key)
+        owner = cls._unit_owning_sense(key, context_sentence=context_sentence)
         if owner:
             _host, sense, source = owner
             definition = cls.format_ldoce_definition(sense) or str(sense.get("definition") or "").strip()
@@ -3629,30 +4252,25 @@ class LinguisticEngine:
         # Tier 3: WordNet, and only for the unit as a whole.
         try:
             wn = cls.get_wordnet()
+            candidate_synsets: List[Any] = []
             for q in (clean_phrase, clean_phrase.replace(" ", "_"), clean_phrase.replace(" ", "")):
-                synsets: List[Any] = []
                 wn_words = wn.words(q) if hasattr(wn, "words") else []
                 if wn_words:
-                    synsets = list(wn_words[0].synsets())
-                synsets += wn.synsets(q)
-                if not synsets:
-                    continue
-                best_syn = synsets[0]
-                if len(synsets) > 1 and context_sentence:
-                    c_toks = set(re.findall(r'[a-zA-Z]{3,}', context_sentence.lower()))
-                    best_overlap = -1
-                    for syn in synsets:
-                        s_toks = set(re.findall(
-                            r'[a-zA-Z]{3,}', f"{syn.definition()} {' '.join(syn.examples())}".lower()))
-                        overlap = len(c_toks & s_toks)
-                        if overlap > best_overlap:
-                            best_overlap = overlap
-                            best_syn = syn
-                d = str(best_syn.definition() or "").strip()
-                if d:
-                    egs = best_syn.examples()
-                    e = egs[0].strip('"\'; ') if egs else ""
-                    return (d, e, "wordnet")
+                    candidate_synsets.extend(list(wn_words[0].synsets()))
+                candidate_synsets.extend(wn.synsets(q))
+            if candidate_synsets:
+                best_syn = cls.disambiguate_wordnet_synset(
+                    clean_phrase,
+                    pos=expr_type,
+                    context_sentence=context_sentence,
+                    candidate_synsets=candidate_synsets
+                )
+                if best_syn:
+                    d = str(best_syn.definition() or "").strip()
+                    if d:
+                        egs = best_syn.examples()
+                        e = egs[0].strip('"\'; ') if egs else ""
+                        return (d, e, "wordnet")
         except Exception:
             pass
 
@@ -8326,6 +8944,11 @@ class LinguisticEngine:
             "INTJ": "interjection",
         }
         sent_text = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", quoted_sentence or "").strip()
+        # Strip outer markdown bold or italic wrappers (e.g. **Heading!**)
+        if sent_text.startswith("**") and sent_text.endswith("**") and len(sent_text) > 4:
+            sent_text = sent_text[2:-2].strip()
+        elif sent_text.startswith("*") and sent_text.endswith("*") and len(sent_text) > 2:
+            sent_text = sent_text[1:-1].strip()
         if not sent_text or not word:
             return "noun"
 
@@ -8441,8 +9064,12 @@ class LinguisticEngine:
 
                         if tok.dep_ == "ROOT":
                             has_nsubj = any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
-                            has_other_verb = any(t.pos_ == "VERB" and t.i != tok.i for t in doc)
-                            if has_nsubj and not has_other_verb:
+                            has_compound_subj = any(c.dep_ == "compound" and c.head == tok for c in tok.children)
+                            has_prep_comp = any(c.dep_ == "prep" for c in tok.children)
+                            # Only genuine clause-level finite predicates (not embedded relative/participial clauses like 'relcl', 'acl', 'amod')
+                            # indicate that another main predicate already exists in the clause.
+                            has_clause_finite_verb = any(t.pos_ in ("VERB", "AUX") and t.dep_ in ("ROOT", "conj", "advcl", "ccomp") and t.i != tok.i for t in doc)
+                            if (has_nsubj or (has_compound_subj and has_prep_comp)) and not has_clause_finite_verb:
                                 return "verb"
 
                 return VALID_POS_MAP.get(tok.pos_, "noun")
@@ -10567,10 +11194,9 @@ class LinguisticEngine:
             if not definition:
                 # Fallback to WordNet definition if LDOCE headword missing
                 try:
-                    wn = cls.get_wordnet()
-                    syns = wn.synsets(w)
-                    if syns:
-                        definition = syns[0].definition()
+                    best_s = cls.disambiguate_wordnet_synset(w, pos=pos, context_sentence=matching_sent)
+                    if best_s:
+                        definition = best_s.definition()
                 except Exception:
                     pass
             # Physical gate: If still no definition found, drop item to avoid empty/boilerplate definition
@@ -12824,12 +13450,15 @@ class LinguisticEngine:
         target_word: str,
         dependent_prep: Optional[str] = None,
         pos: str = "v",
-        count: int = 3
+        count: int = 3,
+        context_sentence: Optional[str] = None
     ) -> List[str]:
         """
         Pre-computes distractors mathematically guaranteed to avoid synonym collisions with target.
         When dependent_prep is specified (e.g. 'on' for 'rely'), prioritizes candidates that
         do NOT govern that preposition or clash with it.
+        Uses context_sentence and MiniLM disambiguation to anchor to the pedagogical synset
+        rather than blind synsets[0].
         """
         wn = cls.get_wordnet()
         target_lower = target_word.lower()
@@ -12846,9 +13475,11 @@ class LinguisticEngine:
                 candidates.append(ant)
 
         # 2. Taxonomy sibling / hypernym search
-        target_synsets = wn.synsets(target_lower, pos=pos)
+        target_synsets = cls.get_wordnet_synsets(target_lower, pos=pos)
         if target_synsets:
-            primary_synset = target_synsets[0]
+            primary_synset = cls.disambiguate_wordnet_synset(
+                target_lower, pos=pos, context_sentence=context_sentence, candidate_synsets=target_synsets
+            ) or target_synsets[0]
             # Get hypernyms (parent categories)
             hypernyms = primary_synset.get_related("hypernym")
             for hyper in hypernyms:

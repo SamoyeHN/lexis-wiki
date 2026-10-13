@@ -2857,6 +2857,65 @@ class TestPayloadCollisionMerge:
         assert b.merge_payload_rows({"kind": "alias", "senses": [], "pos_all": []},
                                     self._article("noun", ["x"])) is None
 
+    def test_same_key_runon_merging_preserves_derived_pos_and_examples(self):
+        # Section 7.1: A headword article (e.g. 'activist' noun) declaring a run-on of the
+        # exact same key/spelling with a distinct POS (e.g. 'activist' adjective) must not be dropped.
+        # Its POS must be merged into pos_all and its sense/examples appended to the article.
+        b = _ldoce_builder()
+        article = self._article("noun", ["someone who works hard doing practical things"], word="activist")
+        article["all_poses"] = ["noun"]
+        article["pos_all"] = ["noun"]
+
+        info = {
+            "base": "activist",
+            "pos": "adjective",
+            "gram": "[only before noun]",
+            "examples": ["activist groups"]
+        }
+        derived_row = b.build_derived_row("activist", info, "activist", "noun",
+                                          {"noun": "someone who works hard doing practical things"})
+        merged = b.merge_payload_rows(article, derived_row)
+        assert merged is not None
+        assert merged["kind"] == "article"
+        assert merged["pos"] == "noun"
+        assert merged["pos_all"] == ["noun", "adjective"]
+        assert merged["all_poses"] == ["noun", "adjective"]
+        assert len(merged["senses"]) == 2
+        assert merged["senses"][0]["pos"] == "noun"
+        assert merged["senses"][1]["pos"] == "adjective"
+        assert merged["senses"][1]["examples"] == ["activist groups"]
+
+    def test_scan_and_merge_same_key_runons_from_html(self):
+        # Verify scan_runons with parse_ldoce_entry and fold logic
+        b = _ldoce_builder()
+        html = (
+            '<span class="entry"><span class="entryhead">'
+            '<span class="hwd">activist</span> <span class="pos">noun</span></span>'
+            '<span class="sense"><span class="def">someone who works hard doing practical things</span></span>'
+            '</span>'
+            '<span class="runon">'
+            '<span class="deriv">activist</span> <span class="pos">adjective</span> '
+            '<span class="gram">[only before noun]</span>'
+            '<span class="example">activist groups</span>'
+            '</span>'
+        )
+        declared = b.scan_runons(html)
+        assert len(declared) == 1
+        word, pos, gram, exs = declared[0]
+        assert word == "activist"
+        assert pos == "adjective"
+        assert exs == ["activist groups"]
+
+        entry = b.parse_ldoce_entry(html, "activist")
+        entry["kind"] = "article"
+        entry["pos_all"] = list(entry["all_poses"])
+
+        d_row = b.build_derived_row(word, {"base": "activist", "pos": pos, "gram": gram, "examples": exs},
+                                    "activist", "noun", {"noun": "someone who works hard doing practical things"})
+        merged = b.merge_payload_rows(entry, d_row)
+        assert merged["pos_all"] == ["noun", "adjective"]
+        assert any(s["pos"] == "adjective" and s["examples"] == ["activist groups"] for s in merged["senses"])
+
 
 class TestSpellingVariantFold:
     """Backlog E6, second half. merge_payload_rows folds two payloads that arrive under one
@@ -4124,6 +4183,40 @@ class TestExpressionDefinitionHost:
         d_num, ex_num, src_num = LinguisticEngine.expression_definition_evidence("A34, A40 etc")
         assert not d_num and not ex_num and not src_num
 
+    def test_section_7_7_phrase_candidates_and_context_disambiguation(self):
+        """Section 7.7: eliminate LIMIT 1 truncation for phrases and support context-based disambiguation.
+        - lookup_ldoce_phrase_candidates returns all attested senses without truncation.
+        - expression_definition_evidence with context_sentence locks to the correct sense.
+        """
+        # 1. Verification of candidates pool without truncation
+        candidates = LinguisticEngine.lookup_ldoce_phrase_candidates("at hand")
+        assert len(candidates) >= 3, candidates
+        sense_indices = {c[1] for c in candidates if c[1] is not None}
+        assert {13, 14, 15}.issubset(sense_indices), sense_indices
+
+        # 2. Context-based sense locking for 'at hand'
+        # Context A: task/business needing immediate attention (sense 15)
+        defn_a, _, _ = LinguisticEngine.expression_definition_evidence(
+            "at hand",
+            context_sentence="Peter turned his attention to the business at hand."
+        )
+        assert "needing to be dealt with now" in defn_a, defn_a
+
+        # Context B: imminent crisis/event (sense 13)
+        defn_b, _, _ = LinguisticEngine.expression_definition_evidence(
+            "at hand",
+            context_sentence="Recent economic performance suggests that a major crisis is at hand."
+        )
+        assert "likely to happen soon" in defn_b, defn_b
+
+        # Context C: readily available / nearby help (sense 14)
+        defn_c, _, _ = LinguisticEngine.expression_definition_evidence(
+            "at hand",
+            context_sentence="Don't worry, help is at hand!"
+        )
+        assert "close to you and available to be used" in defn_c, defn_c
+
+
 
 class TestHomographSenseLock:
     """Backlog E5. Homograph sense locking audits:
@@ -4544,6 +4637,254 @@ class TestCommonMistakesMarkdownIndentation:
         assert len(summaries) == 2
         assert any("where" in s and "discovered the manuscript" in s for s in summaries)
         assert any("reviewed it yesterday" in s for s in summaries)
+
+
+def test_section_7_4_and_7_5_disambiguation():
+    """Verify Section 7.4 and 7.5:
+    1. clean_and_expand_pattern_slashes recursively expands parenthesized slashes.
+    2. Phrase constituent stopwords isolation + offline sense cue index + selectional restrictions:
+       - 'turn around' with human subject -> Sense 0 ('your body')
+       - 'turn around' with corporate/business subject -> Sense 28 ('business turns around / turns it around')
+       - 'pick up' with economic context -> Sense 43 ('if a situation picks up, it improves')
+       - 'pick up' with physical object -> Sense 29 ('lift something or someone up')
+    """
+    # 1. Pattern expansion test
+    expanded = LinguisticEngine.clean_and_expand_pattern_slashes("turn (your head/face) to do something")
+    assert "turn (your head) to do something" in expanded
+    assert "turn (face) to do something" in expanded
+
+    # 2. 'turn' body vs corporate turnaround sense locking
+    turn_entry = LinguisticEngine.get_pedlex_entry("turn")
+    s_turn_body = LinguisticEngine._lock_sense(turn_entry, quote="She turned around and walked away.", target_pos="verb")
+    assert s_turn_body == 0
+    assert "your body" in (turn_entry["senses"][s_turn_body].get("signpost") or "").lower()
+
+    s_turn_corp = LinguisticEngine._lock_sense(
+        turn_entry,
+        quote="The company turned around from losses of 1 million to profits.",
+        target_pos="verb"
+    )
+    assert s_turn_corp == 28
+    assert "business" in (turn_entry["senses"][s_turn_corp].get("definition") or "").lower()
+
+    # 3. 'pick' phone vs economy pick up sense locking
+    pick_entry = LinguisticEngine.get_pedlex_entry("pick")
+    s_pick_econ = LinguisticEngine._lock_sense(pick_entry, quote="The economy is beginning to pick up.", target_pos="verb")
+    assert s_pick_econ == 43
+    assert "improves" in (pick_entry["senses"][s_pick_econ].get("definition") or "").lower()
+
+    s_pick_phone = LinguisticEngine._lock_sense(pick_entry, quote="He picked up the phone.", target_pos="verb")
+    assert s_pick_phone == 29
+    assert "lift" in (pick_entry["senses"][s_pick_phone].get("definition") or "").lower()
+
+
+def test_section_7_3_argument_projection_and_supersenses():
+    """Verify Section 7.3:
+    1. LinguisticEngine.get_wordnet_supersenses extracts semantic primitives offline (e.g. noun.person, noun.state).
+    2. Deep passive projection & argument structure gates:
+       - 'A medal was presented to the winner by the mayor.' -> Sense 6 ('give formal award/gift'), NOT Sense 18 ('illness')
+       - 'The mayor presented an award to the student.' -> Sense 6
+    3. Selectional restriction on situation/crisis vs body movement:
+       - 'The student turned around and smiled.' -> Sense 0 ('your body')
+       - 'The crisis turned around after government intervention.' -> Sense 29 ('situation/crisis turns around')
+    """
+    # 1. Supersenses extraction verification
+    mayor_ss = LinguisticEngine.get_wordnet_supersenses("mayor", pos="n")
+    assert "noun.person" in mayor_ss
+
+    crisis_ss = LinguisticEngine.get_wordnet_supersenses("crisis", pos="n")
+    assert bool(crisis_ss & {"noun.state", "noun.event"})
+
+    award_ss = LinguisticEngine.get_wordnet_supersenses("award", pos="n")
+    assert bool(award_ss & {"noun.possession", "noun.communication", "noun.act"})
+
+    # 2. Deep passive projection & medical domain penalty
+    pres_entry = LinguisticEngine.get_pedlex_entry("present")
+    # Passive sentence: medal (nsubjpass -> deep dobj), mayor (by-agent -> deep nsubj)
+    s_pres_passive = LinguisticEngine._lock_sense(
+        pres_entry,
+        quote="A medal was presented to the winner by the mayor.",
+        target_pos="v"
+    )
+    assert s_pres_passive == 6
+    assert "give" in (pres_entry["senses"][s_pres_passive].get("definition") or "").lower()
+
+    # Active sentence with direct object award
+    s_pres_active = LinguisticEngine._lock_sense(
+        pres_entry,
+        quote="The mayor presented an award to the student.",
+        target_pos="v"
+    )
+    assert s_pres_active == 6
+
+    # 3. Ergative situation/crisis vs human body selectional restrictions
+    turn_entry = LinguisticEngine.get_pedlex_entry("turn")
+    s_turn_human = LinguisticEngine._lock_sense(
+        turn_entry,
+        quote="The student turned around and smiled.",
+        target_pos="v"
+    )
+    assert s_turn_human == 0
+
+    s_turn_crisis = LinguisticEngine._lock_sense(
+        turn_entry,
+        quote="The crisis turned around after government intervention.",
+        target_pos="v"
+    )
+    assert s_turn_crisis == 29
+    assert "situation" in (turn_entry["senses"][s_turn_crisis].get("definition") or "").lower()
+
+
+def test_section_7_2_wordnet_disambiguation():
+    """Verify Section 7.2:
+    Eliminate blind syns[0] selection in WordNet fallbacks:
+    1. get_wordnet_synsets strictly maps canonical POS and deduplicates synsets.
+    2. 'online' adverb disambiguation locks to 'through a computer or a computer network' (pos='r').
+    3. 'online' adjective context disambiguation:
+       - 'Students can easily take lessons online.' -> computer network (NOT 19th-century railroad route)
+       - 'The express train connects the cities online.' -> railroad system
+    4. 'program' noun context disambiguation:
+       - 'He wrote a Python program to parse files.' -> computer science sequence of instructions
+    5. generate_zero_collision_distractors accepts context_sentence and eliminates synsets[0] blind bias.
+    """
+    # 1. Strict POS mapping & deduplication
+    r_syns = LinguisticEngine.get_wordnet_synsets("online", pos="adverb")
+    assert all(s.pos == "r" for s in r_syns)
+    assert len(r_syns) >= 1
+
+    a_syns = LinguisticEngine.get_wordnet_synsets("online", pos="adjective")
+    assert all(s.pos in ("a", "s") for s in a_syns)
+
+    # 2. Adverb disambiguation
+    s_adv = LinguisticEngine.disambiguate_wordnet_synset(
+        "online",
+        pos="adverb",
+        context_sentence="Students can access learning materials online."
+    )
+    assert s_adv is not None
+    assert s_adv.pos == "r"
+    assert "computer" in s_adv.definition().lower()
+
+    # 3. Adjective disambiguation - modern computer vs railway
+    s_comp = LinguisticEngine.disambiguate_wordnet_synset(
+        "online",
+        pos="adjective",
+        context_sentence="Students can easily take lessons online."
+    )
+    assert s_comp is not None
+    assert "computer network" in s_comp.definition().lower()
+    assert "railroad" not in s_comp.definition().lower()
+
+    s_rail = LinguisticEngine.disambiguate_wordnet_synset(
+        "online",
+        pos="adjective",
+        context_sentence="The express train connects the cities online."
+    )
+    assert s_rail is not None
+    assert "railroad" in s_rail.definition().lower()
+
+    # 4. Contextual noun disambiguation for polysemous words
+    s_prog = LinguisticEngine.disambiguate_wordnet_synset(
+        "program",
+        pos="noun",
+        context_sentence="He wrote a Python program to parse files."
+    )
+    assert s_prog is not None
+    assert "instructions" in s_prog.definition().lower() or "computer" in s_prog.definition().lower()
+
+    # 5. Distractor generation with context sentence
+    distractors = LinguisticEngine.generate_zero_collision_distractors(
+        "dog",
+        pos="n",
+        context_sentence="The family adopted a stray dog.",
+        count=3
+    )
+    assert len(distractors) == 3
+    assert all(d != "dog" for d in distractors)
+
+
+def test_section_7_11_automatic_syntactic_pos_binding():
+    """Verify Section 7.11:
+    When target_pos is omitted from get_ldoce_definition_and_example,
+    the method must automatically resolve the syntactic POS from context_sentence
+    via spaCy (determine_contextual_pos) rather than falling back to entry order.
+    """
+    # 1. 'swell' in verbal context -> locks verb sense and example (not noun)
+    defn_swell, ex_swell = LinguisticEngine.get_ldoce_definition_and_example(
+        "swell",
+        context_sentence="Her heart swelled with pride."
+    )
+    assert "feel very proud" in defn_swell.lower()
+    assert "heart swelled with pride" in ex_swell.lower()
+
+    # 2. 'seal' in verbal passive context -> locks verb sense (not noun animal/wax)
+    defn_seal, ex_seal = LinguisticEngine.get_ldoce_definition_and_example(
+        "seal",
+        context_sentence="The envelope was sealed with wax."
+    )
+    assert "close an envelope" in defn_seal.lower()
+    assert "sealed the envelope" in ex_seal.lower()
+
+    # 3. 'common' in adjective predicate context -> locks adjective sense
+    defn_common, ex_common = LinguisticEngine.get_ldoce_definition_and_example(
+        "common",
+        context_sentence="Electric scooters are common in many cities."
+    )
+    assert "happening often" in defn_common.lower()
+    assert "common" in ex_common.lower()
+
+    # 4. 'expect' with complex complement -> locks verb sense (not noun)
+    defn_expect, ex_expect = LinguisticEngine.get_ldoce_definition_and_example(
+        "expect",
+        context_sentence="We expect him to arrive tomorrow."
+    )
+    assert "think that something will happen" in defn_expect.lower()
+
+
+def test_section_7_12_ambitransitive_valency_and_prepositional_supersenses():
+    """Verify Section 7.12:
+    Ambitransitive Valency Arbitration, Selectional Restrictions on Prepositional
+    Complements (pay for/in/by), Phrasal Verb Particle Gating, and Syntactic Frame Primacy.
+    """
+    # 1. 'pay in dollars' -> Sense 0 (give money for something / pay in currency)
+    defn_dollars, ex_dollars = LinguisticEngine.get_ldoce_definition_and_example(
+        "pay",
+        context_sentence="Can we pay in dollars?"
+    )
+    assert "give someone money" in defn_dollars.lower()
+    assert "pay in dollars" in ex_dollars.lower() or "dollars" in ex_dollars.lower() or "pay" in ex_dollars.lower()
+
+    # 2. 'pay for the dinner' -> Sense 0 (pay for goods/services/food)
+    defn_dinner, ex_dinner = LinguisticEngine.get_ldoce_definition_and_example(
+        "pay",
+        context_sentence="He will pay for the dinner."
+    )
+    assert "give someone money" in defn_dinner.lower()
+
+    # 3. 'pay dearly for their mistakes' -> Sense 11 (suffer / be punished)
+    defn_punish, ex_punish = LinguisticEngine.get_ldoce_definition_and_example(
+        "pay",
+        context_sentence="They paid dearly for their mistakes."
+    )
+    assert any(k in defn_punish.lower() for k in ("suffer", "punished"))
+
+    # 4. 'Punctuality pays!' -> Sense 6 (bring good result or advantage)
+    defn_result, ex_result = LinguisticEngine.get_ldoce_definition_and_example(
+        "pay",
+        context_sentence="Punctuality pays!"
+    )
+    assert any(k in defn_result.lower() for k in ("good result", "advantage", "benefit"))
+
+    # 5. 'If the pub does not start to pay, we will have to sell it.' -> Sense 7 (business makes a profit)
+    defn_profit, ex_profit = LinguisticEngine.get_ldoce_definition_and_example(
+        "pay",
+        context_sentence="If the pub does not start to pay, we will have to sell it."
+    )
+    assert any(k in defn_profit.lower() for k in ("profit", "business", "shop"))
+
+
+
+
 
 
 
