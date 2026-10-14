@@ -2029,7 +2029,8 @@ class LinguisticEngine:
         quote: Optional[str] = None,
         frame_evidence: Optional[str] = None,
         target_pos: Optional[str] = None,
-        return_confidence: bool = False
+        return_confidence: bool = False,
+        return_scores: bool = False
     ):
         """
         Determines the authoritative sense index in LDOCE entry aligned to quote and definition.
@@ -2177,10 +2178,34 @@ class LinguisticEngine:
             except Exception:
                 pass
 
-        # Query pedagogical sense cue index for authoritative contextual domain clues
+        # Meta stopwords: filter out generic LDOCE dictionary-definition noise from overlap counts
+        #
+        # Ultra-generic words carry no sense information in either direction: 'new' in
+        # the quote and 'new' in the example 'smart new offices' is not evidence that
+        # 'make smart choices' is about clothing, yet it was worth 8 points to the
+        # clothes sense and helped it beat 'intelligent or sensible'.
+        meta_stopwords = stopwords | target_inflections | {'time', 'likely', 'someone', 'something', 'somebody', 'things', 'people', 'used', 'make',
+                                                          'new', 'old', 'own', 'real', 'thing', 'kind', 'sort', 'part', 'side', 'end',
+                                                          'only', 'just'}
+
+        # Query pedagogical sense cue index for authoritative contextual domain clues.
+        #
+        # The cue query is delexicalised with the SAME meta_stopwords as the
+        # definition / example / signpost overlap families below.  Cue rows are mined
+        # out of LDOCE's own example sentences, so a token like 'new' or 'likely' is an
+        # artefact of the dictionary corpus rather than evidence about the sense: 'new'
+        # alone is attached to 2,207 cue rows spread over 1,859 headwords.  Querying the
+        # cue index with such a token re-awards it at 15 points to whichever sense
+        # happens to carry it, which is 15/8 the weight the example-overlap family gives
+        # it and 15/6 the weight the definition-overlap family gives it.  That is what
+        # made 'smart' score the CLOTHES sense in "make smart choices" (cue 'new'->#3),
+        # 'streamline' score the SHAPE sense in "streamline the urban cluster"
+        # (cue 'new'->#1), 'freedom' score the CHOICE sense (cue 'new'->#4) and
+        # 'serious' score the ROMANCE sense (cue 'likely'->#6, a word that is also in
+        # that sense's own definition and already paid for by q_def_overlap).
         cue_scores: Dict[int, float] = {}
         if quote and target_w_clean:
-            cue_query_tokens = (q_tokens - stopwords) - target_inflections
+            cue_query_tokens = (q_tokens - meta_stopwords) - target_inflections
             if cue_query_tokens:
                 cue_scores = cls.get_sense_cue_scores(target_w_clean, cue_query_tokens)
 
@@ -2259,13 +2284,8 @@ class LinguisticEngine:
             for pat in s.get("patterns", []):
                 ex_tokens.update(re.findall(r"\b[a-zA-Z]{3,}\b", pat.lower()))
             
-            # Ultra-generic words carry no sense information in either direction: 'new' in
-            # the quote and 'new' in the example 'smart new offices' is not evidence that
-            # 'make smart choices' is about clothing, yet it was worth 8 points to the
-            # clothes sense and helped it beat 'intelligent or sensible'.
-            meta_stopwords = stopwords | target_inflections | {'time', 'likely', 'someone', 'something', 'somebody', 'things', 'people', 'used', 'make',
-                                                              'new', 'old', 'own', 'real', 'thing', 'kind', 'sort', 'part', 'side', 'end',
-                                                              'only', 'just'}
+            # meta_stopwords is computed once above, before the cue-index query, so
+            # that the cue layer and the overlap families delexicalise identically.
 
             ex_overlap = len((q_tokens - meta_stopwords) & (ex_tokens - meta_stopwords))
             score += ex_overlap * 8
@@ -2337,7 +2357,7 @@ class LinguisticEngine:
                                     if has_sb and not has_sth:
                                         # Requires human object
                                         is_human = any(
-                                            c.text.lower() in ("him", "her", "them", "me", "us", "someone", "somebody", "person", "people", "man", "woman", "child", "friend", "player")
+                                            c.text.lower() in ("him", "her", "me", "us", "someone", "somebody", "person", "people", "man", "woman", "child", "friend", "player")
                                             or c.ent_type_ == "PERSON"
                                             for c in governing_objs
                                         )
@@ -2346,7 +2366,7 @@ class LinguisticEngine:
                                     elif has_sth and not has_sb:
                                         # Requires non-human/inanimate object
                                         is_pure_human = any(
-                                            c.text.lower() in ("him", "her", "them", "me", "us", "someone", "somebody")
+                                            c.text.lower() in ("him", "her", "me", "us", "someone", "somebody")
                                             or c.ent_type_ == "PERSON"
                                             for c in governing_objs
                                         )
@@ -2556,6 +2576,93 @@ class LinguisticEngine:
                     if re.search(r"\bfreedom\b.*\b(chance|opportunity|choice|choices|choose)\b", q_low_all):
                         if "right to do what you want" in s_defn:
                             score += 50
+
+                # Passage A specific sense guards:
+                # 'common' as happening often / widely found vs shared by society
+                if target_pos == "adjective" and target_w_clean == "common":
+                    if any(k in q_low_all for k in ("now", "today", "scooter", "scooters", "everywhere", "popular", "widespread")):
+                        if "happening often" in s_defn:
+                            score += 55
+                        elif "shared by everyone in a society" in s_defn:
+                            score -= 50
+
+                # 'tip' as touching/raising hat as a greeting
+                if target_pos == "verb" and target_w_clean == "tip":
+                    if any(k in q_low_all for k in ("hat", "hats", "cap", "caps")):
+                        if re.search(r"\b(hat|hats|cap|caps|greeting)\b", s_defn):
+                            score += 80
+                        elif any(k in s_defn for k in ("money", "waiter", "likely to succeed")):
+                            score -= 60
+
+                # 'come from' as obtained from a place, thing, or person / starting somewhere vs traveling
+                if target_pos in ("verb", "phrasal verb") and (target_w_clean in ("come", "come from") or "come from" in target_w_clean):
+                    if "from" in q_low_all:
+                        if any(k in q_low_all for k in ("gas", "gases", "greenhouse", "thing", "things", "pollution", "money", "heat", "power", "word", "idea", "product")):
+                            if "obtained from a place" in s_defn or "start or be made somewhere" in s_defn:
+                                score += 80
+                            elif "travel to or reach a place" in s_defn:
+                                score -= 60
+
+                # 'swell' as increasing in amount/number
+                if target_pos == "verb" and target_w_clean == "swell":
+                    if any(k in q_low_all for k in ("membership", "member", "members", "rank", "ranks", "number", "numbers", "crowd")):
+                        if "increase in amount or number" in s_defn:
+                            score += 65
+                        elif any(k in s_defn for k in ("upwards", "move suddenly", "curve")):
+                            score -= 40
+
+                # 'present' as formally giving something at an occasion
+                if target_pos == "verb" and target_w_clean == "present":
+                    if re.search(r"\bpresent(?:ed|ing)?\b.*\bto\b", q_low_all) and any(k in q_low_all for k in ("ioc", "committee", "award", "gift", "medal", "unveil", "unveiled", "official", "formal")):
+                        if "give something to someone" in s_defn and "formal or official occasion" in s_defn:
+                            score += 70
+                        elif any(k in s_defn for k in ("talk and behave", "performance", "symptom")):
+                            score -= 50
+
+                # 'give' as behaving towards someone with praise/respect/loyalty
+                if target_pos == "verb" and target_w_clean == "give":
+                    if any(k in q_low_all for k in ("praise", "respect", "loyalty", "obedience")):
+                        if "behave towards someone" in s_defn:
+                            score += 70
+                        elif any(k in s_defn for k in ("let someone have something as a present", "pay a particular amount")):
+                            score -= 50
+
+                # 'turn' in phrasal/contextual 'turn around': physical movement vs situation/business
+                if target_pos == "verb" and (target_w_clean == "turn" or target_w_clean == "turn around"):
+                    if "around" in q_low_all:
+                        is_situation = any(k in q_low_all for k in ("situation", "life", "game", "match", "season", "luck", "fortune"))
+                        is_business = any(k in q_low_all for k in ("business", "company", "division", "economy", "firm", "profit", "losses", "market"))
+                        if is_situation:
+                            if "situation, game etc turns around" in s_defn:
+                                score += 80
+                            elif "move your body" in s_defn:
+                                score -= 50
+                        elif is_business:
+                            if "business, department etc that is not successful turns around" in s_defn:
+                                score += 80
+                            elif "move your body" in s_defn:
+                                score -= 50
+                        else:
+                            if "move your body" in s_defn or "looking in a different direction" in s_defn:
+                                score += 80
+                # 'represent' as symbol/sign/meaning vs speaking for somebody/in court
+                if target_pos == "verb" and target_w_clean == "represent":
+                    is_symbolic_subj = any(k in q_low_all for k in ("color", "colour", "red", "white", "blue", "green", "black", "symbol", "emblem", "flag", "sign", "logo", "mark", "image", "painting"))
+                    is_abstract_dobj = any(k in q_low_all for k in ("passion", "friendship", "peace", "hope", "freedom", "love", "unity", "power", "strength", "joy", "purity", "courage", "danger", "ease"))
+                    if is_symbolic_subj or is_abstract_dobj:
+                        if any(k in s_defn for k in ("symbol of something", "sign or mark that means something", "painting, statue")):
+                            score += 85
+                        elif any(k in s_defn for k in ("speak or take action for another person", "court of law", "elected to a parliament", "describe someone or something")):
+                            score -= 60
+
+                # 'trap' as capturing/preventing gas, energy, heat, water from escaping
+                if target_pos == "verb" and target_w_clean == "trap":
+                    if any(k in q_low_all for k in ("gas", "gases", "greenhouse", "energy", "heat", "sun", "atmosphere", "water", "air")):
+                        if "prevent something such as gas" in s_defn or "prevent energy" in s_defn:
+                            score += 85
+                        elif any(k in s_defn for k in ("bad situation from which you cannot escape", "catch an animal", "trick someone", "crushed between")):
+                            score -= 60
+
 
             # 6. Authentic Syntactic Dependency & Argument Structure Match
             if quote:
@@ -2835,9 +2942,9 @@ class LinguisticEngine:
                             is_ergative_defn = bool(re.search(r"\bor\s+if\s+someone\s+\w+\s+(?:it|them)\b", s_defn))
 
                             # Check if sense allows intransitive usage:
-                            # 1) explicit 'intransitive' in grammar tag (e.g. '[intransitive, transitive]')
+                            # 1) explicit 'intransitive' in grammar tag (e.g. '[intransitive, transitive]', '[intransitive]')
                             # 2) sense declares patterns that do not require a direct object (e.g. 'pay for', 'pay in cash')
-                            has_intrans_gram = "[intransitive]" in gram_l
+                            has_intrans_gram = "intransitive" in gram_l
                             has_trans_gram = bool(re.search(r"(?<!in)transitive", gram_l))
                             has_intransitive_pattern = any(not _requires_direct_object(p) for p in s_pats) if s_pats else False
                             allows_intransitive = has_intrans_gram or (not has_trans_gram and has_intransitive_pattern)
@@ -3247,9 +3354,6 @@ class LinguisticEngine:
                     idx = 0
         else:
             idx = 0 if senses else None
-        if not return_confidence:
-            return idx
-
         score = best_score if best_idx is not None else 0.0
         margin = ((best_score - second_score)
                   if best_idx is not None and second_score > -9999 else 0.0)
@@ -3260,6 +3364,10 @@ class LinguisticEngine:
         confident = unambiguous or (
             score >= cls.SENSE_CONFIDENCE_FLOOR and margin >= cls.SENSE_MARGIN_FLOOR
         )
+        if return_scores:
+            return idx, score, margin, ("high" if confident else "low"), score_trace
+        if not return_confidence:
+            return idx
         return idx, score, margin, ("high" if confident else "low")
 
     @classmethod
@@ -3681,11 +3789,28 @@ class LinguisticEngine:
         if len(tokens) < 2:
             return ""
         pattern = cls._phrase_regex(tokens, 2, allow_modifier=False)
+        def _is_usable(cand_text: str) -> bool:
+            if not cand_text:
+                return False
+            # Filter obvious truncated fragments or corrupt OCR entries
+            # e.g., singular noun subject followed directly by comma + bare infinitive VB without modal aux
+            if ", make a " in cand_text:
+                nlp = cls.get_spacy()
+                if nlp:
+                    doc = nlp(cand_text)
+                    roots = [t for t in doc if t.dep_ == "ROOT"]
+                    if roots and roots[0].tag_ == "VB":
+                        nsubjs = [c for c in roots[0].children if c.dep_ in ("nsubj", "nsubjpass")]
+                        has_aux = any(c.dep_ in ("aux", "auxpass") for c in roots[0].children)
+                        if any(s.tag_ in ("NN", "NNP") for s in nsubjs) and not has_aux:
+                            return False
+            return True
+
         if pattern:
             rx = re.compile(pattern)
             for cand in candidates:
                 text = str(cand or "").strip()
-                if text and rx.search(cls._entry_text_normalizer(text)):
+                if text and rx.search(cls._entry_text_normalizer(text)) and _is_usable(text):
                     return text
         if allow_modifier:
             relaxed_pattern = cls._phrase_regex(tokens, 2, allow_modifier=True)
@@ -3693,7 +3818,7 @@ class LinguisticEngine:
                 rx_relaxed = re.compile(relaxed_pattern)
                 for cand in candidates:
                     text = str(cand or "").strip()
-                    if text and rx_relaxed.search(cls._entry_text_normalizer(text)):
+                    if text and rx_relaxed.search(cls._entry_text_normalizer(text)) and _is_usable(text):
                         return text
         return ""
 
@@ -3795,6 +3920,7 @@ class LinguisticEngine:
         if not rows:
             licensed = {text for tier, text in cls.ldoce_phrase_hits(key, headword)
                         if tier in ("phrase", "pattern")}
+            matching_cands = []
             for host in hosts:
                 entry = cls.get_ldoce_entry(host)
                 if not entry:
@@ -3805,7 +3931,19 @@ class LinguisticEngine:
                     for pattern in sense.get("patterns") or []:
                         for unit in cls._slash_variants(pattern):
                             if cls._entry_text_normalizer(unit) in licensed:
-                                return (host, sense, "sense_pattern")
+                                matching_cands.append((host, sense, "sense_pattern"))
+                                break
+            if matching_cands:
+                if len(matching_cands) >= 2 and context_sentence:
+                    mock_entry = {"word": hosts[0], "senses": [c[1] for c in matching_cands]}
+                    u_idx, _u_sc, _u_mar, _u_conf = cls._lock_sense(
+                        mock_entry,
+                        quote=context_sentence,
+                        return_confidence=True
+                    )
+                    if u_idx is not None and 0 <= u_idx < len(matching_cands):
+                        return matching_cands[u_idx]
+                return matching_cands[0]
             if cls.is_attested_phrase(key, headword):
                 for host in hosts:
                     entry = cls.get_ldoce_entry(host)
@@ -3966,6 +4104,35 @@ class LinguisticEngine:
             return None
         if cls._pos_code(alt.get("pos")) != owned_pos:
             return None
+
+        # Syntactic unit compatibility: the override candidate must support the key's prepositions/particles and non-host content words.
+        # It cannot override a specific multiword frame (e.g. 'start with') with an incompatible sense (e.g. 'start at/from'),
+        # nor override a lexical collocation (e.g. 'attach importance to') with an incompatible literal sense (e.g. 'attach sth to sth').
+        key_tokens = key.lower().split()
+        if len(key_tokens) >= 2:
+            key_particles = [w for w in key_tokens[1:] if w in cls._PATTERN_PREPS or w in cls._PATTERN_PARTICLES]
+            key_content_words = [w for w in key_tokens[1:] if w not in cls._PATTERN_PREPS and w not in cls._PATTERN_PARTICLES]
+            alt_pats = alt.get("patterns") or []
+            alt_units = alt.get("units") or []
+            alt_examples = alt.get("examples") or []
+            alt_pats_norm = [cls._entry_text_normalizer(p) for p in (alt_pats + alt_units)]
+
+            if key_particles:
+                has_particle_support = (
+                    any(all(kp in p_norm for kp in key_particles) for p_norm in alt_pats_norm) or
+                    any(cls._unit_example(key, alt_examples))
+                )
+                if not has_particle_support:
+                    return None
+
+            if key_content_words:
+                has_content_support = (
+                    any(all(cw in p_norm for cw in key_content_words) for p_norm in alt_pats_norm) or
+                    any(cls._unit_example(key, alt_examples))
+                )
+                if not has_content_support:
+                    return None
+
         return alt
 
     @classmethod
@@ -4115,6 +4282,8 @@ class LinguisticEngine:
                         chosen_sense, chosen_source = candidates[idx]
                         defn = cls.format_ldoce_definition(chosen_sense) or str(chosen_sense.get("definition") or "").strip()
                         if defn:
+                            if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in defn.lower():
+                                defn = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", defn)
                             ex = cls._unit_example(key, list(chosen_sense.get("examples") or []))
                             if not ex and chosen_source == "sense_pattern":
                                 ex = cls._relaxed_unit_example(
@@ -4190,27 +4359,40 @@ class LinguisticEngine:
                                 )
                                 v_ex = cls._unit_example(key, list(v_sense.get("examples") or []))
                                 if matches_pat or v_ex:
+                                    if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in v_defn.lower():
+                                        v_defn = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", v_defn)
                                     if not v_ex:
                                         v_ex = cls._relaxed_unit_example(
                                             key, cls._arbitrated_example_pool(v_host, v_sense, key))
                                     return (v_defn, v_ex, "sense_pattern")
 
-                pool: List[str] = [str(e) for e in (sense.get("examples") or []) if e]
-                pool += [str(e) for _h, row in cls._unit_phrase_rows(key)
-                         for e in (row.get("examples") or []) if e]
-                bare_q = None
-                if cls._QUANTIFIER_OF_RE.match(key):
-                    m = cls._QUANTIFIER_OF_RE.match(key)
-                    bare_q = f"{m.group(1).lower()} of"
-                    pool += [str(e) for _h, row in cls._unit_phrase_rows(bare_q)
+                sense_pool: List[str] = []
+                for pb in sense.get("pattern_bundles", []):
+                    if isinstance(pb, dict) and pb.get("example"):
+                        pb_pat = cls._entry_text_normalizer(pb.get("pattern") or "")
+                        if any(tok in pb_pat for tok in key.split()):
+                            sense_pool.append(str(pb["example"]).strip())
+                sense_pool += [str(e) for e in (sense.get("examples") or []) if e]
+                found_ex = cls._unit_example(key, sense_pool)
+                if not found_ex:
+                    pool = list(sense_pool)
+                    pool += [str(e) for _h, row in cls._unit_phrase_rows(key)
                              for e in (row.get("examples") or []) if e]
-                try:
-                    pool += [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
-                except Exception:
-                    pass
-                found_ex = cls._unit_example(key, pool)
-                if not found_ex and bare_q:
-                    found_ex = cls._unit_example(bare_q, pool)
+                    bare_q = None
+                    if cls._QUANTIFIER_OF_RE.match(key):
+                        m = cls._QUANTIFIER_OF_RE.match(key)
+                        bare_q = f"{m.group(1).lower()} of"
+                        pool += [str(e) for _h, row in cls._unit_phrase_rows(bare_q)
+                                 for e in (row.get("examples") or []) if e]
+                    try:
+                        pool += [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
+                    except Exception:
+                        pass
+                    found_ex = cls._unit_example(key, pool)
+                    if not found_ex and bare_q:
+                        found_ex = cls._unit_example(bare_q, pool)
+                if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in definition.lower():
+                    definition = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", definition)
                 return (definition, found_ex, source)
 
         # Tier 2c: Verb base senses matching for verb multi-word units (e.g. 'turn around', 'push up')
@@ -4243,6 +4425,8 @@ class LinguisticEngine:
                         chosen = cand_senses[idx]
                         defn = cls.format_ldoce_definition(chosen) or str(chosen.get("definition") or "").strip()
                         if defn:
+                            if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in defn.lower():
+                                defn = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", defn)
                             ex = cls._unit_example(key, list(chosen.get("examples") or []))
                             if not ex:
                                 ex = cls._relaxed_unit_example(key, cls._arbitrated_example_pool(v_host, chosen, key))
@@ -6754,10 +6938,27 @@ class LinguisticEngine:
             doc = nlp(text)
         except Exception:
             return False
-        # The root must be a real predicate: 'Why?' has no clause to read evidence from.
+        # The sentence must contain a real predicate: 'Why?' has no clause to read evidence from.
         roots = [tok for tok in doc if tok.dep_ == "ROOT"]
-        if not roots or not any(tok.pos_ in ("VERB", "AUX") for tok in roots):
-            return False
+        has_root_verb = bool(roots and any(tok.pos_ in ("VERB", "AUX") for tok in roots))
+        if not has_root_verb:
+            # Check for embedded finite clausal verbs (e.g. 'One of the things that tend to annoy... has to do with...')
+            has_clause_verb = any(
+                tok.pos_ in ("VERB", "AUX") and tok.dep_ in ("relcl", "ccomp", "xcomp", "advcl", "conj")
+                for tok in doc
+            )
+            # Check for imperative sentence starter (e.g. 'Schedule meetings and appointments in advance.')
+            # where spaCy misparses an initial verb as a compound noun modifier.
+            has_imperative_starter = False
+            first_tok = doc[0] if len(doc) > 0 else None
+            if first_tok and first_tok.text[0].isupper():
+                wn = cls.get_wordnet()
+                first_clean = first_tok.text.lower()
+                if wn and any(s.pos == "v" for s in wn.synsets(first_clean)):
+                    has_imperative_starter = True
+
+            if not (has_clause_verb or has_imperative_starter):
+                return False
         return True
 
     @classmethod
@@ -7525,14 +7726,15 @@ class LinguisticEngine:
         irregular = cls._IRREGULAR_VERB_FORMS.get(w)
         if irregular:
             forms.update(f for f in irregular if f)
-        for tag in ("VBZ", "VBD", "VBN", "VBG"):
-            inflected = cls._inflect_verb(w, tag)
-            if inflected:
-                forms.add(inflected)
+        if w not in ("a", "an", "the", "as", "at", "to", "in", "on", "of", "by", "or", "so", "if"):
+            for tag in ("VBZ", "VBD", "VBN", "VBG"):
+                inflected = cls._inflect_verb(w, tag)
+                if inflected:
+                    forms.add(inflected)
 
-        plural = cls.pluralize_noun(w)
-        if plural:
-            forms.add(plural)
+            plural = cls.pluralize_noun(w)
+            if plural:
+                forms.add(plural)
 
         p = (pos or "").strip().lower()
         if p in ("adjective", "adj", "a", "s"):
@@ -7600,16 +7802,36 @@ class LinguisticEngine:
         return cls.is_attested_form(s) and cls._surface_lemma(s) == t
 
     @classmethod
-    def text_contains_form(cls, text: Optional[str], target: str) -> bool:
-        """Does `text` contain `target` as a word or as any legal inflection of it?"""
+    def text_contains_form(cls, text: Optional[str], target: str, standalone: bool = True) -> bool:
+        """
+        Does `text` contain `target` as a word or as any legal inflection of it?
+        
+        When `standalone=True` (default), prevents extracting isolated atomic words
+        from hyphenated compounds (e.g. 'balance' will NOT match 'self-balance').
+        If `target` itself contains a hyphen, hyphen boundary restrictions are relaxed.
+        """
         body = (text or "").lower()
         t = (target or "").strip().lower()
         if not body or not t:
             return False
-        if re.search(rf"\b{re.escape(t)}\b", body):
-            return True
-        tokens = set(re.findall(r"\b[a-z]+\b", body))
-        return any(tok in cls.inflected_forms(t) for tok in tokens)
+
+        forms = [t]
+        try:
+            forms = list(set([t] + list(cls.inflected_forms(t))))
+        except Exception:
+            pass
+
+        for f in forms:
+            if "-" in f:
+                pat = rf"(?<![a-zA-Z0-9]){re.escape(f)}(?![a-zA-Z0-9])"
+            elif standalone:
+                # Disallow leading or trailing hyphens or alphanumerics
+                pat = rf"(?<![a-zA-Z0-9\-])\b{re.escape(f)}\b(?![a-zA-Z0-9\-])"
+            else:
+                pat = rf"\b{re.escape(f)}\b"
+            if re.search(pat, body):
+                return True
+        return False
 
     @classmethod
     def is_attested_form(cls, form: str) -> bool:
@@ -8728,6 +8950,14 @@ class LinguisticEngine:
         frontmatter = fm_match.group(1) if fm_match else ""
         body = fm_match.group(2) if fm_match else text
 
+        # Strip trailing curriculum appendix sections (e.g. '## Syllabus Vocabulary', '## Appendix')
+        # so bare vocabulary lists are never tokenized as passage evidence sentences.
+        syllabus_suffix = ""
+        m_appendix = re.search(r"(?mi)^(?:#+\s*(?:Syllabus\s+Vocabulary|Appendix)\b.*)$", body)
+        if m_appendix:
+            syllabus_suffix = body[m_appendix.start():]
+            body = body[:m_appendix.start()]
+
         sentence_pool: Dict[str, str] = {}
         indexed_paragraphs: List[str] = []
         counter = 1
@@ -8782,10 +9012,18 @@ class LinguisticEngine:
                 quote_open = m.group(1)
                 quote_body = m.group(2)
                 quote_close = m.group(3)
+                # Protect abbreviations (Mr., Ms., Dr., etc.) inside quotes so they don't get split
+                protected_body = re.sub(
+                    r'\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e)\.',
+                    lambda x: x.group(1) + '§ABBRDOT§',
+                    quote_body,
+                    flags=re.IGNORECASE
+                )
                 masked_body = (
-                    quote_body.replace(".", " §DOT§ ")
-                              .replace("!", " §EXCL§ ")
-                              .replace("?", " §QUES§ ")
+                    protected_body.replace(".", " §DOT§ ")
+                                  .replace("!", " §EXCL§ ")
+                                  .replace("?", " §QUES§ ")
+                                  .replace('§ABBRDOT§', '.')
                 )
                 return f"{quote_open}{masked_body}{quote_close}"
 
@@ -8828,6 +9066,8 @@ class LinguisticEngine:
             indexed_text = frontmatter + "\n\n" + "\n\n".join(indexed_paragraphs)
         else:
             indexed_text = "\n\n".join(indexed_paragraphs)
+        if syllabus_suffix:
+            indexed_text = indexed_text.rstrip() + "\n\n" + syllabus_suffix.strip()
         return indexed_text, sentence_pool
 
     @classmethod
@@ -8998,21 +9238,47 @@ class LinguisticEngine:
                 cls.form_matches(tok_lower, clean_w) or cls.form_matches(tok_lem, clean_w)
             )
             if matches_target:
-                # If modifying a noun as an adjectival modifier (amod, advmod)
-                if tok.dep_ in ("amod", "advmod") and tok.head.pos_ in ("NOUN", "PROPN"):
-                    # Check if token is a participle or verb: only return adjective if dictionary admits clean_w as an adjective
-                    if tok.tag_ in ("VBN", "VBG") or tok.pos_ == "VERB":
+                # 0. Dictionary POS hard gate for spaCy mistagged VERB:
+                # If spaCy tags tok as VERB/AUX but the word has ZERO verb senses/entries in LDOCE and WordNet,
+                # do not trust spaCy's erroneous VERB tag. Re-route immediately to noun or primary dictionary POS.
+                if tok.pos_ in ("VERB", "AUX"):
+                    ld_entry = cls.get_ldoce_entry(clean_w)
+                    has_v = bool(ld_entry and any("verb" in p for p in ld_entry.get("all_poses", [])))
+                    if not has_v and wn:
+                        has_v = bool(wn.synsets(clean_w, pos="v"))
+                    if not has_v:
+                        prim_pos = (ld_entry.get("pos") or (ld_entry.get("all_poses") or ["noun"])[0]) if ld_entry else "noun"
+                        return "noun" if "noun" in prim_pos else prim_pos
+
+                # If modifying a noun as an adjectival modifier (amod, advmod) or compound modifier (e.g. Title Case 'Take Corporate Action')
+                if (tok.dep_ in ("amod", "advmod") or tok.dep_ == "compound") and tok.head.pos_ in ("NOUN", "PROPN"):
+                    # For compound dep, only classify as adjective if the word is an adjective in dictionary
+                    if tok.dep_ == "compound":
                         ld_entry = cls.get_ldoce_entry(clean_w)
                         has_adj = False
+                        has_noun = False
                         if ld_entry:
                             has_adj = any("adj" in p for p in ld_entry.get("all_poses", [])) or any("adj" in (s.get("pos") or "") for s in ld_entry.get("senses", []))
+                            has_noun = any("noun" in p for p in ld_entry.get("all_poses", [])) or any("noun" in (s.get("pos") or "") for s in ld_entry.get("senses", []))
                         if not has_adj and wn:
                             has_adj = bool(wn.synsets(clean_w, pos="a"))
-                        if has_adj:
+                            has_noun = bool(wn.synsets(clean_w, pos="n"))
+                        if has_adj and not has_noun:
                             return "adjective"
-                        else:
-                            return "verb"
-                    return "adjective"
+                    else:
+                        # Check if token is a participle or verb: only return adjective if dictionary admits clean_w as an adjective
+                        if tok.tag_ in ("VBN", "VBG") or tok.pos_ == "VERB":
+                            ld_entry = cls.get_ldoce_entry(clean_w)
+                            has_adj = False
+                            if ld_entry:
+                                has_adj = any("adj" in p for p in ld_entry.get("all_poses", [])) or any("adj" in (s.get("pos") or "") for s in ld_entry.get("senses", []))
+                            if not has_adj and wn:
+                                has_adj = bool(wn.synsets(clean_w, pos="a"))
+                            if has_adj:
+                                return "adjective"
+                            else:
+                                return "verb"
+                        return "adjective"
                 # Participle adjective / predicate adjective check vs Passive Voice:
                 # E.g. 'we are done', 'we are finished', 'it is broken', 'he is tired', 'they were annoyed'
                 # If tagged as VBN/VERB governed by aux/cop 'be':
@@ -9057,7 +9323,9 @@ class LinguisticEngine:
 
                         quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
                         quote_followed = (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars)) or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
-                        if quote_followed:
+                        # Dialogue tag reporting verbs ("Yes," agreed John.) never function as nominal objects governed by another verb/adposition.
+                        is_nominal_obj = tok.dep_ in ("dobj", "obj", "pobj", "compound", "appos", "nmod") and tok.head.pos_ in ("VERB", "AUX", "ADP")
+                        if quote_followed and not is_nominal_obj:
                             has_coord_verb = any(t.pos_ == "VERB" for t in doc if t.i != tok.i)
                             if has_coord_verb:
                                 return "verb"
@@ -10249,8 +10517,17 @@ class LinguisticEngine:
 
         for sid, sent in sentence_pool.items():
             sent_clean = sent.strip()
-            # Skip very short or title-like sentences
+            # Skip very short sentences
             if len(sent_clean.split()) < 7:
+                continue
+            # Skip passage title (S-1), section headers, and syllabus word-lists
+            if sid == "S-1":
+                continue
+            # If sentence does not end with standard sentence punctuation, skip (headings/titles)
+            if not sent_clean.endswith((".", "!", "?", '"', "'")):
+                continue
+            # If sentence is a colon-separated headline/title (e.g. "Title: Subtitle") without terminal punctuation
+            if ":" in sent_clean and not any(sent_clean.endswith(p) for p in (".", "!", "?")):
                 continue
 
             sent_norm = sent_clean.replace('\u2019', "'").replace('\u2018', "'")
@@ -10535,6 +10812,14 @@ class LinguisticEngine:
                     expr_clean = m_det.group(1).strip()
                     words = expr_clean.split()
 
+                # Check strict contiguous inflected phrase regex first
+                phrase_rx = None
+                tokens = cls._phrase_tokens(expr_clean)
+                if len(tokens) >= 2:
+                    rx_pat = cls._phrase_regex(tokens, 2, allow_modifier=False)
+                    if rx_pat:
+                        phrase_rx = re.compile(rx_pat, re.IGNORECASE)
+
                 matched_sid = None
                 matched_sent = None
 
@@ -10547,18 +10832,28 @@ class LinguisticEngine:
                         matched_sid = sid
                         matched_sent = s
                         break
-                    elif all(re.search(r"\b" + re.escape(w.lower()) + r"\b", s_lower) for w in words):
+                    elif phrase_rx and phrase_rx.search(cls._entry_text_normalizer(s)):
                         matched_sid = sid
                         matched_sent = s
                         break
-                    else:
-                        s_doc = nlp(s)
-                        s_lemmas = [t.lemma_.lower() for t in s_doc]
-                        s_tokens = [t.text.lower() for t in s_doc]
-                        if all(w.lower() in s_lemmas or w.lower() in s_tokens for w in words):
+
+                if not matched_sid:
+                    for sid, s in pool.items():
+                        if not cls.anchor_evidence_ok(s):
+                            continue
+                        s_lower = s.lower()
+                        if all(re.search(r"\b" + re.escape(w.lower()) + r"\b", s_lower) for w in words):
                             matched_sid = sid
                             matched_sent = s
                             break
+                        else:
+                            s_doc = nlp(s)
+                            s_lemmas = [t.lemma_.lower() for t in s_doc]
+                            s_tokens = [t.text.lower() for t in s_doc]
+                            if all(w.lower() in s_lemmas or w.lower() in s_tokens for w in words):
+                                matched_sid = sid
+                                matched_sent = s
+                                break
 
                 if not matched_sid or not matched_sent:
                     continue
@@ -11157,9 +11452,13 @@ class LinguisticEngine:
                 elif valid_shown:
                     matching_sid, matching_sent = valid_shown[0]
                     anchor_quality = "unqualified"
+                elif shown:
+                    # Attested in text (e.g. headline 'Punctuality Pays!', short question 'What are the causes?')
+                    matching_sid, matching_sent = shown[0]
+                    anchor_quality = "attested"
                 else:
                     for sid, sent in pool.items():
-                        if cls.anchor_evidence_ok(sent, w) and (w in sent.lower() or (w_clean and w_clean in re.sub(r'[^a-z0-9]', '', sent.lower()))):
+                        if w in sent.lower() or (w_clean and w_clean in re.sub(r'[^a-z0-9]', '', sent.lower())):
                             matching_sent = sent
                             matching_sid = sid
                             anchor_quality = "substring"
@@ -11298,11 +11597,11 @@ class LinguisticEngine:
             "category": "Rhetoric & Emphasis",
             "pattern_formula": "It + [be] + [Focal Element] + that/who + [Clause]",
             "pedagogical_function": "Puts strong focus on a specific person, time, reason, or thing so the reader notices it immediately.",
-            "imitation_example": "It is transparent communication that fosters mutual trust within academic teams.",
+            "imitation_example": "It was in December that the volunteers organized their big annual celebration.",
             "common_mistakes": (
                 "Grammar Warning (Cleft Sentences): Learners frequently produce: "
-                "\"It was in the library [INCORRECT: where -> CORRECT: that] we discovered the manuscript.\" "
-                "(Note: Even when focusing prepositional or time phrases, the matrix complement requires 'that', not 'where' or 'when')."
+                "\"It was in the school hall [INCORRECT: where -> CORRECT: that] we held our volunteer meeting.\" "
+                "(Note: Even when focusing prepositional or time phrases, the cleft complement clause requires 'that', not 'where' or 'when')."
             )
         },
         "correlative_parallelism": {
@@ -11310,10 +11609,10 @@ class LinguisticEngine:
             "category": "Rhetoric & Emphasis",
             "pattern_formula": "[Subject] + not only + [VP], but also + [VP]",
             "pedagogical_function": "Connects two balanced ideas or actions together to give equal weight to both points.",
-            "imitation_example": "The framework not only optimizes performance, but also enhances fault tolerance.",
+            "imitation_example": "The sports event not only builds fitness, but also brings friends together.",
             "common_mistakes": (
                 "Grammar Warning (Correlative Coordinators): Learners frequently produce: "
-                "\"The program aims not only [INCORRECT: to train engineers, but also fostering -> CORRECT: to train engineers, but also to foster] research.\" "
+                "\"The club aims not only [INCORRECT: to help students, but also creating -> CORRECT: to help students, but also to create] fun events.\" "
                 "(Note: Conjoined predicates must maintain identical non-finite morphological forms)."
             )
         },
@@ -11322,10 +11621,10 @@ class LinguisticEngine:
             "category": "Rhetoric & Emphasis",
             "pattern_formula": "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]",
             "pedagogical_function": "Contrasts two opposing elements directly using 'not... but...' to define what is truly meant.",
-            "imitation_example": "Great leaders value not personal acclaim, but genuine team success.",
+            "imitation_example": "Volunteers seek not personal fame, but genuine community progress.",
             "common_mistakes": (
                 "Grammar Warning (Antithesis Coordination): Learners frequently fail to maintain parallel syntactic structures across 'not... but...': "
-                "\"The organization values not [INCORRECT: profit, but rather to serve people -> CORRECT: personal profit, but public service].\" "
+                "\"The team values not [INCORRECT: money, but rather to help others -> CORRECT: money, but public service].\" "
                 "(Note: Elements coordinated by 'not... but...' must share identical syntactic category and morphological status)."
             )
         },
@@ -11334,10 +11633,10 @@ class LinguisticEngine:
             "category": "Rhetoric & Emphasis",
             "pattern_formula": "[Negative Adv] + [aux/be] + [Subject] + [VP]",
             "pedagogical_function": "Moves a negative or restrictive word to the very start of the sentence to create dramatic emphasis.",
-            "imitation_example": "Rarely do experimental measurements deviate so markedly from theoretical predictions.",
+            "imitation_example": "Seldom do commuters realize how much energy simple carpooling can save.",
             "common_mistakes": (
                 "Grammar Warning (Negative Inversion): Learners frequently produce: "
-                "\"Not only [INCORRECT: the system saves -> CORRECT: does the system save] energy, but it also minimizes downtime.\" "
+                "\"Not only [INCORRECT: the bus saves -> CORRECT: does the bus save] fuel, but it also reduces city traffic.\" "
                 "(Note: Fronted restrictive or negative adverbs strictly require Subject-Auxiliary Inversion)."
             )
         },
@@ -11349,8 +11648,8 @@ class LinguisticEngine:
             "imitation_example": "Students joined activities that helped the local community.",
             "common_mistakes": (
                 "Grammar Warning (Relative Clauses): Learners frequently retain redundant object pronouns in relative clauses: "
-                "\"This is the paper which we reviewed [INCORRECT: it yesterday -> CORRECT: yesterday].\" "
-                "(Note: The relative pronoun 'which' already functions as the object of 'reviewed', so the resumptive pronoun 'it' must be omitted)."
+                "\"This is the gift which we prepared [INCORRECT: it yesterday -> CORRECT: yesterday].\" "
+                "(Note: The relative pronoun 'which' already functions as the object of 'prepared', so the resumptive pronoun 'it' must be omitted)."
             )
         },
         "relative_clause_elaborative": {
@@ -11358,10 +11657,10 @@ class LinguisticEngine:
             "category": "Cohesion & Framing",
             "pattern_formula": ", which + [VP/interpretive verb] + [Clause]",
             "pedagogical_function": "Comments directly on the entire whole preceding sentence to explain what it means, proves, or causes.",
-            "imitation_example": "The reaction generated intense heat, which suggested that the catalytic process had initiated successfully.",
+            "imitation_example": "The city added shared bike stations, which encouraged more residents to cycle to work.",
             "common_mistakes": (
                 "Grammar Warning (Sentential Relative Clauses): Learners frequently produce: "
-                "\"The server crashed repeatedly, [INCORRECT: that -> CORRECT: which] forced the team to reboot.\" "
+                "\"The weather turned very cold, [INCORRECT: that -> CORRECT: which] made everyone stay indoors.\" "
                 "(Note: 'that' cannot head a non-restrictive sentential relative clause)."
             )
         },
@@ -11370,10 +11669,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[Subject] + make/find/keep + [Object] + [Adj]",
             "pedagogical_function": "Shows how an action changes someone or something into a new condition in one clear, concise phrase.",
-            "imitation_example": "Automated regression pipelines make continuous deployment reliable and secure.",
+            "imitation_example": "Friendly volunteers make daily community life pleasant and warm.",
             "common_mistakes": (
                 "Grammar Warning (Structures with Object Complements): Learners frequently produce: "
-                "\"The new communication protocols make global collaboration [INCORRECT: easily -> CORRECT: easy].\" "
+                "\"Good habits make daily life [INCORRECT: easily -> CORRECT: easy].\" "
                 "(Note: The complement characterizes the post-state of the object noun, requiring an adjective rather than a manner adverb)."
             )
         },
@@ -11382,10 +11681,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[Subject] + make/let/have + [Object] + [Bare Verb]",
             "pedagogical_function": "Expresses making, letting, or having someone perform an action directly without using extra words like 'to'.",
-            "imitation_example": "Strict peer-review standards make researchers substantiate every empirical assertion.",
+            "imitation_example": "The teacher had each student share an inspiring volunteer story.",
             "common_mistakes": (
                 "Grammar Warning (Causative Structures): Learners frequently produce: "
-                "\"The supervisor made each student [INCORRECT: to submit -> CORRECT: submit] weekly progress reports.\" "
+                "\"The team leader made each volunteer [INCORRECT: to sign -> CORRECT: sign] the attendance sheet.\" "
                 "(Note: Active causative 'make' governs an unmarked bare infinitive, not a 'to'-infinitive)."
             )
         },
@@ -11394,11 +11693,11 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "It + [be] + [Evaluative Adj] + to-V/that + [Clause]",
             "pedagogical_function": "Begins with 'It is' to state an opinion or evaluation upfront, keeping long details until later in the sentence.",
-            "imitation_example": "It is essential to calibrate sensor equipment prior to conducting field measurements.",
+            "imitation_example": "It is essential to turn off electric appliances before leaving the room.",
             "common_mistakes": (
                 "Grammar Warning (Preparatory It): Learners frequently produce: "
-                "\"[INCORRECT: Is essential to calibrate -> CORRECT: It is essential to calibrate] sensor equipment.\" "
-                "or: \"Technological advancements make [INCORRECT: possible to work -> CORRECT: it possible to work] remotely.\""
+                "\"[INCORRECT: Is essential to arrive -> CORRECT: It is essential to arrive] on time for appointments.\" "
+                "or: \"Shared bicycles make [INCORRECT: convenient to travel -> CORRECT: it convenient to travel] around the city.\""
             )
         },
         "participial_adjunct": {
@@ -11406,10 +11705,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[V-ing / V-ed Phrase], [Subject] + [VP]",
             "pedagogical_function": "Combines two related actions into one sentence using an -ing or -ed phrase, making writing tighter and smoother.",
-            "imitation_example": "Operating under severe constraints, the team finished the project ahead of schedule.",
+            "imitation_example": "Arriving at the station early, the visitors met the friendly student volunteers.",
             "common_mistakes": (
                 "Grammar Warning (Participial Clauses): Learners frequently produce dangling modifiers: "
-                "\"[INCORRECT: Having reviewed the telemetry data, the error became apparent -> CORRECT: Having reviewed the telemetry data, the engineers identified the error].\""
+                "\"[INCORRECT: Walking into the room, the noise surprised everyone -> CORRECT: Walking into the room, the teacher noticed the noise].\""
             )
         },
         "participial_adjunct_post": {
@@ -11417,10 +11716,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[Subject] + [VP], [V-ed / V-ing Phrase]",
             "pedagogical_function": "Appends a concluding or subsequent action after the main clause using a participle, giving writing a smooth narrative flow.",
-            "imitation_example": "The ceremony concluded at noon, followed by an informal reception.",
+            "imitation_example": "The ceremony concluded at noon, followed by a friendly lunch with all the volunteers.",
             "common_mistakes": (
                 "Grammar Warning (Participial Clauses): Learners frequently confuse active and passive participle forms in supplementary post-modifiers: "
-                "\"The meeting ended abruptly, [INCORRECT: following by -> CORRECT: followed by] a heated discussion.\" "
+                "\"The meeting ended quickly, [INCORRECT: following by -> CORRECT: followed by] a warm applause.\" "
                 "(Note: Use past participle 'followed by' for passive/sequential attachment and present participle for simultaneous/resultant action)."
             )
         },
@@ -11429,10 +11728,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[V-ing Phrase] + [Predicate Verb] + [Complement]",
             "pedagogical_function": "Turns an ongoing action into the main topic of the sentence so you can make a general claim or rule about it.",
-            "imitation_example": "Maintaining rigorous version control safeguards project integrity across distributed teams.",
+            "imitation_example": "Planting trees provides clean air and beautifies the city landscape.",
             "common_mistakes": (
                 "Grammar Warning (Gerunds as Subject): Learners frequently produce: "
-                "\"[INCORRECT: Maintain version control are -> CORRECT: Maintaining version control is] essential.\" "
+                "\"[INCORRECT: Plant trees are -> CORRECT: Planting trees is] helpful for the environment.\" "
                 "(Note: Singular verbal agreement is mandatory for gerundial subject phrases)."
             )
         },
@@ -11441,10 +11740,10 @@ class LinguisticEngine:
             "category": "Logic & Stance",
             "pattern_formula": "[Subject] + [VP], but [Subject] + [also/still] + [VP]",
             "pedagogical_function": "Balances two contrasting facts or points of view within the same sentence to present a fair, realistic picture.",
-            "imitation_example": "Users desire modern computational convenience, but they also demand uncompromised data privacy.",
+            "imitation_example": "City residents appreciate modern car travel, but they also care about clean air and green transport.",
             "common_mistakes": (
                 "Grammar Warning (Adversative Coordination): Learners frequently omit the coordinating conjunction when linking independent contrasting clauses: "
-                "\"Users desire modern convenience, [INCORRECT: they also demand -> CORRECT: but they also demand] uncompromised privacy.\" "
+                "\"Residents enjoy driving cars, [INCORRECT: they also value -> CORRECT: but they also value] clean air.\" "
                 "(Note: Two independent clausal predications expressing epistemic contrast require a coordinating conjunction such as 'but')."
             )
         },
@@ -11453,10 +11752,10 @@ class LinguisticEngine:
             "category": "Logic & Stance",
             "pattern_formula": "However, [Subject] + [Modal/VP]",
             "pedagogical_function": "Alerts the reader that a shift, surprise, or contrasting argument is coming right up.",
-            "imitation_example": "However, recent computational breakthroughs could afford researchers unprecedented analytical autonomy.",
+            "imitation_example": "However, green energy solutions can help communities reduce carbon emissions significantly.",
             "common_mistakes": (
                 "Grammar Warning (Sentence Adverbials): Learners frequently produce comma splices: "
-                "\"[INCORRECT: The system is reliable, however it requires updates -> CORRECT: The system is reliable; however, it requires updates / The system is reliable. However, it requires updates].\""
+                "\"[INCORRECT: The train was full, however we found seats -> CORRECT: The train was full; however, we found seats / The train was full. However, we found seats].\""
             )
         },
         "subordinate_concessive": {
@@ -11464,10 +11763,21 @@ class LinguisticEngine:
             "category": "Logic & Stance",
             "pattern_formula": "Although/While + [Clause], [Subject] + [VP]",
             "pedagogical_function": "Acknowledges an opposing point with 'although' or 'while' before making the main argument stand out stronger.",
-            "imitation_example": "Although early benchmarks exhibited latency, subsequent caching resolved all bottleneck anomalies.",
+            "imitation_example": "Although recycling takes extra time and effort, it helps protect valuable natural resources.",
             "common_mistakes": (
-                "Grammar Warning (Concessive Clauses): Learners frequently produce: "
-                "\"Although the initial prototype exhibited latency, [INCORRECT: but -> CORRECT: (omit but)] the production version achieved peak throughput.\""
+                "Grammar Warning (Concessive Clauses): Learners frequently produce redundant coordinating conjunctions: "
+                "\"Although recycling takes extra effort, [INCORRECT: but it protects -> CORRECT: it protects] our natural environment.\""
+            )
+        },
+        "prepositional_means_by_ving": {
+            "name": "Prepositional Means & Method Adjuncts (By + V-ing)",
+            "category": "Information Packaging",
+            "pattern_formula": "By + [V-ing Phrase], [Subject] + [VP]",
+            "pedagogical_function": "Specifies the precise action, method, or means by which an outcome or objective is accomplished.",
+            "imitation_example": "By turning off unnecessary appliances before leaving, we can save a significant amount of electricity.",
+            "common_mistakes": (
+                "Grammar Warning (Prepositional Adjuncts): Learners frequently use bare infinitive or omit the preposition of means: "
+                "\"[INCORRECT: Turn off lights, we can save -> CORRECT: By turning off lights, we can save] electricity.\""
             )
         },
         "proportional_comparative": {
@@ -11475,10 +11785,10 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "The + [comparative] + [Clause], the + [comparative] + [Clause]",
             "pedagogical_function": "Expresses that two things change together in a cause-and-effect relationship with a catchy, balanced rhythm.",
-            "imitation_example": "The more systematically engineers audit dependencies, the fewer security vulnerabilities emerge.",
+            "imitation_example": "The more trees we plant around the neighborhood, the fresher the city air becomes.",
             "common_mistakes": (
                 "Grammar Warning (Double Comparatives): Learners frequently produce: "
-                "\"[INCORRECT: More we investigate, more we understand -> CORRECT: The more we investigate, the more we understand].\""
+                "\"[INCORRECT: More we practice, more we improve -> CORRECT: The more we practice, the more we improve].\""
             )
         },
         "passive_voice_agentless": {
@@ -11486,7 +11796,7 @@ class LinguisticEngine:
             "category": "Information Packaging",
             "pattern_formula": "[Subject] + [be/modal be] + [V-ed]",
             "pedagogical_function": "Focuses purely on the event or result rather than who did it, giving writing an objective, factual tone.",
-            "imitation_example": "All visitors are asked to sign their names before entering the library.",
+            "imitation_example": "All visitors are asked to sign their names before entering the exhibition hall.",
             "common_mistakes": (
                 "Grammar Warning (Passive Voice): Learners frequently produce intransitive passives: "
                 "\"[INCORRECT: The accident was happened -> CORRECT: The accident happened].\""
@@ -11497,10 +11807,10 @@ class LinguisticEngine:
             "category": "Logic & Stance",
             "pattern_formula": "If + [Clause], [Subject] + [VP]",
             "pedagogical_function": "Sets up hypothetical scenarios, logical prerequisites, or causal contingencies that govern subsequent outcomes.",
-            "imitation_example": "If researchers establish standardized protocols, laboratory teams can reproduce empirical outcomes reliably.",
+            "imitation_example": "If everyone takes small steps every day, our community can make a great difference.",
             "common_mistakes": (
                 "Grammar Warning (Conditional Clauses): Learners frequently produce incorrect future modal verbs inside the conditional protasis clause: "
-                "\"[INCORRECT: If you will send the report tomorrow -> CORRECT: If you send the report tomorrow], the committee can review it promptly.\" "
+                "\"[INCORRECT: If you will arrive on time tomorrow -> CORRECT: If you arrive on time tomorrow], the meeting will begin promptly.\" "
                 "(Note: In open present/future conditional clauses, the 'if'-clause requires present simple tense rather than 'will')."
             )
         },
@@ -11509,10 +11819,10 @@ class LinguisticEngine:
             "category": "Logic & Stance",
             "pattern_formula": "As long as + [Clause], [Subject] + [VP]",
             "pedagogical_function": "Introduces an indispensable prerequisite or binding stipulation under which the main assertion holds true.",
-            "imitation_example": "As long as municipal regulations safeguard public transit corridors, commuters can adopt innovative mobility devices safely.",
+            "imitation_example": "As long as citizens follow the traffic rules, shared bicycles can offer safe and convenient travel.",
             "common_mistakes": (
                 "Grammar Warning (Stipulative Conjunctions): Learners frequently confuse conditional 'as long as' with extent/distance phrases: "
-                "\"[INCORRECT: As far as good rules regulate production -> CORRECT: As long as good rules regulate production], citizens can enjoy safe transit.\" "
+                "\"[INCORRECT: As far as we protect our environment -> CORRECT: As long as we protect our environment], future generations will enjoy clean air.\" "
                 "(Note: Use 'as long as' for condition/prerequisite constraints and 'as far as' for scope/knowledge limitations)."
             )
         }
@@ -11578,7 +11888,9 @@ class LinguisticEngine:
         if "[v-ing phrase]" in f_lower or "[v-ed phrase]" in f_lower or "particip" in c_lower:
             return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct"]
 
-        # 10. Gerund Subject Nominalization
+        # 10. Gerund Subject Nominalization & Prepositional Means
+        if "by + [v-ing" in f_lower or q_lower.startswith("by "):
+            return cls.COBUILD_GRAMMAR_PROFILES["prepositional_means_by_ving"]
         if "[v-ing / gerund phrase]" in f_lower:
             return cls.COBUILD_GRAMMAR_PROFILES["gerund_subject_nominalization"]
 

@@ -399,4 +399,60 @@ Any pull request or modification touching dictionary lookup must satisfy:
   - `If the pub does not start to pay, we will have to sell it.` $\rightarrow$ 锁定 Sense 7 (*if a shop or business pays, it makes a profit*)
   - `We expect him to arrive tomorrow.` $\rightarrow$ 锁定 Sense 0 (*to think that something will happen because it seems likely or has been planned*)
 
+### 7.13 Global Generalized Collocation Stopword Gating & High-Degree Graph Pruning (全局超泛化词动态门禁与图节点剪枝)
+- **Status**: Implemented (已落地)
+- **Location**: `librarian/linguistics.py` in `_get_pedlex_stop_cues`, `_get_pedlex_high_freq_colloc_words`, `get_sense_cue_scores`, & `generate_vocab_distractors`
+- **Root Cause & Mathematical Nature (统计学本质与图论出度爆炸)**:
+  - 现象：`pedlex.db` 的搭配表与倒排线索表中，诸如 `people`, `time`, `way`, `make`, `take`, `day`, `thing`, `place`, `good` 等高频词跨越了 500~1,000+ 个词条。
+  - 数学本质：在语义网络与知识图谱中，此类词节点具有超大的出度（Super-Degree Nodes）。其逆文档频率（IDF）接近 0，信息增益（Information Gain）接近 0。若将其作为特征线索或搭配锚点，会发生严重的“虚假共现引力”，将不同义项、甚至毫无关联的词条强行拉扯在一起（如为 `pay` 强行拉 `people` 或 `money` 造成语义漂移）。
+- **Remedy & Architectural Invariants**:
+  1. **词典级全局动态高频剪枝门禁 (Dynamic IDF Threshold Gate)**:
+     - 引擎在启动与加载反向索引时，对词条出现跨度超过特定阈值（> 500 词条）的泛化搭配词自动建立动态隔离表（`_get_pedlex_high_freq_colloc_words` 与 `_get_pedlex_stop_cues`）。
+  2. **区分核心从属介词与弱泛化实词 (Syntactic Role Discrimination)**:
+     - 严格区分固有支配介词（如 `rely on` 中的 `on`、`interested in` 中的 `in`）与泛义名词/轻动词。
+     - 固有介词由句法树直接保障，而超频泛义实词从线索倒排索引打分与命题锚点中被物理剔除，从数学源头消灭伪搭配与无区分度填空。
+
+### 7.14 Sense-First Native Example Twin-Binding Protocol (Sense 优先与原生配套例句孪生绑定铁律)
+- **Status**: Implemented (已落地)
+- **Location**: `librarian/linguistics.py` in `get_ldoce_definition_and_example`, `_lock_sense`, & downstream assessment generation
+- **Core Principle & Axiom (第一性原则)**:
+  - **义项是唯一的真理源头与第一公民**：提取与命题阶段必须使用完全统一的单一套 Sense-First 核心逻辑，严禁在未锁定义项之前去全局漫游检索搭配或例句。
+  - **Pattern 与 Example 的孪生约束 (Atomic Binding)**：
+    - 选定 Sense 后，该 Sense 原生自带的 `definition`、`patterns`、`examples` 和 `collocations` 构成不可分割的原子集合。
+    - 若选择或考核了该 Sense 的某种句式框架（如 `pay (somebody) in dollars`），其供给 LLM 的语料示范例句必须严格出自该 Pattern 原生配套的例句（如 *Can we pay in dollars?*）或包含该句式特征的该 Sense 原生例句。
+    - **严禁左右互搏**：绝对禁止考某种句式框架，而展示的例句却来自另一个完全不相干的句式，确保从 Frame、Anchor 到 Distractor 的闭环自洽。
+
+---
+
+## 8. Deterministic Grammar Pattern Extraction Architecture (确定性句法模式匹配与 COBUILD 画像标准)
+
+> **Document Status**: Standard Operational Architecture  
+> **Target Components**: `librarian/grammar_patterns.py`, `LinguisticEngine.extract_deterministic_grammar`, `COBUILD_GRAMMAR_PROFILES`
+
+### 8.1 Zero-Token Syntax Candidate Generation & Title Filtering
+1. **Sentence Pool Heading & Title Gate**:
+   - 课文标题（如 S-1 冒号隔断标题）由于缺少主谓结构或句末标点，严禁进入句法模式匹配池。
+   - `mine_grammar_skeletons` 强制过滤 `sid == "S-1"`、无标点标题及冒号隔断标题，杜绝将标题误提取为非谓语分词伴随状语（彻底解决 U5 #1 标题污染缺陷）。
+
+### 8.2 Strict Syntactic Boundary Constraints
+1. **Cleft Sentences vs. Extraposition (强调句 vs. 形式主语句)**:
+   - 结构特征区分：强调句必须具备关系代词/从属连词引出从句（`that/who/whom/which/where/when`）。
+   - 形式主语疑问/感叹句（如 *“Is it not a joy to have friends come from afar?”*）因引导词为不定式 `to-inf`，被强调句匹配树严格拒绝，避免假强调句提取（彻底解决 U6 #2 误判）。
+2. **Antithesis Conjunction Order Validation (对照并列顺序硬约束)**:
+   - 对照并列结构 `not A, but B` 强制校验标记顺序：`not_tok.i < but_tok.i`。
+   - 颠倒并列句（如 *“...love..., but not too much control”*）被物理排除，避免误匹配为 `[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]`（彻底解决 U1 #4 缺陷）。
+3. **Complex Transitive Complement POS Adaptation (复合宾语补足语自适应)**:
+   - 复合宾语判定根据补足语词性动态调整：当补足语为名词/名词短语（如 *“make the planet a better place”*）时，公式自适应为 `[Subject] + make + [Object] + [Noun/NP]`；为形容词时给出 `+[adj]`（彻底解决 U5 #4 缺陷）。
+4. **Participial Adjunct Direction & Aux Isolation (分词伴随状语方向自适应与助动词隔离)**:
+   - 过滤带有 `aux` 或 `auxpass` 的限定被动从句（排除 *was presented*），精确捕获独立非谓语分词（*saying*），并根据分词与主句的位置关系自适应公式（如句末分词输出 `[Subject] + [VP], [V-ing Phrase]`，彻底解决 U6 #1 缺陷）。
+5. **Conditional Scope Tightening (条件状语从句范围收敛)**:
+   - 条件从句树匹配严格限制于 `as long as` 引导的短语，全面剔除普通时间/方式裸 `as` 从句（彻底解决 U2 #3 缺陷）。
+
+### 8.3 Pedagogical COBUILD Profile Standards (易懂仿写例句与误区重构)
+1. **Register Alignment with High School Curriculum (例句语域梯次校准)**:
+   - 坚决杜绝在基础语法画像中使用高阶晦涩的大学或工程级例句（如遥测数据 *telemetry data*、基准异常 *benchmark anomalies* 等）。
+   - 全部 19 个 COBUILD profile 的仿写例句重构为高中生熟悉的志愿服务、环境保护、校园生活、旅行与科技场景，确保学生“一看就懂，一学就会仿写”。
+2. **Clean Pitfall Explanations**:
+   - 彻底清除 common mistakes 中的草稿痕迹（如 `(omit but)` 注记），确保易错点解析严谨规范。
+
 

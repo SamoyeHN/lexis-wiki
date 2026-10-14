@@ -164,19 +164,15 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
             ],
             [
                 {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
-                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
-                {"LEFT_ID": "sub_verb", "REL_OP": ">", "RIGHT_ID": "cond_as", "RIGHT_ATTRS": {
-                    "LOWER": "as",
-                    "DEP": "mark"
-                }},
-            ],
-            [
-                {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
                 {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "cond_adv", "RIGHT_ATTRS": {
                     "LOWER": "long",
                     "DEP": "advmod"
                 }},
                 {"LEFT_ID": "cond_adv", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
+                {"LEFT_ID": "sub_verb", "REL_OP": ">", "RIGHT_ID": "sub_as", "RIGHT_ATTRS": {
+                    "LOWER": "as",
+                    "DEP": "mark"
+                }},
             ]
         ]
     },
@@ -443,16 +439,47 @@ class GrammarPatternEngine:
                 else:
                     continue
 
+            # Semantic/topological validation for antithesis coordination (not... but...):
+            # 'not' must strictly precede 'but' (not.i < but.i) to prevent '..., but not ...' from misfiring
+            if string_id == "antithesis_not_but":
+                tokens = [doc[i] for i in token_indices]
+                not_tok = next((t for t in tokens if t.lower_ == "not" and t.dep_ == "neg"), None)
+                but_tok = next((t for t in tokens if t.lower_ == "but" and t.pos_ == "CCONJ"), None)
+                if not_tok and but_tok:
+                    if not (not_tok.i < but_tok.i):
+                        continue
+                else:
+                    continue
+
+            # Semantic/topological validation for it-cleft sentences:
+            # The subordinate cleft clause must be introduced by a relative/subordinate marker (that, who, whom, etc.)
+            # and cannot simply be an infinitive extraposition ("Is it not a joy to have...")
+            if string_id == "cleft_it_be_relcl":
+                tokens = [doc[i] for i in token_indices]
+                copula = next((t for t in tokens if t.lemma_ == "be"), None)
+                cleft_clause = next((t for t in tokens if t != copula and t.dep_ in ("relcl", "ccomp", "advcl")), None)
+                if cleft_clause:
+                    has_cleft_marker = any(
+                        c.lower_ in ("that", "who", "whom", "which", "where", "when")
+                        for c in cleft_clause.children
+                    )
+                    if not has_cleft_marker:
+                        continue
+                else:
+                    continue
+
             # Semantic validation for nonfinite participial adjunct:
             # Must NOT be introduced by interrogative/subordinating adverbs/marks like 'why', 'how', 'when', 'if', 'because'
+            # Must NOT have finite auxiliary verbs (e.g. 'was presented' -> finite passive, not nonfinite participle)
             # Must NOT be inside quotes as a gerund phrase, and must function as genuine non-finite modifier.
             if string_id == "nonfinite_participial_adjunct":
                 tokens = [doc[i] for i in token_indices]
                 part_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 if part_v:
                     has_subordinator = any(child.dep_ in ("mark", "advmod") and child.lemma_.lower() in ("why", "how", "when", "where", "if", "because", "although", "while") for child in part_v.children)
-                    # If part_v has a mark or adverbial subordinator, it is an adverbial/wh clause, not a bare participial adjunct
-                    if has_subordinator:
+                    has_aux = any(child.dep_ in ("aux", "auxpass") for child in part_v.children)
+                    # If part_v has a mark or adverbial subordinator, or finite auxiliary, it is not a bare nonfinite participial adjunct
+                    if has_subordinator or has_aux:
                         continue
                     # Also check if it's introduced by a 'why/how' attached to its head
                     if part_v.head and any(c.lemma_.lower() in ("why", "how", "that") and c.i < part_v.i for c in part_v.head.children):
@@ -515,7 +542,9 @@ class GrammarPatternEngine:
             elif pattern_id == "complex_transitive_adj_complement":
                 caus = next((t for t in tokens if t.pos_ in ("VERB", "AUX")), None)
                 v_lemma = caus.lemma_.lower() if caus else "make"
-                return f"[Subject] + {v_lemma} + [Object] + [Adj]"
+                comp = next((t for t in tokens if t != caus and t.dep_ in ("oprd", "ccomp", "acomp")), None)
+                comp_slot = "[Noun/NP]" if comp and comp.pos_ in ("NOUN", "PROPN") else "[Adj]"
+                return f"[Subject] + {v_lemma} + [Object] + {comp_slot}"
             elif pattern_id == "non_restrictive_relative_clause":
                 rel_pron = next((t for t in tokens if t.lemma_.lower() in ("which", "who", "whom", "whose", "that")), None)
                 pron_str = rel_pron.text.lower() if rel_pron else "which/who"

@@ -2515,10 +2515,26 @@ class WikiProcessor:
             shipped_atoms: Set[str] = set()
             for e_row in (det_expressions_data.expressions if det_expressions_data else []):
                 shipped_atoms |= self.expression_constituent_atoms(e_row.word)
-            rescued = [
+            rescued_raw = [
                 w for (w, _parent) in f12_suppressed_atoms
                 if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
             ]
+            rescued = []
+            for w in rescued_raw:
+                clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                # Scheme A Invariant: Compound words must not be broken down into isolated words
+                # that do not exist independently in the text.
+                if sentence_pool and not any(
+                    LinguisticEngine.text_contains_form(s, clean_w, standalone=True)
+                    for s in sentence_pool.values()
+                ):
+                    logger.info(
+                        f"🚫 [F12 Recovery Gate] Rejecting '{w}' from vocabulary: does not exist as "
+                        f"an independent word in source text (only as part of a compound/phrase)."
+                    )
+                    continue
+                rescued.append(w)
+
             if rescued:
                 logger.info(
                     f"♻️ [F12 Recovery] Re-admitting {rescued} to vocabulary: the expressions "

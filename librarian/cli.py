@@ -35,6 +35,7 @@ def main():
     # Compile command
     compile_parser = subparsers.add_parser("compile", help="Process a raw file and generate wiki nodes")
     compile_parser.add_argument("filename", help="Path to a raw source file (e.g. d:\\book 3\\unit 1.md) or name of an existing unit under wiki/")
+    compile_parser.add_argument("--categories", "-c", help="Comma-separated list of categories to compile (e.g., vocabulary,grammar,summary,mindmap)")
 
     # Quiz command
     quiz_parser = subparsers.add_parser("quiz", help="Generate an interactive HTML handout (vocabulary, reading, translation, or listening quiz)")
@@ -215,8 +216,9 @@ def main():
             print(message_factory)
 
     elif args.command == "compile":
-        print(f"Compiling {args.filename} via modular pipeline...")
-        status, saved_files = processor.run_pipeline(args.filename)
+        cats = [c.strip() for c in args.categories.split(",")] if args.categories else None
+        print(f"Compiling {args.filename} via modular pipeline (categories: {cats or 'all'})...")
+        status, saved_files = processor.run_pipeline(args.filename, categories=cats)
         
         if "Error" in status and not saved_files:
             print(status)
