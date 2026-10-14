@@ -8853,17 +8853,15 @@ class LinguisticEngine:
             return None
         senses = entry.get("senses") or []
         locked = cls._lock_sense(entry, definition=definition, quote=quote, target_pos=pos)
-        ordered: List[Dict[str, Any]] = []
         if locked is not None and 0 <= locked < len(senses):
-            ordered.append(senses[locked])
-        ordered.extend(s for i, s in enumerate(senses) if i != locked)
-        for sense in ordered:
-            for ex in sense.get("examples") or []:
+            chosen_sense = senses[locked]
+            for ex in chosen_sense.get("examples") or []:
                 if ex and len(ex.split()) >= 3:
                     return ex
-        for ex in (entry.get("corpus_examples") or []) + (entry.get("other_dict_examples") or []):
-            if ex and len(ex.split()) >= 3:
-                return ex
+            # If the locked sense has patterns with examples or collocations
+            for pb in chosen_sense.get("pattern_bundles", []):
+                if isinstance(pb, dict) and pb.get("example") and len(pb["example"].split()) >= 3:
+                    return pb["example"]
         return None
 
     @classmethod
@@ -11540,10 +11538,39 @@ class LinguisticEngine:
 
         try:
             from librarian.llm import llm
-            resp = llm.chat([{"role": "user", "content": prompt}], model_override=model)
-            raw = (resp or "").strip().upper()
+            resp = llm.chat(
+                [{"role": "user", "content": prompt}],
+                model_override=model,
+                json_format=False,
+                temperature=0.0
+            )
+            raw = (resp or "").strip()
+
+            # 1. If wrapped in JSON like {"answer": "A"} or {"choice": "A"}
+            if raw.startswith("{") and raw.endswith("}"):
+                try:
+                    import json
+                    d = json.loads(raw)
+                    for k in ("answer", "choice", "selected", "letter"):
+                        val = str(d.get(k, "")).strip().upper()
+                        if val in letters:
+                            return letters.index(val)
+                    # If JSON has only one key that is one of the valid letters: {"A": "..."}
+                    matching_keys = [k.strip().upper() for k in d.keys() if k.strip().upper() in letters]
+                    if len(matching_keys) == 1:
+                        return letters.index(matching_keys[0])
+                except Exception:
+                    pass
+
+            # 2. Plain text / single token matching:
+            # Look for leading letter or explicit standalone letter pattern (e.g. "A", "A.", "Option A")
+            raw_upper = raw.upper()
+            m = re.search(r'\b(?:OPTION\s+)?([A-D])\b', raw_upper)
+            if m and m.group(1) in letters:
+                return letters.index(m.group(1))
+
             for l in letters:
-                if re.search(r'\b' + l + r'\b', raw) or raw.startswith(l):
+                if raw_upper.startswith(l):
                     return letters.index(l)
         except Exception:
             pass
