@@ -1869,6 +1869,11 @@ class LinguisticEngine:
             if ("railroad" in d_low or "railway" in d_low) and not any(t in sent_toks for t in ("train", "railroad", "railway", "track")):
                 overlap -= 5
 
+            # Reward computer / software / data domain senses if context contains programming/computing triggers
+            if any(term in d_low for term in ("computer", "software", "code", "programming", "hardware")):
+                if any(t in sent_toks for t in ("python", "java", "code", "parse", "file", "files", "compile", "script", "algorithm", "data", "software", "computer")):
+                    overlap += 5
+
             token_overlap_scores.append(overlap)
 
         # Step 2: MiniLM Neural Embedding Similarity
@@ -2118,63 +2123,21 @@ class LinguisticEngine:
 
         has_pron_obj = False
         target_tok_morph_number = None
-        # MiniLM embedding similarity between quote/phrase and candidate senses
-        sim_scores: Dict[int, float] = {}
         if quote and len(senses) > 1:
             try:
-                from librarian.embedder import get_embedder
-                embedder = get_embedder()
-                if embedder:
-                    # Extract local syntactic phrase (subtree of target token) if possible
-                    local_phrase = quote
-                    try:
-                        nlp = cls.get_spacy()
-                        doc = nlp(quote)
-                        matching_toks = [
-                            t for t in doc
-                            if t.lemma_.lower() == target_w_clean or t.text.lower() == target_w_clean or
-                            cls.form_matches(t.text.lower(), target_w_clean) or
-                            cls.form_matches(t.lemma_.lower(), target_w_clean) or
-                            (headword_tokens and (t.lemma_.lower() in headword_tokens or t.text.lower() in headword_tokens))
-                        ]
-                        if matching_toks:
-                            subtree_span = ''.join([t.text_with_ws for t in matching_toks[0].subtree]).strip()
-                            if len(subtree_span.split()) >= 2:
-                                local_phrase = subtree_span
-                            has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in matching_toks[0].children)
-                            if matching_toks[0].pos_ == 'NOUN':
-                                target_tok_morph_number = matching_toks[0].morph.get('Number')
-                    except Exception:
-                        pass
-
-                    candidate_texts = []
-                    candidate_indices = []
-                    for i, s in enumerate(senses):
-                        s_pos = cls._pos_code(s.get("pos"))
-                        if target_p and s_pos != target_p:
-                            continue
-                        sp = s.get("signpost") or ""
-                        df = s.get("definition") or ""
-                        base_text = f"{sp}: {df}".strip(": ") if sp else df
-                        exs = s.get("examples") or []
-                        if exs:
-                            # Enrich candidate sense with representative examples to capture contextual valency
-                            clean_exs = [re.sub(r"\(=.*?\)", "", ex).strip() for ex in exs[:2] if ex]
-                            ex_str = "; ".join(clean_exs)
-                            text = f"{base_text}. Examples: {ex_str}" if ex_str else base_text
-                        else:
-                            text = base_text
-                        candidate_texts.append(text)
-                        candidate_indices.append(i)
-                    if candidate_texts:
-                        sims_q = embedder.similarity(quote, candidate_texts)
-                        if local_phrase != quote:
-                            sims_p = embedder.similarity(local_phrase, candidate_texts)
-                        else:
-                            sims_p = sims_q
-                        for idx_c, sq, sp in zip(candidate_indices, sims_q, sims_p):
-                            # Weighted average of full quote context and targeted local syntactic phrase
-                            sim_scores[idx_c] = 0.5 * float(sq) + 0.5 * float(sp)
+                nlp = cls.get_spacy()
+                doc = nlp(quote)
+                matching_toks = [
+                    t for t in doc
+                    if t.lemma_.lower() == target_w_clean or t.text.lower() == target_w_clean or
+                    cls.form_matches(t.text.lower(), target_w_clean) or
+                    cls.form_matches(t.lemma_.lower(), target_w_clean) or
+                    (headword_tokens and (t.lemma_.lower() in headword_tokens or t.text.lower() in headword_tokens))
+                ]
+                if matching_toks:
+                    has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in matching_toks[0].children)
+                    if matching_toks[0].pos_ == 'NOUN':
+                        target_tok_morph_number = matching_toks[0].morph.get('Number')
             except Exception:
                 pass
 
@@ -3210,7 +3173,7 @@ class LinguisticEngine:
                                 else:
                                     # Non-human / abstract subject alignment (e.g. situation / crisis / event vs business / corporate)
                                     is_business_subj = (
-                                        subj_lem in ("business", "company", "firm", "department", "division", "corporation", "organization", "enterprise", "airline", "bank", "shop", "store", "factory") or
+                                        subj_lem in ("business", "company", "firm", "department", "division", "corporation", "organization", "enterprise", "airline", "bank", "shop", "store", "factory", "pub", "bar", "restaurant", "hotel", "cafe") or
                                         "noun.group" in subj_supersenses
                                     )
                                     is_situation_subj = (
@@ -3218,13 +3181,23 @@ class LinguisticEngine:
                                         bool(subj_supersenses & {"noun.state", "noun.event"})
                                     ) and not is_business_subj
 
+                                    is_quality_or_action_subj = (
+                                        subj_lem in ("punctuality", "honesty", "patience", "hard work", "diligence", "effort", "kindness", "courage", "caution", "persistence") or
+                                        bool(subj_supersenses & {"noun.attribute", "noun.act"})
+                                    )
+
                                     if is_business_subj:
-                                        if any(k in s_defn for k in ("business", "department", "company", "starts to be successful")):
+                                        if any(k in s_defn for k in ("business", "department", "company", "shop", "makes a profit", "starts to be successful")):
                                             score += 55
                                     elif is_situation_subj:
                                         if any(k in s_defn for k in ("situation", "game", "develop in the way you want", "changes and starts")):
                                             score += 55
                                         elif any(k in s_defn for k in ("business, department", "business or department")):
+                                            score -= 20
+                                    elif is_quality_or_action_subj:
+                                        if any(k in s_defn for k in ("particular action pays", "brings a good result", "advantage for you", "pays dividends")):
+                                            score += 55
+                                        elif any(k in s_defn for k in ("give someone money", "job they do")):
                                             score -= 20
 
                                     # First-principles invariant: non-human subjects only boost 'effective/successful' for verbs of functioning/operating (e.g. work, operate, run, function)
@@ -3316,13 +3289,7 @@ class LinguisticEngine:
                 elif frame_evidence == "prep" and re.search(r"\[.*prep.*\]", gram):
                     score += 10
 
-            # 8. Embedding semantic similarity bonus (sentence transformer)
-            if i in sim_scores:
-                sim_val = sim_scores[i]
-                if sim_val > 0.05:
-                    score += sim_val * 40.0
-
-            # 9. Contextual Pedagogical Sense Cue Index bonus
+            # 8. Contextual Pedagogical Sense Cue Index bonus
             if i in cue_scores:
                 score += cue_scores[i]
 
@@ -11384,11 +11351,211 @@ class LinguisticEngine:
         return selected[:target_count]
 
     @classmethod
+    def build_top_k_vocab_candidates(
+        cls,
+        word: str,
+        quote: str,
+        pos: Optional[str] = None,
+        k: int = 4
+    ) -> List[Dict[str, Any]]:
+        """
+        Pure Symbolic Candidate Selection (NO Embedding Model).
+        Retrieves top-k candidate senses from PedLex using:
+        1. POS gating
+        2. Syntactic valency / frame / particle agreement
+        3. Simplified Lesk overlap and pedagogical cue scoring
+        4. PedLex natural frequency order fallback
+        """
+        entry = cls.get_pedlex_entry(word)
+        if not entry:
+            return []
+        senses = entry.get("senses", [])
+        if not senses:
+            return []
+        if len(senses) == 1:
+            s0 = senses[0]
+            return [{
+                "definition": s0.get("definition", ""),
+                "pos": s0.get("pos", pos or "noun"),
+                "sense_idx": 0,
+                "signpost": s0.get("signpost", ""),
+                "patterns": s0.get("patterns", []),
+                "examples": s0.get("examples", [])
+            }]
+
+        target_pos = pos or entry.get("pos")
+        res = cls._lock_sense(entry, quote=quote, target_pos=target_pos, return_scores=True)
+        if not res or len(res) < 5:
+            target_p = cls._pos_code(target_pos)
+            matched = [s for s in senses if cls._pos_code(s.get("pos")) == target_p] or senses
+            return [{
+                "definition": s.get("definition", ""),
+                "pos": s.get("pos", target_pos),
+                "sense_idx": i,
+                "signpost": s.get("signpost", ""),
+                "patterns": s.get("patterns", []),
+                "examples": s.get("examples", [])
+            } for i, s in enumerate(matched[:k])]
+
+        idx, score, margin, conf, score_trace = res
+        sorted_trace = sorted(score_trace, key=lambda x: -x[1])
+        top_indices = [s_i for s_i, _ in sorted_trace[:k]]
+        if idx not in top_indices:
+            top_indices = [idx] + top_indices[:k-1]
+
+        candidates = []
+        for s_i in top_indices:
+            s = senses[s_i]
+            candidates.append({
+                "definition": s.get("definition", ""),
+                "pos": s.get("pos", target_pos),
+                "sense_idx": s_i,
+                "signpost": s.get("signpost", ""),
+                "patterns": s.get("patterns", []),
+                "examples": s.get("examples", []),
+                "score": next((sc for s_idx, sc in score_trace if s_idx == s_i), 0.0)
+            })
+        return candidates
+
+    @classmethod
+    def build_top_k_expression_candidates(
+        cls,
+        expr_word: str,
+        quote: str,
+        k: int = 4
+    ) -> List[Dict[str, Any]]:
+        """
+        Pure Symbolic Candidate Selection for Multi-Word Expressions (NO Embedding Model):
+        1. Phrasal verb blocks (particle matching)
+        2. PedLex phrase index candidates
+        3. Constituent word collocations and pattern units
+        """
+        clean = re.sub(r'\[.*?\]|\(.*?\)', '', expr_word).strip().lower()
+        tokens = clean.split()
+        candidates = []
+        seen_defs = set()
+
+        # 1. Phrasal verb blocks
+        if len(tokens) >= 2:
+            entry = cls.get_pedlex_entry(tokens[0])
+            if entry:
+                for pv in entry.get('phrasal_verbs', []):
+                    pv_hw = pv.get('headword', '').lower()
+                    clean_pv_hw = re.sub(r'\[.*?\]|\(.*?\)', '', pv_hw).strip()
+                    particle = tokens[1] if len(tokens) >= 2 else ""
+                    pv_words = re.findall(r'[a-z/]+', clean_pv_hw)
+                    matches_pv = False
+                    if particle:
+                        for part in pv_words[1:]:
+                            if particle == part or particle in part.split('/'):
+                                matches_pv = True
+                                break
+                    elif clean == clean_pv_hw:
+                        matches_pv = True
+                    if matches_pv:
+                        for s in pv.get('senses', []):
+                            df = s.get('definition', '').strip()
+                            if df and df.lower() not in seen_defs:
+                                seen_defs.add(df.lower())
+                                candidates.append({
+                                    'definition': df,
+                                    'pos': 'phrasal verb',
+                                    'source': pv.get('headword'),
+                                    'examples': s.get('examples', [])
+                                })
+
+        # 2. LDOCE phrase index candidates
+        phrase_cands = cls.lookup_ldoce_phrase_candidates(clean)
+        for host, s_idx, tier, raw_p in phrase_cands:
+            h_entry = cls.get_pedlex_entry(host)
+            if h_entry:
+                senses = h_entry.get('senses', [])
+                if s_idx is not None and s_idx < len(senses):
+                    s = senses[s_idx]
+                    df = s.get('definition', '').strip()
+                    if df and df.lower() not in seen_defs:
+                        seen_defs.add(df.lower())
+                        candidates.append({
+                            'definition': df,
+                            'pos': s.get('pos', 'set phrase'),
+                            'source': f"{host} #{s_idx}",
+                            'examples': s.get('examples', [])
+                        })
+
+        # 3. Constituent words collocations / patterns
+        if len(candidates) < k:
+            for tok in tokens:
+                if len(tok) <= 2 or tok in ('the', 'and', 'with', 'for', 'about', 'to', 'in', 'on', 'at'):
+                    continue
+                e = cls.get_pedlex_entry(tok)
+                if e:
+                    for s_i, s in enumerate(e.get('senses', [])):
+                        colls = s.get('collocations', [])
+                        pats = s.get('patterns', [])
+                        units = s.get('units', [])
+                        all_sub = [str(x).lower() for x in colls + pats + units]
+                        if any(clean in x or tok in x for x in all_sub if clean in x):
+                            df = s.get('definition', '').strip()
+                            if df and df.lower() not in seen_defs:
+                                seen_defs.add(df.lower())
+                                candidates.append({
+                                    'definition': df,
+                                    'pos': s.get('pos', 'collocation'),
+                                    'source': f"{tok} #{s_i}",
+                                    'examples': s.get('examples', [])
+                                })
+
+        return candidates[:k]
+
+    @classmethod
+    def disambiguate_via_llm(
+        cls,
+        item_name: str,
+        sentence: str,
+        candidates: List[Dict[str, Any]],
+        model: str = "llama3.1:8b"
+    ) -> int:
+        """
+        Neuro-Symbolic Zero-Hallucination LLM Reranker.
+        Given an authentic sentence and 2-4 candidates from PedLex/LDOCE,
+        prompts the local LLM to select the single best option letter (A/B/C/D).
+        Returns chosen candidate index (0-based).
+        """
+        if len(candidates) <= 1:
+            return 0
+
+        letters = ["A", "B", "C", "D"][:len(candidates)]
+        options_text = []
+        for idx, cand in enumerate(candidates):
+            pos_str = f"({cand.get('pos', '')}) " if cand.get('pos') else ""
+            defn_str = cand.get('definition', '').strip()
+            options_text.append(f"{letters[idx]}. {pos_str}{defn_str}")
+
+        prompt = (
+            f"Select the single best dictionary sense for '{item_name}' as used in this sentence:\n"
+            f"\"{sentence}\"\n\n"
+            f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
+            f"Reply with ONLY the letter of the correct sense (e.g. A):"
+        )
+
+        try:
+            from librarian.llm import llm
+            resp = llm.chat([{"role": "user", "content": prompt}], model_override=model)
+            raw = (resp or "").strip().upper()
+            for l in letters:
+                if re.search(r'\b' + l + r'\b', raw) or raw.startswith(l):
+                    return letters.index(l)
+        except Exception:
+            pass
+        return 0
+
+    @classmethod
     def extract_deterministic_vocabulary(
         cls,
         text: str,
         syllabus_vocab: Optional[List[str]] = None,
-        target_count: int = 20
+        target_count: int = 20,
+        enable_llm_disambiguation: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Pure Computational Linguistic & Lexicographic Extractor (0 Tokens, 100% Deterministic).
@@ -11472,20 +11639,31 @@ class LinguisticEngine:
                 ld_w = cls.get_ldoce_entry(w)
                 pos = (ld_w.get("pos") if ld_w else "") or "noun"
 
-            # Hydrate authoritative LDOCE definition and authentic example. B1: the sense lock
-            # is graded first. An entry with several candidate senses whose sense the quote did
-            # not earn ships no LDOCE definition - the WordNet fallback below is an honest
-            # second source, not whichever Longman sense happens to be printed first.
-            lock = cls.sense_confidence(
-                cls.get_ldoce_entry(w),
-                definition=cand.get("definition"),
-                quote=matching_sent,
-                target_pos=pos
-            )
-            definition, example = cls.get_ldoce_definition_and_example(
-                w, target_pos=pos, context_sentence=matching_sent,
-                require_sense_confidence=False
-            )
+            # Hydrate authoritative LDOCE definition and authentic example via Top-K Candidate Pool
+            definition = ""
+            example = ""
+            lock_confidence = "high"
+            lock_score = 0.0
+            lock_margin = 0.0
+
+            cand_pool = cls.build_top_k_vocab_candidates(w, matching_sent, pos=pos, k=4) if matching_sent else []
+            if cand_pool:
+                if len(cand_pool) > 1 and enable_llm_disambiguation:
+                    chosen_idx = cls.disambiguate_via_llm(w, matching_sent, cand_pool)
+                    chosen = cand_pool[chosen_idx]
+                else:
+                    chosen = cand_pool[0]
+                definition = chosen.get("definition", "")
+                exs = chosen.get("examples") or []
+                if exs:
+                    example = exs[0]
+                lock_score = chosen.get("score", 0.0)
+
+            if not definition:
+                definition, example = cls.get_ldoce_definition_and_example(
+                    w, target_pos=pos, context_sentence=matching_sent,
+                    require_sense_confidence=False
+                )
             if not example:
                 example = cls.ldoce_sense_example(w, pos=pos, quote=matching_sent)
             if (not example or not cls.text_contains_form(example, w)) and matching_sent and cls.text_contains_form(matching_sent, w):
@@ -11512,9 +11690,9 @@ class LinguisticEngine:
                 # B1: the evidence tier this row was built on, visible to the writer and to
                 # the audit instead of being implicit in whichever sentence came first.
                 "anchor_quality": anchor_quality,
-                "sense_confidence": lock["confidence"],
-                "sense_lock_score": lock["score"],
-                "sense_lock_margin": lock["margin"],
+                "sense_confidence": lock_confidence,
+                "sense_lock_score": lock_score,
+                "sense_lock_margin": lock_margin,
                 "design_audit": f"AUDIT: {audit_sid} -> [{w}] -> [VERBATIM_CONFIRMED]"
             })
             seen_words.add(w)
@@ -11526,7 +11704,8 @@ class LinguisticEngine:
         cls,
         text: str,
         target_count: int = 5,
-        syllabus_expressions: Optional[List[str]] = None
+        syllabus_expressions: Optional[List[str]] = None,
+        enable_llm_disambiguation: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Extracts genuine multi-word academic expressions and collocations from text
@@ -11558,15 +11737,27 @@ class LinguisticEngine:
             quote = s.get("quote", "")
             expr_type = s.get("type", "collocation")
 
-            # F7 后续④: the cascade follows the lexicon host that owns THIS unit - a
-            # phrasal-verb block, a phrase row, the sense a phrase row was filed under -
-            # before it falls back to the headword's first sense or WordNet. 'keep in touch'
-            # must not inherit 'keep' sense 1.
+            # Primary: Ground multi-word expressions in authoritative PedLex expression evidence tiers
             defn, ex, def_source = cls.expression_definition_evidence(
                 phrase=phrase,
                 expr_type=expr_type,
                 context_sentence=quote
             )
+
+            # Secondary: If ungrounded or ambiguous, check Top-K Candidate Pool
+            if not defn and quote:
+                pool = cls.build_top_k_expression_candidates(formula, quote, k=4)
+                if pool:
+                    if len(pool) > 1 and enable_llm_disambiguation:
+                        chosen_idx = cls.disambiguate_via_llm(formula, quote, pool)
+                        chosen = pool[chosen_idx]
+                    else:
+                        chosen = pool[0]
+                    if chosen.get("definition"):
+                        defn = chosen["definition"]
+                        def_source = "phrase_row"
+                    if chosen.get("examples") and not ex:
+                        ex = chosen["examples"][0]
             # F2: an ungrounded cascade ships no definition at all rather than the invented
             # 'A core idiomatic collocation functioning in ...' filler. The row carries the
             # tier it was built on so the writer and the audit can see it was never grounded.

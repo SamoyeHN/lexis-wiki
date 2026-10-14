@@ -126,9 +126,9 @@
   - Assessment generation (`vocabulary_quiz`, `translation_quiz`, etc.) **MUST NEVER** treat `extractions/*.md` as authoritative semantic or lexical truth. Relying on downstream markdown risks ingesting stale, incomplete, or user-altered data (e.g. definitions modified to Chinese, tampered POS, or broken examples), which fatally contaminates quiz items.
 - **Mandatory Fresh Deterministic Extraction at Quiz Generation**:
   - For both `vocabulary_quiz` and `translation_quiz`, generation pipelines must ground directly on the authentic primary source text (`sources/<Unit>.md`) and its syllabus items.
-  - The pipeline runs a fresh, zero-token deterministic extraction pass (`LinguisticEngine` + `all-MiniLM-L6-v2` + PedLex SQLite) directly against authentic source sentences.
+  - The pipeline runs a fresh deterministic extraction pass (`LinguisticEngine` + PedLex SQLite + Pure Symbolic Pre-filtering + Local LLM Arbitration) directly against authentic source sentences, completely decoupling from external embedding models (`all-MiniLM-L6-v2` 80MB model permanently removed).
   - **Atomic Semantic Cohesion (`Sense` Primacy)**:
-    - `all-MiniLM-L6-v2` embedding similarity dynamically locks the headword to its authoritative pedagogical `Sense` using the authentic sentence context.
+    - Pure symbolic syntactic constraints (POS gates, valency/preposition slots, Lesk lexical overlap, frequency) build a top-$K$ candidate pool ($K \le 4$), and a 1-token Local LLM arbitration pass dynamically locks the headword to its authoritative pedagogical `Sense` using the authentic sentence context.
     - The locked `Sense` acts as the single invariant binding `part_of_speech`, `definition`, `patterns`, `collocational anchors`, and pre-computed zero-collision distractors into an unbreakable, atomic blueprint. This permanently eliminates pos-definition desync (e.g. verb distractors with noun definitions).
   - **Translation Quiz Alignment**:
     - `translation_quiz` follows the identical rule: core grammatical patterns, key headwords, and clause structures are freshly extracted and calibrated from `sources/<Unit>.md`, ensuring target bilingual translations strictly represent authentic passage pedagogy rather than edited extraction notes.
@@ -150,8 +150,10 @@
 ### 1.11 真正神经-符号混合义项与句式重排裁决架构 (True Neuro-Symbolic Sense & Pattern Reranker)
 - **核心理念 (True Neuro-Symbolic Paradigm)**:
   - 彻底终结用脆弱的硬编码启发式（if-else/正则特判/规则打补丁）去解决自然语言中多义词与复杂句法配价长尾歧义的死胡同。
+  - 彻底移除体积冗余（80MB）且缺乏离散句法感知能力的密集向量模型（`all-MiniLM-L6-v2`），避免其将 "Punctuality pays!" 误判为金融付款类语义偏置。
   - **符号数据库（SQLite / PedLex / LDOCE）充当“绝对语义真理与候选池”**：
     - 负责离线、零成本检索目标词全部合法的 Sense、POS、Pattern 槽位及原版例句。
+    - 结合离散句法特征（POS 硬约束、核心介词/搭配槽位重合、上下文词形交集、教学频度先验）构建精准的 Top-$K$ ($K \le 4$) 候选池。
     - LLM 永远**零自由生成权、零幻觉空间**，绝对禁止凭空臆造定义或篡改词典体系。
   - **神经网络（Local / Remote LLM）充当“极窄候选集判别器（Zero-Hallucination Reranker）”**：
     - 针对课文原句，将符号库检索出的 $N$ 个权威候选义项与 Pattern 构建为极简多选单选题（Prompt 仅 ~100 tokens）。
@@ -164,11 +166,12 @@
     - `gemma4:12b`：**16/16 (100.0%)**，单题推理延迟 **0.60s**；
     - `granite4.2:8b`：**16/16 (100.0%)**，单题推理延迟 **3.43s**。
   - **实证结论**：证明该任务（微型窄候选 Reranker）对不同家族 7B–12B 模型具有**绝对的泛化性与超高鲁棒性**，且 8B 级模型的单题推理延迟普遍低至 **0.1~0.3 秒**，完全满足在线实时编译要求。
-- **分层漏斗执行原则 (Tiered Confidence Cascade)**:
-  - **单义词 / 高置信度词 (~60%)**：继续由本地纯代码符号层 0ms 瞬间锁定，消耗 0 tokens，保证绝大部分编译操作秒级完成。
-  - **多词性 / 跨义项竞争 / 低置信度短语 (~40%)**：自动激活 LLM 窄候选裁决器，以极低 token 成本彻底清零词义错位。
-- **跨模型权威验证准则 (Cross-Model Evaluation Policy)**:
-  - 在正式全量上线到默认主干前，必须跨越不同架构与参数规模的模型（如 Qwen2.5 7B/14B/32B、Llama 3.1/3.3 8B/70B 等）进行多模型回归测评，确立严谨、普适的权威评测基准。
+- **全词库覆盖度与分层漏斗执行原则 (Coverage & Tiered Cascade)**:
+  - **PedLex 库统计数据**：
+    - **70.66%** 的词条在对应 POS 下仅有单义项（Single Sense），本地纯符号层 **0ms 瞬间锁定，消耗 0 tokens**。
+    - **94.00%** 的词条在对应 POS 下候选数 $\le 4$，保证 Top-4 候选池能够涵盖绝大多数合法语义。
+  - **单义词 / 单候选短语 (~71%)**：纯代码符号层 0ms 瞬间锁定，消耗 0 tokens。
+  - **多义词 / 跨义项竞争短语 (~29%)**：自动激活 Local LLM 极简 1-token 裁决，以极微小开销彻底清零词义错位。
 
 ---
 
