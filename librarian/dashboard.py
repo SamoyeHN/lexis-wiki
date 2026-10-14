@@ -328,11 +328,16 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
 
-        # Security check to stay inside wiki dir or project root
+        # Security check to stay strictly inside allowed directories (wiki or logs)
         try:
             resolved_file = file_path.resolve()
-            resolved_root = Path(config.project_root).resolve()
-            if not str(resolved_file).startswith(str(resolved_root)):
+            wiki_root = (Path(config.project_root) / "wiki").resolve()
+            logs_root = (Path(config.project_root) / "logs").resolve()
+            if rel_path.startswith("logs/"):
+                allowed = resolved_file.is_relative_to(logs_root)
+            else:
+                allowed = resolved_file.is_relative_to(wiki_root)
+            if not allowed:
                 self.send_error(403, "Access Denied")
                 return
         except Exception:
@@ -1059,13 +1064,13 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/select-active-media":
                 data = json.loads(body)
-                unit_name = data.get("unit")
-                media_name = data.get("media")
+                unit_name = os.path.basename(str(data.get("unit") or ""))
+                media_name = os.path.basename(str(data.get("media") or ""))
 
                 if not unit_name or not media_name:
                     response_data = {"success": False, "error": "unit and media are required"}
                 else:
-                    wiki_dir = Path(config.project_root) / "wiki"
+                    wiki_dir = (Path(config.project_root) / "wiki").resolve()
                     unit_dir = wiki_dir / unit_name
                     
                     if wiki_dir.exists():
@@ -1074,8 +1079,10 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 unit_dir = child
                                 break
                     
-                    media_file_path = unit_dir / "sources" / "media" / media_name
-                    if media_file_path.exists() and media_file_path.is_file():
+                    media_file_path = (unit_dir / "sources" / "media" / media_name).resolve()
+                    if not media_file_path.is_relative_to(wiki_dir):
+                        response_data = {"success": False, "error": "Access Denied"}
+                    elif media_file_path.exists() and media_file_path.is_file():
                         try:
                             media_file_path.touch()
                             response_data = {"success": True, "message": f"Successfully activated media {media_name} via touch."}
@@ -1248,7 +1255,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     try:
                         resolved_wiki = wiki_dir.resolve()
                         resolved_target_dir = target_dir.resolve()
-                        if not str(resolved_target_dir).startswith(str(resolved_wiki)):
+                        if not resolved_target_dir.is_relative_to(resolved_wiki):
                             response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                             self.wfile.write(json.dumps(response_data).encode("utf-8"))
                             return
@@ -1326,7 +1333,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     resolved_wiki = wiki_dir.resolve()
                     resolved_target_dir = target_dir.resolve()
-                    if not str(resolved_target_dir).startswith(str(resolved_wiki)):
+                    if not resolved_target_dir.is_relative_to(resolved_wiki):
                         response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
@@ -1359,7 +1366,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # Path traversal check on final target file
                 try:
                     resolved_target_file = target_file.resolve()
-                    if not str(resolved_target_file).startswith(str(resolved_wiki)):
+                    if not resolved_target_file.is_relative_to(resolved_wiki):
                         response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
@@ -1402,7 +1409,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     # Path traversal check on placeholder file
                     try:
                         resolved_placeholder = placeholder_file.resolve()
-                        if not str(resolved_placeholder).startswith(str(resolved_wiki)):
+                        if not resolved_placeholder.is_relative_to(resolved_wiki):
                             response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                             self.wfile.write(json.dumps(response_data).encode("utf-8"))
                             return
@@ -1486,7 +1493,7 @@ category: "video_transcript"
         file_path = (static_root / rel_path).resolve()
 
         # Security check: ensure file stays inside librarian/static
-        if not str(file_path).startswith(str(static_root)):
+        if not file_path.is_relative_to(static_root):
             self.send_error(403, "Access Denied")
             return
 

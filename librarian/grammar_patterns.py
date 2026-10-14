@@ -497,6 +497,36 @@ class GrammarPatternEngine:
                     if has_subordinator or has_aux:
                         continue
 
+            if string_id == "correlative_not_only_but_also":
+                tokens = [doc[i] for i in token_indices]
+                neg_tok = next((t for t in tokens if t.lemma_.lower() == "not"), None)
+                cc_tok = next((t for t in tokens if t.lemma_.lower() == "but"), None)
+                if not neg_tok or not cc_tok or neg_tok.i >= cc_tok.i:
+                    continue
+                next_after_neg = doc[neg_tok.i + 1].lower_ if neg_tok.i + 1 < len(doc) else ""
+                if next_after_neg not in ("only", "merely", "just", "simply"):
+                    continue
+
+            if string_id == "evaluative_dummy_it_subject":
+                tokens = [doc[i] for i in token_indices]
+                cop_tok = next((t for t in tokens if t.lemma_ == "be"), None)
+                eval_tok = next((t for t in tokens if t != cop_tok and t.dep_ in ("acomp", "attr", "oprd") and t.pos_ in ("ADJ", "NOUN")), None)
+                ext_tok = next((t for t in tokens if t != cop_tok and t != eval_tok and t.dep_ in ("ccomp", "csubj", "xcomp", "advcl")), None)
+                if not eval_tok or not ext_tok or ext_tok.i <= eval_tok.i:
+                    continue
+                if ext_tok.tag_ in ("VBG", "VBN"):
+                    continue
+                has_to_or_comp = any(
+                    (c.lower_ == "to" and c.dep_ in ("aux", "mark"))
+                    or c.lower_ in ("that", "whether", "if", "how", "why", "what", "when", "where", "who")
+                    for c in ext_tok.children
+                ) or any(
+                    t.lower_ in ("that", "to", "whether", "if")
+                    for t in doc[eval_tok.i + 1 : ext_tok.i + 1]
+                )
+                if not has_to_or_comp:
+                    continue
+
             # Resolve dynamic slots based on actual tokens in the sentence
             resolved_formula = self._resolve_formula(string_id, base_formula, doc, token_indices)
             seen_ids.add(string_id)
@@ -524,17 +554,34 @@ class GrammarPatternEngine:
                 return f"{neg_adv.text.capitalize()} + [aux/be] + [Subject] + [VP]"
             elif pattern_id == "concession_clausal":
                 marker = next((t for t in tokens if t.dep_ in ("mark", "advmod")), tokens[0])
-                return f"{marker.text.capitalize()} + [Clause], [Subject] + [VP]"
+                next_tok = doc[marker.i + 1].lower_ if marker.i + 1 < len(doc) else ""
+                prev_tok = doc[marker.i - 1].lower_ if marker.i > 0 else ""
+                if marker.lower_ == "even" and next_tok in ("if", "though"):
+                    m_str = f"Even {next_tok}"
+                elif prev_tok == "even" and marker.lower_ in ("if", "though"):
+                    m_str = f"Even {marker.lower_}"
+                else:
+                    m_str = marker.text.capitalize()
+                return f"{m_str} + [Clause], [Subject] + [VP]"
             elif pattern_id == "conditional_clausal":
                 doc_text_low = doc.text.lower()
                 if "as long as" in doc_text_low:
                     return "As long as + [Clause], [Subject] + [VP]"
                 marker = next((t for t in tokens if t.dep_ == "mark"), tokens[0])
+                prev_tok = doc[marker.i - 1].lower_ if marker.i > 0 else ""
+                if prev_tok == "even" and marker.lower_ == "if":
+                    return "Even if + [Clause], [Subject] + [VP]"
                 return f"{marker.text.capitalize()} + [Clause], [Subject] + [VP]"
             elif pattern_id == "propositional_encapsulation_which":
                 interp = next((t for t in tokens if t.pos_ in ("VERB", "AUX")), None)
                 v_lemma = interp.lemma_.lower() if interp else "suggest"
-                return f", which + {v_lemma}s + that + [Proposition Clause]"
+                if v_lemma.endswith("y") and len(v_lemma) > 1 and v_lemma[-2] not in "aeiou":
+                    v_3sg = f"{v_lemma[:-1]}ies"
+                elif v_lemma.endswith(("s", "sh", "ch", "x", "z", "o")):
+                    v_3sg = f"{v_lemma}es"
+                else:
+                    v_3sg = f"{v_lemma}s"
+                return f", which + {v_3sg} + that + [Proposition Clause]"
             elif pattern_id == "shell_noun_complement":
                 shell = next((t for t in tokens if t.pos_ == "NOUN"), None)
                 n_lemma = shell.lemma_.lower() if shell else "fact"

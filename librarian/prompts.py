@@ -37,6 +37,8 @@ class Prompts:
         "expert_audit_vocabulary": QuizQualityAuditReport,
         "expert_audit_reading": QuizQualityAuditReport,
         "expert_audit_translation": QuizQualityAuditReport,
+        "expert_audit_video": QuizQualityAuditReport,
+        "expert_audit_listening": QuizQualityAuditReport,
     }
 
     @classmethod
@@ -80,6 +82,8 @@ class Prompts:
         "expert_audit_translation",
         "expert_audit_vocabulary",
         "expert_audit_reading",
+        "expert_audit_video",
+        "expert_audit_listening",
     }
 
     @classmethod

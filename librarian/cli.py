@@ -1,12 +1,14 @@
 import argparse
 import sys
+from . import __version__
 from .config import config
 from .linter import linter
 from .processor import processor
 from .llm import llm
 
 def main():
-    parser = argparse.ArgumentParser(description="Teacher Wiki CLI Manager")
+    parser = argparse.ArgumentParser(description="Lexis Wiki CLI Manager")
+    parser.add_argument("--version", "-v", action="version", version=f"lexis v{__version__}")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # Init command
@@ -352,11 +354,10 @@ def main():
             sys.stdout = _Tee(sys.stdout, _log_file)
             sys.stderr = _Tee(sys.stderr, _log_file)
 
-            # Ensure python logging library outputs with timestamp, level, and logger name
+            # Ensure python logging library outputs with level and logger name (_Tee prefixes the timestamp)
             import logging
             logging.basicConfig(
-                format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
+                format="[%(levelname)s] [%(name)s] %(message)s",
                 level=logging.INFO,
                 force=True
             )
@@ -572,7 +573,7 @@ def main():
     elif args.command == "export-exe":
         try:
             from .exporter import export_standalone_exe
-            export_standalone_exe(args.html_path, video_path=args.video, output_path=args.output)
+            export_standalone_exe(args.html_path, video_path=args.media_path, output_path=args.output)
         except Exception as e:
             print(f"Error compiling standalone EXE: {e}")
 
@@ -592,20 +593,32 @@ def main():
             print(f"Error: Unit '{args.old_name}' not found under '{config.wiki_content_path}'.")
             sys.exit(1)
             
+        old_unit_name = old_unit_dir.name
         new_unit_dir = config.wiki_content_path / args.new_name
         if new_unit_dir.exists():
             print(f"Error: Target directory '{new_unit_dir}' already exists.")
             sys.exit(1)
             
-        print(f"Renaming unit from '{old_unit_dir.name}' to '{args.new_name}'...")
+        print(f"Renaming unit from '{old_unit_name}' to '{args.new_name}'...")
         try:
             # Atomically move directory
             old_unit_dir.rename(new_unit_dir)
             
-            # Recursively rename files
+            # Recursively rename files and update internal references
             for item in sorted(new_unit_dir.rglob("*"), key=lambda x: len(x.parts), reverse=True):
-                if item.is_file() and item.name.startswith(old_unit_dir.name):
-                    new_filename = item.name.replace(old_unit_dir.name, args.new_name, 1)
+                if item.is_file():
+                    target_item = item
+                    if item.name.startswith(old_unit_name):
+                        new_filename = item.name.replace(old_unit_name, args.new_name, 1)
+                        target_item = item.parent / new_filename
+                        item.rename(target_item)
+                    if target_item.suffix.lower() in (".md", ".html", ".json"):
+                        try:
+                            text = target_item.read_text(encoding="utf-8")
+                            if old_unit_name in text:
+                                target_item.write_text(text.replace(old_unit_name, args.new_name), encoding="utf-8")
+                        except Exception:
+                            pass
             print("Successfully renamed unit and internal references.")
         except Exception as e:
             print(f"Error renaming unit: {e}")

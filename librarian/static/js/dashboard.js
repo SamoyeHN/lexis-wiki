@@ -598,6 +598,10 @@
                 let lines = bodyContent.split(/\r?\n/);
                 let processedLines = lines.map(line => {
                     let trimmed = line.trim();
+                    let leadingSpaces = (line.match(/^(\s*)/) || ['', ''])[1].replace(/\t/g, '    ').length;
+                    let indentRem = leadingSpaces > 0 ? Math.min(leadingSpaces * 0.45, 6) : 0;
+                    let indentStyle = indentRem > 0 ? `padding-left: ${indentRem.toFixed(2)}rem;` : '';
+
                     if (trimmed.startsWith('# ')) {
                         return `<h1 class="h4 fw-bold border-bottom pb-2 mb-3 mt-2">${trimmed.substring(2)}</h1>`;
                     } else if (trimmed.startsWith('## ')) {
@@ -605,11 +609,16 @@
                     } else if (trimmed.startsWith('### ')) {
                         return `<h3 class="h6 fw-bold text-success mt-2 mb-2">${trimmed.substring(4)}</h3>`;
                     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-                        return `<div class="d-flex align-items-start gap-1.5 mb-1 ps-2"><span class="text-info fw-bold lh-1 me-1">- </span><div class="small">${trimmed.substring(2)}</div></div>`;
-                    } else if (trimmed === '') {
+                        let bulletPadding = indentRem > 0 ? `style="padding-left: ${(0.5 + indentRem).toFixed(2)}rem;"` : 'class="ps-2"';
+                        return `<div class="d-flex align-items-start gap-1.5 mb-1" ${bulletPadding}><span class="text-info fw-bold lh-1 me-1">- </span><div class="small">${trimmed.substring(2)}</div></div>`;
+                    } else if (trimmed === '' || trimmed === '&nbsp;') {
                         return '';
+                    } else if (trimmed.startsWith('✗')) {
+                        return `<div class="mb-1 small" style="line-height: 1.55; ${indentStyle}"><span class="text-danger fw-bold me-1">✗</span><span class="text-on-surface-variant">${trimmed.substring(1).trim()}</span></div>`;
+                    } else if (trimmed.startsWith('✓')) {
+                        return `<div class="mb-1 small" style="line-height: 1.55; ${indentStyle}"><span class="text-success fw-bold me-1">✓</span><span class="text-on-surface-variant">${trimmed.substring(1).trim()}</span></div>`;
                     } else {
-                        return `<p class="mb-2 text-on-surface-variant small" style="line-height: 1.55;">${line}</p>`;
+                        return `<p class="mb-2 text-on-surface-variant small" style="line-height: 1.55; ${indentStyle}">${trimmed}</p>`;
                     }
                 });
                 let html = processedLines.join('\n');

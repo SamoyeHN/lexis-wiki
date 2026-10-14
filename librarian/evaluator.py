@@ -38,7 +38,8 @@ ALLOWED_GRAMMAR_SLOTS = frozenset({
     "main clause", "dependent clause", "modal", "modal/vp", "copula", "past participle",
     "present participle", "infinitive", "gerund", "adjective phrase", "adverb phrase",
     "prepositional phrase", "quotation", "wh-word", "wh-clause", "head noun",
-    "verb-ing", "verb-ed", "prepp/np", "adj/np", "comparative", "proposition clause", "also"
+    "verb-ing", "verb-ed", "v-ing phrase", "v-ed phrase", "prepp/np", "adj/np", "np/adj",
+    "comparative", "proposition clause", "also"
 })
 
 # Standard COBUILD bare POS tokens for unbracketed pattern formulas
@@ -662,6 +663,8 @@ def _detect_task_type(task: str, parsed: Any) -> str:
     # Turn 1 prose drafting is an intermediate natural language stage, not a final JSON output
     if "turn1_prose" in t or "prose_draft" in t:
         return "intermediate_prose"
+    if "wsd_arbitration" in t or "chat_text_mode" in t:
+        return "wsd_arbitration"
     if "expert_audit" in t or "quality_audit" in t:
         return "expert_audit"
     if isinstance(parsed, dict):
@@ -2665,7 +2668,7 @@ class LogEvaluator:
             if not parsed:
                 return None
             evaluation = cls.evaluate_log(parsed)
-            if evaluation.get("task_type") == "intermediate_prose":
+            if evaluation.get("task_type") in ("intermediate_prose", "wsd_arbitration"):
                 return None
             return evaluation
 

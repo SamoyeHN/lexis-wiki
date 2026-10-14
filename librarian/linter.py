@@ -145,7 +145,7 @@ class WikiLinter:
                 if f.is_file() and f.name.endswith('.html'):
                     name = f.name
                     core_name = name
-                    for suffix in ["_vocabulary_quiz.html", "_reading_quiz.html", "_translation_quiz.html", "_listening_quiz.html"]:
+                    for suffix in ["_vocabulary_quiz.html", "_reading_quiz.html", "_translation_quiz.html", "_listening_quiz.html", "_video_quiz.html"]:
                         if name.endswith(suffix):
                             core_name = name[:-len(suffix)]
                             break

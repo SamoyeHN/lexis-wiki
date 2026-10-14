@@ -26,6 +26,13 @@ class RangeHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args, **kwargs):
         pass # Silence verbose terminal logging
 
+    def translate_path(self, path):
+        if path.startswith('/api/media/'):
+            filename = path.split('/api/media/', 1)[1].split('?')[0].split('#')[0]
+            filename = os.path.basename(filename)
+            path = f'/raw/media/{filename}'
+        return super().translate_path(path)
+
     def send_head(self):
         path = self.translate_path(self.path)
         if os.path.isdir(path):

@@ -64,12 +64,13 @@ class WikiProcessor:
 
         # 2. Matches bracketed or parenthesized letters: (A), (B), [A], [B]
         def replace_bracketed(m):
-            open_b = m.group(1)
-            let = m.group(2).lower()
-            close_b = m.group(3)
+            full_match = m.group(0)
+            open_b = full_match[0]
+            let = full_match[1].lower()
+            close_b = full_match[2]
             if let in let_to_num and let_to_num[let] in old_to_new:
                 return f"{open_b}{num_to_let[old_to_new[let_to_num[let]]]}{close_b}"
-            return m.group(0)
+            return full_match
 
         res = re.sub(
             r'\b(Option|Choice)\s+([A-Da-d\d]|One|Two|Three|Four|First|Second|Third|Fourth)\b',
@@ -77,7 +78,7 @@ class WikiProcessor:
             explanation,
             flags=re.IGNORECASE
         )
-        res = re.sub(r'(\(|\b\[)([A-Da-d])(\]|\))', replace_bracketed, res)
+        res = re.sub(r'(\([A-D]\)|\[[A-D]\])', replace_bracketed, res)
         return res
 
     @staticmethod
@@ -113,8 +114,15 @@ class WikiProcessor:
                 if not chunk:
                     continue
 
+                # Normalize curly apostrophes and ellipsis before splitting/cleaning
+                chunk = chunk.replace('\u2019', "'").replace('\u2018', "'").replace('…', '...')
+
+                # Normalize slash-separated word alternatives (e.g. 'get / feel / be lost' -> 'get/feel/be lost')
+                # so middle segments ('/ feel /') are never mistaken for IPA transcriptions
+                chunk = re.sub(r"([A-Za-z'’\-])\s*/\s*(?=[A-Za-z'’\-])", r"\1/", chunk)
+
                 # Remove IPA pronunciations like /'bɜːɡləri/ or [ˈfæsɪneɪtɪŋ]
-                chunk = re.sub(r'\/[^\/]+\/|\[[^\]]+\]', ' ', chunk)
+                chunk = re.sub(r'(?<!\S)\/[^\/]+\/(?!\S)|\[[^\]]+\]', ' ', chunk)
 
                 # Split out Chinese translations or English definitions following colons, dashes, tabs, or spaces
                 chunk = re.split(r'[\u4e00-\u9fa5]|(?<!\w)[—–\-:]+(?!\w)|\t', chunk)[0].strip()
@@ -125,9 +133,9 @@ class WikiProcessor:
                 # Normalize whitespace
                 chunk = re.sub(r'\s+', ' ', chunk).strip()
 
-                # Filter out numbers and punctuation
+                # Filter out numbers and punctuation (preserving internal '...' for slot ellipsis)
                 if chunk and re.search(r'[A-Za-z]', chunk):
-                    cleaned_hw = re.sub(r'[^\w\s\-\'\[\]\(\)\/]', '', chunk).strip()
+                    cleaned_hw = re.sub(r'[^\w\s\-\'\[\]\(\)\/\.]', '', chunk).strip('. ').strip()
                     if cleaned_hw and len(cleaned_hw) >= 2:
                         headwords.append(cleaned_hw)
 
@@ -249,7 +257,12 @@ class WikiProcessor:
         which atoms were promised a home they never got.
         """
         atoms: Set[str] = set()
-        for st in re.findall(r"[a-zA-Z]+", (expression or "").lower()):
+        for st in re.findall(r"[a-zA-Z]+(?:-[a-zA-Z]+)*", (expression or "").lower()):
+            if "-" in st:
+                # A hyphenated compound ('self-balance') inside an expression ('self-balance vehicle')
+                # only suppresses the exact compound ('self-balance'), not its unhyphenated root ('balance').
+                atoms.add(st)
+                continue
             atoms.add(st)
             if st == "granted":
                 atoms.add("grant")
@@ -403,17 +416,21 @@ class WikiProcessor:
 
     # Normalization mapping from legacy/verbose grammar slots to standard COBUILD tokens
     GRAMMAR_SLOT_NORMALIZATION: Dict[str, str] = {
-        "clause": "[S]",
-        "main clause": "[S]",
-        "subordinate clause": "[S]",
-        "dependent clause": "[S]",
+        "clause": "[Clause]",
+        "main clause": "[Clause]",
+        "subordinate clause": "[Clause]",
+        "dependent clause": "[Clause]",
         "subject": "[S]",
-        "predicate": "[S]",
+        "predicate": "[VP]",
+        "predicate verb": "[V]",
+        "complement/object": "[NP/adj]",
         "noun phrase": "[NP]",
+        "noun/np": "[NP]",
         "verb phrase": "[VP]",
-        "focus element": "[NP]",
+        "focus element": "[Focal Element]",
+        "focal element": "[Focal Element]",
         "object": "[NP]",
-        "complement": "[NP]",
+        "complement": "[NP/adj]",
         "copula": "[be]",
         "auxiliary": "[aux]",
         "modal": "[aux]",
@@ -423,6 +440,7 @@ class WikiProcessor:
         "present participle": "[V-ing]",
         "gerund": "[V-ing]",
         "verb-ing": "[V-ing]",
+        "v-ing / gerund phrase": "[V-ing Phrase]",
         "base verb": "[V]",
         "finite verb": "[V]",
         "infinitive": "[to-V]",
@@ -448,7 +466,8 @@ class WikiProcessor:
     CANONICAL_SLOT_CASING = {
         "s": "[S]", "np": "[NP]", "vp": "[VP]", "v": "[V]", "be": "[be]", "aux": "[aux]",
         "v-ed": "[V3]", "v3": "[V3]", "v-ing": "[V-ing]", "to-v": "[to-V]",
-        "adj": "[adj]", "adv": "[adv]", "prep": "[prep]", "det": "[det]", "conj": "[conj]"
+        "adj": "[adj]", "adv": "[adv]", "prep": "[prep]", "det": "[det]", "conj": "[conj]",
+        "clause": "[Clause]", "focal element": "[Focal Element]"
     }
 
     @classmethod
@@ -994,8 +1013,8 @@ class WikiProcessor:
                 if index_was_repaired and not explanation_was_already_aligned:
                     cur_exp = q_dict.get("explanation", "")
                     if cur_exp:
-                        # Map old declared_idx to actual correct_idx
-                        repair_map = {declared_idx: correct_idx}
+                        # Map old declared_idx to actual correct_idx bidirectionally to prevent label collision
+                        repair_map = {declared_idx: correct_idx, correct_idx: declared_idx}
                         remapped_exp = cls._remap_explanation_labels(cur_exp, repair_map)
                         if isinstance(q, dict):
                             q["explanation"] = remapped_exp
@@ -1771,9 +1790,14 @@ class WikiProcessor:
         elif any(w in lang_str for w in ["spanish", "french", "german", "italian", "portuguese"]):
             # European target languages (Latin with accented / non-ASCII Latin characters)
             target_char_pattern = r'[A-Za-z\u00C0-\u024F]'
+            option_forbidden_char_pattern = r'[\u00C0-\u024F\u4e00-\u9fff]'
         else:
             # Default fallback: check for CJK or non-ASCII characters
             target_char_pattern = r'[\u4e00-\u9fff]|[^\x00-\x7F]'
+            option_forbidden_char_pattern = r'[\u4e00-\u9fff]'
+
+        if "option_forbidden_char_pattern" not in locals():
+            option_forbidden_char_pattern = target_char_pattern
 
         # Inflectional / Stemming helper for target word matching
         def _word_in_text(word: str, text: str) -> bool:
@@ -1856,7 +1880,7 @@ class WikiProcessor:
             # 1.2 Options must be purely in English (no target language characters)
             for o_i, opt in enumerate(options):
                 opt_str = str(opt)
-                if re.search(target_char_pattern, opt_str):
+                if re.search(option_forbidden_char_pattern, opt_str):
                     flagged_indices.add(idx)
                     defect_messages.append(
                         f"Translation Item #{idx + 1}: Option [{chr(65 + o_i)}] contains {target_language} characters: \"{opt_str[:40]}...\""
@@ -2390,169 +2414,170 @@ class WikiProcessor:
 
         # Deterministic Vocabulary Extraction (0 Tokens, Pure Computational Linguistic & Pedagogical Lexicon Lookup)
         det_vocab_data = None
-        if run_vocab:
-            logger.info(f"⚡ Deterministic Vocabulary Extraction executing locally via spaCy & Pedagogical Lexicon (0 tokens)...")
-            from .schemas import VocabularyExtraction, VocabularyItem
-            raw_v_items = LinguisticEngine.extract_deterministic_vocabulary(
-                raw_source_text,
-                syllabus_vocab=cleaned_syllabus_vocab if syllabus_vocab else None,
-                target_count=target_vocab_count
-            )
-            v_items_list = []
-            for it in raw_v_items:
-                v_item = VocabularyItem(
-                    design_audit=it.get("design_audit", ""),
-                    word=it["word"],
-                    definition=it["definition"],
-                    quoted_sentence=it["quoted_sentence"],
-                    example_usage=it["example_usage"],
-                    part_of_speech=it.get("part_of_speech", "noun")
-                )
-                v_items_list.append(v_item)
-            det_vocab_data = VocabularyExtraction(
-                title=f"{file_stem.replace('_', ' ')} Vocabulary",
-                vocabulary=v_items_list
-            )
-
-        # Deterministic Expressions Extraction (0 Tokens, Pure ACL + spaCy + Pedagogical Lexicon + WordNet)
         det_expressions_data = None
-        if run_expressions:
-            logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & Pedagogical Lexicon/WordNet (0 tokens)...")
-            from .schemas import ExpressionsExtraction, ExpressionItem
-            raw_e_items = LinguisticEngine.extract_deterministic_expressions(
-                raw_source_text,
-                target_count=target_expr_count,
-                syllabus_expressions=syllabus_expressions
-            )
-            e_items_list = []
-            for it in raw_e_items:
-                # Syllabus Fallback Grounding:
-                # If an item was explicitly declared in syllabus_expressions but the strict multi-word cascade
-                # returned no definition (e.g. 'toward the end of' -> sub-phrase 'the end of', or
-                # 'show thanks to' -> head noun 'thanks' sense 2), perform deterministic fallback grounding
-                # directly against Pedagogical Lexicon to ensure declared syllabus requirements are 100% fulfilled.
-                if not str(it.get("definition", "")).strip() and syllabus_expressions:
-                    w_raw = it.get("word", "")
-                    clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w_raw).strip().lower()
-                    quote_sent = it.get("quoted_sentence", "")
-                    if 'end of' in clean_w:
-                        sub_def, sub_ex, sub_src = LinguisticEngine.expression_definition_evidence('the end of', 'set phrase')
-                        if sub_def:
-                            it["definition"] = sub_def
-                            if sub_ex:
-                                it["example_usage"] = sub_ex
-                            elif not it.get("example_usage"):
-                                it["example_usage"] = quote_sent
-                            it["definition_source"] = sub_src
-                            logger.info(f"🎯 Grounded syllabus expression '{w_raw}' via sub-phrase 'the end of' ({sub_src})")
-
-                # F2: no Longman block, phrase row or sense defines this unit, so the cascade
-                # returned nothing. Ship no expression rather than the invented
-                # 'A core idiomatic ... functioning in ...' filler.
-                if not str(it.get("definition", "")).strip():
-                    logger.warning(
-                        f"🚫 F2 gate: no lexicon host defines '{it.get('word', '')}' "
-                        f"(source tier: '{it.get('definition_source', '')}') - expression dropped"
-                    )
-                    continue
-                audit = it.get("design_audit", "")
-                if it.get("definition_source"):
-                    # The tier the definition was built on travels with the row so the audit
-                    # shows which Longman host - block, phrase row, sense pattern - owns it.
-                    audit = f"{audit} -> [DEF: {it['definition_source']}]"
-                e_item = ExpressionItem(
-                    design_audit=audit,
-                    word=it["word"],
-                    definition=it["definition"],
-                    quoted_sentence=it["quoted_sentence"],
-                    example_usage=it["example_usage"],
-                    part_of_speech=it.get("part_of_speech", "collocation")
-                )
-                e_items_list.append(e_item)
-
-            # Backfill genuine expressions from text if syllabus items were dropped by F2 gate
-            if len(e_items_list) < target_expr_count:
-                existing_expr_tokens = {
-                    re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower()
-                    for it in e_items_list
-                }
-                supplementary_items = LinguisticEngine.extract_deterministic_expressions(
+        with LinguisticEngine.wsd_log_session(file_stem):
+            if run_vocab:
+                logger.info(f"⚡ Deterministic Vocabulary Extraction executing locally via spaCy & Pedagogical Lexicon (0 tokens)...")
+                from .schemas import VocabularyExtraction, VocabularyItem
+                raw_v_items = LinguisticEngine.extract_deterministic_vocabulary(
                     raw_source_text,
-                    target_count=target_expr_count + 5,
-                    syllabus_expressions=None
+                    syllabus_vocab=cleaned_syllabus_vocab if syllabus_vocab else None,
+                    target_count=target_vocab_count
                 )
-                for sup in supplementary_items:
-                    if len(e_items_list) >= target_expr_count:
-                        break
-                    sup_clean = re.sub(r'\[.*?\]|\(.*?\)', '', sup.get("word", "")).strip().lower()
-                    if sup_clean not in existing_expr_tokens and str(sup.get("definition", "")).strip():
-                        audit = sup.get("design_audit", "")
-                        if sup.get("definition_source"):
-                            audit = f"{audit} -> [DEF: {sup['definition_source']}]"
-                        e_items_list.append(ExpressionItem(
-                            design_audit=audit,
-                            word=sup["word"],
-                            definition=sup["definition"],
-                            quoted_sentence=sup["quoted_sentence"],
-                            example_usage=sup["example_usage"],
-                            part_of_speech=sup.get("part_of_speech", "collocation")
-                        ))
-                        existing_expr_tokens.add(sup_clean)
-                        logger.info(f"✨ Backfilled genuine expression from text: '{sup['word']}' ({sup.get('definition_source')})")
-
-            det_expressions_data = ExpressionsExtraction(
-                title=f"{file_stem.replace('_', ' ')} Expressions",
-                expressions=e_items_list
-            )
-
-        # F12 recovery: every atom held back above was held back on the promise that its
-        # expression would teach it. An expression that no lexicon host defines never ships
-        # (F2 gate), so that promise is void and the word has to come back - otherwise a
-        # dropped phrase silently takes the words inside it with it. 'smart' disappeared
-        # from Book_1_Unit_1_Passage_A exactly this way when 'make smart choices' was
-        # dropped for want of a definition.
-        if f12_suppressed_atoms and det_vocab_data is not None:
-            shipped_atoms: Set[str] = set()
-            for e_row in (det_expressions_data.expressions if det_expressions_data else []):
-                shipped_atoms |= self.expression_constituent_atoms(e_row.word)
-            rescued_raw = [
-                w for (w, _parent) in f12_suppressed_atoms
-                if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
-            ]
-            rescued = []
-            for w in rescued_raw:
-                clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
-                # Scheme A Invariant: Compound words must not be broken down into isolated words
-                # that do not exist independently in the text.
-                if sentence_pool and not any(
-                    LinguisticEngine.text_contains_form(s, clean_w, standalone=True)
-                    for s in sentence_pool.values()
-                ):
-                    logger.info(
-                        f"🚫 [F12 Recovery Gate] Rejecting '{w}' from vocabulary: does not exist as "
-                        f"an independent word in source text (only as part of a compound/phrase)."
-                    )
-                    continue
-                rescued.append(w)
-
-            if rescued:
-                logger.info(
-                    f"♻️ [F12 Recovery] Re-admitting {rescued} to vocabulary: the expressions "
-                    f"that were to carry them shipped no definition."
-                )
-                for it in LinguisticEngine.extract_deterministic_vocabulary(
-                    raw_source_text,
-                    syllabus_vocab=rescued,
-                    target_count=len(rescued)
-                ):
-                    det_vocab_data.vocabulary.append(VocabularyItem(
+                v_items_list = []
+                for it in raw_v_items:
+                    v_item = VocabularyItem(
                         design_audit=it.get("design_audit", ""),
                         word=it["word"],
                         definition=it["definition"],
                         quoted_sentence=it["quoted_sentence"],
                         example_usage=it["example_usage"],
                         part_of_speech=it.get("part_of_speech", "noun")
-                    ))
+                    )
+                    v_items_list.append(v_item)
+                det_vocab_data = VocabularyExtraction(
+                    title=f"{file_stem.replace('_', ' ')} Vocabulary",
+                    vocabulary=v_items_list
+                )
+
+            # Deterministic Expressions Extraction (0 Tokens, Pure ACL + spaCy + Pedagogical Lexicon + WordNet)
+            if run_expressions:
+                logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & Pedagogical Lexicon/WordNet (0 tokens)...")
+                from .schemas import ExpressionsExtraction, ExpressionItem
+                raw_e_items = LinguisticEngine.extract_deterministic_expressions(
+                    raw_source_text,
+                    target_count=target_expr_count,
+                    syllabus_expressions=syllabus_expressions
+                )
+                e_items_list = []
+                for it in raw_e_items:
+                    # Syllabus Fallback Grounding:
+                    # If an item was explicitly declared in syllabus_expressions but the strict multi-word cascade
+                    # returned no definition (e.g. 'toward the end of' -> sub-phrase 'the end of', or
+                    # 'show thanks to' -> head noun 'thanks' sense 2), perform deterministic fallback grounding
+                    # directly against Pedagogical Lexicon to ensure declared syllabus requirements are 100% fulfilled.
+                    if not str(it.get("definition", "")).strip() and syllabus_expressions:
+                        w_raw = it.get("word", "")
+                        clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w_raw).strip().lower()
+                        quote_sent = it.get("quoted_sentence", "")
+                        if 'end of' in clean_w:
+                            sub_def, sub_ex, sub_src = LinguisticEngine.expression_definition_evidence('the end of', 'set phrase')
+                            if sub_def:
+                                it["definition"] = sub_def
+                                if sub_ex:
+                                    it["example_usage"] = sub_ex
+                                elif not it.get("example_usage"):
+                                    it["example_usage"] = quote_sent
+                                it["definition_source"] = sub_src
+                                logger.info(f"🎯 Grounded syllabus expression '{w_raw}' via sub-phrase 'the end of' ({sub_src})")
+
+                    # F2: no Longman block, phrase row or sense defines this unit, so the cascade
+                    # returned nothing. Ship no expression rather than the invented
+                    # 'A core idiomatic ... functioning in ...' filler.
+                    if not str(it.get("definition", "")).strip():
+                        logger.warning(
+                            f"🚫 F2 gate: no lexicon host defines '{it.get('word', '')}' "
+                            f"(source tier: '{it.get('definition_source', '')}') - expression dropped"
+                        )
+                        continue
+                    audit = it.get("design_audit", "")
+                    if it.get("definition_source"):
+                        # The tier the definition was built on travels with the row so the audit
+                        # shows which Longman host - block, phrase row, sense pattern - owns it.
+                        audit = f"{audit} -> [DEF: {it['definition_source']}]"
+                    e_item = ExpressionItem(
+                        design_audit=audit,
+                        word=it["word"],
+                        definition=it["definition"],
+                        quoted_sentence=it["quoted_sentence"],
+                        example_usage=it["example_usage"],
+                        part_of_speech=it.get("part_of_speech", "collocation")
+                    )
+                    e_items_list.append(e_item)
+
+                # Backfill genuine expressions from text only when syllabus_expressions is not explicitly provided
+                if not syllabus_expressions and len(e_items_list) < target_expr_count:
+                    existing_expr_tokens = {
+                        re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower()
+                        for it in e_items_list
+                    }
+                    supplementary_items = LinguisticEngine.extract_deterministic_expressions(
+                        raw_source_text,
+                        target_count=target_expr_count + 5,
+                        syllabus_expressions=None
+                    )
+                    for sup in supplementary_items:
+                        if len(e_items_list) >= target_expr_count:
+                            break
+                        sup_clean = re.sub(r'\[.*?\]|\(.*?\)', '', sup.get("word", "")).strip().lower()
+                        if sup_clean not in existing_expr_tokens and str(sup.get("definition", "")).strip():
+                            audit = sup.get("design_audit", "")
+                            if sup.get("definition_source"):
+                                audit = f"{audit} -> [DEF: {sup['definition_source']}]"
+                            e_items_list.append(ExpressionItem(
+                                design_audit=audit,
+                                word=sup["word"],
+                                definition=sup["definition"],
+                                quoted_sentence=sup["quoted_sentence"],
+                                example_usage=sup["example_usage"],
+                                part_of_speech=sup.get("part_of_speech", "collocation")
+                            ))
+                            existing_expr_tokens.add(sup_clean)
+                            logger.info(f"✨ Backfilled genuine expression from text: '{sup['word']}' ({sup.get('definition_source')})")
+
+                det_expressions_data = ExpressionsExtraction(
+                    title=f"{file_stem.replace('_', ' ')} Expressions",
+                    expressions=e_items_list
+                )
+
+            # F12 recovery: every atom held back above was held back on the promise that its
+            # expression would teach it. An expression that no lexicon host defines never ships
+            # (F2 gate), so that promise is void and the word has to come back - otherwise a
+            # dropped phrase silently takes the words inside it with it. 'smart' disappeared
+            # from Book_1_Unit_1_Passage_A exactly this way when 'make smart choices' was
+            # dropped for want of a definition.
+            if f12_suppressed_atoms and det_vocab_data is not None:
+                shipped_atoms: Set[str] = set()
+                for e_row in (det_expressions_data.expressions if det_expressions_data else []):
+                    shipped_atoms |= self.expression_constituent_atoms(e_row.word)
+                rescued_raw = [
+                    w for (w, _parent) in f12_suppressed_atoms
+                    if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
+                ]
+                rescued = []
+                for w in rescued_raw:
+                    clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                    # Scheme A Invariant: Compound words must not be broken down into isolated words
+                    # that do not exist independently in the text.
+                    if sentence_pool and not any(
+                        LinguisticEngine.text_contains_form(s, clean_w, standalone=True)
+                        for s in sentence_pool.values()
+                    ):
+                        logger.info(
+                            f"🚫 [F12 Recovery Gate] Rejecting '{w}' from vocabulary: does not exist as "
+                            f"an independent word in source text (only as part of a compound/phrase)."
+                        )
+                        continue
+                    rescued.append(w)
+
+                if rescued:
+                    logger.info(
+                        f"♻️ [F12 Recovery] Re-admitting {rescued} to vocabulary: the expressions "
+                        f"that were to carry them shipped no definition."
+                    )
+                    for it in LinguisticEngine.extract_deterministic_vocabulary(
+                        raw_source_text,
+                        syllabus_vocab=rescued,
+                        target_count=len(rescued)
+                    ):
+                        det_vocab_data.vocabulary.append(VocabularyItem(
+                            design_audit=it.get("design_audit", ""),
+                            word=it["word"],
+                            definition=it["definition"],
+                            quoted_sentence=it["quoted_sentence"],
+                            example_usage=it["example_usage"],
+                            part_of_speech=it.get("part_of_speech", "noun")
+                        ))
 
         # Deterministic Grammar Extraction (0 Tokens, Pure Computational Syntax + COBUILD Common Learner Pitfalls)
         det_grammar_data = None
@@ -3627,37 +3652,49 @@ class WikiProcessor:
 
                                 # Modality-specific Level 1 gate on candidate cure
                                 cure_l1_defects = []
+                                cure_cefr = kwargs.get("cefr_level", "B2")
                                 if template_name == "reading":
                                     cure_l1_flagged, cure_l1_defects = self.audit_reading_integrity(
                                         {"questions": [healed_item]},
                                         passage_text=source_context,
-                                        cefr_level=kwargs.get("cefr_level", "B2")
+                                        cefr_level=cure_cefr
                                     )
+                                    cure_item_failed = bool(cure_l1_flagged)
                                 elif template_name == "video":
                                     cure_l1_flagged, cure_l1_defects = self.audit_video_integrity(
                                         {"questions": [healed_item]},
-                                        transcript_text=source_context
+                                        transcript_text=source_context,
+                                        cefr_level=cure_cefr
                                     )
+                                    cure_item_failed = bool(cure_l1_flagged)
                                 elif template_name == "listening":
                                     cure_l1_flagged, cure_l1_defects = self.audit_listening_integrity(
                                         {"questions": [healed_item]},
-                                        script_text=source_context
+                                        script_text=source_context,
+                                        cefr_level=cure_cefr
                                     )
+                                    cure_item_failed = bool(cure_l1_flagged)
                                 elif template_name == "translation":
                                     cure_l1_flagged, cure_l1_defects = self.audit_translation_integrity(
                                         {"questions": [healed_item]},
                                         unit_headwords=unit_headwords,
-                                        target_language=curr_tgt_lang
+                                        target_language=curr_tgt_lang,
+                                        cefr_level=cure_cefr
                                     )
+                                    cure_item_failed = bool(cure_l1_flagged)
                                 else:
+                                    candidate_batch = list(cured_questions)
+                                    candidate_batch[item_slot] = healed_item
                                     cure_l1_flagged, cure_l1_defects = self.audit_quiz_integrity(
-                                        {"questions": [healed_item]},
+                                        {"questions": candidate_batch},
                                         banned_sentences=banned_quiz_sentences,
                                         unit_headwords=unit_headwords,
-                                        strict_distractor_recycling=True
+                                        strict_distractor_recycling=True,
+                                        allow_authentic_cloze=is_cloze_mode
                                     )
+                                    cure_item_failed = item_slot in cure_l1_flagged
 
-                                if not cure_l1_flagged:
+                                if not cure_item_failed:
                                     # Candidate passed L1 gate: splice in-place and assign deterministic score
                                     cured_questions[item_slot] = healed_item
                                     qa["single_fit_valid"] = True
@@ -4765,40 +4802,121 @@ class WikiProcessor:
                 if candidates:
                     source_path = candidates[0]
 
+        def _extract_fresh_vocab_md(src_path: Path) -> Tuple[str, str, str]:
+            """Runs fresh deterministic vocabulary + expression extraction with F12 atom suppression/recovery."""
+            with open(src_path, "r", encoding="utf-8") as f:
+                src_text = f.read()
+            clean_p, syl_v, syl_g, syl_e = self.parse_syllabus_sections(src_text)
+            self._last_source_content = clean_p or src_text
+            det_c = LinguisticEngine.calculate_text_cefr(clean_p) if clean_p else cefr
+            resolved_cefr = det_c or cefr
+
+            _, sent_pool = LinguisticEngine.tokenize_and_index_sentences(clean_p)
+            f12_suppressed: List[Tuple[str, str]] = []
+            filtered_syl_v = list(syl_v) if syl_v else []
+            if syl_v and syl_e:
+                f12_parent: Dict[str, str] = {}
+                for expr in syl_e:
+                    for atom in self.expression_constituent_atoms(expr):
+                        f12_parent.setdefault(atom, expr)
+                pending_v: List[str] = []
+                for w in syl_v:
+                    w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                    parent_expr = f12_parent.get(w_clean)
+                    if parent_expr:
+                        f12_suppressed.append((w, parent_expr))
+                        continue
+                    pending_v.append(w)
+                filtered_syl_v = pending_v
+
+            with LinguisticEngine.wsd_log_session(core_name):
+                target_k = len(filtered_syl_v) if filtered_syl_v else 20
+                det_v = LinguisticEngine.extract_deterministic_vocabulary(
+                    clean_p,
+                    syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
+                    target_count=target_k
+                )
+                v_items = [
+                    VocabularyItem(
+                        word=it['word'],
+                        part_of_speech=it.get('part_of_speech', 'noun'),
+                        definition=it.get('definition', ''),
+                        quoted_sentence=it.get('quoted_sentence', ''),
+                        example_usage=it.get('example_usage', ''),
+                        design_audit=it.get('design_audit', '')
+                    )
+                    for it in (det_v or [])
+                ]
+
+                target_e_k = len(syl_e) if syl_e else 5
+                det_e = LinguisticEngine.extract_deterministic_expressions(
+                    clean_p,
+                    target_count=target_e_k,
+                    syllabus_expressions=syl_e
+                )
+                shipped_atoms: Set[str] = set()
+                e_items = []
+                for it in (det_e or []):
+                    if not str(it.get("definition", "")).strip():
+                        continue
+                    shipped_atoms |= self.expression_constituent_atoms(it.get("word", ""))
+                    e_items.append(
+                        VocabularyItem(
+                            word=it['word'],
+                            part_of_speech=it.get('part_of_speech', 'collocation'),
+                            definition=it.get('definition', ''),
+                            quoted_sentence=it.get('quoted_sentence', ''),
+                            example_usage=it.get('example_usage', ''),
+                            design_audit=it.get('design_audit', '')
+                        )
+                    )
+
+                if f12_suppressed:
+                    rescued_raw = [
+                        w for (w, _parent) in f12_suppressed
+                        if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
+                    ]
+                    rescued = [
+                        w for w in rescued_raw
+                        if not sent_pool or any(
+                            LinguisticEngine.text_contains_form(s, re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower(), standalone=True)
+                            for s in sent_pool.values()
+                        )
+                    ]
+                    if rescued:
+                        for it in LinguisticEngine.extract_deterministic_vocabulary(
+                            clean_p,
+                            syllabus_vocab=rescued,
+                            target_count=len(rescued)
+                        ):
+                            v_items.append(
+                                VocabularyItem(
+                                    word=it['word'],
+                                    part_of_speech=it.get('part_of_speech', 'noun'),
+                                    definition=it.get('definition', ''),
+                                    quoted_sentence=it.get('quoted_sentence', ''),
+                                    example_usage=it.get('example_usage', ''),
+                                    design_audit=it.get('design_audit', '')
+                                )
+                            )
+
+            all_v_items = v_items + e_items
+            fresh_md = ""
+            if all_v_items:
+                v_ext = VocabularyExtraction(
+                    title=f"{core_name} Vocabulary",
+                    vocabulary=all_v_items
+                )
+                fresh_md = self._format_as_markdown(v_ext, "vocabulary", src_path.name)
+            return fresh_md, resolved_cefr, clean_p
+
         if quiz_type in ("vocabulary", "vocabulary_quiz"):
             # Per Rule 1.9: Assessment truth must be grounded directly on authentic source text,
             # not downstream editable extraction notes. Perform fresh deterministic extraction if source exists.
             if source_path and source_path.exists():
                 try:
-                    with open(source_path, "r", encoding="utf-8") as f:
-                        source_text = f.read()
-                    clean_passage, syl_v, syl_g, syl_e = self.parse_syllabus_sections(source_text)
-                    det_cefr = LinguisticEngine.calculate_text_cefr(clean_passage) if clean_passage else cefr
-                    if det_cefr:
-                        cefr = det_cefr
-                    target_k = len(syl_v) if syl_v else 20
-                    det_v = LinguisticEngine.extract_deterministic_vocabulary(
-                        clean_passage,
-                        syllabus_vocab=syl_v,
-                        target_count=target_k
-                    )
-                    if det_v:
-                        v_items = [
-                            VocabularyItem(
-                                word=it['word'],
-                                part_of_speech=it.get('part_of_speech', 'noun'),
-                                definition=it.get('definition', ''),
-                                quoted_sentence=it.get('quoted_sentence', ''),
-                                example_usage=it.get('example_usage', ''),
-                                design_audit=it.get('design_audit', '')
-                            )
-                            for it in det_v
-                        ]
-                        v_ext = VocabularyExtraction(
-                            title=f"{core_name} Vocabulary",
-                            vocabulary=v_items
-                        )
-                        fresh_vocab_md = self._format_as_markdown(v_ext, "vocabulary", source_path.name)
+                    fresh_vocab_md, cefr, _ = _extract_fresh_vocab_md(source_path)
+                    if fresh_vocab_md:
                         return {"content": fresh_vocab_md, "cefr_level": cefr}
                 except Exception as e:
                     import logging
@@ -4814,6 +4932,10 @@ class WikiProcessor:
             with open(source_path, "r", encoding="utf-8") as f: passage = f.read()
             # Clean syllabus sections (e.g. ## Syllabus Vocabulary, ## Syllabus Grammar) so only pure passage text is supplied
             clean_passage, _, _, _ = self.parse_syllabus_sections(passage)
+            self._last_source_content = clean_passage or passage
+            det_cefr = LinguisticEngine.calculate_text_cefr(clean_passage) if clean_passage else cefr
+            if det_cefr:
+                cefr = det_cefr
             return {"passage": clean_passage.strip() if clean_passage else passage, "cefr_level": cefr}
 
         elif quiz_type == "translation":
@@ -4825,33 +4947,9 @@ class WikiProcessor:
                     with open(source_path, "r", encoding="utf-8") as f:
                         source_text = f.read()
                     clean_passage, syl_v, syl_g, syl_e = self.parse_syllabus_sections(source_text)
-                    det_cefr = LinguisticEngine.calculate_text_cefr(clean_passage) if clean_passage else cefr
-                    if det_cefr:
-                        cefr = det_cefr
-
-                    target_k_v = len(syl_v) if syl_v else 20
-                    det_v = LinguisticEngine.extract_deterministic_vocabulary(
-                        clean_passage,
-                        syllabus_vocab=syl_v,
-                        target_count=target_k_v
-                    )
-                    if det_v:
-                        v_items = [
-                            VocabularyItem(
-                                word=it['word'],
-                                part_of_speech=it.get('part_of_speech', 'noun'),
-                                definition=it.get('definition', ''),
-                                quoted_sentence=it.get('quoted_sentence', ''),
-                                example_usage=it.get('example_usage', ''),
-                                design_audit=it.get('design_audit', '')
-                            )
-                            for it in det_v
-                        ]
-                        v_ext = VocabularyExtraction(
-                            title=f"{core_name} Vocabulary",
-                            vocabulary=v_items
-                        )
-                        fresh_vocab = self._format_as_markdown(v_ext, "vocabulary", source_path.name)
+                    fresh_v_md, cefr, _ = _extract_fresh_vocab_md(source_path)
+                    if fresh_v_md:
+                        fresh_vocab = fresh_v_md
 
                     indexed_text, pool = LinguisticEngine.tokenize_and_index_sentences(clean_passage)
                     target_k_g = len(syl_g) if syl_g else 5
@@ -4898,7 +4996,16 @@ class WikiProcessor:
             return {"vocab_list": fresh_vocab, "grammar_list": fresh_grammar, "cefr_level": cefr}
 
         elif quiz_type == "listening":
-            if not vocab_path.exists(): return None
+            fresh_listening_vocab = vocab_content
+            if source_path and source_path.exists():
+                try:
+                    fresh_v_md, cefr, _ = _extract_fresh_vocab_md(source_path)
+                    if fresh_v_md:
+                        fresh_listening_vocab = fresh_v_md
+                except Exception:
+                    pass
+            if not fresh_listening_vocab and not vocab_path.exists():
+                return None
             # Retrieve unit summary to anchor dialogue topic to Core Concepts
             summary_content = ""
             summary_path = unit_dir / "extractions" / f"{core_name}_summary.md"
@@ -4913,27 +5020,22 @@ class WikiProcessor:
                     pass
             # Fallback to source article if summary does not exist
             source_content = ""
-            if not summary_content:
-                source_path = unit_dir / "sources" / f"{core_name}.md"
-                if not source_path.exists():
-                    source_path = unit_dir / "sources" / f"{core_name}.txt"
-                if source_path.exists():
-                    try:
-                        source_content = source_path.read_text(encoding="utf-8")
-                    except Exception:
-                        pass
+            if not summary_content and source_path and source_path.exists():
+                try:
+                    source_content = source_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
             return {
-                "vocab_list": vocab_content,
+                "vocab_list": fresh_listening_vocab,
                 "summary_content": summary_content,
                 "source_content": source_content,
                 "unit_core_name": core_name,
                 "cefr_level": cefr
             }
 
-        elif quiz_type in ["video", "listening"]:
+        elif quiz_type == "video":
             video_url = ""
             video_type = ""
-            # For listening quiz, we check if there's an active media file first
             from .config import normalize_name
             normalized_core = normalize_name(core_name)
             unit_wiki_dir = self.config.wiki_content_path / core_name
@@ -4958,8 +5060,8 @@ class WikiProcessor:
                         source_path = candidates[0]
                         active_media_name = source_path.name
 
-            # Fallback if no active_media or active_media not found (only for video, or if listening needs it)
-            if not source_path and quiz_type == "video":
+            # Fallback if no active_media or active_media not found
+            if not source_path:
                 if unit_wiki_dir.exists() and unit_wiki_dir.is_dir():
                     # Check sources/media/ first for any md/txt transcript files
                     media_dir = unit_wiki_dir / "sources" / "media"
@@ -5000,11 +5102,6 @@ class WikiProcessor:
                                 if f.is_file() and not any(suffix in f.name for suffix in ["_vocabulary", "_grammar", "_summary"]):
                                     source_path = f
                                     break
-
-            if quiz_type == "listening" and not source_path:
-                # Normal listening quiz defaults to using vocab list (not a specific transcript file)
-                if not vocab_path.exists(): return None
-                return {"vocab_list": vocab_content, "cefr_level": cefr}
 
             if not source_path or not source_path.exists(): return None
             with open(source_path, "r", encoding="utf-8") as f: transcript = f.read()

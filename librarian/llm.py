@@ -60,6 +60,27 @@ def _prune_to_schema(schema: Any, data: Any) -> Any:
 # Declarative architectural model capability profiles for structured output
 MODEL_CAPABILITY_PROFILES = [
     {
+        # Specialized Decision / Classification / Guardrail models (Ollama 'decision' family):
+        # Single-pass or fast typed classification, routing, WSD arbitration, and groundedness scoring.
+        # Must run with GBNF and CoT thinking disabled for sub-second classification and to prevent
+        # grammar-masking crashes on encoder/classifier heads (e.g. laya/ModernBERT, kev, tev1, nimble, clef).
+        "match": [
+            "kev",
+            "nimble",
+            "strands-decider",
+            "clef",
+            "laya",
+            "tev1",
+            "guardian",
+            "shieldgemma",
+            "llama-guard",
+        ],
+        "role": "classifier",
+        "enforce_gbnf": False,
+        "enforce_json_format": False,
+        "think": False,
+    },
+    {
         # Granite family (e.g. granite4.2:30b): Prompt-guided JSON mode with thinking disabled
         # Avoids GBNF grammar token-masking repetition loops and reasoning stalls while maintaining schema-compliant output
         "match": ["granite"],
@@ -124,7 +145,7 @@ MODEL_CAPABILITY_PROFILES = [
 def get_model_profile(model_name: str) -> dict:
     """
     Intelligently determines optimal execution profile for structured output via a 3-tier precedence hierarchy:
-    - Tier 1 (Base): Declarative architectural heuristics (Granite, Qwen, Gemma, Llama, Hermes, etc.)
+    - Tier 1 (Base): Declarative architectural heuristics (Decision/Classifier, Granite, Qwen, Gemma, Llama, Hermes, etc.)
     - Tier 2 (Global): Global settings in wiki_config.json (e.g. global enforce_gbnf)
     - Tier 3 (Override): Explicit per-model overrides in wiki_config.json['model_options'][model_name]
     """
@@ -134,17 +155,19 @@ def get_model_profile(model_name: str) -> dict:
     base_gbnf = False
     base_think = None
     base_json_format = True
+    base_role = "generator"
     for profile_rule in MODEL_CAPABILITY_PROFILES:
         if any(keyword in m_lower for keyword in profile_rule["match"]):
             base_gbnf = profile_rule["enforce_gbnf"]
             base_think = profile_rule.get("think")
             base_json_format = profile_rule.get("enforce_json_format", True)
+            base_role = profile_rule.get("role", "generator")
             if base_gbnf is True and ("thinking" in m_lower or "reasoning" in m_lower):
                 base_think = True
             break
 
-    # Tier 2: Global config settings (if explicitly enforced)
-    if config.data.get("enforce_gbnf") is True:
+    # Tier 2: Global config settings (if explicitly enforced, except for dedicated classifiers)
+    if config.data.get("enforce_gbnf") is True and base_role != "classifier":
         base_gbnf = True
 
     # Tier 3: Per-model explicit overrides (Highest Precedence)
@@ -152,8 +175,10 @@ def get_model_profile(model_name: str) -> dict:
     resolved_gbnf = model_opts.get("enforce_gbnf", base_gbnf)
     resolved_think = model_opts.get("think", base_think)
     resolved_json_format = model_opts.get("enforce_json_format", base_json_format)
+    resolved_role = model_opts.get("role", base_role)
 
     profile = dict(model_opts)
+    profile["role"] = resolved_role
     profile["enforce_gbnf"] = resolved_gbnf
     profile["enforce_json_format"] = resolved_json_format
     if resolved_think is not None:
@@ -303,6 +328,7 @@ class LLMClient:
         Supports both streaming and non-streaming responses.
         If schema is provided, returns an instance of the schema dataclass.
         """
+        skip_log = bool(kwargs.pop("skip_log", False))
         self._refresh_config()
         if model:
             self.model = model
@@ -381,6 +407,19 @@ class LLMClient:
             else:
                 messages.insert(0, {"role": "system", "content": schema_prompt})
 
+        # Capture clean system and initial user prompts for logging/evaluation before any Gemma/Gemini role merging
+        raw_sys_contents = []
+        for m in messages:
+            if m["role"] == "system":
+                c = m["content"]
+                if "### JSON SCHEMA REQUIREMENT ###" in c:
+                    c = c.split("### JSON SCHEMA REQUIREMENT ###")[0].strip()
+                if c:
+                    raw_sys_contents.append(c)
+        system_prompt = "\n".join(raw_sys_contents)
+        critique_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user" and any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), None)
+        initial_user_prompt = next((m["content"] for m in messages if m["role"] == "user" and not any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), "")
+
         # 3.1 Gemma & Gemini compatibility: combine system instructions with the first user message
         # because Gemma and Gemini chat templates do not render a separate system turn.
         is_no_system_role_family = any(k in (self.model or "").lower() for k in ("gemma", "gemini"))
@@ -409,14 +448,10 @@ class LLMClient:
 
         # Prompts for logging
         mode_str = "STRICT_SCHEMA" if (schema and use_gbnf) else ("JSON_MODE" if force_json_mode else "TEXT_MODE")
-        system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"])
-        # If this is a multi-turn self-correction retry, log only the modification ticket/request instead of re-dumping the initial prompt
-        critique_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user" and any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), None)
-        initial_user_prompt = next((m["content"] for m in messages if m["role"] == "user" and not any(k in m["content"] for k in ("### 🚨 QUALITY AUDIT", "### 🚨 [QUALITY AUDIT"))), "")
         if critique_msg:
             user_prompt = critique_msg.strip()
         else:
-            user_prompt = "\n".join([m["content"] for m in messages if m["role"] == "user"])
+            user_prompt = initial_user_prompt or "\n".join([m["content"] for m in messages if m["role"] == "user"])
         eval_user_prompt = initial_user_prompt or user_prompt
         t_name = task_name or "chat"
         schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=False) if schema else None)
@@ -635,8 +670,7 @@ class LLMClient:
                                 "design_audit": f"AUDIT: [{sid}] -> [{clean_cat}] -> [{clean_formula}]",
                                 "category": clean_cat,
                                 "imitation_example": f"Empirical findings confirm that {clean_formula}, highlighting significant variance.",
-                                "common_mistakes": "ESL learners frequently misapply slot boundary constraints or omit required subordinators.",
-                                "cefr_level": "B2"
+                                "common_mistakes": "ESL learners frequently misapply slot boundary constraints or omit required subordinators."
                             }
                             data["grammar_patterns"].append(item)
 
@@ -712,6 +746,7 @@ class LLMClient:
                                 "quoted_sentence": act_quote,
                                 "design_audit": f"AUDIT: [{sid}] -> [{clean_word}] -> [{clean_pos}] -> [VERBATIM_CONFIRMED]"
                             }
+                            data["vocabulary"].append(item)
                 # Level 1 Code Gate: Auto-Snap vocabulary items to authentic syllabus items from prompt
                 # (Anti-truncation: e.g. model outputting 're' instead of 're-schedule')
                 if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list) and "### TARGET VOCABULARY LIST ###" in user_prompt:
@@ -917,8 +952,8 @@ class LLMClient:
                                     has_vowel_init = any(init in 'aeiou' for init in initials)
                                     has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
                                     if has_vowel_init and has_cons_init:
-                                        # Self-heal to 'the ____' to preserve grammaticality and eliminate test-wiseness leakage
-                                        stem = re.sub(r"\b(?:a|an)\s+(_{2,})\b", r"the \1", stem, flags=re.IGNORECASE)
+                                        # Self-heal to 'a(n) ____' to preserve grammaticality and eliminate test-wiseness leakage
+                                        stem = re.sub(r"\b(?:a|an)\s+(_{2,})\b", r"a(n) \1", stem, flags=re.IGNORECASE)
 
                                 if "question" in q_item:
                                     q_item["question"] = stem
@@ -1099,6 +1134,7 @@ class LLMClient:
                                 
                                 return self.chat(
                                     retry_messages,
+                                    model=self.model,
                                     stream=stream,
                                     json_format=json_format,
                                     schema=schema,
@@ -1203,7 +1239,7 @@ class LLMClient:
                 )
                 raise LLMError(f"Failed to generate structured data matching schema: {e}")
         else:
-            if not stream:
+            if not stream and not skip_log:
                 from .logger import log_task
                 log_task(
                     f"{t_name}_{mode_str}",

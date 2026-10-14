@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lexis"
-version = "0.1.1"
-description = "A professional linguistic platform to manage your ESL teaching knowledge wiki."
+version = "3.0.0"
+description = "A neuro-symbolic linguistic platform and interactive assessment generator for ESL teaching knowledge wikis."
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 authors = [
     { name = "Gemini CLI Agent" }
 ]
@@ -40,4 +40,4 @@ lexis = "librarian.cli:main"
 include = ["librarian*"]
 
 [tool.setuptools.package-data]
-librarian = ["prompts/*.md", "templates/*.html"]
+librarian = ["prompts/*.md", "templates/*.html", "static/css/*.css", "static/js/*.js"]

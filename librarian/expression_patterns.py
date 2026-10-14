@@ -549,21 +549,24 @@ class ExpressionPatternEngine:
 
         # 2. Keep/Stay/Get in touch (with)
         elif pattern_id == "verb_touch_in_with":
-            has_with = any(c.text.lower() == "with" for c in root_verb.children)
-            if not has_with:
+            with_toks = [c for c in root_verb.children if c.text.lower() == "with"]
+            if not with_toks:
                 for c in root_verb.children:
-                    if any(gc.text.lower() == "with" for gc in c.children):
-                        has_with = True
+                    gc_with = [gc for gc in c.children if gc.text.lower() == "with"]
+                    if gc_with:
+                        with_toks = gc_with
                         break
+            has_with = bool(with_toks)
             phrase = f"{v_lemma} in touch with" if has_with else f"{v_lemma} in touch"
             formula = f"{v_lemma} in touch with [sb]" if has_with else f"{v_lemma} in touch"
+            tok_indices = [t.i for t in tokens] + ([with_toks[0].i] if with_toks and with_toks[0].i not in [t.i for t in tokens] else [])
             return {
                 "pattern_id": pattern_id,
                 "phrase": phrase,
                 "pattern_formula": formula,
                 "type": "idiom",
                 "priority": priority,
-                "token_indices": [t.i for t in tokens]
+                "token_indices": tok_indices
             }
 
         # 3. Standard phrasal verb (Verb + Particle)
@@ -633,13 +636,14 @@ class ExpressionPatternEngine:
                 phrase = f"{v_lemma} [one's] {target_noun}"
                 formula = f"{v_lemma} [one's] {target_noun}"
 
+            tok_indices = [t.i for t in tokens] + ([prt.i] if prt and prt.i not in [t.i for t in tokens] else [])
             return {
                 "pattern_id": pattern_id,
                 "phrase": phrase,
                 "pattern_formula": formula,
                 "type": "collocation",
                 "priority": priority,
-                "token_indices": [t.i for t in tokens]
+                "token_indices": tok_indices
             }
 
         # 6. Transitive verb + preposition collocation (e.g. provide [sb] with [sth])
@@ -668,6 +672,9 @@ class ExpressionPatternEngine:
             # Exclude copular/auxiliary verbs (e.g. 'be') from forming spurious prepositional verbs
             if v_lemma in ("be", "have", "do"):
                 return None
+            # Reject passive constructions (e.g. 'is used in', 'was put in') where the surface subject is the patient
+            if root_verb.tag_ == "VBN" or any(c.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for c in root_verb.children):
+                return None
             # If the verb is an adjectival clause / reduced participle modifying a noun (e.g. 'the commitment made to sb'),
             # the head noun is the underlying patient/object of the verb; do not treat it as an intransitive prep verb.
             if root_verb.dep_ in ("acl", "relcl") and root_verb.head.pos_ in ("NOUN", "PROPN"):
@@ -680,6 +687,10 @@ class ExpressionPatternEngine:
                 return None
             p_text = prep.text.lower()
             if p_text not in DEPENDENT_PREPS and p_text != COLLOCATION_VERB_PREPS.get(v_lemma):
+                return None
+            # Exclude generic/spatial verbs + literal locative prepositions (e.g. 'appear in', 'come to', 'come from', 'use in')
+            # unless the verb+prep pair is explicitly registered in COLLOCATION_VERB_PREPS
+            if v_lemma in ("use", "come", "go", "appear", "live", "work", "stay", "put", "take", "get", "make", "look", "see", "sit", "stand", "walk", "run") and p_text != COLLOCATION_VERB_PREPS.get(v_lemma):
                 return None
 
             pobj_lemma = None
@@ -771,11 +782,13 @@ class ExpressionPatternEngine:
             # Check if noun has an adjectival modifier forming an authentic compound collocation (e.g. 'adverse effect on')
             amod_toks = [c for c in noun_tok.children if c.dep_ == "amod"]
             amod_prefix = ""
+            extra_indices = []
             if amod_toks:
                 amod_candidate = amod_toks[0].lemma_.lower()
                 from librarian.linguistics import LinguisticEngine
                 if LinguisticEngine.is_attested_phrase(f"{amod_candidate} {n_lemma}"):
                     amod_prefix = f"{amod_candidate} "
+                    extra_indices.append(amod_toks[0].i)
 
             phrase = f"{amod_prefix}{n_lemma} {p_text}".strip()
             formula = f"{amod_prefix}{n_lemma} {p_text} [sth/sb]".strip()
@@ -786,7 +799,7 @@ class ExpressionPatternEngine:
                 "pattern_formula": formula,
                 "type": "collocation",
                 "priority": priority,
-                "token_indices": [noun_tok.i, prep.i]
+                "token_indices": extra_indices + [noun_tok.i, prep.i]
             }
 
         return None
