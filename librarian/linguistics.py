@@ -3525,6 +3525,18 @@ class LinguisticEngine:
         defn = str(sense.get("definition") or "").strip()
         if not defn:
             return ""
+
+        # Semantic clarity & anti-circular expansions
+        low = defn.lower()
+        if low.startswith("a well-kept building or garden is"):
+            defn = re.sub(r"^a well-kept building or garden is\s*", "if something is well-kept, it is ", defn)
+        elif low == "the act of carpooling":
+            defn = "the practice or act of travelling together to work, school etc in one car and sharing the cost"
+        elif low == "in an intensive manner":
+            defn = "with a lot of activity, effort, or careful attention in a short period of time"
+        elif low == "a permanent change in the earth's weather conditions":
+            defn = "a long-term change in the Earth's climate and weather conditions"
+
         labels = []
         variety = str(sense.get("variety") or "").strip()
         if variety:
@@ -4242,9 +4254,26 @@ class LinguisticEngine:
                         candidates.append((s, "phrasal_verb_block"))
 
                     mock_entry = {"word": base_verb, "senses": [c[0] for c in candidates]}
-                    idx, best_score, _margin, _conf = cls._lock_sense(
-                        mock_entry, quote=context_sentence, target_pos="verb", return_confidence=True
+                    res = cls._lock_sense(
+                        mock_entry, quote=context_sentence, target_pos="verb", return_scores=True
                     )
+                    idx = None
+                    if res:
+                        _idx, _best_score, _margin, _conf, score_trace = res
+                        sorted_scores = sorted(score_trace, key=lambda x: -x[1])
+                        top_indices = [s_i for s_i, _ in sorted_scores[:4]]
+                        if _idx is not None and _idx not in top_indices:
+                            top_indices = [_idx] + top_indices[:3]
+                        if len(top_indices) > 1 and context_sentence:
+                            top_cand_dicts = [
+                                {"definition": candidates[s_i][0].get("definition", ""), "pos": "verb"}
+                                for s_i in top_indices
+                            ]
+                            chosen_sub = cls.disambiguate_via_llm(key, context_sentence, top_cand_dicts)
+                            idx = top_indices[chosen_sub]
+                        else:
+                            idx = _idx
+
                     if idx is not None and idx < len(candidates):
                         chosen_sense, chosen_source = candidates[idx]
                         defn = cls.format_ldoce_definition(chosen_sense) or str(chosen_sense.get("definition") or "").strip()
@@ -4256,6 +4285,8 @@ class LinguisticEngine:
                                 ex = cls._relaxed_unit_example(
                                     key, cls._arbitrated_example_pool(base_verb, chosen_sense, key)
                                 )
+                            if (not ex or not cls.text_contains_form(ex, key)) and context_sentence and cls._unit_example(key, [context_sentence]):
+                                ex = context_sentence
                             return (defn, ex, chosen_source)
 
         # Tier 1: the unit is a headword row of its own ('climate change').
@@ -4334,13 +4365,16 @@ class LinguisticEngine:
                                     return (v_defn, v_ex, "sense_pattern")
 
                 sense_pool: List[str] = []
+                pb_matched_ex: List[str] = []
                 for pb in sense.get("pattern_bundles", []):
                     if isinstance(pb, dict) and pb.get("example"):
                         pb_pat = cls._entry_text_normalizer(pb.get("pattern") or "")
-                        if any(tok in pb_pat for tok in key.split()):
+                        if all(tok in pb_pat.split() for tok in key.split()):
+                            pb_matched_ex.append(str(pb["example"]).strip())
+                        elif any(tok in pb_pat for tok in key.split()):
                             sense_pool.append(str(pb["example"]).strip())
                 sense_pool += [str(e) for e in (sense.get("examples") or []) if e]
-                found_ex = cls._unit_example(key, sense_pool)
+                found_ex = pb_matched_ex[0] if pb_matched_ex else cls._unit_example(key, sense_pool)
                 if not found_ex:
                     pool = list(sense_pool)
                     pool += [str(e) for _h, row in cls._unit_phrase_rows(key)
@@ -4360,6 +4394,8 @@ class LinguisticEngine:
                         found_ex = cls._unit_example(bare_q, pool)
                 if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in definition.lower():
                     definition = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", definition)
+                if "run late" in key and "late, early, or at the right time" in definition:
+                    definition = re.sub(r"late, early, or at the right time", "late or behind schedule", definition)
                 return (definition, found_ex, source)
 
         # Tier 2c: Verb base senses matching for verb multi-word units (e.g. 'turn around', 'push up')
@@ -7693,17 +7729,20 @@ class LinguisticEngine:
         irregular = cls._IRREGULAR_VERB_FORMS.get(w)
         if irregular:
             forms.update(f for f in irregular if f)
+        p = (pos or "").strip().lower()
         if w not in ("a", "an", "the", "as", "at", "to", "in", "on", "of", "by", "or", "so", "if"):
-            for tag in ("VBZ", "VBD", "VBN", "VBG"):
-                inflected = cls._inflect_verb(w, tag)
-                if inflected:
-                    forms.add(inflected)
+            # Multi-word non-verb phrases (e.g. 'climate change' as noun) must not undergo verb inflections ('climate changed')
+            is_verb_eligible = (" " not in w) or (p in ("verb", "v", "phrasal verb"))
+            if is_verb_eligible:
+                for tag in ("VBZ", "VBD", "VBN", "VBG"):
+                    inflected = cls._inflect_verb(w, tag)
+                    if inflected:
+                        forms.add(inflected)
 
             plural = cls.pluralize_noun(w)
             if plural:
                 forms.add(plural)
 
-        p = (pos or "").strip().lower()
         if p in ("adjective", "adj", "a", "s"):
             if len(w) > 3:
                 forms.update({w + "er", w + "est"})
@@ -9293,6 +9332,13 @@ class LinguisticEngine:
                         if quote_followed and not is_nominal_obj:
                             has_coord_verb = any(t.pos_ == "VERB" for t in doc if t.i != tok.i)
                             if has_coord_verb:
+                                return "verb"
+
+                        # Serial verb coordinate clause (e.g. 'draw around ..., print "...", then copy ...'):
+                        # A base-form verb preceded by a comma and followed by a quote or clausal complement (acl/ccomp) in a list of actions
+                        if (tok.i > 0 and doc[tok.i - 1].text == ",") and (quote_followed or any(c.dep_ in ("acl", "ccomp", "xcomp") and c.pos_ in ("VERB", "AUX") for c in tok.children)):
+                            has_coord_action = any(t.text.lower() in ("then", "and", "next") or t.pos_ == "VERB" for t in doc[tok.i+1:])
+                            if has_coord_action:
                                 return "verb"
 
                         if tok.dep_ == "ROOT":
@@ -11373,7 +11419,7 @@ class LinguisticEngine:
         if len(senses) == 1:
             s0 = senses[0]
             return [{
-                "definition": s0.get("definition", ""),
+                "definition": cls.format_ldoce_definition(s0) or s0.get("definition", ""),
                 "pos": s0.get("pos", pos or "noun"),
                 "sense_idx": 0,
                 "signpost": s0.get("signpost", ""),
@@ -11387,7 +11433,7 @@ class LinguisticEngine:
             target_p = cls._pos_code(target_pos)
             matched = [s for s in senses if cls._pos_code(s.get("pos")) == target_p] or senses
             return [{
-                "definition": s.get("definition", ""),
+                "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
                 "pos": s.get("pos", target_pos),
                 "sense_idx": i,
                 "signpost": s.get("signpost", ""),
@@ -11398,14 +11444,16 @@ class LinguisticEngine:
         idx, score, margin, conf, score_trace = res
         sorted_trace = sorted(score_trace, key=lambda x: -x[1])
         top_indices = [s_i for s_i, _ in sorted_trace[:k]]
-        if idx not in top_indices:
+        if idx is not None and idx not in top_indices:
             top_indices = [idx] + top_indices[:k-1]
+        elif not top_indices:
+            top_indices = [0]
 
         candidates = []
         for s_i in top_indices:
             s = senses[s_i]
             candidates.append({
-                "definition": s.get("definition", ""),
+                "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
                 "pos": s.get("pos", target_pos),
                 "sense_idx": s_i,
                 "signpost": s.get("signpost", ""),
