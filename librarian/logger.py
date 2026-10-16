@@ -144,7 +144,7 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
     filename = f"{timestamp}_{task_name}.log"
     log_path = logs_dir / filename
 
-    actual_model = model or config.get('model') or 'llama3.1:8b'
+    actual_model = model or config.get('model') or 'unknown'
     n_total = len(records)
     n_cached = sum(1 for r in records if r.get("cached"))
     n_llm = n_total - n_cached
@@ -165,12 +165,13 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
     content.append(f"Consolidated Top-K Sense Disambiguation for unit '{safe_unit}' ({n_total} items):")
     content.append("")
 
+    all_letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
     for idx, rec in enumerate(records, 1):
         item_name = rec.get("item_name", "")
         sentence = rec.get("sentence", "")
         cands = rec.get("candidates", [])
         chosen_idx = rec.get("chosen_idx", 0)
-        letters = ["A", "B", "C", "D"][:max(len(cands), 1)]
+        letters = all_letters[:max(len(cands), 1)]
         chosen_letter = letters[chosen_idx] if 0 <= chosen_idx < len(letters) else "A"
         chosen_cand = cands[chosen_idx] if 0 <= chosen_idx < len(cands) else {}
         chosen_def = chosen_cand.get("definition", "")
@@ -183,7 +184,11 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
             let = letters[c_i] if c_i < len(letters) else str(c_i)
             mark = "👉" if c_i == chosen_idx else "  "
             p_str = f"({c.get('pos', '')}) " if c.get('pos') else ""
-            content.append(f"  {mark} {let}. {p_str}{c.get('definition', '').strip()}")
+            raw_s = c.get("raw_sense") if isinstance(c.get("raw_sense"), dict) else {}
+            gram_raw = str(raw_s.get("grammar") or "").strip()
+            d_str = c.get('definition', '').strip()
+            g_str = f"{gram_raw} " if gram_raw in ("[plural]", "[singular]", "[only plural]") and gram_raw.lower() not in d_str.lower() else ""
+            content.append(f"  {mark} {let}. {p_str}{g_str}{d_str}")
         content.append(f"  Selected: {chosen_letter} -> ({chosen_pos}) {chosen_def}")
         content.append("")
 
@@ -196,7 +201,7 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
         "decisions": [
             {
                 "item": r.get("item_name", ""),
-                "chosen_letter": ["A", "B", "C", "D"][r.get("chosen_idx", 0)] if 0 <= r.get("chosen_idx", 0) < 4 else "A",
+                "chosen_letter": all_letters[r.get("chosen_idx", 0)] if 0 <= r.get("chosen_idx", 0) < len(all_letters) else "A",
                 "chosen_pos": (r.get("candidates", [{}])[r.get("chosen_idx", 0)].get("pos", "") if r.get("candidates") and 0 <= r.get("chosen_idx", 0) < len(r.get("candidates", [])) else ""),
                 "chosen_definition": (r.get("candidates", [{}])[r.get("chosen_idx", 0)].get("definition", "") if r.get("candidates") and 0 <= r.get("chosen_idx", 0) < len(r.get("candidates", [])) else ""),
                 "cached": bool(r.get("cached", False)),

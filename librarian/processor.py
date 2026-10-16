@@ -107,8 +107,21 @@ class WikiProcessor:
             if not line_clean:
                 continue
 
-            # If separated by commas or semicolons
-            chunks = re.split(r'[,;]+', line_clean)
+            # Strip ', etc.' or 'etc.' before comma-splitting so items like
+            # 'enlist sb.'s help / services, etc.' or 'devote one's time / money, etc. to sth.' do not fracture.
+            line_clean = re.sub(r',?\s*\betc\.?(?=\s|$|[,;])', '', line_clean, flags=re.IGNORECASE)
+
+            # If separated by commas or semicolons:
+            # Do not split on internal commas inside multi-clause proverbs/expressions
+            # (e.g. "where there's a will, there's a way") where every comma-separated clause has >= 3 words.
+            semi_chunks = re.split(r';+', line_clean)
+            chunks = []
+            for sc in semi_chunks:
+                comma_parts = [p.strip() for p in sc.split(',') if p.strip()]
+                if len(comma_parts) == 2 and all(len(p.split()) >= 3 for p in comma_parts):
+                    chunks.append(sc.strip())
+                else:
+                    chunks.extend(comma_parts)
             for chunk in chunks:
                 chunk = chunk.strip()
                 if not chunk:
@@ -129,6 +142,10 @@ class WikiProcessor:
 
                 # Clean common PoS abbreviations
                 chunk = re.sub(r'\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|num|phr|idiom)\.?\b', ' ', chunk, flags=re.IGNORECASE)
+
+                # Normalize sb.'s / sb. / sth. periods before stripping trailing punctuation
+                chunk = re.sub(r"\bsb\.'s\b", "sb's", chunk, flags=re.IGNORECASE)
+                chunk = re.sub(r'\b(sth|sb)\.', r'\1', chunk, flags=re.IGNORECASE)
 
                 # Normalize whitespace
                 chunk = re.sub(r'\s+', ' ', chunk).strip()
@@ -153,15 +170,8 @@ class WikiProcessor:
     @classmethod
     def strip_non_prose_wordlists(cls, text: str) -> Tuple[str, List[str]]:
         """
-        Backlog F6: Detects and strips non-prose word lists, vocabulary appendices,
-        and glossaries embedded in source text.
-        A block is classified as a non-prose word list if:
-        1. It has >= 5 consecutive non-empty lines;
-        2. Each line contains <= 3 words;
-        3. Lines contain NO finite verbs (e.g. lists of single words, headword + PoS).
-        Returns:
-            clean_text: Text with non-prose word lists stripped.
-            extracted_words: Mined vocabulary items from stripped lists.
+        Detects and strips non-prose word lists, vocabulary appendices, and glossaries
+        embedded in source text (>= 5 consecutive lines with <= 3 words and no finite verbs).
         """
         if not text:
             return "", []
@@ -248,19 +258,10 @@ class WikiProcessor:
 
     @classmethod
     def expression_constituent_atoms(cls, expression: str) -> Set[str]:
-        """
-        F12: the single words an expression is expected to carry.
-
-        A syllabus that declares both 'smart' and 'make smart choices' should teach the
-        word once, inside the phrase. This is the set used to decide which atoms may be
-        held back from vocabulary - and, once the expressions have actually been built,
-        which atoms were promised a home they never got.
-        """
+        """Returns the single-word constituent atoms covered by a multi-word expression."""
         atoms: Set[str] = set()
         for st in re.findall(r"[a-zA-Z]+(?:-[a-zA-Z]+)*", (expression or "").lower()):
             if "-" in st:
-                # A hyphenated compound ('self-balance') inside an expression ('self-balance vehicle')
-                # only suppresses the exact compound ('self-balance'), not its unhyphenated root ('balance').
                 atoms.add(st)
                 continue
             atoms.add(st)
@@ -275,12 +276,8 @@ class WikiProcessor:
     @classmethod
     def parse_syllabus_sections(cls, content: str) -> Tuple[str, List[str], List[str], List[str]]:
         """
-        Parses source Markdown for syllabus sections (Plan 1: single-source architecture).
-        Extracts:
-        - clean_body: Text excluding syllabus sections (avoids polluting standard extraction)
-        - syllabus_vocab: Extracted mandatory vocabulary/phrases list
-        - syllabus_grammar: Extracted mandatory grammar patterns list
-        - syllabus_expressions: Extracted mandatory expressions/phrases (explicit or multi-word items)
+        Parses source Markdown for syllabus sections (clean_body, syllabus_vocab,
+        syllabus_grammar, syllabus_expressions).
         """
         if not content:
             return "", [], [], []
@@ -339,7 +336,10 @@ class WikiProcessor:
             if is_multiword(item):
                 detected_exprs.append(item)
             else:
-                pure_words.append(item)
+                if item.strip().lower() not in {
+                    "on", "in", "at", "to", "of", "by", "for", "up", "as", "or", "so", "be", "do", "go", "no", "if", "it", "he", "we", "me", "us", "my", "an"
+                }:
+                    pure_words.append(item)
 
         # 1. Parse explicit expressions if section present
         syllabus_expressions = []
@@ -355,25 +355,16 @@ class WikiProcessor:
         else:
             syllabus_expressions = detected_exprs
 
-        # F12 Architecture Gate: Phrase Promotion & Atom Suppression (Chunk Overrides Atom)
-        # 1. Text-grounded phrase promotion: if a single word in syllabus (e.g. 'grant')
-        # only appears in the body text inside a recognized idiomatic expression (e.g. 'take it for granted'),
-        # promote the multi-word idiom into syllabus_expressions and suppress the atom from syllabus_vocab.
+        # Promote 'take it for granted' into syllabus_expressions when 'grant' appears in that idiom
         body_lower = content.lower()
         if "grant" in [re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() for w in pure_words]:
             if "take it for granted" in body_lower or "take for granted" in body_lower or "taken for granted" in body_lower:
                 promoted_expr = "take it for granted"
                 if promoted_expr not in [e.lower() for e in syllabus_expressions]:
                     syllabus_expressions.insert(0, promoted_expr)
-                    logger.info(f"✨ [F12 Gate] Promoted 'take it for granted' into syllabus expressions from body text evidence.")
+                    logger.info(f"✨ Promoted 'take it for granted' into syllabus expressions from body text evidence.")
 
-        # 2. Pure single words for vocabulary extraction.
-        # F12 atom suppression is deliberately NOT applied here. Holding a word back is a
-        # promise that its expression will teach it, and only process_passage knows which
-        # expressions actually ship - the F2 gate discards any unit no lexicon host
-        # defines. Suppressing eagerly here silently deleted 'smart' from
-        # Book_1_Unit_1_Passage_A: 'make smart choices' was dropped for want of a
-        # definition, and the word never came back. See _f12 provisional suppression.
+        # Atom suppression is deferred to process_passage so atoms are only suppressed if their expression ships
         syllabus_vocab = pure_words
 
         # Strip syllabus sections from body text to avoid confusing general prompt
@@ -403,10 +394,7 @@ class WikiProcessor:
         clean_body = re.sub(r'\s*\(\s*(?:posted|updated|published|written)\s+(?:on|by)\b[^\n\)]+\)', '', clean_body, flags=re.IGNORECASE)
         clean_body = re.sub(r'(?m)^\s*(?:posted|updated|published|written)\s+(?:on|by)\b[^\n]+$', '', clean_body, flags=re.IGNORECASE).strip()
 
-        # Backlog F6: Generic non-prose list detector & stripper.
-        # Catches word lists or glossaries (e.g. at the bottom of texts or under arbitrary headings)
-        # where lines are short (<= 3 words) without finite verbs, preventing them from being
-        # tokenized as artificial run-on sentences in sentence_pool.
+        # Strip non-prose word lists or glossaries at the bottom of texts
         clean_body, auto_vocab = cls.strip_non_prose_wordlists(clean_body)
         if not syllabus_vocab and auto_vocab:
             # If no syllabus section was explicitly defined, populate syllabus_vocab from stripped lists
@@ -416,12 +404,12 @@ class WikiProcessor:
 
     # Normalization mapping from legacy/verbose grammar slots to standard COBUILD tokens
     GRAMMAR_SLOT_NORMALIZATION: Dict[str, str] = {
-        "clause": "[Clause]",
-        "main clause": "[Clause]",
-        "subordinate clause": "[Clause]",
-        "dependent clause": "[Clause]",
+        "clause": "[S]",
+        "main clause": "[S]",
+        "subordinate clause": "[S]",
+        "dependent clause": "[S]",
         "subject": "[S]",
-        "predicate": "[VP]",
+        "predicate": "[S]",
         "predicate verb": "[V]",
         "complement/object": "[NP/adj]",
         "noun phrase": "[NP]",
@@ -467,18 +455,14 @@ class WikiProcessor:
         "s": "[S]", "np": "[NP]", "vp": "[VP]", "v": "[V]", "be": "[be]", "aux": "[aux]",
         "v-ed": "[V3]", "v3": "[V3]", "v-ing": "[V-ing]", "to-v": "[to-V]",
         "adj": "[adj]", "adv": "[adv]", "prep": "[prep]", "det": "[det]", "conj": "[conj]",
-        "clause": "[Clause]", "focal element": "[Focal Element]"
+        "clause": "[S]", "focal element": "[Focal Element]"
     }
 
     @classmethod
     def unwrap_literal_brackets(cls, formula: str) -> str:
         """
         Unwraps accidental square brackets around literal words/connectors in formulas.
-        E.g.:
-        - '[If] [S] [to-V], [then] [S] [have to] [V]' -> 'If [S] [to-V], then [S] have to [V]'
-        - '[Such] [NP] [V] [that] [S]' -> 'Such [NP] [V] that [S]'
-        - '[The] [adj] [NP] of [NP] [that] [be] [adv] [S]' -> 'The [adj] [NP] of [NP] that [be] [adv] [S]'
-        - '[V-ing] [it] [adj] [to-V]' -> '[V-ing] it [adj] [to-V]'
+        E.g. '[If] [S] [to-V], [then] [S] [have to] [V]' -> 'If [S] [to-V], then [S] have to [V]'
         """
         if not formula or "[" not in formula:
             return formula
@@ -494,9 +478,6 @@ class WikiProcessor:
                 sub_parts = [p.strip() for p in slot_lower.split("/") if p.strip()]
                 from .evaluator import degenerate_grammar_slots
                 if degenerate_grammar_slots(f"[{raw_slot}]"):
-                    # Backlog D1: '[NP/NP]' is not a legal alternation — it is one
-                    # constituent offered to itself. Never whitelist it: keep the bracket so
-                    # the QA gate rejects the item instead of shipping a slot that teaches nothing.
                     return f"[{raw_slot}]"
 
                 if all(p in ALLOWED_GRAMMAR_SLOTS or p in cls.GRAMMAR_SLOT_NORMALIZATION for p in sub_parts):
@@ -559,6 +540,8 @@ class WikiProcessor:
                 sent = m.group(1).strip()
                 if sent:
                     banned_sentences.append(sent)
+            elif re.match(r'^\s*-\s*\*\*(?:Collocations|Grammar & Usage|Thesaurus Note)\*\*:\s*(.*)', line, re.IGNORECASE):
+                continue
             else:
                 clean_lines.append(line)
 
@@ -687,11 +670,21 @@ class WikiProcessor:
         valid_questions = []
         for q in questions:
             if isinstance(q, dict):
+                idiom_t = str(q.get("idiomatic_translation") or "").strip()
+                flawed_t = str(q.get("flawed_translation") or "").strip()
+                if idiom_t and flawed_t and len(q.get("options") or []) != 2:
+                    q["options"] = [idiom_t, flawed_t]
+                    q["correct_answer_index"] = 0
                 opts = q.get("options")
                 has_stem = q.get("question") or q.get("translated_sentence")
                 if isinstance(opts, list) and len(opts) > 0 and has_stem:
                     valid_questions.append(q)
             else:
+                idiom_t = str(getattr(q, "idiomatic_translation", "") or "").strip()
+                flawed_t = str(getattr(q, "flawed_translation", "") or "").strip()
+                if idiom_t and flawed_t and len(getattr(q, "options", None) or []) != 2:
+                    q.options = [idiom_t, flawed_t]
+                    q.correct_answer_index = 0
                 opts = getattr(q, "options", None)
                 has_stem = getattr(q, "question", None) or getattr(q, "translated_sentence", None)
                 if isinstance(opts, list) and len(opts) > 0 and has_stem:
@@ -1081,10 +1074,13 @@ class WikiProcessor:
 
                 if headword_set and target not in headword_set:
                     # Check inflectional stem and multi-word headword component matching (e.g. 'piece' in 'a piece of')
+                    from .linguistics import LinguisticEngine
                     t_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target)
                     target_tokens = set(target.split())
                     in_set = any(
                         (hw == target or (len(t_stem) >= 4 and hw.startswith(t_stem)))
+                        or (len(t_stem) >= 3 and (hw == t_stem or hw == t_stem + "e"))
+                        or LinguisticEngine.form_matches(target, hw)
                         or (target in hw.split() or bool(target_tokens & set(hw.split())))
                         for hw in headword_set
                     )
@@ -1188,11 +1184,22 @@ class WikiProcessor:
                     if o_idx == correct_idx:
                         continue
                     opt_clean = str(opt).strip().lower()
-                    # If distractor is derived from this item's own target keyword, exempt it
+                    if re.search(r'\((?:synonym|antonym|distractor|correct|key|target|meaning|i\.e\.|e\.g\.)\b[^)]*\)', opt_clean):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Distractor '{opt}' contains parenthetical meta-annotation."
+                        )
+                        continue
+                    if target and opt_clean != target and re.search(rf'\b{re.escape(target)}\b', opt_clean):
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Distractor '{opt}' leaks the target word."
+                        )
+                        continue
+                    # If distractor is an inflectional variant of this item's own single-word target, exempt it
                     if target and (
                         opt_clean == target or
-                        target in opt_clean or
-                        (len(target) >= 4 and opt_clean.startswith(target[:4]))
+                        (" " not in opt_clean and len(target) >= 4 and opt_clean.startswith(target[:4]))
                     ):
                         continue
 
@@ -1205,6 +1212,9 @@ class WikiProcessor:
                         opt_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', opt_clean)
                         for hw in headword_set:
                             if hw == target:
+                                continue
+                            # Prefix matching only applies to single-word items (never across multi-word phrases sharing a light verb like 'take ')
+                            if " " in hw or " " in opt_clean:
                                 continue
                             hw_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', hw)
                             if (len(hw_stem) >= 4 and len(opt_stem) >= 4 and hw_stem == opt_stem) or \
@@ -1245,8 +1255,15 @@ class WikiProcessor:
                 try:
                     from .linguistics import LinguisticEngine
                     stem_tokens = {w.lower() for w in re.findall(r"\b[a-zA-Z]+\b", stem or "")}
-                    # Infer target POS from item metadata if present, or fall back to stem context
+                    # Infer target POS from item metadata if present, design_audit tag, or stem context
                     item_pos = q_dict.get("part_of_speech")
+                    if not item_pos and q_dict.get("design_audit"):
+                        m_da = re.search(r"->\s*(noun|verb|adj|adjective|adv|adverb|phrase)\b", str(q_dict.get("design_audit")), re.IGNORECASE)
+                        if m_da:
+                            item_pos = m_da.group(1).lower()
+                    if not item_pos and stem and "____" in stem:
+                        filled_stem = re.sub(r"_{2,}", target, stem, count=1)
+                        item_pos = LinguisticEngine.determine_contextual_pos(target, filled_stem)
                     target_collocs = LinguisticEngine.get_oxford_collocations(
                         target, pos=item_pos, context_sentence=stem
                     )
@@ -1255,7 +1272,7 @@ class WikiProcessor:
                         if p.lower() in stem_tokens
                     ]
                     anchor = bound_preps[0] if bound_preps else None
-                    near, ants = LinguisticEngine.semantic_fields(target)
+                    near, ants = LinguisticEngine.semantic_fields(target, pos=item_pos)
                     frame_hits, pile = [], []
                     for o_idx, opt in enumerate(options):
                         if o_idx == correct_idx:
@@ -1612,11 +1629,32 @@ class WikiProcessor:
         return sorted(list(flagged_indices)), defect_messages
 
     @classmethod
+    def _expand_headword_whitelist(cls, unit_headwords: Optional[List[str]]) -> Set[str]:
+        """Expands unit headwords (including multi-word expressions and inflections) into a lowercase token whitelist."""
+        allow_set: Set[str] = set()
+        if not unit_headwords:
+            return allow_set
+        for hw in unit_headwords:
+            if not hw:
+                continue
+            hw_clean = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", str(hw).lower())
+            for tok in re.findall(r"[a-zA-Z]{3,}", hw_clean):
+                if tok in {"sth", "somebody", "something", "someone", "oneself"}:
+                    continue
+                allow_set.add(tok)
+                try:
+                    allow_set.update(LinguisticEngine.inflected_forms(tok))
+                except Exception:
+                    pass
+        return allow_set
+
+    @classmethod
     def audit_listening_integrity(
         cls,
         quiz_obj: Any,
         script_text: str = "",
-        cefr_level: str = "B2"
+        cefr_level: str = "B2",
+        unit_headwords: List[str] = None
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Listening Comprehension Quiz.
@@ -1643,6 +1681,7 @@ class WikiProcessor:
 
         script_norm = script_text.lower() if script_text else ""
         clean_script_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", script_norm))
+        headword_whitelist = cls._expand_headword_whitelist(unit_headwords)
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
             "dialogue", "conversation", "reason", "purpose", "detail", "meaning", "option", "correct",
@@ -1654,10 +1693,11 @@ class WikiProcessor:
         if script_items is not None and isinstance(script_items, list):
             if len(script_items) < 4:
                 defect_messages.append(f"Listening Script Gate: Dialogue script contains fewer than 4 turns ({len(script_items)} turns).")
-            # If script_text wasn't passed directly, build words from script_items
-            if not clean_script_words:
-                all_turn_text = " ".join([str(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")) for item in script_items])
-                clean_script_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", all_turn_text.lower()))
+            # Always merge dialogue turn words into clean_script_words so script vocabulary is licensed
+            all_turn_text = " ".join([str(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")) for item in script_items])
+            clean_script_words.update(re.findall(r"\b[a-zA-Z]{4,}\b", all_turn_text.lower()))
+
+        combined_allow = clean_script_words | headword_whitelist | meta_whitelist
 
         # 2. Inspect questions
         valid_cats = {"detail", "main idea", "inference"}
@@ -1693,7 +1733,7 @@ class WikiProcessor:
                 for opt in options:
                     over = LinguisticEngine.over_ceiling_tokens(
                         str(opt), cefr_upper, mode="text",
-                        allow=clean_script_words | meta_whitelist,
+                        allow=combined_allow,
                     )
                     if over:
                         flagged_indices.add(idx)
@@ -1715,7 +1755,7 @@ class WikiProcessor:
             else:
                 over = LinguisticEngine.over_ceiling_tokens(
                     stem, cefr_upper, mode="text",
-                    allow=clean_script_words | meta_whitelist,
+                    allow=combined_allow,
                 )
                 if over:
                     flagged_indices.add(idx)
@@ -1768,10 +1808,11 @@ class WikiProcessor:
         defect_messages = []
         cefr_upper = (cefr_level or "B2").upper()
 
+        headword_whitelist = cls._expand_headword_whitelist(unit_headwords)
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
             "sentence", "translation", "english", "chinese", "option", "correct", "flawed", "idiomatic"
-        }
+        } | headword_whitelist
 
         # Determine target language regex pattern
         lang_str = (target_language or "Chinese").lower()
@@ -1807,18 +1848,31 @@ class WikiProcessor:
                 return False
             # Clean placeholders like "sth", "sb", "something", "someone" (e.g. "impose sth on sb" -> "impose on")
             w_clean = re.sub(r'\b(sth|sb|something|someone|somebody|oneself)\b', '', w)
+            w_clean = re.sub(r'[^\w\s\-]', ' ', w_clean)
             w_clean = ' '.join(w_clean.split())
-            if w_clean != w:
+            if w_clean:
                 w = w_clean
-            # Multi-word phrase check
+            # Direct inflection-aware check via LinguisticEngine
+            try:
+                if LinguisticEngine.text_contains_form(t, w):
+                    return True
+            except Exception:
+                pass
+            # Multi-word phrase check (handling inflected verbs/nouns inside the phrase, e.g. "turn up" -> "turned up")
             if " " in w:
-                # If exact phrase is present
                 if w in t:
                     return True
-                # Check with flexible gap between words (e.g. "impose ... on")
-                parts = [re.escape(p) for p in w.split() if len(p) > 1]
-                if len(parts) >= 2:
-                    pattern = r'\b' + r'\b.*?\b'.join(parts) + r'\b'
+                raw_parts = [p for p in w.split() if len(p) > 1]
+                if len(raw_parts) >= 2:
+                    # Allow each content token in the phrase to match via LinguisticEngine.text_contains_form
+                    if all(LinguisticEngine.text_contains_form(t, p) for p in raw_parts):
+                        return True
+                    # Regex fallback allowing optional inflectional suffixes on each part with flexible gap
+                    part_patterns = []
+                    for p in raw_parts:
+                        p_stem = re.sub(r'(?:ed|ing|es|s|d)$', '', p) if len(p) >= 5 else p
+                        part_patterns.append(rf"{re.escape(p_stem)}\w*")
+                    pattern = r'\b' + r'\b.*?\b'.join(part_patterns) + r'\b'
                     if re.search(pattern, t):
                         return True
             # Exact word boundary
@@ -2148,10 +2202,7 @@ class WikiProcessor:
         v_target_num = v_count
         f12_suppressed_atoms: List[Tuple[str, str]] = []
         if syllabus_vocab:
-            # F12 Architecture Gate (provisional): a syllabus word that is a constituent of
-            # a declared expression is held back so the phrase teaches it once. The promise
-            # is recorded in f12_suppressed_atoms and revoked below for every atom whose
-            # expression fails to ship.
+            # Hold back syllabus words that are constituents of declared expressions (restored later if expression fails to ship)
             f12_parent: Dict[str, str] = {}
             for expr in syllabus_expressions:
                 for atom in self.expression_constituent_atoms(expr):
@@ -2163,96 +2214,36 @@ class WikiProcessor:
                 parent_expr = f12_parent.get(w_clean)
                 if parent_expr:
                     f12_suppressed_atoms.append((w, parent_expr))
-                    logger.info(f"🚫 [F12 Gate] Holding back '{w}' from vocabulary - '{parent_expr}' is expected to carry it.")
+                    logger.info(f"🚫 Holding back '{w}' from vocabulary - '{parent_expr}' is expected to carry it.")
                     continue
                 pending_vocab.append(w)
 
-            # Word-Family Deduplication on Syllabus Items:
-            # If syllabus list has multiple items from the same morphological family (e.g. 'recognize' & 'recognition'),
-            # cluster them and retain the single most pedagogically significant one (higher CEFR or longer headword).
-            clusters: List[List[str]] = []
-            spacy_nlp = LinguisticEngine.get_spacy()
-
-            def _get_item_pos(w_str: str) -> str:
-                if not spacy_nlp:
-                    return ""
-                doc_t = spacy_nlp(w_str)
-                return doc_t[0].pos_ if doc_t and len(doc_t) > 0 else ""
-
-            for w in pending_vocab:
-                w_clean = w.strip().lower()
-                w_pos = _get_item_pos(w_clean)
-                placed = False
-                for c in clusters:
-                    # If two items share the same word family BUT have different parts of speech
-                    # (e.g. 'recognize' [VERB] vs 'recognition' [NOUN]), do NOT consolidate them.
-                    # Both serve distinct pedagogical functions in the curriculum.
-                    if any(LinguisticEngine.are_same_word_family(w_clean, cw) and w_pos == _get_item_pos(cw) for cw in c):
-                        c.append(w_clean)
-                        placed = True
-                        break
-                if not placed:
-                    clusters.append([w_clean])
-
             cleaned_syllabus_vocab = []
-            cefr_rank_map = {'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6}
-            for c in clusters:
-                scored = []
-                for item in c:
-                    e = LinguisticEngine.get_ldoce_entry(item)
-                    has_ldoce = bool(e and e.get("senses"))
-                    if not has_ldoce:
-                        logger.info(f"🚫 [Lexicon Gate] Dropped syllabus candidate '{item}' because it has no standalone Pedagogical Lexicon entry.")
-                        continue
+            for item in pending_vocab:
+                w_clean = item.strip().lower()
+                if not w_clean or w_clean in cleaned_syllabus_vocab:
+                    continue
+                e = LinguisticEngine.get_pedlex_entry(w_clean)
+                has_pedlex = bool(e and e.get("senses"))
+                if not has_pedlex:
+                    wn_mod = LinguisticEngine.get_wordnet()
+                    has_pedlex = bool(wn_mod and wn_mod.synsets(w_clean))
+                if not has_pedlex:
+                    logger.info(f"🚫 [Lexicon Gate] Dropped syllabus candidate '{w_clean}' because it has no standalone Pedagogical Lexicon or WordNet entry.")
+                    continue
+                cleaned_syllabus_vocab.append(w_clean)
 
-                    # Textual presence check in source text sentence_pool.
-                    # The syllabus declares the citation form; the passage almost never
-                    # prints it. 'voice' occurs only as 'voices' and 'stranger' only as
-                    # 'strangers', so an exact \b match dropped both from
-                    # Book_1_Unit_1_Passage_A although the text used them. Every other
-                    # attestation test in the engine is inflection-aware (text_contains_form
-                    # for anchors, A1 for distractors); this gate has to agree with them or
-                    # the pipeline contradicts itself about what the passage contains.
-                    item_in_text = False
-                    if sentence_pool:
-                        for s in sentence_pool.values():
-                            if LinguisticEngine.text_contains_form(s, item):
-                                item_in_text = True
-                                break
-                    else:
-                        item_in_text = True
-
-                    if not item_in_text:
-                        logger.info(f"🚫 [Textual Gate] Dropped syllabus candidate '{item}' because it does not appear in source text.")
-                        continue
-
-                    doc_item = spacy_nlp(item) if spacy_nlp else None
-                    lem = doc_item[0].lemma_.lower() if doc_item and len(doc_item) > 0 else item
-                    is_base = 1 if lem == item else 0
-                    lvl = LinguisticEngine.get_word_cefr(item)
-                    rank = cefr_rank_map.get(lvl, 3)
-                    scored.append((is_base, rank, len(item), item))
-
-                if scored:
-                    scored.sort(reverse=True)
-                    chosen = scored[0][3]
-                    if len(c) > 1:
-                        logger.info(f"🧬 Consolidated syllabus word-family cluster {c} -> '{chosen}'")
-                    cleaned_syllabus_vocab.append(chosen)
-
-            # The syllabus is a floor, not a ceiling. Mandatory declared items must not be truncated by v_count.
-            v_target_num = max(len(cleaned_syllabus_vocab), v_count)
-            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified to {len(cleaned_syllabus_vocab)} items).")
+            # Extraction counts strictly respect compile_defaults (v_count) from wiki_config.json
+            v_target_num = v_count
+            logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified to {len(cleaned_syllabus_vocab)} items, target count: {v_count}).")
 
             vocab_bullets = []
-            for w in cleaned_syllabus_vocab:
+            for w in cleaned_syllabus_vocab[:v_target_num]:
                 clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
                 target_tok = clean_w.replace('-', '')
                 matching_sent = ""
                 matching_sid = ""
                 if sentence_pool:
-                    # Same inflection-aware rule as the gate above: the anchor sentence for
-                    # 'voice' is the one that actually prints 'voices'.
                     for sid, s in sentence_pool.items():
                         s_lower = s.lower()
                         if (LinguisticEngine.text_contains_form(s, clean_w)
@@ -2266,18 +2257,18 @@ class WikiProcessor:
 
             v_syllabus_sec = (
                 f"\n### TARGET VOCABULARY LIST ###\n"
-                f"The text has {len(cleaned_syllabus_vocab)} syllabus items:\n"
+                f"The text has {len(vocab_bullets)} syllabus items:\n"
                 + "\n".join(vocab_bullets) + "\n\n"
-                f"Extract all {len(cleaned_syllabus_vocab)} syllabus items listed above. For each word, adopt the exact headword into 'word', copy its authentic sentence into 'quoted_sentence' (using its pre-located sentence anchor), and craft an academic definition and new example_usage.\n\n"
+                f"Extract all {len(vocab_bullets)} syllabus items listed above. For each word, adopt the exact headword into 'word', copy its authentic sentence into 'quoted_sentence' (using its pre-located sentence anchor), and craft an academic definition and new example_usage.\n\n"
             )
 
         e_syllabus_sec = ""
         if syllabus_expressions:
-            logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown.")
-            expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions])
+            logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown (target count: {e_count}).")
+            expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions[:e_count]])
             e_syllabus_sec = (
                 f"\n### TARGET EXPRESSIONS LIST ###\n"
-                f"The text has {len(syllabus_expressions)} syllabus multi-word candidate items:\n"
+                f"The text has {len(syllabus_expressions[:e_count])} syllabus multi-word candidate items:\n"
                 f"{expr_bullets}\n\n"
                 f"Extract all designated syllabus expressions present in the passage below. For each expression, adopt its canonical headword into 'word', copy its authentic sentence into 'quoted_sentence', and craft an academic definition and new example_usage.\n\n"
             )
@@ -2294,7 +2285,10 @@ class WikiProcessor:
             )
 
         # Deterministically mine genuine academic grammar skeletons from sentence pool via spaCy
-        grammar_skeletons = LinguisticEngine.mine_grammar_skeletons(sentence_pool, target_count=g_count, syllabus_grammar=syllabus_grammar)
+        g_cefr_band = LinguisticEngine.resolve_grammar_cefr_band(raw_source_text)
+        grammar_skeletons = LinguisticEngine.mine_grammar_skeletons(
+            sentence_pool, target_count=g_count, syllabus_grammar=syllabus_grammar, cefr_band=g_cefr_band
+        )
         g_skeletons_sec = ""
         if grammar_skeletons:
             logger.info(f"🏛️ Mined {len(grammar_skeletons)} deterministic academic grammar skeletons from text.")
@@ -2311,12 +2305,8 @@ class WikiProcessor:
                 + "\n".join(skeleton_bullets) + "\n\n"
             )
 
-        # Deterministically mine genuine academic expressions and collocations (ACL + spaCy + OCD)
-        # Always extract expression skeletons with standardized formulas (e.g. hear [one's] voice, keep in touch with [sb]),
-        # prioritizing syllabus_expressions when provided.
-        # When syllabus_expressions is explicitly provided by the user/curriculum, respect it strictly
-        # without polluting it with synthetic or uncurated expressions.
-        target_expr_count = len(syllabus_expressions) if syllabus_expressions else e_count
+        # Deterministically mine genuine academic expressions and collocations
+        target_expr_count = e_count
         expression_skeletons = LinguisticEngine.mine_expression_skeletons(
             raw_source_text,
             target_count=target_expr_count,
@@ -2338,8 +2328,7 @@ class WikiProcessor:
                 + "\n".join(expr_skel_bullets) + "\n\n"
             )
 
-        # Deterministically mine genuine academic vocabulary targets (AWL + Lemmatization)
-        # If no syllabus_vocab is provided in markdown, automatically extract top AWL/academic words from text
+        # Deterministically mine genuine academic vocabulary targets
         v_skeletons_sec = ""
         vocab_skeletons = []
         if not syllabus_vocab:
@@ -2361,7 +2350,7 @@ class WikiProcessor:
                 )
 
         # Prepare kwargs with indexed content for extractions (with pristine fallback)
-        target_vocab_count = v_target_num if syllabus_vocab else (len(vocab_skeletons) if vocab_skeletons else v_count)
+        target_vocab_count = v_count
         v_kwargs = {
             "content": indexed_content or raw_source_text,
             "count": target_vocab_count,
@@ -2451,39 +2440,27 @@ class WikiProcessor:
                 )
                 e_items_list = []
                 for it in raw_e_items:
-                    # Syllabus Fallback Grounding:
-                    # If an item was explicitly declared in syllabus_expressions but the strict multi-word cascade
-                    # returned no definition (e.g. 'toward the end of' -> sub-phrase 'the end of', or
-                    # 'show thanks to' -> head noun 'thanks' sense 2), perform deterministic fallback grounding
-                    # directly against Pedagogical Lexicon to ensure declared syllabus requirements are 100% fulfilled.
                     if not str(it.get("definition", "")).strip() and syllabus_expressions:
                         w_raw = it.get("word", "")
                         clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w_raw).strip().lower()
-                        quote_sent = it.get("quoted_sentence", "")
                         if 'end of' in clean_w:
                             sub_def, sub_ex, sub_src = LinguisticEngine.expression_definition_evidence('the end of', 'set phrase')
-                            if sub_def:
+                            if sub_def and sub_ex:
                                 it["definition"] = sub_def
-                                if sub_ex:
-                                    it["example_usage"] = sub_ex
-                                elif not it.get("example_usage"):
-                                    it["example_usage"] = quote_sent
+                                it["example_usage"] = sub_ex
                                 it["definition_source"] = sub_src
                                 logger.info(f"🎯 Grounded syllabus expression '{w_raw}' via sub-phrase 'the end of' ({sub_src})")
 
-                    # F2: no Longman block, phrase row or sense defines this unit, so the cascade
-                    # returned nothing. Ship no expression rather than the invented
-                    # 'A core idiomatic ... functioning in ...' filler.
-                    if not str(it.get("definition", "")).strip():
+                    # Evidence-Completeness Gate: ship no expression lacking an authoritative definition or distinct corpus example.
+                    if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
                         logger.warning(
-                            f"🚫 F2 gate: no lexicon host defines '{it.get('word', '')}' "
+                            f"🚫 Gate 2 (DROP_INCOMPLETE_LEXICON): incomplete lexicon evidence for '{it.get('word', '')}' "
                             f"(source tier: '{it.get('definition_source', '')}') - expression dropped"
                         )
                         continue
                     audit = it.get("design_audit", "")
                     if it.get("definition_source"):
-                        # The tier the definition was built on travels with the row so the audit
-                        # shows which Longman host - block, phrase row, sense pattern - owns it.
+                        # Record which PedLex host (block, phrase row, sense pattern) owns the definition.
                         audit = f"{audit} -> [DEF: {it['definition_source']}]"
                     e_item = ExpressionItem(
                         design_audit=audit,
@@ -2495,8 +2472,8 @@ class WikiProcessor:
                     )
                     e_items_list.append(e_item)
 
-                # Backfill genuine expressions from text only when syllabus_expressions is not explicitly provided
-                if not syllabus_expressions and len(e_items_list) < target_expr_count:
+                # Backfill genuine expressions from text when e_items_list has fewer than target_expr_count
+                if len(e_items_list) < target_expr_count:
                     existing_expr_tokens = {
                         re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower()
                         for it in e_items_list
@@ -2536,7 +2513,7 @@ class WikiProcessor:
             # dropped phrase silently takes the words inside it with it. 'smart' disappeared
             # from Book_1_Unit_1_Passage_A exactly this way when 'make smart choices' was
             # dropped for want of a definition.
-            if f12_suppressed_atoms and det_vocab_data is not None:
+            if f12_suppressed_atoms and det_vocab_data is not None and len(det_vocab_data.vocabulary) < target_vocab_count:
                 shipped_atoms: Set[str] = set()
                 for e_row in (det_expressions_data.expressions if det_expressions_data else []):
                     shipped_atoms |= self.expression_constituent_atoms(e_row.word)
@@ -2561,6 +2538,20 @@ class WikiProcessor:
                     rescued.append(w)
 
                 if rescued:
+                    existing_v_words = {v.word.strip().lower() for v in det_vocab_data.vocabulary}
+                    rescued = [
+                        w for w in rescued
+                        if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in existing_v_words
+                        and not any(
+                            LinguisticEngine.are_same_word_family(
+                                re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower(), ew
+                            )
+                            for ew in existing_v_words
+                        )
+                    ]
+                needed_slots = max(0, target_vocab_count - len(det_vocab_data.vocabulary))
+                rescued = rescued[:needed_slots]
+                if rescued:
                     logger.info(
                         f"♻️ [F12 Recovery] Re-admitting {rescued} to vocabulary: the expressions "
                         f"that were to carry them shipped no definition."
@@ -2570,14 +2561,21 @@ class WikiProcessor:
                         syllabus_vocab=rescued,
                         target_count=len(rescued)
                     ):
-                        det_vocab_data.vocabulary.append(VocabularyItem(
-                            design_audit=it.get("design_audit", ""),
-                            word=it["word"],
-                            definition=it["definition"],
-                            quoted_sentence=it["quoted_sentence"],
-                            example_usage=it["example_usage"],
-                            part_of_speech=it.get("part_of_speech", "noun")
-                        ))
+                        if len(det_vocab_data.vocabulary) >= target_vocab_count:
+                            break
+                        cand_w = it["word"].strip().lower()
+                        if cand_w not in existing_v_words and not any(
+                            LinguisticEngine.are_same_word_family(cand_w, ew) for ew in existing_v_words
+                        ):
+                            existing_v_words.add(cand_w)
+                            det_vocab_data.vocabulary.append(VocabularyItem(
+                                design_audit=it.get("design_audit", ""),
+                                word=it["word"],
+                                definition=it["definition"],
+                                quoted_sentence=it["quoted_sentence"],
+                                example_usage=it["example_usage"],
+                                part_of_speech=it.get("part_of_speech", "noun")
+                            ))
 
         # Deterministic Grammar Extraction (0 Tokens, Pure Computational Syntax + COBUILD Common Learner Pitfalls)
         det_grammar_data = None
@@ -2708,11 +2706,12 @@ class WikiProcessor:
                         if expression_skeletons:
                             w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
                             w_toks = set(re.findall(r'[a-zA-Z]+', w_clean))
+                            is_multi_or_slotted = len(w_toks) > 1 or bool(re.search(r"\[(?:one's|oneself|sth|sb|sth/sb|sb/sth)\]", w, re.IGNORECASE))
                             # 1.1 Match by token similarity with skeleton phrase
-                            if w_toks:
+                            if w_toks and is_multi_or_slotted:
                                 for skel in expression_skeletons:
                                     skel_toks = set(re.findall(r'[a-zA-Z]+', skel.get("phrase", "").lower()))
-                                    if w_toks and skel_toks and (w_toks == skel_toks or w_toks.issubset(skel_toks) or skel_toks.issubset(w_toks)):
+                                    if w_toks and skel_toks and (w_toks == skel_toks or (len(skel_toks) > 1 and len(w_toks) > 1 and (w_toks.issubset(skel_toks) or skel_toks.issubset(w_toks)))):
                                         return skel.get("pattern_formula", w), skel.get("type", "collocation")
 
                             # 1.2 Match by sid only if the skeleton phrase matches the expression headword or audit
@@ -2860,11 +2859,8 @@ class WikiProcessor:
                                 logger.info(f"✂️ Code Gate: Pruning exact duplicate item '{clean_w}'")
                                 break
                         else:
-                            # Single-word family deduplication (exempt explicit syllabus candidates)
-                            is_syllabus_item = False
-                            if syllabus_vocab:
-                                is_syllabus_item = any(clean_w == sw.lower() or clean_w == re.sub(r'[^\w]', '', sw.lower()) for sw in syllabus_vocab)
-                            if not is_syllabus_item and LinguisticEngine.are_same_word_family(clean_w, existing_w):
+                            # Single-word family deduplication across all single-word items
+                            if LinguisticEngine.are_same_word_family(clean_w, existing_w):
                                 is_family_duplicate = True
                                 logger.info(f"✂️ Code Gate: Pruning duplicate word-family item '{clean_w}' (subsumed by '{existing_w}')")
                                 break
@@ -3026,6 +3022,7 @@ class WikiProcessor:
         unit_headwords: List[str] = []
         unit_grammar_patterns: List[str] = []
         banned_quiz_sentences: List[str] = []
+        vocab_sense_map: Dict[str, str] = {}
 
         if template_name == "vocabulary":
             raw_vocab = data.get("content", "")
@@ -3047,6 +3044,9 @@ class WikiProcessor:
                     logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode, count capped at {effective_count}).")
                     cloze_bullets = []
                     for idx, c in enumerate(raw_cloze_items[:effective_count], 1):
+                        tw_key = str(c.get("target_word") or "").strip().lower()
+                        if tw_key and c.get("definition"):
+                            vocab_sense_map[tw_key] = str(c["definition"]).strip()
                         opts_str = ", ".join(c.get("precomputed_distractors", []) or c.get("precomputed_options", []))
                         cloze_bullets.append(
                             f"### Item {idx} ###\n"
@@ -3075,6 +3075,9 @@ class WikiProcessor:
                     logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
                     skeleton_bullets = []
                     for idx, s in enumerate(skeletons[:effective_count], 1):
+                        tw_key = str(s.get("target_word") or "").strip().lower()
+                        if tw_key and s.get("definition"):
+                            vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
                         opts_str = ", ".join(s.get("prescribed_options", []))
                         micro_task_str = s.get("micro_task", "")
                         pattern_line = f"- Pattern: {s['best_pattern']}\n" if s.get("best_pattern") else ""
@@ -3447,6 +3450,12 @@ class WikiProcessor:
                         source_context = ""
 
                     quiz_dict_eval = dataclasses.asdict(quiz_obj) if dataclasses.is_dataclass(quiz_obj) else quiz_obj
+                    if template_name == "vocabulary" and vocab_sense_map and isinstance(quiz_dict_eval, dict):
+                        for q_item in quiz_dict_eval.get("questions", []):
+                            if isinstance(q_item, dict):
+                                tw_q = str(q_item.get("target_word") or "").strip().lower()
+                                if tw_q in vocab_sense_map and not q_item.get("contextual_sense"):
+                                    q_item["contextual_sense"] = vocab_sense_map[tw_q]
 
                     # ---------------------------------------------------------
                     # Step 1: Pre-Audit Level 1 Code Gate (Sanitize & Surface Flaws)
@@ -3468,7 +3477,8 @@ class WikiProcessor:
                         l1_defective, l1_defects = self.audit_listening_integrity(
                             quiz_dict_eval,
                             script_text=source_context,
-                            cefr_level=kwargs.get("cefr_level", "B2")
+                            cefr_level=kwargs.get("cefr_level", "B2"),
+                            unit_headwords=unit_headwords
                         )
                     elif template_name == "translation":
                         l1_defective, l1_defects = self.audit_translation_integrity(
@@ -3566,15 +3576,32 @@ class WikiProcessor:
                                             txt = o_val.get("text") or o_val.get("option_text") or o_val.get("sentence") or ""
                                             if o_val.get("is_correct") is True and cand_corr_idx is None:
                                                 cand_corr_idx = o_i
-                                            normalized_opts.append(txt)
                                         else:
-                                            normalized_opts.append(str(o_val))
+                                            txt = str(o_val)
+                                        if template_name == "vocabulary":
+                                            txt = re.sub(r'\s*\([^)]*\)', '', str(txt)).strip()
+                                        else:
+                                            txt = re.sub(
+                                                r'\s*\((?:synonym|antonym|distractor|correct|key|target|meaning|i\.e\.|e\.g\.)\b[^)]*\)',
+                                                '',
+                                                str(txt),
+                                                flags=re.IGNORECASE
+                                            ).strip()
+                                        normalized_opts.append(txt)
                                     candidate_cure["options"] = normalized_opts
                                     if cand_corr_idx is not None:
                                         try:
                                             candidate_cure["correct_answer_index"] = int(cand_corr_idx)
                                         except (ValueError, TypeError):
                                             pass
+
+                                if isinstance(candidate_cure.get("explanation"), str):
+                                    candidate_cure["explanation"] = re.sub(
+                                        r'\s*(?:This\s+(?:rewrite|revision|item|stem|change)\s+(?:ensures|eliminates|prevents|fixes|resolves)[^.\n]*\.?)+\s*$',
+                                        '',
+                                        candidate_cure["explanation"],
+                                        flags=re.IGNORECASE
+                                    ).strip()
 
                                 orig_item = orig_questions[item_slot] if 0 <= item_slot < len(orig_questions) else {}
                                 orig_dict = orig_item if isinstance(orig_item, dict) else (dataclasses.asdict(orig_item) if dataclasses.is_dataclass(orig_item) else {})
@@ -3671,7 +3698,8 @@ class WikiProcessor:
                                     cure_l1_flagged, cure_l1_defects = self.audit_listening_integrity(
                                         {"questions": [healed_item]},
                                         script_text=source_context,
-                                        cefr_level=cure_cefr
+                                        cefr_level=cure_cefr,
+                                        unit_headwords=unit_headwords
                                     )
                                     cure_item_failed = bool(cure_l1_flagged)
                                 elif template_name == "translation":
@@ -4383,8 +4411,7 @@ class WikiProcessor:
                     inner = val_str[2:-2]
                 else:
                     inner = val_str
-                # Backlog F1: nested brackets like [sb/sth] inside a wikilink break Obsidian
-                # syntax at the first ']]'. Normalize inner slot brackets to parentheses.
+                # Normalize inner brackets to parentheses so wikilinks [[...]] stay valid in Obsidian
                 inner = inner.replace("[", "(").replace("]", ")")
                 header_val = f"[[{inner}]]"
                 
@@ -4410,6 +4437,7 @@ class WikiProcessor:
                     has_pos = any(k.lower() == "part_of_speech" and v for k, v in body_entries)
                     if primary_key == "word":
                         raw_quote = next((v for k, v in body_entries if k.lower() in ("quoted_sentence", "quote")), "")
+                        raw_defn = next((v for k, v in body_entries if k.lower() == "definition"), "")
                         headword = str(header_entry[1])
                         current_pos_val = next((v for k, v in body_entries if k.lower() == "part_of_speech"), None)
                         authoritative_pos = LinguisticEngine.resolve_item_pos(headword, str(raw_quote), manual_pos=current_pos_val)
@@ -4420,6 +4448,18 @@ class WikiProcessor:
                                 if field_key.lower() == "part_of_speech":
                                     body_entries[j] = (field_key, authoritative_pos)
                                     break
+
+                        # Zero-Token Pedagogical Enrichment (<GRAM>, Collocations, Grammar Boxes, Thesaurus)
+                        existing_keys = {k.lower() for k, _ in body_entries}
+                        enrichment = LinguisticEngine.get_vocab_card_enrichment(
+                            word=headword,
+                            pos=authoritative_pos,
+                            definition=str(raw_defn or ""),
+                            quote=str(raw_quote or "")
+                        )
+                        for e_key in ("collocations", "grammar_usage", "thesaurus_note"):
+                            if enrichment.get(e_key) and e_key not in existing_keys:
+                                body_entries.append((e_key, enrichment[e_key]))
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -4436,7 +4476,10 @@ class WikiProcessor:
                         "word_cefr_level",
                         "definition",
                         "quoted_sentence",
-                        "example_usage"
+                        "example_usage",
+                        "collocations",
+                        "grammar_usage",
+                        "thesaurus_note"
                     ],
                     "expressions": [
                         "part_of_speech",
@@ -4460,6 +4503,9 @@ class WikiProcessor:
                     "part_of_speech": "Part of Speech",
                     "word_cefr_level": "Word CEFR Level",
                     "cefr_level": "CEFR Level",
+                    "collocations": "Collocations",
+                    "grammar_usage": "Grammar & Usage",
+                    "thesaurus_note": "Thesaurus Note",
                 }
 
                 # Pre-fetch sentence pool for deterministic quote snapping if source content is available
@@ -4469,13 +4515,10 @@ class WikiProcessor:
 
                 for fname, fval in sorted_body_entries:
                     label = LABEL_OVERRIDES.get(fname.lower(), fname.replace("_", " ").title())
-                    # F2: an invented fallback definition never reaches the page. The cascade
-                    # writes '' when no lexicon host grounds a unit, and a boilerplate that
-                    # arrived by another path is dropped here instead of printed as fact.
                     if fname.lower() == "definition" and fval and \
                             LinguisticEngine.is_boilerplate_definition(str(fval)):
                         logger.warning(
-                            f"🚫 F2 gate: invented definition blocked for "
+                            f"🚫 Invented definition blocked for "
                             f"{header_val}: {str(fval).strip()[:70]}"
                         )
                         continue
@@ -4496,8 +4539,8 @@ class WikiProcessor:
                             fval_str = str(fval).strip()
                             # Convert to Simplified Plan B layout if not already multiline
                             if "\n" not in fval_str:
-                                # Strip prefix like 'LDOCE Grammar Alert (TAG): ', 'COBUILD Warning (TAG): ', or 'Grammar Warning (TAG): '
-                                m_tag = re.match(r'^(?:LDOCE\s+Grammar\s+Alert|COBUILD\s+Warning|Grammar\s+Warning)\s*\(([^)]+)\)\s*:\s*(.*)', fval_str, re.DOTALL | re.IGNORECASE)
+                                # Strip prefix like 'PedLex Grammar Alert (TAG): ', 'COBUILD Warning (TAG): ', or 'Grammar Warning (TAG): '
+                                m_tag = re.match(r'^(?:(?:PedLex|LDOCE)\s+Grammar\s+Alert|COBUILD\s+Warning|Grammar\s+Warning)\s*\(([^)]+)\)\s*:\s*(.*)', fval_str, re.DOTALL | re.IGNORECASE)
                                 if m_tag:
                                     tag = m_tag.group(1).strip()
                                     body = m_tag.group(2).strip()
@@ -4829,8 +4872,12 @@ class WikiProcessor:
                     pending_v.append(w)
                 filtered_syl_v = pending_v
 
+            compile_defaults = self.config.get("compile_defaults") or {}
+            v_default_k = compile_defaults.get("vocabulary", 20)
+            e_default_k = compile_defaults.get("expressions", 5)
+
             with LinguisticEngine.wsd_log_session(core_name):
-                target_k = len(filtered_syl_v) if filtered_syl_v else 20
+                target_k = v_default_k
                 det_v = LinguisticEngine.extract_deterministic_vocabulary(
                     clean_p,
                     syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
@@ -4848,7 +4895,7 @@ class WikiProcessor:
                     for it in (det_v or [])
                 ]
 
-                target_e_k = len(syl_e) if syl_e else 5
+                target_e_k = e_default_k
                 det_e = LinguisticEngine.extract_deterministic_expressions(
                     clean_p,
                     target_count=target_e_k,
@@ -4857,7 +4904,7 @@ class WikiProcessor:
                 shipped_atoms: Set[str] = set()
                 e_items = []
                 for it in (det_e or []):
-                    if not str(it.get("definition", "")).strip():
+                    if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
                         continue
                     shipped_atoms |= self.expression_constituent_atoms(it.get("word", ""))
                     e_items.append(
@@ -4871,7 +4918,7 @@ class WikiProcessor:
                         )
                     )
 
-                if f12_suppressed:
+                if f12_suppressed and len(v_items) < target_k:
                     rescued_raw = [
                         w for (w, _parent) in f12_suppressed
                         if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
@@ -4884,21 +4931,29 @@ class WikiProcessor:
                         )
                     ]
                     if rescued:
+                        existing_v_words = {v.word.strip().lower() for v in v_items}
+                        rescued = [w for w in rescued if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in existing_v_words]
+                    if rescued:
+                        remaining_slots = max(0, target_k - len(v_items))
                         for it in LinguisticEngine.extract_deterministic_vocabulary(
                             clean_p,
                             syllabus_vocab=rescued,
-                            target_count=len(rescued)
+                            target_count=min(len(rescued), remaining_slots)
                         ):
-                            v_items.append(
-                                VocabularyItem(
-                                    word=it['word'],
-                                    part_of_speech=it.get('part_of_speech', 'noun'),
-                                    definition=it.get('definition', ''),
-                                    quoted_sentence=it.get('quoted_sentence', ''),
-                                    example_usage=it.get('example_usage', ''),
-                                    design_audit=it.get('design_audit', '')
+                            if len(v_items) >= target_k:
+                                break
+                            if it['word'].strip().lower() not in existing_v_words:
+                                existing_v_words.add(it['word'].strip().lower())
+                                v_items.append(
+                                    VocabularyItem(
+                                        word=it['word'],
+                                        part_of_speech=it.get('part_of_speech', 'noun'),
+                                        definition=it.get('definition', ''),
+                                        quoted_sentence=it.get('quoted_sentence', ''),
+                                        example_usage=it.get('example_usage', ''),
+                                        design_audit=it.get('design_audit', '')
+                                    )
                                 )
-                            )
 
             all_v_items = v_items + e_items
             fresh_md = ""
@@ -4952,7 +5007,8 @@ class WikiProcessor:
                         fresh_vocab = fresh_v_md
 
                     indexed_text, pool = LinguisticEngine.tokenize_and_index_sentences(clean_passage)
-                    target_k_g = len(syl_g) if syl_g else 5
+                    compile_defaults = self.config.get("compile_defaults") or {}
+                    target_k_g = compile_defaults.get("grammar", 5)
                     det_g = LinguisticEngine.extract_deterministic_grammar(
                         clean_passage,
                         sentence_pool=pool,

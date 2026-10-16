@@ -30,7 +30,7 @@ class ExpertAuditor:
         judge_model = config.get("judge_model")
         if judge_model and str(judge_model).strip():
             return str(judge_model).strip()
-        return config.get("model", "gemma4:12b")
+        return str(config.get("model") or "").strip()
 
     @classmethod
     def format_quiz_for_blind_audit(cls, source_text: str, questions: List[Dict[str, Any]], is_translation: bool = False, include_source: bool = True) -> str:
@@ -73,6 +73,9 @@ class ExpertAuditor:
             tgt_word = q.get("target_word", "")
             if tgt_word and not is_translation:
                 lines.append(f"Target Word to Assess: {tgt_word}")
+                ctx_sense = q.get("contextual_sense", "")
+                if ctx_sense:
+                    lines.append(f"Intended Contextual Sense: {ctx_sense}")
             timestamp = q.get("timestamp", "")
             if timestamp:
                 lines.append(f"Timestamp Segment: {timestamp}")
@@ -505,9 +508,14 @@ class ExpertAuditor:
             # Reconcile summary verdict with transparent disclosure
             current_summary = str(report_dict.get("summary_verdict", ""))
             clean_summary = re.sub(
-                r'(?i)(?:no\s+(?:fatal\s+flaws?|double[\-\s]*keys?)[^.\n]*[.\n]*)',
+                r'^(?:\[REVIEW NEEDED:[^\]]*\]\.?\s*)+',
                 '',
                 current_summary
+            ).strip()
+            clean_summary = re.sub(
+                r'(?i)(?:no\s+(?:fatal\s+flaws?|double[\-\s]*keys?)[^.\n]*[.\n]*)',
+                '',
+                clean_summary
             ).strip()
 
             flaw_details = []

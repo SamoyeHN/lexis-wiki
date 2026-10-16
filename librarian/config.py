@@ -47,7 +47,8 @@ DEFAULT_CONFIG = {
     "max_tokens": 8192,
     "enable_authentic_cloze": True,
     "disable_pedlex": False,
-    "disable_ldoce": False
+    "disable_ldoce": False,
+    "dashboard_port": 8000
 }
 
 class Config:
@@ -133,11 +134,14 @@ class Config:
 
     def update_config(self, key, value):
         """Generic config update helper."""
+        self.load_config()
         config_path = self.project_root / "wiki_config.json"
         self.data[key] = value
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=4)
+            if config_path.exists():
+                self._config_mtime = config_path.stat().st_mtime
             return True, f"{key} updated to {value}"
         except Exception as e:
             return False, str(e)

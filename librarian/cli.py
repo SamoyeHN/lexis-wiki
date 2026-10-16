@@ -51,7 +51,8 @@ def main():
 
     # Dashboard command
     dashboard_parser = subparsers.add_parser("dashboard", help="Start the interactive local dashboard server")
-    dashboard_parser.add_argument("--port", type=int, default=8000, help="Port to run the dashboard server on (default: 8000)")
+    dashboard_parser.add_argument("--port", type=int, default=None, help="Port to run the dashboard server on (default: from wiki_config.json or 8000)")
+    dashboard_parser.add_argument("--host", type=str, default=None, help="Host/IP to bind the dashboard server on (default: from wiki_config.json or localhost)")
 
     # Video Import command
     video_import_parser = subparsers.add_parser("video-import", help="Import a video transcript (YouTube/Local File) into the self-contained unit structure")
@@ -270,7 +271,13 @@ def main():
         import time
         from .dashboard import DashboardHTTPRequestHandler, DashboardState
 
-        port = args.port
+        from urllib.parse import urlparse
+        cfg_dash_url = config.get("dashboard_url") or config.get("server_url") or ""
+        parsed_dash = urlparse(cfg_dash_url) if cfg_dash_url else None
+        cfg_host = config.get("dashboard_host") or (parsed_dash.hostname if parsed_dash and parsed_dash.hostname else None) or "localhost"
+        cfg_port = config.get("dashboard_port") or (parsed_dash.port if parsed_dash and parsed_dash.port else None) or 8000
+        port = int(args.port if args.port is not None else cfg_port)
+        display_host = args.host if args.host is not None else cfg_host
 
         # Dual-output logging: append dashboard output to logs/dashboard.log with ISO timestamps and size rotation;
         # when run in a terminal, also mirror it to the console. Under pythonw
@@ -469,8 +476,10 @@ def main():
 
         with httpd:
             httpd.timeout = 0.5  # Check for KeyboardInterrupt every 0.5s on Windows
-            url = f"http://localhost:{port}"
+            url = f"http://{display_host}:{port}"
             print(f"Dashboard server is running at: {url}")
+            print(f"LLM API endpoint (wiki_config.json): {config.get('api_url')} (model: {config.get('model')})")
+            print(f"TTS API endpoint (wiki_config.json): {config.get('tts_url')} (engine: {config.get('tts_engine')})")
             print("Closing the browser window will automatically stop this server and free the port.")
             print("(Ctrl+C also works.)")
             

@@ -138,7 +138,7 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         score2, flags2 = _score_pedagogy([over], "grammar", SAMPLE_SOURCE)
         self.assertEqual(score2, 0.0)
         self.assertTrue(
-            any("imitation_example exceeds the CEFR B2 ceiling of the CEFR A2 source passage" in f
+            any("imitation_example exceeds the CEFR C1 ceiling of the CEFR B1 source passage" in f
                 and "elusive" in f for f in flags2),
             flags2,
         )

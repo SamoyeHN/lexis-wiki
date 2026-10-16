@@ -1,7 +1,6 @@
 """
 Declarative Multi-Word Expression Pattern Definitions and ExpressionPatternEngine.
-Implements Scheme 3: Declarative Multi-Word Expression Pattern DSL for robust, zero-token phrase and collocation extraction.
-Decouples syntactic tree topologies, slot extraction, transitivity valency, and canonical formula generation from monolithic procedural code.
+Provides a declarative pattern DSL for zero-token phrase and collocation extraction.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Set
@@ -516,7 +515,7 @@ class ExpressionPatternEngine:
                 # to prevent incidental adjunct prepositions (e.g. 'show up on time') from hijacking
                 try:
                     from librarian.linguistics import LinguisticEngine
-                    entry = LinguisticEngine.get_ldoce_entry(v_lemma)
+                    entry = LinguisticEngine.get_pedlex_entry(v_lemma)
                     pvs = (entry.get("phrasal_verbs") or []) if entry else []
                     is_true_three_part = any(pv.get("phrase") == cand_phrase for pv in pvs)
                     if not is_true_three_part:

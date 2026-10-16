@@ -231,7 +231,7 @@ class TestEvidenceDefects:
         scores = [sense_score("appear", sense_at("appear", i), quote, "verb")
                   for i in (2, 3, 5)]
         assert len(set(scores)) == 1, f"expected a dead tie, got {scores}"
-        assert scores[0] == pytest.approx(10.0)
+        assert scores[0] == pytest.approx(115.0)
         assert sense_score("appear", sense_at("appear", 1), quote, "verb") > scores[0]
 
     def test_tie_is_broken_by_evidence_not_dictionary_order(self):
@@ -363,12 +363,12 @@ class TestEvidenceDefects:
         assert card_block("scooter") is not None, "the atom 'scooter' was rescued"
 
     def test_part_of_speech_label_is_derived_after_the_sense_lock(self):
-        """RC-10: the lock ran on 'preposition', the card is filed as 'function_word',
-        and 'function_word' has no POS code, so the gate is blind."""
+        """RC-10 CLOSED: 'within' is resolved and shipped as 'preposition', while an
+        uncodable POS label like 'function_word' still has no POS code."""
         quote = sent("Within one day")
-        assert L.resolve_item_pos("within", quote) == "function_word"
+        assert L.resolve_item_pos("within", quote) == "preposition"
         assert L._pos_code("function_word") == ""
-        assert "function_word" in (card_block("within") or "")
+        assert "preposition" in (card_block("within") or "")
         with_gate = sense_score("within", sense_at("within", 5), quote, "function_word")
         without_gate = sense_score("within", sense_at("within", 5), quote, None)
         assert with_gate == pytest.approx(without_gate), (
@@ -392,8 +392,8 @@ class TestEvidenceDefects:
         titles = [h.strip().strip("[]").strip().lower() for h in headings]
         single_words = [t for t in titles if " " not in t]
         multi_words = [t for t in titles if " " in t]
-        assert len(single_words) == 29
-        assert len(multi_words) == 7
+        assert len(single_words) == 30
+        assert len(multi_words) == 4
         assert "lone ranger" not in titles
         assert "flying carpet" in titles
 

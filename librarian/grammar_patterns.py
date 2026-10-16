@@ -1,7 +1,6 @@
 """
 Declarative Grammar Pattern Definitions and DependencyMatcher Engine.
-Implements Scheme 1: Declarative Syntax Pattern DSL for robust, zero-token grammar extraction.
-Decouples syntactic tree topologies, slot extraction, and COBUILD formula bindings from monolithic procedural code.
+Provides a declarative syntax pattern DSL for zero-token grammar extraction.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Set
@@ -37,13 +36,13 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
             [
                 {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "dummy_it", "RIGHT_ATTRS": {"LOWER": "it", "DEP": {"IN": ["nsubj", "expl"]}}},
-                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep", "npadvmod", "advmod"]}}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep", "npadvmod"]}, "LOWER": {"NOT_IN": ["time"]}}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "cleft_clause", "RIGHT_ATTRS": {"DEP": {"IN": ["relcl", "ccomp", "advcl"]}}},
             ],
             [
                 {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "dummy_it", "RIGHT_ATTRS": {"LOWER": "it", "DEP": {"IN": ["nsubj", "expl"]}}},
-                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep"]}}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep"]}, "LOWER": {"NOT_IN": ["time"]}}},
                 {"LEFT_ID": "focal_elem", "REL_OP": ">", "RIGHT_ID": "cleft_clause", "RIGHT_ATTRS": {"DEP": "relcl"}},
             ]
         ]
@@ -99,6 +98,20 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         ]
     },
     {
+        "id": "correlative_not_only_but_also",
+        "category": "Rhetoric & Emphasis",
+        "priority": 93,
+        "name": "Correlative Coordination (Not only... but also)",
+        "formula": "not only + [A] + but (also) + [B]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "anchor_root", "RIGHT_ATTRS": {}},
+                {"LEFT_ID": "anchor_root", "REL_OP": ">>", "RIGHT_ID": "neg_part", "RIGHT_ATTRS": {"LOWER": "not", "DEP": {"IN": ["neg", "advmod", "preconj"]}}},
+                {"LEFT_ID": "anchor_root", "REL_OP": ">>", "RIGHT_ID": "coord_conj", "RIGHT_ATTRS": {"LOWER": "but", "POS": "CCONJ"}},
+            ]
+        ]
+    },
+    {
         "id": "antithesis_not_but",
         "category": "Rhetoric & Emphasis",
         "priority": 92,
@@ -113,16 +126,23 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         ]
     },
     {
-        "id": "correlative_not_only_but_also",
+        "id": "resultative_so_such_that",
         "category": "Rhetoric & Emphasis",
-        "priority": 90,
-        "name": "Correlative Coordination (Not only... but also)",
-        "formula": "not only + [A] + but also + [B]",
+        "priority": 91,
+        "name": "Resultative Degree Constructions (So + Adj / Such + NP + that ...)",
+        "formula": "so + [Adj/Adv] + that + [Result Clause]",
         "tree_patterns": [
             [
-                {"RIGHT_ID": "coord_conj", "RIGHT_ATTRS": {"LOWER": "but", "DEP": "cc"}},
-                {"LEFT_ID": "coord_conj", "REL_OP": "<", "RIGHT_ID": "anchor_head", "RIGHT_ATTRS": {}},
-                {"LEFT_ID": "anchor_head", "REL_OP": ">", "RIGHT_ID": "neg_part", "RIGHT_ATTRS": {"LOWER": "not", "DEP": "neg"}},
+                {"RIGHT_ID": "head_pred", "RIGHT_ATTRS": {"POS": {"IN": ["ADJ", "ADV", "VERB", "AUX"]}}},
+                {"LEFT_ID": "head_pred", "REL_OP": ">>", "RIGHT_ID": "so_mod", "RIGHT_ATTRS": {"LOWER": "so", "DEP": "advmod"}},
+                {"LEFT_ID": "head_pred", "REL_OP": ">>", "RIGHT_ID": "res_clause", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "advcl"]}}},
+                {"LEFT_ID": "res_clause", "REL_OP": ">", "RIGHT_ID": "that_mark", "RIGHT_ATTRS": {"LOWER": "that", "DEP": "mark"}},
+            ],
+            [
+                {"RIGHT_ID": "head_np", "RIGHT_ATTRS": {"POS": {"IN": ["NOUN", "PROPN"]}}},
+                {"LEFT_ID": "head_np", "REL_OP": ">>", "RIGHT_ID": "such_mod", "RIGHT_ATTRS": {"LOWER": "such", "DEP": {"IN": ["det", "predet", "amod"]}}},
+                {"LEFT_ID": "head_np", "REL_OP": ">>", "RIGHT_ID": "res_clause", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "advcl", "acl", "relcl"]}}},
+                {"LEFT_ID": "res_clause", "REL_OP": ">", "RIGHT_ID": "that_mark", "RIGHT_ATTRS": {"LOWER": "that", "DEP": {"IN": ["mark", "dobj", "nsubj"]}}},
             ]
         ]
     },
@@ -141,7 +161,7 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                 {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
                 {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
                 {"LEFT_ID": "sub_verb", "REL_OP": ">", "RIGHT_ID": "concessive_marker", "RIGHT_ATTRS": {
-                    "LEMMA": {"IN": ["although", "though", "while", "whereas", "even"]},
+                    "LEMMA": {"IN": ["although", "though", "while", "whereas"]},
                     "DEP": {"IN": ["mark", "advmod"]}
                 }},
             ]
@@ -252,15 +272,52 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                     "POS": {"IN": ["VERB", "AUX"]}
                 }},
                 {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "dobj", "RIGHT_ATTRS": {"DEP": "dobj"}},
-                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "adj_comp", "RIGHT_ATTRS": {"DEP": {"IN": ["oprd", "ccomp", "acomp"]}}},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "adj_comp", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["oprd", "ccomp", "acomp"]},
+                    "POS": {"IN": ["ADJ", "NOUN", "PROPN"]}
+                }},
             ],
             [
                 {"RIGHT_ID": "causative_verb", "RIGHT_ATTRS": {
                     "LEMMA": {"IN": ["make", "find", "render", "keep", "leave", "consider"]},
                     "POS": {"IN": ["VERB", "AUX"]}
                 }},
-                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "adj_comp", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "oprd", "acomp"]}}},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "adj_comp", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["ccomp", "oprd", "acomp"]},
+                    "POS": {"IN": ["ADJ", "NOUN", "PROPN"]}
+                }},
                 {"LEFT_ID": "adj_comp", "REL_OP": ">", "RIGHT_ID": "obj_subj", "RIGHT_ATTRS": {"DEP": {"IN": ["nsubj", "nsubjpass", "dobj"]}}},
+            ]
+        ]
+    },
+    {
+        "id": "causative_bare_infinitive",
+        "category": "Information Packaging",
+        "priority": 82,
+        "name": "Causative Bare-Infinitive Construction",
+        "formula": "[Subject] + make/let/have + [Object] + [Bare Infinitive]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "causative_verb", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["make", "let", "have"]},
+                    "POS": {"IN": ["VERB", "AUX"]}
+                }},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "inf_comp", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["ccomp", "xcomp"]},
+                    "TAG": "VB"
+                }},
+                {"LEFT_ID": "inf_comp", "REL_OP": ">", "RIGHT_ID": "obj_subj", "RIGHT_ATTRS": {"DEP": {"IN": ["nsubj", "dobj"]}}},
+            ],
+            [
+                {"RIGHT_ID": "causative_verb", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["make", "let", "have"]},
+                    "POS": {"IN": ["VERB", "AUX"]}
+                }},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "dobj", "RIGHT_ATTRS": {"DEP": "dobj"}},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "inf_comp", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["ccomp", "xcomp"]},
+                    "TAG": "VB"
+                }},
             ]
         ]
     },
@@ -440,7 +497,8 @@ class GrammarPatternEngine:
                     continue
 
             # Semantic/topological validation for antithesis coordination (not... but...):
-            # 'not' must strictly precede 'but' (not.i < but.i) to prevent '..., but not ...' from misfiring
+            # 'not' must strictly precede 'but' (not.i < but.i) to prevent '..., but not ...' from misfiring,
+            # and must NOT be 'not only/merely/just/simply' (which belongs to correlative_not_only_but_also).
             if string_id == "antithesis_not_but":
                 tokens = [doc[i] for i in token_indices]
                 not_tok = next((t for t in tokens if t.lower_ == "not" and t.dep_ == "neg"), None)
@@ -448,16 +506,43 @@ class GrammarPatternEngine:
                 if not_tok and but_tok:
                     if not (not_tok.i < but_tok.i):
                         continue
+                    next_after_not = doc[not_tok.i + 1].lower_ if not_tok.i + 1 < len(doc) else ""
+                    if next_after_not in ("only", "merely", "just", "simply"):
+                        continue
                 else:
                     continue
 
+            if string_id == "resultative_so_such_that":
+                tokens = [doc[i] for i in token_indices]
+                deg_tok = next((t for t in tokens if t.lower_ in ("so", "such")), None)
+                that_tok = next((t for t in tokens if t.lower_ == "that"), None)
+                if not deg_tok or not that_tok or deg_tok.i >= that_tok.i:
+                    continue
+                if deg_tok.lower_ == "so" and that_tok.i == deg_tok.i + 1:
+                    continue
+
             # Semantic/topological validation for it-cleft sentences:
-            # The subordinate cleft clause must be introduced by a relative/subordinate marker (that, who, whom, etc.)
-            # and cannot simply be an infinitive extraposition ("Is it not a joy to have...")
+            # The subordinate cleft clause must be introduced by a relative/subordinate marker (that, who, whom, etc.),
+            # the copula must NOT have an adjectival complement (acomp, e.g., "It is also true that..."),
+            # and the focal element must be a substantive phrase (not a bare discourse adverb or extraposition noun).
             if string_id == "cleft_it_be_relcl":
                 tokens = [doc[i] for i in token_indices]
                 copula = next((t for t in tokens if t.lemma_ == "be"), None)
                 cleft_clause = next((t for t in tokens if t != copula and t.dep_ in ("relcl", "ccomp", "advcl")), None)
+                focal_elem = next((t for t in tokens if t != copula and t != cleft_clause and t.lower_ != "it"), None)
+                if copula and any(c.dep_ == "acomp" for c in copula.children):
+                    continue
+                _EXTRAPOSITION_NOUNS = {
+                    "surprise", "wonder", "secret", "doubt", "coincidence", "accident",
+                    "pity", "shame", "mystery", "fact", "truth", "news", "use", "good",
+                    "point", "time", "question", "matter"
+                }
+                if (
+                    not focal_elem
+                    or focal_elem.lower_ in ("also", "not", "never", "even", "only", "still", "just", "merely")
+                    or focal_elem.lemma_.lower() in _EXTRAPOSITION_NOUNS
+                ):
+                    continue
                 if cleft_clause:
                     has_cleft_marker = any(
                         c.lower_ in ("that", "who", "whom", "which", "where", "when")
@@ -470,20 +555,42 @@ class GrammarPatternEngine:
 
             # Semantic validation for nonfinite participial adjunct:
             # Must NOT be introduced by interrogative/subordinating adverbs/marks like 'why', 'how', 'when', 'if', 'because'
-            # Must NOT have finite auxiliary verbs (e.g. 'was presented' -> finite passive, not nonfinite participle)
-            # Must NOT be inside quotes as a gerund phrase, and must function as genuine non-finite modifier.
+            # Must NOT have finite auxiliary verbs (e.g. 'was presented' -> finite passive, not nonfinite participle;
+            # note that non-finite 'having' or 'being' as in 'Having seen...' or 'Being delayed...' are valid non-finite auxiliaries!)
             if string_id == "nonfinite_participial_adjunct":
                 tokens = [doc[i] for i in token_indices]
                 part_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 if part_v:
                     has_subordinator = any(child.dep_ in ("mark", "advmod") and child.lemma_.lower() in ("why", "how", "when", "where", "if", "because", "although", "while") for child in part_v.children)
-                    has_aux = any(child.dep_ in ("aux", "auxpass") for child in part_v.children)
+                    has_finite_aux = any(
+                        child.dep_ in ("aux", "auxpass") and child.lower_ not in ("having", "being")
+                        for child in part_v.children
+                    )
                     # If part_v has a mark or adverbial subordinator, or finite auxiliary, it is not a bare nonfinite participial adjunct
-                    if has_subordinator or has_aux:
+                    if has_subordinator or has_finite_aux:
                         continue
                     # Also check if it's introduced by a 'why/how' attached to its head
                     if part_v.head and any(c.lemma_.lower() in ("why", "how", "that") and c.i < part_v.i for c in part_v.head.children):
                         continue
+
+            # Topological validation for shell_noun_complement:
+            # Verify that the complement clause is genuinely introduced by appositive 'that'/'whether' or 'of',
+            # rather than a restrictive relative clause ('which'/'that' acting as nsubj/dobj)
+            if string_id == "shell_noun_complement":
+                tokens = [doc[i] for i in token_indices]
+                shell_tok = next((t for t in tokens if t.pos_ == "NOUN"), None)
+                comp_tok = next((t for t in tokens if t != shell_tok), None)
+                if not shell_tok or not comp_tok:
+                    continue
+                has_appos_marker = any(
+                    c.dep_ == "mark" and c.lower_ in ("that", "whether")
+                    for c in comp_tok.children
+                ) or any(
+                    c.dep_ == "prep" and c.lower_ == "of"
+                    for c in shell_tok.children
+                )
+                if not has_appos_marker:
+                    continue
 
             # Topological validation for absolute construction:
             # The independent participial construction must NOT be introduced by subordinating conjunctions (mark)
@@ -493,7 +600,7 @@ class GrammarPatternEngine:
                 abs_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 if abs_v:
                     has_subordinator = any(child.dep_ == "mark" for child in abs_v.children)
-                    has_aux = any(child.dep_ in ("aux", "auxpass") for child in abs_v.children)
+                    has_aux = any(child.dep_ in ("aux", "auxpass") and child.lower_ not in ("having", "being") for child in abs_v.children)
                     if has_subordinator or has_aux:
                         continue
 
@@ -527,6 +634,15 @@ class GrammarPatternEngine:
                 if not has_to_or_comp:
                     continue
 
+            if string_id == "complex_transitive_adj_complement":
+                tokens = [doc[i] for i in token_indices]
+                if len(tokens) >= 3:
+                    v_tok, dobj_tok, comp_tok = tokens[0], tokens[1], tokens[2]
+                    if comp_tok.dep_ == "conj" or (comp_tok.i > 0 and doc[comp_tok.i - 1].lower_ in ("and", "or", "but")):
+                        continue
+                    if any(t.dep_ == "prep" for t in doc[dobj_tok.i : comp_tok.i]):
+                        continue
+
             # Resolve dynamic slots based on actual tokens in the sentence
             resolved_formula = self._resolve_formula(string_id, base_formula, doc, token_indices)
             seen_ids.add(string_id)
@@ -552,6 +668,11 @@ class GrammarPatternEngine:
             if pattern_id == "fronted_negative_inversion":
                 neg_adv = next((t for t in tokens if t.dep_ in ("advmod", "neg")), tokens[0])
                 return f"{neg_adv.text.capitalize()} + [aux/be] + [Subject] + [VP]"
+            elif pattern_id == "resultative_so_such_that":
+                has_such = any(t.lower_ == "such" for t in tokens)
+                if has_such:
+                    return "such + [NP] + that + [Result Clause]"
+                return "so + [Adj/Adv] + that + [Result Clause]"
             elif pattern_id == "concession_clausal":
                 marker = next((t for t in tokens if t.dep_ in ("mark", "advmod")), tokens[0])
                 next_tok = doc[marker.i + 1].lower_ if marker.i + 1 < len(doc) else ""
@@ -592,6 +713,10 @@ class GrammarPatternEngine:
                 comp = next((t for t in tokens if t != caus and t.dep_ in ("oprd", "ccomp", "acomp")), None)
                 comp_slot = "[Noun/NP]" if comp and comp.pos_ in ("NOUN", "PROPN") else "[Adj]"
                 return f"[Subject] + {v_lemma} + [Object] + {comp_slot}"
+            elif pattern_id == "causative_bare_infinitive":
+                caus = next((t for t in tokens if t.lemma_.lower() in ("make", "let", "have")), None)
+                v_lemma = caus.lemma_.lower() if caus else "make"
+                return f"[Subject] + {v_lemma} + [Object] + [Bare Infinitive]"
             elif pattern_id == "non_restrictive_relative_clause":
                 rel_pron = next((t for t in tokens if t.lemma_.lower() in ("which", "who", "whom", "whose", "that")), None)
                 pron_str = rel_pron.text.lower() if rel_pron else "which/who"
@@ -608,7 +733,16 @@ class GrammarPatternEngine:
             elif pattern_id == "nonfinite_participial_adjunct":
                 part = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 if part:
-                    v_type = "V-ing" if part.tag_ == "VBG" else "V-ed"
+                    has_having = any(c.dep_ in ("aux", "auxpass") and c.lower_ == "having" for c in part.children)
+                    has_being = any(c.dep_ in ("aux", "auxpass") and c.lower_ == "being" for c in part.children)
+                    if has_having:
+                        v_type = "Having + V-ed"
+                    elif has_being:
+                        v_type = "Being + V-ed"
+                    elif part.tag_ == "VBG":
+                        v_type = "V-ing"
+                    else:
+                        v_type = "V-ed"
                     main_v = next((t for t in tokens if t != part and t.pos_ in ("VERB", "AUX")), None)
                     if main_v and part.i < main_v.i:
                         return f"[{v_type} Phrase], [Subject] + [VP]"
@@ -619,6 +753,8 @@ class GrammarPatternEngine:
             elif pattern_id == "antithesis_not_but":
                 return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
             elif pattern_id == "correlative_not_only_but_also":
+                if re.search(r"(?:^|[,;—–-]\s*)not\s+only\s+(?:can|could|will|would|shall|should|may|might|must|do|does|did|have|has|had|am|is|are|was|were)\b", doc.text.lower()):
+                    return "Not only + [Aux] + [Subject] + [VP], but + [Subject] + [also] + [VP]"
                 return "[Subject] + not only + [VP], but also + [VP]"
             elif pattern_id == "inverted_conditional_subjunctive":
                 inv_tok = next((t for t in tokens if t.lower_ in ("had", "were", "should")), None)

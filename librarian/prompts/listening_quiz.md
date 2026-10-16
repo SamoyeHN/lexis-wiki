@@ -22,7 +22,10 @@ Generate a realistic academic dialogue and a rigorous comprehension assessment c
 
 3. **Listening Distractor Taxonomy (NO Cartoonish Choices)**:
    - All 4 options must be plausible, concise, grammatically parallel, and closely tied to the discussion.
-   - ⚓ **ABSOLUTE SINGLE-FIT VALIDITY**: High diagnostic plausibility must NEVER create ambiguity. The question stem combined with the specific dialogue turn MUST provide definitive conversational evidence (clear speaker attribution, explicit conditions, or established consensus) that makes the correct answer the ONLY defensible choice, while decisively eliminating all three distractors without relying on subjective conjecture.
+   - ⚓ **ABSOLUTE SINGLE-FIT VALIDITY & ZERO CROSS-TURN DOUBLE-KEY**:
+     * High diagnostic plausibility must NEVER create ambiguity. The question stem combined with the specific dialogue turn MUST provide definitive conversational evidence that makes the correct answer the ONLY defensible choice.
+     * **Single-Turn Action Disambiguation**: If a speaker mentions multiple actions, needs, or proposals across different turns (e.g., needing a list in Turn 4 AND suggesting a Monday meeting in Turn 8), NEVER ask a vague open stem like *"What does [Speaker] suggest doing?"* while placing BOTH of that speaker's proposals in the options! Either anchor the stem to the exact conversational trigger (e.g., *"Instead of starting tomorrow, what does [Speaker] suggest doing?"*) OR ensure no distractor states another true proposal made by that same speaker.
+     * **Exact Script Entity Grounding (Zero Unspoken Modifiers)**: The correct option MUST strictly reflect the entities and qualifiers spoken in the script (e.g., if the script says *"local faculty"*, do NOT substitute an unspoken modifier like *"university faculty"* in the correct option unless explicitly stated in the dialogue).
    - ❌ **STRICTLY PROHIBIT**: Childish or absurd choices (e.g., 'machines are too heavy to move', 'destroy all electronics'), trivial common-sense giveaways, and pure polar opposites.
    - Engineer distractors using authentic listening test cognitive traps:
      * *Trap 1 (Speaker Attribution Swap)*: Attributes an opinion, concern, or proposal to Speaker 1 when it was actually expressed or qualified by Speaker 2 (or vice versa).

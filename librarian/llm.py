@@ -899,6 +899,15 @@ class LLMClient:
                     # Clean accidental target leakage and auto-mask missing blank slots (Level 1 deterministic code gate)
                     for q_item in flattened_questions:
                         if isinstance(q_item, dict):
+                            # Canonicalize comparative translation items (Version A vs Version B) before L1 validation
+                            idiom_t = str(q_item.get("idiomatic_translation") or "").strip()
+                            flawed_t = str(q_item.get("flawed_translation") or "").strip()
+                            if idiom_t and flawed_t:
+                                q_item["options"] = [idiom_t, flawed_t]
+                                q_item["correct_answer_index"] = 0
+                                if not q_item.get("explanation") and q_item.get("diagnostic_critique"):
+                                    q_item["explanation"] = str(q_item["diagnostic_critique"]).strip()
+
                             target = str(q_item.get("target_word") or q_item.get("word") or "").strip()
                             stem = q_item.get("question") or q_item.get("translated_sentence") or ""
                             if target and stem:
@@ -1047,14 +1056,7 @@ class LLMClient:
                                 scores = {k: v for k, v in audit.get("scores", {}).items() if v is not None}
                                 lowest_dim = min(scores.keys(), key=lambda k: scores[k]) if scores else "pedagogical_quality"
                                 
-                                # F10 (Backlog): a repair ticket names a field, never a sentence.
-                                # The inline builder that used to sit here emitted a free-text error
-                                # plus a "[LOOKUP]: <source text>" hint, which left the model free to
-                                # rewrite whole items — in the Book_2_Unit_3_Section_A run it rewrote
-                                # the four options the blueprint had already fixed and then repeated
-                                # the same mistake. librarian/qa_ticket.py is now the only channel.
-
-                                # Dynamic source section header discovery for LOOKUP
+                                # Build field-scoped QA repair tickets via qa_ticket.py
                                 source_header = "### PASSAGE (WITH NUMBERED SENTENCES) ###"
                                 if user_prompt:
                                     if "### PASSAGE (WITH NUMBERED SENTENCES) ###" in user_prompt:
@@ -1082,8 +1084,6 @@ class LLMClient:
                                     source_header=source_header,
                                 )
                                 if not qa_tickets:
-                                    # Nothing could be attributed to a field. The only honest
-                                    # instruction left names the array and the scored dimension.
                                     qa_tickets = [score_ticket(
                                         composite,
                                         lowest_dim,
@@ -1092,11 +1092,6 @@ class LLMClient:
                                     )]
                                 critique_prompt = format_qa_ticket_block(qa_tickets)
 
-                                # The mandate is built from the tickets themselves (F10 rule 4): it
-                                # names only the declarations this run actually violated. The fixed
-                                # per-task-type invariant that used to be appended here named rules
-                                # the item may never have broken, which told the model to re-derive
-                                # constraints instead of fixing the field named in front of it.
                                 import logging
                                 logging.getLogger("librarian").info(
                                     f"QA score {composite}/100 (<80% or fatal flags) for {t_name}. Retrying ({retry_count + 1}/{max_qa_retries}) via multi-turn self-correction..."

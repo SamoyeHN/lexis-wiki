@@ -285,10 +285,11 @@ def test_ollama_llm_generation_with_pros_and_cons():
     Directly tests Ollama LLM generating a question for idiom 'pros and cons'
     using the enhanced Lexical Reference Card and pre-computed symmetric phrase distractors.
     """
+    from librarian.config import config
     from librarian.llm import llm
     from librarian.schemas import QuizQuestion
 
-    if not _ollama_online(llm.model or "llama3.1:8b"):
+    if not _ollama_online(llm.model or config.get("model") or ""):
         pytest.skip(f"Ollama model {llm.model} not available")
 
     phrase = "pros and cons"
@@ -342,10 +343,11 @@ def test_ollama_llm_generation_with_a_piece_of():
     Directly tests Ollama LLM generating a question for quantifier 'a piece of'
     contrasted with 'a slice of', 'a bit of', 'a sheet of'.
     """
+    from librarian.config import config
     from librarian.llm import llm
     from librarian.schemas import QuizQuestion
 
-    if not _ollama_online(llm.model or "llama3.1:8b"):
+    if not _ollama_online(llm.model or config.get("model") or ""):
         pytest.skip(f"Ollama model {llm.model} not available")
 
     phrase = "a piece of"
@@ -384,7 +386,7 @@ CRITICAL INSTRUCTIONS:
         print(f"Target Word: {response.target_word}")
         print(f"Question:    {response.question}")
         print(f"Options:     {response.options}")
-        print(f"Answer Idx:  {response.correct_answer_index} ({response.options[response.correct_answer_index]})")
+        print(f"Answer Idx:  {response.correct_answer_index} ({response.options[response.correct_answer_index] if 0 <= response.correct_answer_index < len(response.options) else 'N/A'})")
         print(f"Explanation: {response.explanation}")
 
         # Level 1 Deterministic Code Gate: normalize blank and options
@@ -410,7 +412,7 @@ CRITICAL INSTRUCTIONS:
 
         if len(response.options) != 4:
             # Code gate: auto-bind precomputed symbolic options
-            standard_options = [phrase] + [o for o in distractor_options if o != phrase][:3]
+            standard_options = [phrase] + [o for o in net["phrase_distractors"] if o != phrase][:3]
             response.options = standard_options
             response.correct_answer_index = 0
 
@@ -612,7 +614,7 @@ def load_vocabulary_from_markdown(md_path: str) -> List[Dict[str, str]]:
 
 def run_assessment_on_vocab_file(
     md_path: str = "wiki/Book_1_Unit_1_Passage_A/extractions/Book_1_Unit_1_Passage_A_vocabulary.md",
-    model_name: str = "llama3.1:8b",
+    model_name: Optional[str] = None,
     limit: int = 3,
 ):
     """
@@ -620,10 +622,12 @@ def run_assessment_on_vocab_file(
     extracts the 0-token Lexical Reference Card (with 4-6 candidates),
     and asks LLM to generate cloze questions with selected distractors.
     """
+    from librarian.config import config
     from librarian.llm import LLMClient
     from librarian.schemas import QuizQuestion
     import time
 
+    model_name = model_name or config.get("model") or ""
     items = load_vocabulary_from_markdown(md_path)
     print(f"\n================================================================================")
     print(f"Loaded {len(items)} items from: {md_path}")
@@ -736,9 +740,10 @@ INSTRUCTIONS:
 
 if __name__ == "__main__":
     import sys
+    from librarian.config import config
     # Allow running directly: python tests/test_lexical_network.py [md_path] [model_name] [limit]
     md_file = sys.argv[1] if len(sys.argv) > 1 else "wiki/Book_1_Unit_1_Passage_A/extractions/Book_1_Unit_1_Passage_A_vocabulary.md"
-    m_name = sys.argv[2] if len(sys.argv) > 2 else "llama3.1:8b"
+    m_name = sys.argv[2] if len(sys.argv) > 2 else config.get("model")
     lim = int(sys.argv[3]) if len(sys.argv) > 3 else 3
     run_assessment_on_vocab_file(md_path=md_file, model_name=m_name, limit=lim)
 

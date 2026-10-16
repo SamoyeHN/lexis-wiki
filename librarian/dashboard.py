@@ -420,6 +420,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             response_data = {"success": True, "message": "Dashboard server is shutting down."}
 
         elif path == "/api/config":
+            config.load_config()
             response_data = {
                 "config": config.data,
                 "project_root": str(config.project_root)

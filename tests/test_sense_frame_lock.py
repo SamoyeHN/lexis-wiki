@@ -183,3 +183,34 @@ class TestBareParticlePattern:
         assert idx is not None
         locked_sense = entry["senses"][idx]
         assert "hat" in locked_sense.get("definition", "").lower() or "greeting" in locked_sense.get("definition", "").lower()
+
+    def test_specimen_human_sense_distractors_and_collocation_isolation(self):
+        """When 'specimen' is locked to its humorous human sense ('a person you are describing
+        in a particular way'), it must:
+        1. Not be misclassified as a plural noun due to spaCy's 'speciman' lemma artifact;
+        2. Not pull biological/animal/body distractors (cocoon, nest, abdomen, tissue);
+        3. Not select 0-overlap biological corpus collocations ('examine' / crypts) over
+           the locked sense's attested 'physical' / 'impressive physical specimen' frame."""
+        assert not L._is_genuine_plural_noun("specimen")
+        assert L.pluralize_noun("specimen") == "specimens"
+
+        defn = "a person you are describing in a particular way – used humorously"
+        quote = 'One student was an unusual specimen, outside the regular aesthetic of an "animal person".'
+        vocab_md = (
+            f"## [[specimen]]\n\n"
+            f"- **Part of Speech**: noun\n"
+            f"- **Definition**: {defn}\n\n"
+            f"**Context from Source**:\n"
+            f'> "{quote}"\n\n'
+            f"**Example**:\n"
+            f"- Her boyfriend is an impressive physical specimen.\n"
+        )
+        skels = L.build_precomputed_target_skeletons(vocab_md, target_count=5)
+        assert len(skels) == 1
+        spec = skels[0]
+        assert spec["inflection"] == "base form"
+        assert spec["context_anchor"] in ("physical", "impressive")
+        assert "impressive physical specimen" in (spec["authentic_example"] or "").lower()
+        forbidden_bio = {"cocoon", "nest", "abdomen", "tissue", "urine", "blood", "organ"}
+        assert not (set(spec["prescribed_options"]) & forbidden_bio)
+

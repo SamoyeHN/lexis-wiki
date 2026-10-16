@@ -454,7 +454,7 @@ open the door to sth.
         self.assertIn("Inversion with negative adverbs", grammar)
         
         self.assertIn("remind sb of sb / sth", expressions)
-        self.assertIn("get by (on / with)", expressions)
+        self.assertIn("get by (on/with)", expressions)
         self.assertIn("make the most of sth", expressions)
         self.assertIn("in advance", expressions)
         self.assertIn("all at once", expressions)

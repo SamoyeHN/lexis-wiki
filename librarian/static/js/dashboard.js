@@ -1573,6 +1573,7 @@
 
     // ------------------ SETTINGS OVERLAY MODAL ------------------
     function openSettingsModal() {
+        fetchConfig();
         const modal = document.getElementById('settings-modal');
         const modalInstance = bootstrap.Modal.getOrCreateInstance(modal);
         modalInstance.show();
@@ -2659,14 +2660,18 @@
     function onApiTypeChange(triggerFetch = true) {
         const val = document.getElementById('config-api-type').value;
         const urlInput = document.getElementById('config-api-url');
-        if (urlInput) {
+        if (urlInput && triggerFetch) {
             const curVal = urlInput.value.trim();
-            if (val === 'ollama') {
-                if (!curVal || curVal.includes(':1234') || curVal.includes(':8000') || curVal.includes('api.openai.com')) {
-                    urlInput.value = 'http://localhost:11434';
+            const savedVal = (appConfig && appConfig.api_url) ? appConfig.api_url.trim() : '';
+            const savedType = (appConfig && appConfig.api_type) || 'ollama';
+            if (val === savedType && savedVal) {
+                urlInput.value = savedVal;
+            } else if (val === 'ollama') {
+                if (!curVal || curVal === 'http://localhost:1234' || curVal === 'http://127.0.0.1:1234' || curVal.includes('api.openai.com')) {
+                    urlInput.value = savedVal || 'http://localhost:11434';
                 }
             } else if (val === 'openai') {
-                if (!curVal || curVal.includes(':11434')) {
+                if (!curVal || curVal === 'http://localhost:11434' || curVal === 'http://127.0.0.1:11434') {
                     urlInput.value = 'http://localhost:1234';
                 }
             }
@@ -2697,9 +2702,21 @@
         if (autoFillEndpoint) {
             const urlInput = document.getElementById('config-tts-url');
             if (urlInput) {
-                urlInput.value = engine === 'kokoro' 
-                    ? 'http://localhost:8880/v1/audio/speech' 
-                    : 'http://localhost:5050/v1/audio/speech';
+                const savedEngine = (appConfig && appConfig.tts_engine) || 'kokoro';
+                const savedTtsUrl = (appConfig && appConfig.tts_url) ? appConfig.tts_url.trim() : '';
+                if (engine === savedEngine && savedTtsUrl) {
+                    urlInput.value = savedTtsUrl;
+                } else {
+                    // Preserve configured host IP if present in savedTtsUrl or api_url
+                    let host = 'localhost';
+                    try {
+                        const refUrl = savedTtsUrl || (appConfig && appConfig.api_url) || '';
+                        if (refUrl) host = new URL(refUrl).hostname || 'localhost';
+                    } catch (e) {}
+                    urlInput.value = engine === 'kokoro' 
+                        ? `http://${host}:8880/v1/audio/speech` 
+                        : `http://${host}:5050/v1/audio/speech`;
+                }
             }
         }
 

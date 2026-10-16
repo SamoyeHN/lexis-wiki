@@ -31,11 +31,17 @@
 
 ## 2. Sense-First Unified Extraction & WSD Architecture
 
-### 2.1 Deterministic Code-Driven Extraction (Source-to-Wiki)
+### 2.1 Deterministic Code-Driven Extraction & Evidence-Completeness Gate ("宁缺勿滥")
 - **Vocabulary & Multi-Word Expressions (`extract_deterministic_vocabulary`, `extract_deterministic_expressions`)**:
   - Extracted deterministically from `sources/<Unit>.md` + syllabus wordlists via `spaCy` dependency trees and `pedlex.db`, eliminating LLM extraction hallucinations and omissions.
   - **Multi-Word Expression Typing (`classify_expression_type`)**: Multi-word units are never labeled with token-level POS (`verb`/`noun`); they are strictly classified into `phrasal verb`, `collocation`, `set phrase`, or `idiom`.
   - **Multi-Slash Syllabus Preservation (`parse_raw_headwords`)**: Slash-separated alternatives (e.g., `get / feel / be lost`) are normalized prior to standalone `/IPA/` stripping so middle variants are never lost.
+- **Quality-Over-Quantity Evidence-Completeness Gate ("宁缺勿滥")**:
+  - Every candidate word or expression (including syllabus items such as `hybridize`, `crossbreed`, `domesticate`, or `compromise` under an unattested sense) must pass a strict **Three-Gate Selection Pipeline**:
+    1. **Gate 1 — Sense Locking (Top-$K$ Symbolic + 1-Token LLM WSD)**: Locks the exact contextual `Sense` in `pedlex.db` (or WordNet) matching the passage quote's POS, syntactic frame, and semantics.
+    2. **Gate 2 — Sense-Isolated Authentic Example Gate (`ensure_distinct_example`)**: The locked `Sense` must provide an authentic dictionary example distinct from the source quote (via the locked sense's own `examples`/`pattern_bundles`, or inflection-aware corpus search `search_corpus_examples` for monosemous items). **Cross-sense example stealing is strictly forbidden** for polysemous words. Any item with a definition but 0 authentic examples for its locked sense is **immediately dropped and replaced** by a better candidate (`[DROP_INCOMPLETE_LEXICON]`).
+    3. **Gate 3 — Collocational Anchor & Zero Double-Key Gate**: Candidates lacking discriminative context/collocational anchors or prone to synonym double-key collisions (e.g. `crossbreed` vs `hybridize`) are dropped before quiz generation.
+  - **Zero Hardcoded Example/Sense Tables**: Hardcoded Python dictionaries (`curated_examples`, `priority_sense_examples`, `supplemental_vocab_senses`) are permanently prohibited so dictionary gaps and retrieval bugs are never masked.
 - **Grammar Extraction (`extract_deterministic_grammar`)**:
   - Deterministically mines structural patterns and COBUILD syntactic formulas across **Four Macro Functional Domains**:
     1. `Rhetoric & Emphasis` (inversion, clefts, antithesis/parallelism)
@@ -134,3 +140,5 @@ wiki/<UnitName>/
 - [x] **Sense-First Quiz Blueprint Closure**: Zero `DEF_DRIFT`, zero `POS_DRIFT`, atomic Pattern–Example–Anchor binding, and post-inflection double-key collision screening verified across Books 2, 3, and 4.
 - [x] **Unified One-Shot Structured Output & CEFR Grounding**: Direct JSON output + `cefrpy` text/word calibration + Dual-Distribution open-source adapter.
 - [ ] **Ongoing**: Expand discourse-level grammar pattern coverage and enrich Markdown vocabulary cards with zero-token pedagogical collocation boxes.
+- [x] **Orthographic / Paronym Distractor Tier (with Cognate Near-Synonym Guard)**: Introduce an orthographic look-alike (`形近词`) fallback/blending tier in `generate_vocab_distractors` for sparse synsets, strictly guarded by WordNet synset/hypernym disjointness and `double_key_collision` checks so root-sharing near-synonyms (e.g., `historic`/`historical`, `classic`/`classical`, `economic`/`economical`, `continual`/`continuous`) never create ambiguous double keys. But Paronyms like adapt / adopt / adept、complement / compliment、simulate / stimulate、thorough / through. 同根但语义域完全正交：如 specimen（标本/怪人） vs.  spectrum（光谱/范围） vs. spectacle（壮观场面/奇观） vs.
+      speculation（推测/投机）

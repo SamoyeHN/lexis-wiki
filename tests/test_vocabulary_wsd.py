@@ -260,4 +260,84 @@ class TestVocabularyWSD:
         assert "track that a train" in entry["senses"][idx_rail]["definition"].lower(), (
             entry["senses"][idx_rail]["definition"])
 
+    def test_text_contains_form_rejects_hyphenated_sub_tokens(self):
+        """Step 2A: text_contains_form(standalone=True) must never match a severed root inside a hyphenated compound."""
+        sent_waste_prone = (
+            "The shift to an industrial, centralized food system has led to a system that is "
+            "increasingly complex, opaque, and — when it comes to food loss — proves to be a waste-prone system."
+        )
+        assert not LinguisticEngine.text_contains_form(sent_waste_prone, "prone")
+        assert LinguisticEngine.text_contains_form(sent_waste_prone, "waste-prone")
+
+        sent_self_indulgent = "How can we learn to be less self-indulgent and put others first?"
+        assert not LinguisticEngine.text_contains_form(sent_self_indulgent, "indulgent")
+        assert LinguisticEngine.text_contains_form(sent_self_indulgent, "self-indulgent")
+
+    def test_verbatim_compound_promotion_and_lexicon_gate(self):
+        """Step 1 & Step 2B: Bare syllabus root promotes to verbatim hyphenated compound in passage,
+        shipping only when the compound passes Gate 1 & Gate 2 in PedLex (e.g., 'self-indulgent' ships,
+        while 'waste-prone' is dropped by Gate 2)."""
+        passage_waste_prone = (
+            "The shift to an industrial, centralized food system has led to a system that is "
+            "increasingly complex, opaque, and — when it comes to food loss — proves to be a waste-prone system. "
+            "Therefore, researchers must design an optimal strategy for sustainable agriculture."
+        )
+        vocab_wp = LinguisticEngine.extract_deterministic_vocabulary(
+            passage_waste_prone,
+            target_count=5,
+            syllabus_vocab=["prone", "optimal"],
+            enable_llm_disambiguation=False,
+        )
+        extracted_words_wp = [item["word"] for item in vocab_wp]
+        assert "prone" not in extracted_words_wp
+        assert "waste-prone" not in extracted_words_wp
+        assert "optimal" in extracted_words_wp
+
+        passage_indulgent = (
+            "Many young consumers struggle with impulsive spending habits in modern society. "
+            "How can we learn to be less self-indulgent and cultivate lasting financial discipline?"
+        )
+        vocab_ind = LinguisticEngine.extract_deterministic_vocabulary(
+            passage_indulgent,
+            target_count=5,
+            syllabus_vocab=["indulgent"],
+            enable_llm_disambiguation=False,
+        )
+        extracted_words_ind = [item["word"] for item in vocab_ind]
+        assert "indulgent" not in extracted_words_ind
+        assert "self-indulgent" in extracted_words_ind
+
+    def test_mine_vocabulary_skeletons_never_splits_hyphenated_compounds(self):
+        """Step 3: Free-mining via spaCy must never extract severed sub-tokens adjacent to a hyphen."""
+        text = (
+            "The shift to an industrial food system has led to a system that proves to be a waste-prone system "
+            "with muscle-bound logistics and self-indulgent consumption."
+        )
+        skeletons = LinguisticEngine.mine_vocabulary_skeletons(text, target_count=10)
+        mined_words = [s["word"] for s in skeletons]
+        assert "prone" not in mined_words
+        assert "indulgent" not in mined_words
+        assert "muscle" not in mined_words
+        assert "bound" not in mined_words
+
+    def test_quiz_blueprint_governed_prep_anchor_source(self):
+        """Step 4: build_precomputed_target_skeletons must only set anchor_source='quote' for a preposition
+        anchor when that preposition is syntactically governed by the target word in the quote."""
+        # In this sentence, 'to' appears in 'led to' and 'proves to be', NOT governed by 'prone'.
+        sent = (
+            "The shift to an industrial food system has led to a system that proves to be a waste-prone system."
+        )
+        vocab_md = (
+            "## [[prone]]\n"
+            "- **Part of Speech**: adjective\n"
+            "- **Definition**: likely to do something or suffer from something, especially something bad or harmful\n"
+            f"- **Quoted Sentence**: {sent}\n"
+        )
+        skels = LinguisticEngine.build_precomputed_target_skeletons(
+            vocab_md,
+            target_count=1,
+        )
+        assert len(skels) == 1
+        assert skels[0].get("anchor_source") != "quote"
+
 

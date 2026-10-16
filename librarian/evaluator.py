@@ -141,11 +141,6 @@ FATAL_QA_FLAGS = (
     "Stem verbatim from dictionary example",
     "Stem verbatim from curriculum quote",
     "Inflection discordance",
-    # F10 rule 0: these are no longer fatal Level-1 flags. 'blank slot POS mismatch',
-    # 'Anchor missing in question stem' and 'Explanation anchor not grounded' all require
-    # reading a sentence, so they belong to the Level-2 expert audit; 'Distractor slot
-    # illegality' is a dictionary comparison that stays reported but no longer caps the score.
-    # Backlog D1: skeleton-to-output alignment defects
     "Prescribed options altered",
     "Prescribed answer index altered",
     "degenerate formula slot",
@@ -202,14 +197,7 @@ COMMON_IRREGULARS = {
 
 
 def _form_in_text(tok: str, text: str) -> bool:
-    """
-    Backlog A1: the single word-form matcher behind every quote-evidence check.
-
-    Delegates to LinguisticEngine so an inflected occurrence counts ('attaches' for the
-    headword 'attach'), then keeps the historical stem-prefix heuristic - which also
-    accepts derivationally related forms ('degradation' for 'degrade') that no inflection
-    table covers - and the closed irregular-verb table.
-    """
+    """Checks whether `tok` (including inflected or irregular forms) appears in `text`."""
     if not tok or not text:
         return False
     if LinguisticEngine.text_contains_form(text, tok):
@@ -538,20 +526,11 @@ def _extract_source_content(user_prompt: str) -> str:
     return content
 
 
-# Backlog C1: a passage sets ONE difficulty ceiling, and every support sentence the
-# student is asked to read - the 'example_usage' of a vocabulary or expression item,
-# the 'imitation_example' of a grammar pattern - has to respect it. Before this, each
-# quiz audit in processor.py wrote its own ladder and the grammar / vocabulary
-# extraction paths had none at all.
 MIN_SOURCE_WORDS_FOR_CEILING = 40
 
 
 def _cefr_source_ceiling(user_prompt: str) -> Tuple[Optional[str], Set[str]]:
-    """(CEFR level of the authentic passage, the words that passage already uses).
-
-    Returns (None, set()) when the prompt carries no real passage: instruction text,
-    target lists and retry critiques must never be measured as source difficulty.
-    """
+    """Returns (CEFR level of the authentic passage, words used in that passage)."""
     source = _extract_source_content(user_prompt)
     words = re.findall(r"[a-zA-Z]+", source.lower())
     if len(words) < MIN_SOURCE_WORDS_FOR_CEILING:
@@ -1001,7 +980,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             licensed_quote_val = m_lq.group(1).strip() if m_lq else ""
             candidate_quote_val = m_cq.group(1).strip() if m_cq else ""
 
-            # Backlog D1: the blueprint also prescribes the four options and the answer
+            # the blueprint also prescribes the four options and the answer
             # index; the writer is only allowed to author stem, explanation and audit.
             m_opts = re.search(r"-\s*Prescribed Options:\s*\[([^\]]*)\]", block, re.IGNORECASE)
             prescribed_opts_val = [o.strip() for o in m_opts.group(1).split(",") if o.strip()] if m_opts else []
@@ -1024,7 +1003,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
             }
 
-    # Backlog C1: one ceiling for every support sentence the student reads.
+    # one ceiling for every support sentence the student reads.
     ceiling_level, ceiling_words = (None, set())
     if task_type in ("vocabulary", "expressions", "grammar") and user_prompt:
         ceiling_level, ceiling_words = _cefr_source_ceiling(user_prompt)
@@ -1061,7 +1040,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             f"source passage: {offenders}{extra}"
         )
 
-    # Backlog D1: the formulas the lexicon pre-extracted, indexed by a presentation-
+    # the formulas the lexicon pre-extracted, indexed by a presentation-
     # insensitive key. An item consumes a skeleton when it copies it; a same-category
     # skeleton left unconsumed means the model rewrote the formula it was handed.
     grammar_skeletons: List[Dict[str, str]] = []
@@ -1142,7 +1121,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
             over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
-            # F2: 'A core academic term functioning as a noun.' is the engine's own filler,
+            # 'A core academic term functioning as a noun.' is the engine's own filler,
             # not a definition. It fails the check the same way a missing one does.
             invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
 
@@ -1173,7 +1152,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
             over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
-            # F2: the cascade's invented filler is not a definition. An expression the lexicon
+            # the cascade's invented filler is not a definition. An expression the lexicon
             # does not define is a defect to be reported, not a row to be shipped.
             invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
 
@@ -1214,7 +1193,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 reasons.append("missing imitation_example")
             else:
                 if quote and _clean_core(imitation) == _clean_core(quote):
-                    # Backlog D1: an imitation example that IS the passage sentence teaches
+                    # an imitation example that IS the passage sentence teaches
                     # no transfer — the student copies instead of re-using the pattern.
                     reasons.append("imitation_example duplicates the source quote")
                     flags.append(
@@ -1224,7 +1203,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
                 over_ceiling = _over_example_ceiling(imitation)
                 if over_ceiling:
-                    # Backlog C1: a pattern modelled from an A2 passage must not be
+                    # a pattern modelled from an A2 passage must not be
                     # demonstrated with C2 vocabulary the student has not met.
                     reasons.append(_ceiling_reason(over_ceiling, "imitation_example"))
             if not _safe_str(item.get("common_mistakes")):
@@ -1276,7 +1255,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         missing_anchors_quote.append(lit)
                     if imitation and len(imitation.split()) >= 3:
                         is_instantiated = any(_clean_core(a) in imitation_tokens for a in valid_alts)
-                        # Backlog F4 tolerance: propositional encapsulation interpretive verbs (show/suggest/mean/indicate)
+                        # propositional encapsulation interpretive verbs (show/suggest/mean/indicate)
                         # allow cross-verb instantiation within the closed interpretive verb paradigm
                         if not is_instantiated and any(re.match(r"^(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)$", a, re.IGNORECASE) for a in valid_alts):
                             if re.search(r"\b(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)\b", imitation, re.IGNORECASE):
@@ -1287,7 +1266,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if missing_anchors_quote:
                     reasons.append(f"formula anchor '{', '.join(missing_anchors_quote)}' ungrounded in quote")
                 if missing_anchors_imitation:
-                    # Backlog F4: An imitation sentence must instantiate its own formula
+                    # An imitation sentence must instantiate its own formula
                     reasons.append(f"imitation_example does not instantiate formula anchor '{', '.join(missing_anchors_imitation)}'")
                     flags.append(
                         f"❌ Grammar pattern '{pattern[:40]}': imitation_example does not instantiate formula anchor "
@@ -1305,7 +1284,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         if not ing_tokens_imitation:
                             reasons.append("formula requires '[V-ing]' but imitation_example contains no participle verb")
 
-            # Backlog D1: Degenerate Slot Gate — '[NP/NP]' names the same constituent
+            # Degenerate Slot Gate — '[NP/NP]' names the same constituent
             # twice, teaches nothing, and is never mined by the lexicon.
             degenerate_slots = degenerate_grammar_slots(pattern)
             if degenerate_slots:
@@ -1315,7 +1294,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     "(a slot may not be offered to itself)"
                 )
 
-            # Backlog D1: Skeleton Alignment Gate — the formula the lexicon mined is the
+            # Skeleton Alignment Gate — the formula the lexicon mined is the
             # formula the item must ship. Casing, '+' separators and slot synonyms are
             # presentation; a rewritten structure is a deviation.
             aligned, wanted_formula = _align_grammar_formula(pattern, category)
@@ -1462,24 +1441,30 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 clean_target = _clean_core(target)
                 if is_comparative_translation:
                     # In comparative translation, target_keyword must be in idiomatic_translation
-                    idiomatic_ans = _safe_str(item.get("idiomatic_translation")).lower()
-                    target_in_options = clean_target in _clean_core(idiomatic_ans) or (
-                        len(clean_target) >= 4 and clean_target[:4] in _clean_core(idiomatic_ans)
+                    idiomatic_ans = _clean_core(_safe_str(item.get("idiomatic_translation")).lower())
+                    target_toks = [t for t in clean_target.split() if t and t not in STOP_SLOTS]
+                    target_in_options = (
+                        clean_target in idiomatic_ans
+                        or (len(clean_target) >= 4 and clean_target[:4] in idiomatic_ans)
+                        or (bool(target_toks) and all(_form_in_text(t, idiomatic_ans) for t in target_toks))
                     )
                 elif is_translation:
                     # In legacy translation quizzes, target_keyword can be in the options slot,
                     # or in the fixed english_skeleton / correct_english_answer!
-                    full_ans = _safe_str(item.get("correct_english_answer")).lower()
-                    skel_ans = _safe_str(item.get("english_skeleton")).lower()
-                    opt_ans = _safe_str(options[idx]).lower()
+                    full_ans = _clean_core(_safe_str(item.get("correct_english_answer")).lower())
+                    skel_ans = _clean_core(_safe_str(item.get("english_skeleton")).lower())
+                    opt_ans = _clean_core(_safe_str(options[idx]).lower())
+                    combined_ans = f"{full_ans} {skel_ans} {opt_ans}"
+                    target_toks = [t for t in clean_target.split() if t and t not in STOP_SLOTS]
                     target_in_options = (
-                        clean_target in _clean_core(full_ans) or
-                        clean_target in _clean_core(skel_ans) or
-                        clean_target in _clean_core(opt_ans) or
+                        clean_target in full_ans or
+                        clean_target in skel_ans or
+                        clean_target in opt_ans or
                         (len(clean_target) >= 4 and any(
-                            clean_target[:4] in _clean_core(text)
+                            clean_target[:4] in text
                             for text in [full_ans, skel_ans, opt_ans]
-                        ))
+                        )) or
+                        (bool(target_toks) and all(_form_in_text(t, combined_ans) for t in target_toks))
                     )
                 else:
                     selected_opt = _clean_core(str(options[idx]))
@@ -1509,7 +1494,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             verbatim_label = "dictionary example"
             inflection_agreed = True
             illegal_distractors: List[str] = []
-            # Backlog D1: the Prescribed Options Contract is satisfied by default — it only
+            # the Prescribed Options Contract is satisfied by default — it only
             # binds when the blueprint actually prescribes options (cloze and comprehension
             # blueprints do not).
             options_match_blueprint = True
@@ -1598,7 +1583,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Quiz item '{target}': Question stem leaks other batch target word(s) outside blank: {leaked_other_targets} (cross-target leakage)!"
                     )
 
-                # Blank Syntactic Slot & POS Agreement — moved to Level 2 (F10 rule 0).
+                # Blank Syntactic Slot & POS Agreement — moved to Level 2 .
                 # Filling the target back into the stem and letting spaCy judge the slot is a
                 # sentence-level judgement: it cannot be re-checked next round by the same
                 # comparison, so it is not a Level-1 gate. 'grant', 'conduct' and 'accustomed'
@@ -1617,7 +1602,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     pos_source = "lexicon guess"
                 pos_is_guess = (pos_source == "lexicon guess")
 
-                # Anchor Presence in Question Stem Gate — deleted from Level 1 (F10 rule 1.1).
+                # Anchor Presence in Question Stem Gate — deleted from Level 1 .
                 # 'sector' declares the anchor 'manufacture'; the model wrote 'the manufacturing
                 # ____', a literal search found no 'manufacture', and that one false error -
                 # reported once per item and once again in the summary - consumed two of five
@@ -1640,7 +1625,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                             )
                             break
 
-                # Backlog D1: Prescribed Options Contract Gate — the blueprint owns the
+                # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer
                 # may only author the stem, explanation and audit.
                 prescribed_opts = bp_info.get("prescribed_options") or []
@@ -1666,14 +1651,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         )
 
 
-                # Explanation Grounding Gate — moved to Level 2 (F10 rule 1.3).
+                # Explanation Grounding Gate — moved to Level 2 .
                 # "Does the collocation this explanation claims actually land in the stem?" is a
                 # reading task: the next round cannot re-run the same comparison on the same
                 # strings, so by rule 0 it is not a Level-1 gate. Level 1 keeps the declaration —
                 # the blueprint states the anchor, the micro-task repeats it — and the Level-2
                 # expert audit (scripts/l2_expert_audit.py) is the one that reads prose.
 
-                # Verbatim Copy Gate (P1-3): a stem may emulate a corpus model's syntax and
+                # Verbatim Copy Gate : a stem may emulate a corpus model's syntax and
                 # register, but it may never reuse its wording. Both corpus models are checked —
                 # the PedLex example and the curriculum quote that was strong enough to license
                 # evidence. Each source is compared twice: as written, and with the target word
@@ -1719,7 +1704,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"(detected n-gram overlap: '{verbatim_hit}...')!"
                     )
 
-                # Inflection Concordance Gate (P1-2)
+                # Inflection Concordance Gate 
                 # The blueprint declares a verb form, the stem physically demands one, and every
                 # option must be cast in it. A declared 'past tense (VBD)' target sitting in a
                 # 'will ____' slot — or offered as the bare base form — makes the item unanswerable.
@@ -1745,7 +1730,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                             f"but the answer option is '{target}'!"
                         )
                     # 'does the stem slot contradict the declared form?' — deleted from Level 1
-                    # (F10 rule 1.4). The auxiliary table below read the finished sentence and
+                    # . The auxiliary table below read the finished sentence and
                     # guessed which form the slot demanded; a detector built that way covers
                     # 'is currently ____' and misses 'has been ____', 'to have ____' and
                     # 'the report that the firm ____ last year'. What Level 1 keeps is the pure
@@ -1766,7 +1751,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                                     f"{opt_tag} while the blueprint declares '{bp_info.get('inflection')}'"
                                 )
 
-                # Distractor Slot Legality Gate (P1-1)
+                # Distractor Slot Legality Gate 
                 # Every option must be able to occupy the target's own syntactic slot;
                 # 'log in to a ____' offering the adverb 'somehow' is solved by morphology
                 # instead of meaning. Only positive dictionary evidence vetoes an option.
@@ -1788,7 +1773,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if illegal_distractors:
                     # Downgraded from fatal to a report (F10 改哪几处 2). The check itself is a
                     # pure dictionary comparison, so it is a legitimate Level-1 finding and it is
-                    # re-checkable next round — but the options are blueprint-owned (Backlog D1),
+                    # re-checkable next round — but the options are blueprint-owned ,
                     # so the writer is forbidden from changing them. A ❌ here therefore triggers a
                     # regeneration that is not allowed to fix the thing it was called for. It is
                     # reported for human review instead of capping the score.
@@ -1840,15 +1825,18 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                             if clean_target and (hw_clean == clean_target or _clean_core(hw_clean) == clean_target):
                                 continue
                             hw_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', hw_clean)
-                            if (len(hw_stem) >= 4 and len(opt_stem) >= 4 and hw_stem == opt_stem) or \
-                               (len(hw_clean) >= 5 and opt_clean.startswith(hw_clean[:5])) or \
-                               (len(opt_clean) >= 5 and hw_clean.startswith(opt_clean[:5])):
+                            if (len(hw_stem) >= 4 and len(opt_stem) >= 4 and hw_stem == opt_stem) or (
+                                " " not in hw_clean and " " not in opt_clean and (
+                                    (len(hw_clean) >= 5 and opt_clean.startswith(hw_clean[:5])) or
+                                    (len(opt_clean) >= 5 and hw_clean.startswith(opt_clean[:5]))
+                                )
+                            ):
                                 recycled_in_distractors.append(opt_clean)
                                 break
 
             no_in_list_recycling = len(recycled_in_distractors) == 0
 
-            # Level-1 pass list (F10 rule 0). Every term below is a field-to-field or
+            # Level-1 pass list . Every term below is a field-to-field or
             # string-to-string comparison that the next round can re-run identically. The four
             # sentence-level terms that used to sit in this list — blank POS agreement, anchor
             # presence in the stem, explanation grounding, distractor slot legality — are gone:

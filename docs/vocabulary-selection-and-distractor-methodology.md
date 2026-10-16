@@ -4,18 +4,51 @@
 
 ---
 
-## 1. Candidate Selection & Filtering Gates
+## 1. Candidate Selection & "Quality-Over-Quantity" (宁缺勿滥) Three-Gate Pipeline
 
-Candidate words extracted from authentic lesson passages must satisfy a dual-gate architecture before entering the syllabus vocabulary pool:
+Candidate words and multi-word expressions extracted from authentic lesson passages (including textbook syllabus items) must satisfy a strict **Three-Gate Architecture** before entering the final vocabulary pool or assessment blueprint. **Hardcoded Python dictionaries (`curated_examples`, `priority_sense_examples`, `supplemental_vocab_senses`) are strictly forbidden** so that lexicon gaps and retrieval bugs are never silently masked.
 
-1. **Lexicon Gate (Pedagogical Lexicon Grounding)**:
-   - The headword must have an independent, fully-formed entry in `pedlex.db` with valid definitions and senses.
-   - Suffix-derived words or nominalizations that lack standalone definitions in the dictionary are excluded rather than force-converted.
-2. **Textual Gate (Authentic Textual Grounding)**:
-   - The headword (or its exact inflected surface form) must physically occur in the lesson sentence pool.
-   - Abstract headwords deduced by morphological clustering (e.g. *entrepreneur* when the passage only contains *entrepreneurship*) are barred unless physically attested in the source text.
-3. **CEFR & Zipf Ceilings**:
-   - High-utility headwords are indexed against Oxford 3000/5000 and CEFR standards (`cefrpy`).
+```
+[ Candidate Pool (Syllabus + Passage Mining) ]
+                      │
+                      ▼
+┌───────────────────────────────────────────────────────────┐
+│ Gate 1: Sense Locking (Top-K Symbolic + 1-Token LLM WSD)  │
+│ - Locks the exact contextual Sense in pedlex.db           │
+│ - Enforces POS hard gate, homograph resolution, & syntax  │
+└───────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌───────────────────────────────────────────────────────────┐
+│ Gate 2: Sense-Isolated Authentic Example Gate             │
+│ - Polysemous: MUST use examples/pattern_bundles from      │
+│   the exact locked Sense (zero cross-sense stealing)      │
+│ - Monosemous: Locked sense examples + inflection-aware    │
+│   corpus search (search_corpus_examples) & WordNet        │
+│ - Missing example? ──► 🗑️ DROP & REPLACE                  │
+└───────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌───────────────────────────────────────────────────────────┐
+│ Gate 3: Collocational Anchor & Double-Key Screening       │
+│ - Verifies single-fit anchor & 0 synonym collision        │
+│ - No anchor / synset clash (e.g. crossbreed/hybridize)?   │
+│   ──► 🗑️ DROP & REPLACE                                   │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 1.1 The Four Categories of Excluded / Re-Routed Items
+1. **Example-Less Domain Verbs & Run-On Derivatives (🗑️ Drop & Replace)**:
+   - Words that possess a sense definition in `pedlex.db` or WordNet but **0 authentic dictionary examples** (e.g., `hybridize`, `crossbreed`, `domesticate`, `adulation`, or unattested `-ly`/`-tion`/`-ness` run-on derivatives like `biologically`, `conscientiously`, `weightlessness`).
+   - Rather than fabricating examples in Python code—which forces downstream quizzes to test anchor-less words and invites synonym double-key collisions (`crossbreed` vs. `hybridize`)—these items are deterministically dropped (`[DROP_INCOMPLETE_LEXICON]`) and replaced by fully attested candidates from the passage.
+2. **Transparent Free Word Combinations (🗑️ Drop & Replace)**:
+   - Compositional phrases lacking a lexicalized multi-word entry in `pedlex.db` (e.g., `passenger plane`, `new generation`, `family member`, `put into the atmosphere`) are rejected at the expression gate.
+3. **Inflected Multi-Word & Cross-Entry Corpus Items (✅ Recovered via Algorithmic Retrieval)**:
+   - Authentic idioms and phrasal verbs whose examples in `pedlex.db` or WordNet appear in inflected surface forms (e.g., `pass away` $\rightarrow$ *"passed away"*, `stand for` $\rightarrow$ *"stood for"*, `show up` $\rightarrow$ *"showed up"*) or across other entries (`considerably`) are retrieved automatically via inflection-aware `search_corpus_examples` and multi-word WordNet synset lookup.
+4. **Polysemous Sense-Example Desynchronization (✅ Prevented via Strict Sense Isolation)**:
+   - If a polysemous word's contextual sense lacks an example in `pedlex.db` (e.g., `compromise` in the transitive *"harm/weaken"* sense), `ensure_distinct_example` is strictly barred from stealing an example from another sense (*"compromise with the bosses"*). Without an authentic example for its locked sense, the item is cleanly dropped.
+5. **Textual & CEFR Gates**:
+   - The headword (or its inflected surface form) must physically occur in the lesson sentence pool, and its difficulty is calibrated deterministically via `cefrpy` + Zipf frequency ceilings.
 
 ---
 

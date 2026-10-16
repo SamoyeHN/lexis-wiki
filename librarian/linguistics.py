@@ -22,8 +22,6 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 class LinguisticEngine:
     _spacy_nlp = None
     _wn = None
-    _acl_data = None
-    _awl_data = None
     _cefr_analyzer = None
     _ldoce_conn = None
     _ldoce_cache: Dict[str, Any] = {}
@@ -38,6 +36,8 @@ class LinguisticEngine:
     _phrase_evidence_cache: Dict[Tuple[str, str], List[str]] = {}
     _wsd_llm_cache: Dict[str, Tuple[int, str]] = {}
     _wsd_session_local = threading.local()
+    _orthographic_pos_index: Optional[Dict[str, Dict[str, Dict[str, List[str]]]]] = None
+    _derivational_base_cache: Dict[str, Set[str]] = {}
 
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
@@ -234,21 +234,21 @@ class LinguisticEngine:
         avg = sum(scores) / len(scores)
         sorted_scores = sorted(scores)
         p80 = sorted_scores[int(len(sorted_scores) * 0.8)]
+        p90 = sorted_scores[int(len(sorted_scores) * 0.9)]
+        # Count fraction of tokens rated B2+ (>= 3.5) and C1+ (>= 4.5)
+        b2_plus_ratio = sum(1 for s in scores if s >= 3.5) / len(scores)
+        c1_plus_ratio = sum(1 for s in scores if s >= 4.5) / len(scores)
 
-        # Pedagogical Text CEFR Rating combining baseline average & 80th percentile ceiling
-        # A1: avg <= 1.55 and p80 <= 2.0
-        # A2: avg <= 1.95 and p80 <= 3.0
-        # B1: avg <= 2.60 and p80 <= 4.0
-        # B2: avg <= 3.40
-        # C1: avg <= 4.30
-        # C2: >= 4.30
-        if avg <= 1.55 and p80 <= 2.0:
+        # Pedagogical Text CEFR Rating combining baseline average, 80th/90th percentile ceiling,
+        # and academic/advanced lexical density (preventing high-frequency narrative function words
+        # from falsely depressing B2/C1 texts down to A2).
+        if avg <= 1.55 and p80 <= 2.0 and p90 <= 2.5 and b2_plus_ratio < 0.04:
             return "A1"
-        elif avg <= 1.95 and p80 <= 3.0:
+        elif avg <= 1.95 and p80 <= 2.5 and p90 <= 3.0 and b2_plus_ratio < 0.06 and c1_plus_ratio < 0.025:
             return "A2"
-        elif avg <= 2.60 and p80 <= 4.0:
+        elif avg <= 2.60 and p80 <= 3.5 and p90 <= 4.2 and c1_plus_ratio < 0.05:
             return "B1"
-        elif avg <= 3.40:
+        elif avg <= 3.40 and c1_plus_ratio < 0.12:
             return "B2"
         elif avg <= 4.30:
             return "C1"
@@ -303,32 +303,32 @@ class LinguisticEngine:
     @classmethod
     def _lexicon_profile(cls, form: str) -> Tuple[bool, bool, Optional[str], str]:
         """
-        Backlog C1: what the three lexicons say about a surface form.
+        What the PedLex/OCD lexicon and CEFR analyzer say about a surface form.
 
         An inflected form is not itself a headword - 'attaches', 'children' and 'buses'
-        appear in none of OCD, the AWL or the CEFR list even though 'attach', 'child' and
-        'bus' appear in all three - so a gate that reads the surface literally treats every
+        appear in neither OCD nor the CEFR headword list even though 'attach', 'child' and
+        'bus' appear in both - so a gate that reads the surface literally treats every
         inflected distractor as obscure and rejects it for A1/A2/B1 targets. An empty
         literal lookup is therefore retried through the lemma. The retry is lazy: the
         ordinary single-word path never pays a spaCy call for it.
 
-        Returns (in_ocd, in_awl, cefr_level_or_None, form_the_lookup_resolved_to).
+        Returns (in_ocd, is_academic_cefr, cefr_level_or_None, form_the_lookup_resolved_to).
         """
         f = (form or "").strip().lower()
         if not f:
             return (False, False, None, "")
         ocd = cls.get_oxford_collocations()
-        awl = cls.get_awl_words()
-        in_ocd, in_awl = f in ocd, f in awl
+        in_ocd = f in ocd
         level = cls.get_word_cefr(f)
         resolved = f
-        if not (in_ocd or in_awl or level):
+        if not (in_ocd or level):
             lemma = cls._surface_lemma(f)
             if lemma:
                 resolved = lemma
-                in_ocd, in_awl = lemma in ocd, lemma in awl
+                in_ocd = lemma in ocd
                 level = cls.get_word_cefr(lemma)
-        return (in_ocd, in_awl, level, resolved)
+        is_acad = level in ("B2", "C1")
+        return (in_ocd, is_acad, level, resolved)
 
     @classmethod
     def _obscure_affix_forms(cls, form: str) -> List[str]:
@@ -356,11 +356,11 @@ class LinguisticEngine:
            - For A1/A2 target: distractor must be <= B1 (never B2, C1, C2, or obscure unlisted).
            - For B1 target: distractor must be <= B2 (never C1, C2, or obscure unlisted).
            - For B2 target: distractor must be <= C1.
-        3. Lexicon Filter: candidate must exist in Oxford Collocations Dictionary or CEFR database.
+        3. Lexicon Filter: candidate must exist in PedLex/OCD or CEFR database.
         4. Morphological Anomaly Gate:
            - Max length <= max(11, len(target) + 4) (rejects 14+ letter monsters like 'conceivableness').
            - Rejects obscure multi-affix formations ('-ableness', '-lessness', '-icalness', '-fulness').
-        5. Backlog C1: every one of those tests is applied to the surface form the student
+        5. every one of those tests is applied to the surface form the student
            reads. Difficulty belongs to the lemma ('attaches' is as easy as 'attach'), but
            length and affix weirdness belong to the spelling on the page.
         """
@@ -380,23 +380,23 @@ class LinguisticEngine:
         if c_clean in cls._REGISTER_BANNED_WORDS:
             return False
 
-        # Backlog F5: Empty / generic nouns, stop words, and indefinite placeholders
+        # Empty / generic nouns, stop words, and indefinite placeholders
         # (e.g. 'thing', 'things', 'stuff', 'item', 'items', 'someone', 'something')
         # must never be offered as test options/distractors.
         if c_clean in cls._ANCHOR_STOPWORDS:
             return False
 
-        # Lexicon Filter: must be recognized in OCD or AWL (through the lemma when the
+        # Lexicon Filter: must be recognized in OCD or CEFR (through the lemma when the
         # candidate is an inflection rather than a headword).
-        in_ocd, in_awl, c_lvl_str, resolved = cls._lexicon_profile(c_clean)
+        in_ocd, is_acad, c_lvl_str, resolved = cls._lexicon_profile(c_clean)
 
         analyzer = cls.get_cefr_analyzer()
         if not analyzer:
-            return in_ocd or in_awl
+            return in_ocd or is_acad
 
         t_lvl_str = cls._lexicon_profile(t_clean)[2] or "B2"
         t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
-        # Backlog C1: the ceiling itself comes from the shared table, not from a
+        # the ceiling itself comes from the shared table, not from a
         # ladder hand-written inside this gate.
         ceiling_rank = cls._ceiling_rank(t_rank, "support")
 
@@ -421,26 +421,8 @@ class LinguisticEngine:
         if c_rank > ceiling_rank and not is_direct_negation:
             return False
 
-        return in_ocd or in_awl or analyzer.is_word_in_database(resolved) or is_direct_negation
+        return in_ocd or is_acad or analyzer.is_word_in_database(resolved) or is_direct_negation
 
-    # ------------------------------------------------------------------
-    # Backlog C1: ONE difficulty ceiling, shared by every gate
-    # ------------------------------------------------------------------
-    # Two tables because two different questions are being asked.
-    #
-    # CEFR_CEILING_BY_LEVEL answers "how hard may a DISTRACTOR be?" - a word the
-    # student must decode on its own, competing against a target word. It may sit
-    # one band above that target / passage. This is the ladder
-    # is_cefr_compliant_distractor used to spell out inline.
-    #
-    # CEFR_TEXT_CEILING_BY_LEVEL answers "how hard may a word inside running text
-    # the student reads be?" - a quiz option, a question stem, the sentence in an
-    # 'example_usage' or an 'imitation_example'. Running text is easier to decode
-    # than an isolated option, so the stop is looser: foundational levels stop at
-    # C1/C2 words ('enigmatic', 'perused', 'meticulously'), B1 stops at C2, and
-    # B2+ is not vocabulary-limited at all. This is exactly what the four
-    # processor.py audits used to hard-code, and what the grammar / vocabulary
-    # extraction paths never had at all.
     CEFR_CEILING_BY_LEVEL = {
         "A1": "B1", "A2": "B1", "B1": "B2", "B2": "C1", "C1": "C2", "C2": "C2",
     }
@@ -451,7 +433,7 @@ class LinguisticEngine:
     @classmethod
     def cefr_ceiling(cls, passage_level: Optional[str], mode: str = "support") -> str:
         """
-        Backlog C1: the hardest CEFR band that vocabulary may carry in a task
+        the hardest CEFR band that vocabulary may carry in a task
         built on a passage rated `passage_level`.
 
         mode='support'  a distractor or option competing with the target: one band
@@ -481,26 +463,7 @@ class LinguisticEngine:
         allow: Optional[Iterable[str]] = None,
         min_len: int = 4,
     ) -> List[Tuple[str, str]]:
-        """
-        Backlog C1: every word in `text` rated harder than
-        `cefr_ceiling(passage_level, mode)`, as (word, its_cefr_level) pairs
-        ordered by descending difficulty so a caller can name the worst offender.
 
-        Two exemptions keep the gate honest:
-          * `allow` - words the source text already uses. A passage cannot be too
-            hard for its own vocabulary, and a headword may not be banned from the
-            example that is required to demonstrate it.
-          * words no lexicon lists. An unlisted word is not evidence of difficulty;
-            only a word the CEFR database actually rates above the ceiling is.
-
-        Two more exemptions were forced by the corpus audit (scripts/_probe_stale_examples.py):
-        the graded word list contains proper nouns ('Cassie' C2, 'Karen' C1) and the
-        pieces of contractions ('doesn' C2), none of which is vocabulary a student is
-        being asked to learn.
-
-        Difficulty is looked up through the lemma, so 'deteriorating' is judged as
-        'deteriorate' (Backlog A1 / C1).
-        """
         ceiling_rank = cls.CEFR_ORDER[cls.cefr_ceiling(passage_level, mode)]
         if ceiling_rank >= cls.CEFR_ORDER["C2"]:
             return []  # nothing on the scale is above C2 - skip the lookups entirely
@@ -554,13 +517,16 @@ class LinguisticEngine:
 
     @classmethod
     def get_wordnet(cls):
-        """Lazy-loads the wn (Open English WordNet) client with multithreading enabled."""
+        """Lazy-loads the Open English WordNet ('oewn:2025+') client with multithreading enabled."""
         if cls._wn is None:
             import wn
             # Web dashboard / background worker threads share WordNet SQLite connection.
             # SQLite check_same_thread must be disabled for read-only multi-threaded queries.
             wn.config.allow_multithreading = True
-            cls._wn = wn
+            try:
+                cls._wn = wn.Wordnet("oewn:2025+")
+            except Exception:
+                cls._wn = wn
         return cls._wn
 
     @classmethod
@@ -621,15 +587,7 @@ class LinguisticEngine:
             return True
         return False
 
-    # The raw Oxford Collocations Dictionary file (`data/oxford_collocations.json.gz`)
-    # used to be lazy-loaded here and consulted by generate_phrase_distractors and by
-    # mine_expression_skeletons.  Both now ask LDOCE instead - see ldoce_phrase_evidence -
-    # so nothing reads that file any more and the accessor is gone.
 
-    # LDOCE stores lemmas and open compounds only, but the pipeline asks for whatever
-    # surface form the passage happened to contain ('posts', 'luxuries', 'potluck').
-    # Without headword resolution an inflected target loses its entire entry:
-    # no collocations, no examples, no anchor, no structural model.
     _HEADWORD_FORM_EXCEPTIONS = {
         "news", "series", "species", "means", "headquarters", "premises",
     }
@@ -640,14 +598,13 @@ class LinguisticEngine:
 
     @classmethod
     def _headword_candidates(cls, surface: str) -> List[str]:
-        """Surface form -> plausible LDOCE headwords, most literal first."""
+        """Surface form -> plausible PedLex headwords, most literal first."""
         cands = [surface]
         if "-" in surface:
             cands.append(surface.replace("-", ""))
             cands.append(surface.replace("-", " "))
-        else:
+        elif " " in surface:
             cands.append(surface.replace(" ", "-"))
-            cands.append(surface.replace(" ", ""))
         if surface.endswith("ies") and len(surface) > 4:
             cands.append(surface[:-3] + "y")
         if surface.endswith("ied") and len(surface) > 4:
@@ -843,7 +800,7 @@ class LinguisticEngine:
                     data = cls._resolve_ldoce_kind(q_cand, w_clean, *fetched)
                     return cls._finish_ldoce_entry(w_clean, data)
 
-            # Last resort: closed compounds are spelled with a space in LDOCE
+            # Last resort: closed compounds are spelled with a space in PedLex
             # ('potluck' -> 'pot luck'), which no suffix handling can recover. The
             # SQL version of this lookup (REPLACE(word, ' ', '') = ?) cannot use an
             # index and scans all 48,648 rows on every dictionary miss, so the
@@ -965,7 +922,7 @@ class LinguisticEngine:
 
     @classmethod
     def _ldoce_compound_index(cls) -> Dict[str, str]:
-        """normalized headword -> the headword LDOCE actually stores, built once."""
+        """normalized headword -> the headword PedLex actually stores, built once."""
         if cls._ldoce_compounds is None:
             cls._ldoce_compounds = {}
             if cls._ldoce_conn is not None:
@@ -981,7 +938,7 @@ class LinguisticEngine:
         return cls._ldoce_compounds
 
     # ------------------------------------------------------------------
-    # Backlog R1 - the rebuilt database classifies every row, so the engine reads
+    # the rebuilt database classifies every row, so the engine reads
     # that classification instead of re-deriving it from a copied payload.
     #   article / entity : the row owns its payload - use it as it is
     #   derived          : the row owns one sense of its own; the base entry lends
@@ -1092,7 +1049,7 @@ class LinguisticEngine:
     @classmethod
     def get_ldoce_preps(cls, word: str) -> Set[str]:
         """
-        Extracts governing prepositions for the given word from LDOCE grammar patterns and collocations.
+        Extracts governing prepositions for the given word from PedLex grammar patterns and collocations.
         """
         entry = cls.get_ldoce_entry(word)
         if not entry:
@@ -1128,7 +1085,7 @@ class LinguisticEngine:
                 preps.add(m.group(1))
         return preps
 
-    # The tokens Longman uses as the second word of a phrasal verb.
+    # The tokens PedLex uses as the second word of a phrasal verb.
     _PHRASAL_PARTICLES = frozenset({
         "in", "off", "up", "down", "away", "back", "over", "into", "through", "on", "to",
         "for", "out", "with", "from", "around", "at", "by", "upon", "of", "about",
@@ -1137,8 +1094,8 @@ class LinguisticEngine:
 
     @classmethod
     def get_ldoce_phrasal_verbs(cls, word: str) -> List[str]:
-        """The phrasal verbs Longman declares inside `word`'s own entry, as 'verb particle'
-        pairs. Longman writes them with object slots and separable arrows ('send somebody
+        """The phrasal verbs PedLex declares inside `word`'s own entry, as 'verb particle'
+        pairs. PedLex writes them with object slots and separable arrows ('send somebody
         <-> off'), so the pair is read off the leading tokens of each phrasal-verb block.
         This is the dictionary's list, not a guess from a preposition that appeared somewhere
         in a grammar pattern."""
@@ -1165,7 +1122,7 @@ class LinguisticEngine:
         return out
 
     # ------------------------------------------------------------------
-    # LDOCE phrase attestation (backlog F7 修法 2)
+    # PedLex phrase attestation (修法 2)
     # ------------------------------------------------------------------
     # 'keep of', 'havoc for', 'streak on' and 'depend for' are not phrases. Each one is a
     # preposition lifted out of somebody else's frame and glued onto the headword:
@@ -1175,7 +1132,7 @@ class LinguisticEngine:
     #   'streak on'   <- 'be on a winning/losing streak'         ('on' belongs to 'be')
     #   'depend for'  <- 'depend on somebody/something for something' (second complement)
     #
-    # and these are phrases because Longman itself states them:
+    # and these are phrases because PedLex itself states them:
     #
     #   'remind of'   - a phrasal verb block, headword 'remind somebody of somebody/something'
     #   'depend on'   - a phrasal verb block 'depend on/upon somebody/something'
@@ -1188,7 +1145,7 @@ class LinguisticEngine:
     #      'saturate something with something'), matched through the A1 legal forms so
     #      'happened to' still counts for 'happen to' and 'embedded' for 'embed';
     #   2. frame head - the pattern or block the match was found in begins with the headword,
-    #      or with nothing but Longman's own placeholders and a copula ('be embedded in
+    #      or with nothing but PedLex's own placeholders and a copula ('be embedded in
     #      something'), so a preposition governed by a different verb in the same pattern
     #      cannot be borrowed.  Sense examples are exempt from (2) - a sentence has no frame
     #      head - which is exactly why example-only evidence is the weakest tier and is not
@@ -1198,8 +1155,8 @@ class LinguisticEngine:
         "himself", "herself", "his", "her", "their", "its", "my", "your", "our", "it",
         "this", "that", "these", "those", "some", "any", "etc",
     })
-    # What may stand in front of a frame's head: Longman's own placeholders, bare articles,
-    # and the copula or auxiliary of a passive frame.  Longman spells a passive out with the
+    # What may stand in front of a frame's head: PedLex's own placeholders, bare articles,
+    # and the copula or auxiliary of a passive frame.  PedLex spells a passive out with the
     # copula in front - 'be embedded in something', 'be obsessed by/with something', 'be
     # derived from something', 'be based in something' - and the headword inside it is still
     # the word that governs the preposition, so 'embed in' and 'base in' are stated frames.
@@ -1215,7 +1172,7 @@ class LinguisticEngine:
         "to",
     })
     # The closed class of prepositions and particles.  This is *not* what the gate accepts as
-    # evidence - Longman's own frames are - it is only what may sit inside a frame's gap as
+    # evidence - PedLex's own frames are - it is only what may sit inside a frame's gap as
     # one alternative of a slash group: 'profit by/from' states 'profit from' and 'cover
     # something with/in something' states 'cover in', because the word before the slash is an
     # alternative of the same slot.  A preposition that is not followed by a slash is a
@@ -1226,7 +1183,7 @@ class LinguisticEngine:
         "during", "except", "near", "onto", "past", "since", "toward", "towards",
         "under", "underneath", "until", "upon", "within", "without", "as", "than",
     })
-    # Strongest first. 'phrasal_verb' is Longman declaring a phrasal verb; 'phrase' is its
+    # Strongest first. 'phrasal_verb' is PedLex declaring a phrasal verb; 'phrase' is its
     # PHRASES block; 'pattern' is a grammar pattern built on the headword; 'collocation' is
     # a COLLOCATIONS box item; 'example' is a sentence that merely contains the string.
     _PHRASE_TIERS = ("phrasal_verb", "phrase", "pattern", "collocation",
@@ -1235,7 +1192,7 @@ class LinguisticEngine:
 
     @classmethod
     def _entry_text_normalizer(cls, text: Any) -> str:
-        """Longman's own strings, flattened so a frame can be matched as a token sequence:
+        """PedLex's own strings, flattened so a frame can be matched as a token sequence:
         brackets, the separable-particle arrow, alternative slashes and '...' holes all
         become spaces ('keep something <-> up' -> 'keep something up')."""
         if not isinstance(text, str):
@@ -1267,7 +1224,7 @@ class LinguisticEngine:
             forms = {f for f in cls.inflected_forms(token) if f}
             if not forms:
                 return ""
-            # A mined surface form has to reach the form Longman wrote: 'kept in touch' is
+            # A mined surface form has to reach the form PedLex wrote: 'kept in touch' is
             # stated by the entry as 'keep in touch', so the token's own lemma is inflected
             # too.  Only a real word gets that treatment, so a typo cannot lemmatize its way
             # into a frame it was never part of.
@@ -1313,10 +1270,10 @@ class LinguisticEngine:
 
     # A phrase's alternative headwords are listed on one line with a slash: 'stay/keep in
     # touch', 'bring/call somebody to account', 'by/from all accounts'.  Each alternative
-    # heads the same tail, so 'keep in touch' is stated by Longman even though it shares a
+    # heads the same tail, so 'keep in touch' is stated by PedLex even though it shares a
     # A phrase's alternative headwords are listed on one line with a slash: 'stay/keep in
     # touch', 'bring/call somebody to account', 'by/from all accounts'.  Each alternative
-    # heads the same tail, so 'keep in touch' is stated by Longman even though it shares a
+    # heads the same tail, so 'keep in touch' is stated by PedLex even though it shares a
     # line with 'stay'.  Only a group at the head of the string is expanded - a slash deeper
     # inside a frame separates alternatives inside it, and the normalizer keeps those as the
     # boundaries they are.
@@ -1365,6 +1322,10 @@ class LinguisticEngine:
                     grp = m.group(1)
                     alts = [a for a in grp.split("/") if a]
                     if len(alts) >= 2 and not all(a.lower() in cls._SLASH_PLACEHOLDERS for a in alts):
+                        prefix_part = cur[:m.start(1)].strip()
+                        suffix_part = cur[m.end(1):].strip()
+                        if len(prefix_part.split()) >= 2 and len(suffix_part.split()) >= 2:
+                            continue
                         matched_group = (m.start(1), m.end(1), alts)
                         break
 
@@ -1401,7 +1362,7 @@ class LinguisticEngine:
 
         def add(tier: str, value: Any) -> None:
             if isinstance(value, str):
-                # Longman's slash-listed alternatives each stand on their own, so a frame is
+                # PedLex's slash-listed alternatives each stand on their own, so a frame is
                 # never matched across the boundary between two of them.
                 for unit in cls._slash_variants(value):
                     flat = cls._entry_text_normalizer(unit)
@@ -1443,8 +1404,8 @@ class LinguisticEngine:
 
     @classmethod
     def _phrase_headwords(cls, phrase: str, headword: Optional[str]) -> List[str]:
-        """Which LDOCE entries to look in. A mined surface form ('attaches', 'happened')
-        has to be resolved back to the headword Longman filed it under, and a verbal idiom
+        """Which PedLex entries to look in. A mined surface form ('attaches', 'happened')
+        has to be resolved back to the headword PedLex filed it under, and a verbal idiom
         ('take into consideration') is filed under its head noun, so every content word is
         tried."""
         cands: List[str] = []
@@ -1455,8 +1416,8 @@ class LinguisticEngine:
             lemma = cls._surface_lemma(token)
             if lemma and lemma != token:
                 cands.append(lemma)
-        # Multi-word compound headwords in LDOCE (e.g. 'all right', 'alma mater',
-        # 'armed forces', 'art form'): Longman files entries directly under compound headwords.
+        # Multi-word compound headwords in PedLex (e.g. 'all right', 'alma mater',
+        # 'armed forces', 'art form'): PedLex files entries directly under compound headwords.
         raw_tokens = [t.replace("'s", "").replace("'", "")
                       for t in cls._entry_text_normalizer(phrase).split()
                       if t and t != "/"]
@@ -1480,7 +1441,7 @@ class LinguisticEngine:
         tokens = cls._phrase_tokens(phrase)
         if len(tokens) < 2:
             return []
-        # Longman's declared units *and* its grammar patterns both write the object inside
+        # PedLex's declared units *and* its grammar patterns both write the object inside
         # the frame - 'remind somebody of', 'take something into consideration', 'saturate
         # something with something', 'be embedded in something' - so one object slot is
         # allowed between the two tokens wherever a frame is stated.  A collocation box item
@@ -1507,7 +1468,7 @@ class LinguisticEngine:
                     # 'cover in').  A copula in front is part of the frame, not another
                     # word's construction - 'be embedded in something' is 'embed's own
                     # pattern.  A phrasal verb block or a PHRASES item is already a declared
-                    # unit - its head is itself, and Longman writes alternatives with a
+                    # unit - its head is itself, and PedLex writes alternatives with a
                     # slash ('stay/keep in touch', 'whatever happened to somebody'), so
                     # the frame-head test does not apply to those two tiers.
                     if tier not in ("phrasal_verb", "phrase", "example") and \
@@ -1527,7 +1488,7 @@ class LinguisticEngine:
         headword: Optional[str] = None,
         include_examples: bool = False,
     ) -> List[str]:
-        """Is `phrase` a unit LDOCE6 states, or a string assembled out of tokens scraped
+        """Is `phrase` a unit PedLex states, or a string assembled out of tokens scraped
         from a pattern? Returns the tiers found, strongest first; [] means drop it."""
         key = ((phrase or "").strip().lower(), (headword or "").strip().lower(),
                bool(include_examples))
@@ -1544,7 +1505,7 @@ class LinguisticEngine:
 
     @classmethod
     def is_attested_phrase(cls, phrase: str, headword: Optional[str] = None) -> bool:
-        """Ship a multi-word item to a learner only if Longman states it at a tier stronger
+        """Ship a multi-word item to a learner only if PedLex states it at a tier stronger
         than 'some example sentence happens to contain these words in this order'."""
         return any(tier in cls._PHRASE_STRONG_TIERS
                    for tier in cls.ldoce_phrase_evidence(phrase, headword))
@@ -1552,12 +1513,12 @@ class LinguisticEngine:
     @classmethod
     def _phrasal_verb_blocks(cls, phrase: str,
                              headword: Optional[str] = None) -> List[Dict[str, Any]]:
-        """The phrasal-verb blocks Longman states for `phrase`, with each block's own frame
+        """The phrasal-verb blocks PedLex states for `phrase`, with each block's own frame
         still attached.
 
         `ldoce_phrase_hits` flattens every block into tiered strings, which is what the
         attestation gate needs.  The object-fit audit needs the block's headword instead,
-        because that is where Longman says whether the object comes before the particle
+        because that is where PedLex says whether the object comes before the particle
         ('keep somebody in', 'work somebody / something in') or after it
         ('depend on / upon somebody / something')."""
         tokens = cls._phrase_tokens(phrase)
@@ -1780,9 +1741,9 @@ class LinguisticEngine:
         """Where this frame puts its object relative to the particle: 'before', 'after' or
         'unknown'.
 
-        Longman writes a frame as a token sequence with slots.  'depend on / upon somebody /
+        PedLex writes a frame as a token sequence with slots.  'depend on / upon somebody /
         something' puts the object after the particle; 'keep somebody in' and 'work somebody /
-        something in' put it before.  '↔' marks the pair as separable, which means Longman
+        something in' put it before.  '↔' marks the pair as separable, which means PedLex
         allows both orders, so it counts as 'after'.  A slash group is one slot holding several
         alternatives ('on/upon', 'somebody/something'), so it is read as a unit rather than as
         a space.  A frame with no slot at all ('break away') makes no claim either way."""
@@ -1808,16 +1769,16 @@ class LinguisticEngine:
         obj: Optional[str],
         headword: Optional[str] = None,
     ) -> bool:
-        """Is the object the passage put after this phrase one Longman's frame allows there?
+        """Is the object the passage put after this phrase one PedLex's frame allows there?
 
-        'keep in' is a real phrasal verb, but Longman's frame for it is 'keep somebody in' -
+        'keep in' is a real phrasal verb, but PedLex's frame for it is 'keep somebody in' -
         the object comes before the particle - so a parse that reads 'keep in WeChat Moments'
         as that frame has mistaken a locative 'in ...' for the particle.  'depend on Mary' is
-        a fit, because Longman's frame is 'depend on / upon somebody / something'.
+        a fit, because PedLex's frame is 'depend on / upon somebody / something'.
 
         The veto needs positive evidence: it fires only when some frame puts the object before
         the particle and no frame puts it after.  An empty object is always a fit - nothing has
-        been claimed about it - and so is a phrase Longman gives no frame for ('break away',
+        been claimed about it - and so is a phrase PedLex gives no frame for ('break away',
         'listen to'), because there is nothing in the entry to contradict the parse."""
         target = (obj or "").strip().lower()
         if not target:
@@ -1856,9 +1817,9 @@ class LinguisticEngine:
             pass
         return None
 
-    # Longman spells parts of speech out ('noun count', 'predeterminer'), the sense
+    # PedLex spells parts of speech out ('noun count', 'predeterminer'), the sense
     # gate works in short codes. Canonicalising both sides once is what closes the
-    # backlog E5 leak: 'v' is a substring of 'adjective' and 'adverb', 'n' is a
+    # leak: 'v' is a substring of 'adjective' and 'adverb', 'n' is a
     # substring of 'adverb', 'conjunction', 'determiner' and 'pronoun'.
     _SENSE_POS_CODES = {
         "noun": "n", "noun count": "n", "noun mass": "n", "number": "n",
@@ -1904,7 +1865,7 @@ class LinguisticEngine:
     # evidence, so beating it takes a margin 4x the ordinary sense-lock floor.
     UNIT_SENSE_QUOTE_MARGIN = SENSE_MARGIN_FLOOR * 4
 
-    # A grammar pattern in a Longman entry is a frame, not a bag of words: 'voice of' says
+    # A grammar pattern in a PedLex entry is a frame, not a bag of words: 'voice of' says
     # the headword is followed by 'of'.  Pattern words further apart in the quote than this
     # window belong to different parts of the sentence and say nothing about the frame.
     PATTERN_FRAME_WINDOW = 4
@@ -1912,7 +1873,7 @@ class LinguisticEngine:
     # Prepositions a pattern line uses to state valency ('accustomed to', 'serious about').
     _PATTERN_PREPS = ("to", "for", "with", "about", "in", "on", "of", "from", "at")
 
-    # Spatial particles Longman prints as a bare one-word pattern line ('line along',
+    # Spatial particles PedLex prints as a bare one-word pattern line ('line along',
     # 'run down'). They state a frame as much as 'accustomed to' does - the headword plus
     # the particle - so a quote that merely contains the word, with the headword nowhere
     # near it, proves nothing. Bare 'along' alone was worth 15 points to 'a track that a
@@ -1926,14 +1887,14 @@ class LinguisticEngine:
                                "sb", "sth", "etc", "some", "his", "her", "their", "its",
                                "him", "me", "us", "them", "you", "your", "my", "our")
 
-    # Longman's stand-ins for 'any noun phrase'.
+    # PedLex's stand-ins for 'any noun phrase'.
     _PATTERN_PLACEHOLDERS = ("somebody", "something", "someone", "anything", "everything",
                              "etc", "sb", "sth")
 
     @classmethod
     def _pattern_words(cls, pattern_fragment: str) -> List[str]:
         """
-        The words a pattern fragment actually asserts, with Longman's placeholders removed.
+        The words a pattern fragment actually asserts, with PedLex's placeholders removed.
 
         'chance to do something' is a template: 'do something' stands for any verb phrase,
         so the frame it states is 'chance to'. Keeping 'do' in the frame demanded a literal
@@ -2257,7 +2218,7 @@ class LinguisticEngine:
         return_scores: bool = False
     ):
         """
-        Determines the authoritative sense index in LDOCE entry aligned to quote and definition.
+        Determines the authoritative sense index in PedLex entry aligned to quote and definition.
         Calculates content-word overlap across examples, patterns, definitions, signposts,
         and enforces grammar/syntactic frame agreement.
 
@@ -2268,12 +2229,12 @@ class LinguisticEngine:
         if not senses:
             return None
 
-        # Backlog E5: this gate used to be `target_p not in s_pos`, a substring test
+        # this gate used to be `target_p not in s_pos`, a substring test
         # against single-letter codes. Both sides are canonical codes compared for
         # equality now, so a noun query can no longer admit an adverb sense.
         target_p = cls._pos_code(target_pos)
         
-        # Exact / clean definition override: if definition was passed directly from LDOCE extraction
+        # Exact / clean definition override: if definition was passed directly from PedLex extraction
         if definition:
             clean_def = re.sub(r"\[.*?\]", "", definition).strip().lower()
             if clean_def:
@@ -2308,7 +2269,7 @@ class LinguisticEngine:
 
         # A1: a pattern word is evidenced by the quote when the quote carries the word
         # OR any legal inflection of it. 'firm ... attaches itself to' satisfies the
-        # LDOCE pattern 'attach something to something'; the old \battach\b regex did not.
+        # PedLex pattern 'attach something to something'; the old \battach\b regex did not.
         q_low_all = (quote or "").lower()
         q_word_tokens = set(re.findall(r"\b[a-z]+\b", q_low_all))
         # Ordered copy of the same tokens: a pattern frame is judged by how far apart its
@@ -2328,7 +2289,7 @@ class LinguisticEngine:
         eligible_senses = 0
         score_trace: List[Tuple[int, float]] = []
 
-        # Homograph blocks (backlog E5): one row can hold 'right1 adj', 'right2 noun',
+        # Homograph blocks : one row can hold 'right1 adj', 'right2 noun',
         # 'right3 verb'. A sense that sits in the block declaring the target POS is the
         # primary one for this query, so it must not lose a tie to ordering alone.
         block_pos = {
@@ -2362,7 +2323,7 @@ class LinguisticEngine:
             except Exception:
                 pass
 
-        # Meta stopwords: filter out generic LDOCE dictionary-definition noise from overlap counts
+        # Meta stopwords: filter out generic PedLex dictionary-definition noise from overlap counts
         #
         # Ultra-generic words carry no sense information in either direction: 'new' in
         # the quote and 'new' in the example 'smart new offices' is not evidence that
@@ -2370,13 +2331,13 @@ class LinguisticEngine:
         # clothes sense and helped it beat 'intelligent or sensible'.
         meta_stopwords = stopwords | target_inflections | {'time', 'likely', 'someone', 'something', 'somebody', 'things', 'people', 'used', 'make',
                                                           'new', 'old', 'own', 'real', 'thing', 'kind', 'sort', 'part', 'side', 'end',
-                                                          'only', 'just'}
+                                                          'only', 'just', 'friend', 'friends'}
 
         # Query pedagogical sense cue index for authoritative contextual domain clues.
         #
         # The cue query is delexicalised with the SAME meta_stopwords as the
         # definition / example / signpost overlap families below.  Cue rows are mined
-        # out of LDOCE's own example sentences, so a token like 'new' or 'likely' is an
+        # out of PedLex's own example sentences, so a token like 'new' or 'likely' is an
         # artefact of the dictionary corpus rather than evidence about the sense: 'new'
         # alone is attached to 2,207 cue rows spread over 1,859 headwords.  Querying the
         # cue index with such a token re-awards it at 15 points to whichever sense
@@ -2443,15 +2404,20 @@ class LinguisticEngine:
                 if not is_direct_speech:
                     score -= 50
 
-            # 0d. Rare / Technical Domain Gate (Medical / Law):
-            # Penalize highly technical domain senses (e.g. 'illness/symptom' for present, legal technicalities)
+            # 0d. Rare / Technical Domain Gate (Medical / Law / Technical):
+            # Penalize highly technical domain senses (e.g. 'illness/symptom' for present, chemistry/physics senses)
             # unless the context quote actually contains relevant domain lexical triggers.
             s_reg = (s.get("register") or "").lower()
             s_signpost = (s.get("signpost") or "").lower()
             s_gram_str = (s.get("grammar") or "").lower()
             is_med_sense = s_reg == "medical" or "[medical]" in s_gram_str or s_signpost in ("illness", "medical", "disease")
             if is_med_sense:
-                has_med_trigger = any(w in q_low_all for w in ("illness", "disease", "symptom", "patient", "doctor", "hospital", "medicine", "syndrome", "fever", "pain", "clinic", "clinical", "infection", "treatment"))
+                has_med_trigger = any(w in q_low_all for w in (
+                    "illness", "disease", "symptom", "patient", "doctor", "hospital", "medicine",
+                    "syndrome", "fever", "pain", "clinic", "clinical", "infection", "treatment",
+                    "suffer", "suffered", "suffering", "mild", "severe", "fatal", "heart", "brain",
+                    "blood", "attack", "paralyz", "recover", "health"
+                ))
                 if not has_med_trigger:
                     score -= 50
 
@@ -2459,6 +2425,19 @@ class LinguisticEngine:
             if is_law_sense:
                 has_law_trigger = any(w in q_low_all for w in ("court", "judge", "jury", "trial", "lawyer", "attorney", "lawsuit", "legal", "statute", "prosecution", "defendant", "verdict"))
                 if not has_law_trigger:
+                    score -= 50
+
+            is_tech_sense = (
+                s_reg in ("technical", "chemistry", "physics", "biology", "computing")
+                or any(tag in s_gram_str for tag in ("[technical]", "[chemistry]", "[physics]", "[computing]"))
+                or s_signpost in ("chemistry", "physics", "technical", "chemical")
+            )
+            if is_tech_sense:
+                has_tech_trigger = any(w in q_low_all for w in (
+                    "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
+                    "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound"
+                ))
+                if not has_tech_trigger:
                     score -= 50
 
             # 1. Quote token overlap against sense examples & patterns
@@ -2476,6 +2455,8 @@ class LinguisticEngine:
 
             # 2. Quote token overlap against sense definition itself
             s_defn = s.get("definition", "").lower()
+            if re.match(r"^(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b", s_defn.strip()):
+                score -= 120
             s_def_tokens = set(re.findall(r"\b[a-zA-Z]{3,}\b", s_defn)) - meta_stopwords
             # A definition that merely restates the headword ('a smart person is wearing neat
             # attractive clothes') proves nothing about which sense the quote uses, yet every
@@ -2521,10 +2502,11 @@ class LinguisticEngine:
 
                     matched_pat = False
                     for br in branches:
-                        # Check separable/transitive phrasal patterns: if pattern specifies 'somebody ↔ ...' or 'something ↔ ...',
-                        # it requires an explicit transitive direct object governed by the target verb in the clause context.
-                        is_separable_transitive = "\u2194" in br or "<->" in br or "somebody" in br or "something" in br or " sb " in f" {br} " or " sth " in f" {br} "
-                        if is_separable_transitive and quote:
+                        # Check separable/transitive phrasal patterns: if pattern specifies a mandatory (non-parenthesized)
+                        # 'somebody ↔ ...' or 'something ↔ ...', it requires an explicit transitive direct object governed by the target verb.
+                        br_non_opt = re.sub(r"\(.*?\)", "", br)
+                        is_separable_transitive = "\u2194" in br or "<->" in br or (target_p == "v" and ("somebody" in br_non_opt or "something" in br_non_opt or " sb " in f" {br_non_opt} " or " sth " in f" {br_non_opt} "))
+                        if is_separable_transitive and quote and target_p == "v":
                             try:
                                 nlp = cls.get_spacy()
                                 doc_q = nlp(quote)
@@ -2575,7 +2557,7 @@ class LinguisticEngine:
                         # an authentic infinitive verbal complement (e.g. xcomp/ccomp with 'to', or prep 'to' governing a verb/pcomp)
                         # rather than a prepositional noun phrase (e.g. 'to a new level').
                         has_to_do_in_pat = bool(re.search(r"\bto\s+do\b", br))
-                        if has_to_do_in_pat and quote:
+                        if has_to_do_in_pat and quote and target_p == "v":
                             try:
                                 nlp = cls.get_spacy()
                                 doc_q = nlp(quote)
@@ -2605,7 +2587,7 @@ class LinguisticEngine:
                                     and w not in cls._PATTERN_FUNCTION_WORDS
                                     and w not in ("be", "become", "get", "grow", target_w_clean)]
                         # The headword is an implicit member of a valency pattern even when
-                        # Longman writes only 'accustomed to'. Without it 'the voice of' became
+                        # PedLex writes only 'accustomed to'. Without it 'the voice of' became
                         # the frame 'the ... of', which any sentence containing a determiner and
                         # 'of' satisfies - the reason 'voice' was pinned to the 'representative'
                         # sense for a sentence about hearing voices.
@@ -2639,9 +2621,14 @@ class LinguisticEngine:
 
             # 5b. Units Matching & Idiom Constraint Enforcement
             if quote:
+                any_unit_demanded = False
+                any_unit_matched = False
+                best_unit_bonus = 0
                 for u in s.get("units", []):
-                    u_clean = u.lower()
+                    u_clean = u.lower().replace("\u2019", "'")
                     u_no_opt = re.sub(r"\(.*?\)", "", u_clean).strip()
+                    u_no_opt = re.sub(r"\b(?:somebody|something|someone|sb|sth|one)'s?\b", "somebody", u_no_opt)
+                    u_no_opt = re.sub(r"'s\b", "", u_no_opt)
                     slash_match = re.search(r"([a-zA-Z]+(?:/[a-zA-Z]+)+)", u_no_opt)
                     if slash_match:
                         full_span = slash_match.group(1)
@@ -2652,22 +2639,20 @@ class LinguisticEngine:
                     else:
                         branches = [u_no_opt]
 
-                    unit_matched = False
-                    unit_demanded = False
                     is_formulaic_greeting = ("!" in u_clean) or any(k in str(s.get("definition", "")).lower() for k in ("used to greet", "exclamation", "used when someone is leaving"))
                     for br in branches:
                         # 'do' in 'to do something' is a placeholder for any action verb
-                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if w not in ("the", "a", "an", "somebody", "something", "your", "his", "her", "their", "my", "its", "one", "oneself", "sb", "sth", "etc", "eg", "ie")]
+                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if len(w) >= 2 and w not in ("the", "an", "somebody", "something", "someone", "your", "his", "her", "their", "my", "its", "one", "oneself", "sb", "sth", "etc", "eg", "ie")]
                         if len(words) >= 2:
-                            unit_demanded = True
+                            any_unit_demanded = True
                             other_words = [w for w in words if not cls.form_matches(w, target_w_clean) and w not in headword_tokens]
                             if is_formulaic_greeting:
                                 # Formulaic greetings and conversational exclamations (e.g. "hello, stranger!", "bless you!")
                                 # are fixed frozen locutions; they require strict syntactic adjacency in the sentence.
                                 u_pat = r"\b" + r"[\s,!?:;\-\"'\u201c\u201d\u2018\u2019]+".join(re.escape(w) for w in words) + r"\b"
                                 if re.search(u_pat, q_low_all):
-                                    score += 45
-                                    unit_matched = True
+                                    best_unit_bonus = max(best_unit_bonus, 45)
+                                    any_unit_matched = True
                                     break
                             elif cls._quote_has_frame(q_seq, words):
                                 # Fixed Idiom Invariant: if target word in quote has an intervening/modifying
@@ -2685,24 +2670,26 @@ class LinguisticEngine:
                                     except Exception:
                                         pass
                                 if not has_intervening_modifier:
-                                    score += 45
-                                    unit_matched = True
+                                    best_unit_bonus = max(best_unit_bonus, 45)
+                                    any_unit_matched = True
                                     break
                             elif not is_formulaic_greeting and (
                                 (len(other_words) >= 2 and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in other_words))
                                 or (has_pron_obj and other_words and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in other_words))
                             ):
-                                score += 40
-                                unit_matched = True
+                                best_unit_bonus = max(best_unit_bonus, 40)
+                                any_unit_matched = True
                                 break
                             elif not is_formulaic_greeting and "to do" in br and any(cls.form_matches(tok, "to") for tok in q_seq):
                                 non_do_other = [w for w in other_words if w != "do"]
                                 if non_do_other and all(any(cls.form_matches(tok, ow) for tok in q_seq) for ow in non_do_other):
-                                    score += 40
-                                    unit_matched = True
+                                    best_unit_bonus = max(best_unit_bonus, 40)
+                                    any_unit_matched = True
                                     break
-                    if unit_demanded and not unit_matched:
-                        score -= 30
+                if any_unit_matched:
+                    score += best_unit_bonus
+                elif any_unit_demanded:
+                    score -= 30
 
                 # Specific suppressions (e.g. keep somebody posted when 'keep' is absent)
                 for u in s.get("units", []):
@@ -2726,7 +2713,7 @@ class LinguisticEngine:
                             score += 40
 
                 # Passage A sense guards: keep the deterministic lock on the sense the
-                # passage actually uses, not on a nearby LDOCE sense with shared words.
+                # passage actually uses, not on a nearby PedLex sense with shared words.
                 if target_pos == "noun" and target_w_clean == "stamp":
                     if any(k in q_low_all for k in ("letter", "envelope", "post", "postage", "mail", "keep in touch")):
                         if "mail" in sp or "postage stamp" in s.get("units", []) or "envelope" in s_defn:
@@ -2743,7 +2730,7 @@ class LinguisticEngine:
                             score += 50
 
                 if target_pos == "noun" and target_w_clean == "line":
-                    # 'line' as the row of people waiting (Longman 3b) is the sense a school
+                    # 'line' as the row of people waiting (PedLex 3b) is the sense a school
                     # passage uses; the railway sense shares only the particle 'along', which
                     # a queue sentence borrows for the shape of the queue and not for a train.
                     queue_cue = re.search(
@@ -2942,6 +2929,29 @@ class LinguisticEngine:
 
                         # If target is an adjective, check its modified noun or copula subject against sense patterns & examples
                         if tok.pos_ == "ADJ" or is_hyphen_adj:
+                            gram_l = (s.get("grammar") or "").lower()
+                            is_attr_slot = (
+                                tok.dep_ in ("amod", "compound", "nmod")
+                                or (tok.head and tok.head.pos_ in ("NOUN", "PROPN") and tok.i < tok.head.i)
+                            )
+                            is_pred_slot = (
+                                tok.dep_ in ("acomp", "oprd", "attr", "advcl")
+                                or (
+                                    tok.dep_ == "ROOT"
+                                    and any(ch.dep_ in ("cop", "aux", "nsubj", "nsubjpass") for ch in tok.children)
+                                )
+                            )
+                            if is_attr_slot:
+                                if "[only before noun]" in gram_l or "[usually before noun]" in gram_l:
+                                    score += 25
+                                elif "[not before noun]" in gram_l or "[never before noun]" in gram_l:
+                                    score -= 60
+                            elif is_pred_slot:
+                                if "[not before noun]" in gram_l or "[never before noun]" in gram_l:
+                                    score += 25
+                                elif "[only before noun]" in gram_l:
+                                    score -= 60
+
                             mod_noun = ""
                             if tok.head and tok.head.pos_ in ("NOUN", "PROPN"):
                                 mod_noun = tok.head.lemma_.lower()
@@ -2983,10 +2993,15 @@ class LinguisticEngine:
                         # If target is a noun, check compound head noun and dependency relations
                         elif tok.pos_ == "NOUN" and target_p != "v":
                             gram_l = (s.get("grammar") or "").lower()
-                            if tok.tag_ == "NNS":
-                                if ("[uncountable]" in gram_l or "[singular]" in gram_l) and "countable" not in gram_l:
-                                    score -= 30
-                                elif "countable" in gram_l:
+                            has_count_det = any(
+                                ch.dep_ in ("det", "nummod")
+                                and ch.lemma_.lower() in ("a", "an", "one", "two", "three", "many", "few", "several", "each", "every", "another", "both")
+                                for ch in tok.children
+                            )
+                            if tok.tag_ == "NNS" or has_count_det:
+                                if ("[uncountable]" in gram_l or (tok.tag_ == "NNS" and "[singular]" in gram_l)) and "countable" not in gram_l:
+                                    score -= 45 if has_count_det else 30
+                                elif "countable" in gram_l or (has_count_det and "[singular]" in gram_l):
                                     score += 25
 
                             # Specific semantic differentiation for 'teen':
@@ -3126,6 +3141,21 @@ class LinguisticEngine:
                                 any(c.dep_ in ("auxpass", "aux:pass") for c in tok.children) or
                                 any(c.dep_ in ("nsubjpass", "nsubj:pass") for c in tok.children)
                             )
+                            is_progressive = (
+                                tok.tag_ == "VBG"
+                                and any(c.dep_ == "aux" and c.lemma_.lower() == "be" for c in tok.children)
+                            )
+
+                            # Sense-linked Grammar Box constraints (e.g. 'admire' sense 1: no progressive; 'consist of': no passive)
+                            for gb in entry.get("grammar_boxes") or []:
+                                gb_senses = gb.get("sense_indices")
+                                if gb_senses and i not in gb_senses:
+                                    continue
+                                syn_c = gb.get("syntactic_constraints") or {}
+                                if is_progressive and syn_c.get("no_progressive"):
+                                    score -= 50
+                                if is_passive and syn_c.get("no_passive"):
+                                    score -= 50
 
                             surface_dobjs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj")]
                             passive_dobjs = [ch for ch in tok.children if ch.dep_ in ("nsubjpass", "nsubj:pass")] if is_passive else []
@@ -3186,15 +3216,16 @@ class LinguisticEngine:
                                 t_clean = re.sub(r"\b(?:to|and)\s+(?:do|make|have)\s+(?:something|sth|somebody|sb)\b", "", t_clean)
                                 return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean))
 
-                            # Check if definition shows ergative (both intransitive and transitive):
-                            # e.g. 'if a situation, game etc turns around, or if someone turns it around'
+                            # Check if definition shows ergative or intransitive conditional usage:
+                            # e.g. 'if a situation, game etc turns around, or if someone turns it around', 'if a situation picks up, it improves'
                             is_ergative_defn = bool(re.search(r"\bor\s+if\s+someone\s+\w+\s+(?:it|them)\b", s_defn))
+                            is_intrans_cond_defn = bool(re.match(r"^if\s+(?:a|an|the|your|someone's|somebody's)?\s*(?:situation|things|business|economy|trade|sales|market|weather|wind|speed|prices?|traffic|conversation|life)\b", s_defn))
 
                             # Check if sense allows intransitive usage:
                             # 1) explicit 'intransitive' in grammar tag (e.g. '[intransitive, transitive]', '[intransitive]')
                             # 2) sense declares patterns that do not require a direct object (e.g. 'pay for', 'pay in cash')
-                            has_intrans_gram = "intransitive" in gram_l
-                            has_trans_gram = bool(re.search(r"(?<!in)transitive", gram_l))
+                            has_intrans_gram = "intransitive" in gram_l or is_intrans_cond_defn
+                            has_trans_gram = bool(re.search(r"(?<!in)transitive", gram_l)) and not is_intrans_cond_defn
                             has_intransitive_pattern = any(not _requires_direct_object(p) for p in s_pats) if s_pats else False
                             allows_intransitive = has_intrans_gram or (not has_trans_gram and has_intransitive_pattern)
 
@@ -3261,6 +3292,10 @@ class LinguisticEngine:
                                     score += 30
                                 elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in s.get("patterns", [])):
                                     score += 30
+
+                                if obj_lem in ("dream", "dreams", "ambition", "goal", "potential", "hope", "desire", "plan", "aim", "vision", "aspiration"):
+                                    if any(k in s_defn or k in sp for k in ("achieve", "ambition", "potential", "hoping to achieve", "fulfil", "fulfill")):
+                                        score += 45
 
                                 # Supersenses selectional restrictions for dobj:
                                 obj_supersenses = cls.get_wordnet_supersenses(obj_lem, pos="n")
@@ -3346,10 +3381,13 @@ class LinguisticEngine:
                                     # check if this verb+prep frame is explicitly articulated in the sense definition or examples.
                                     target_lemmas = {target_w_clean} | cls.inflected_forms(target_w_clean) | {tok.lemma_.lower()}
                                     v_prep_pat = r"\b(?:" + "|".join(re.escape(f) for f in target_lemmas) + r")(?:\s+\w+)?\s+(?:" + re.escape(p_lem) + r"|" + re.escape(p_txt) + r")\b"
-                                    if re.search(v_prep_pat, s_defn):
-                                        score += 45
-                                    elif any(re.search(v_prep_pat, ex.lower()) for ex in s.get("examples", [])):
-                                        score += 40
+                                    if not pat_matched:
+                                        if re.search(v_prep_pat, s_defn):
+                                            score += 35
+                                        elif any(re.search(v_prep_pat, ex.lower()) for ex in s.get("examples", [])):
+                                            score += 40
+                                    if any(k in s_defn for k in ("radio or television broadcast", "touch a child sexually")) and not any(k in q_low_all for k in ("radio", "television", "broadcast", "signal", "reception", "child", "sexually", "boy", "girl")):
+                                        score -= 45
 
                                     # Selectional restrictions on prepositional complements:
                                     # Distinguish commercial/financial exchange ('pay for dinner/tickets/lessons', 'pay in cash/dollars')
@@ -3476,7 +3514,7 @@ class LinguisticEngine:
                                         if any(k in s_defn for k in ("business", "department", "company", "shop", "makes a profit", "starts to be successful")):
                                             score += 55
                                     elif is_situation_subj:
-                                        if any(k in s_defn for k in ("situation", "game", "develop in the way you want", "changes and starts")):
+                                        if any(k in s_defn for k in ("situation", "game", "develop in the way you want", "changes and starts", "improves", "gets better", "picks up")):
                                             score += 55
                                         elif any(k in s_defn for k in ("business, department", "business or department")):
                                             score -= 20
@@ -3661,23 +3699,55 @@ class LinguisticEngine:
         limit: int = 3
     ) -> List[str]:
         """
-        Retrieves authentic LDOCE6 corpus examples directly from entry data_json at 0-token cost.
-        Scans senses, collocations, cross-collocations, and grammar boxes for matching patterns.
+        Retrieves authentic PedLex corpus examples directly from entry data_json at 0-token cost.
+        Scans own headword entries plus indexed cross-entries (ldoce_phrase_index & ldoce_sense_cue_index).
         """
         if not query or not query.strip():
             return []
-        
-        # Clean query: strip quotes and FTS-specific keywords like NEAR
+
         clean_q = query.strip()
         near_match = re.search(r'NEAR\(\s*([a-zA-Z0-9_-]+)\s+([a-zA-Z0-9_-]+)', clean_q, re.IGNORECASE)
         key_tokens = [t.lower() for t in re.findall(r'[a-zA-Z0-9_-]{2,}', clean_q) if t.lower() not in ("near", "and", "or", "category")]
         if not key_tokens:
             return []
 
-        # Find anchor words to load entries (scan key tokens to capture collocations stored across headwords)
-        anchor_words = [near_match.group(1).lower()] if near_match else key_tokens[:2]
+        is_multi = len(key_tokens) >= 2 and "-" not in clean_q
+        u_key = cls._unit_key(clean_q)
+
+        # 1. Primary anchor words (own headword entries + hyphen sub-parts for derived hyphenated compounds)
+        anchor_words: List[str] = []
+        sub_parts: List[str] = []
+        if "-" in clean_q:
+            sub_parts = [p.lower() for p in clean_q.split("-") if len(p) >= 3 and p.lower() not in ("self", "non", "pre", "sub", "anti", "counter")]
+        for aw in ([near_match.group(1).lower()] if near_match else [clean_q.lower()] + key_tokens[:3] + sub_parts):
+            if aw and aw not in anchor_words:
+                anchor_words.append(aw)
+
+        # 2. Cross-entry host lookups via ldoce_phrase_index and ldoce_sense_cue_index (<0.5ms indexed lookup)
+        if cls._ensure_ldoce_conn() and cls._ldoce_conn is not None:
+            try:
+                cur = cls._ldoce_conn.cursor()
+                if is_multi and u_key:
+                    cur.execute(
+                        "SELECT DISTINCT host_word FROM ldoce_phrase_index WHERE phrase_key = ? LIMIT 20",
+                        (u_key,)
+                    )
+                    for (hw,) in cur.fetchall():
+                        if hw and hw not in anchor_words:
+                            anchor_words.append(hw)
+                for tok in (key_tokens[:2] + sub_parts[:2]):
+                    cur.execute(
+                        "SELECT DISTINCT host_word FROM ldoce_sense_cue_index WHERE cue_word = ? ORDER BY weight DESC LIMIT 20",
+                        (tok,)
+                    )
+                    for (hw,) in cur.fetchall():
+                        if hw and hw not in anchor_words:
+                            anchor_words.append(hw)
+            except Exception:
+                pass
+
         entries = []
-        for aw in anchor_words:
+        for aw in anchor_words[:30]:
             ent = cls.get_ldoce_entry(aw)
             if ent and ent not in entries:
                 entries.append(ent)
@@ -3686,35 +3756,56 @@ class LinguisticEngine:
 
         pool: List[str] = []
         for entry in entries:
-            # 1. Sense examples
             for s in entry.get("senses", []):
                 pool.extend(s.get("examples", []) or [])
-            # 2. Grammar boxes examples
+                for pb in (s.get("pattern_bundles") or []):
+                    if isinstance(pb, dict) and pb.get("example"):
+                        pool.append(pb["example"])
+                for u_obj in (s.get("units") or []):
+                    if isinstance(u_obj, dict):
+                        pool.extend(u_obj.get("examples", []) or [])
             for gb in entry.get("grammar_boxes", []):
                 pool.extend(gb.get("examples", []) or [])
-            # 3. Collocations examples
-            for cat_k, items in entry.get("collocations", {}).items():
+            for _cat_k, items in entry.get("collocations", {}).items():
                 for it in items:
                     if isinstance(it, dict) and it.get("example"):
                         pool.append(it["example"])
-            # 4. Cross collocations examples
             for cc in entry.get("cross_collocations", []):
                 if isinstance(cc, dict) and cc.get("example"):
                     pool.append(cc["example"])
+            for th in entry.get("thesaurus", []):
+                if isinstance(th, dict):
+                    pool.extend(th.get("examples", []) or [])
+                    if th.get("example"):
+                        pool.append(th["example"])
+            for la in entry.get("language_activator", []):
+                if isinstance(la, dict):
+                    for exp in (la.get("exponents") or []):
+                        if isinstance(exp, dict):
+                            pool.extend(exp.get("examples", []) or [])
+                            if exp.get("example"):
+                                pool.append(exp["example"])
 
         res: List[str] = []
         for cand in pool:
-            cand_low = cand.lower()
-            if all(tok in cand_low for tok in key_tokens):
-                # Clean speaker prefixes (e.g. 'Male speaker', 'Female speaker', 'S ') and (=...) glosses
-                cand_clean = re.sub(r'^(?:(?:Male|Female)\s+speaker|S\b)[\s:]*', '', cand, flags=re.IGNORECASE)
-                cand_clean = re.sub(r'\s*\(=[^)]*\)', '', cand_clean)
-                cand_clean = re.sub(r'\s+', ' ', cand_clean).strip()
-                if cand_clean and len(cand_clean) > 8 and cand_clean not in res:
+            if not cand or not isinstance(cand, str):
+                continue
+            cand_clean = re.sub(r'^(?:(?:Male|Female)\s+speaker|S\b)[\s:]*', '', cand, flags=re.IGNORECASE)
+            cand_clean = re.sub(r'\s*\(=[^)]*\)', '', cand_clean)
+            cand_clean = re.sub(r'\s+', ' ', cand_clean).strip()
+            if not cand_clean or len(cand_clean) <= 8 or cand_clean in res:
+                continue
+            cand_low = cand_clean.lower()
+            if is_multi:
+                if cls._unit_example(u_key, [cand_clean], allow_modifier=True) or all(tok in cand_low for tok in key_tokens):
                     res.append(cand_clean)
+            else:
+                if cls.text_contains_form(cand_clean, clean_q) or all(tok in cand_low for tok in key_tokens):
+                    res.append(cand_clean)
+            if len(res) >= max(limit * 3, 15):
+                break
 
-        # Prioritize candidates that match the multi-word unit phrase
-        unit_matches = [c for c in res if cls._unit_example(clean_q, [c])]
+        unit_matches = [c for c in res if cls._unit_example(u_key or clean_q, [c], allow_modifier=True)]
         other_matches = [c for c in res if c not in unit_matches]
         return (unit_matches + other_matches)[:limit]
 
@@ -3722,11 +3813,13 @@ class LinguisticEngine:
     def get_ldoce_grammar_alert(
         cls,
         word: str,
-        quote: str = ""
-    ) -> Optional[Dict[str, str]]:
+        quote: str = "",
+        sense_index: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Retrieves authentic grammar error diagnostics (Don't say / ✗) directly from LDOCE6 Grammar Boxes in data_json.
-        Returns dict with keys: 'word', 'title', 'content' or None.
+        Retrieves authentic grammar error diagnostics (Don't say / ✗) directly from PedLex Grammar Boxes in data_json.
+        When `sense_index` is provided, filters out boxes explicitly restricted to other senses (`sense_indices`).
+        Returns dict with keys: 'word', 'title', 'content', 'rules', 'comparison_peers', 'syntactic_constraints', etc. or None.
         """
         if not word:
             return None
@@ -3741,10 +3834,14 @@ class LinguisticEngine:
 
         best_box = None
         for b in boxes:
+            gb_senses = b.get("sense_indices")
+            if sense_index is not None and gb_senses and sense_index not in gb_senses:
+                continue
             title = b.get("title", "")
             content = b.get("content", "")
             bad_exs = b.get("bad_examples", [])
-            has_alert = bool(bad_exs) or "Don't say" in content or "✗" in content or "grammar" in title.lower()
+            rules = b.get("rules", [])
+            has_alert = bool(bad_exs) or bool(rules) or "Don't say" in content or "✗" in content or "grammar" in title.lower()
 
             if has_alert:
                 box_res = {
@@ -3752,7 +3849,12 @@ class LinguisticEngine:
                     "title": title or "GRAMMAR ALERT",
                     "content": content,
                     "bad_examples": bad_exs,
-                    "examples": b.get("examples", [])
+                    "examples": b.get("examples", []),
+                    "rules": rules,
+                    "comparison_peers": b.get("comparison_peers", []),
+                    "peer_details": b.get("peer_details", []),
+                    "syntactic_constraints": b.get("syntactic_constraints", {}),
+                    "sense_indices": gb_senses or [],
                 }
                 if quote and any(tok in content.lower() for tok in quote.lower().split() if len(tok) > 4):
                     return box_res
@@ -3764,9 +3866,9 @@ class LinguisticEngine:
     def get_ldoce_thesaurus(cls, word: str) -> List[Dict[str, Any]]:
 
         """
-        Retrieves near-synonym clusters with exact distinctions from LDOCE Thesaurus.
+        Retrieves near-synonym clusters with exact distinctions from PedLex Thesaurus.
 
-        The Longman Language Activator boxes are thesaurus boxes too - Longman's own
+        The PedLex Language Activator boxes are thesaurus boxes too - PedLex's own
         synonym dictionary - but the builder stores them once under 'language_activator'
         rather than copying every exponent into 'thesaurus' as well ('get': 932 Activator
         exponents against 8 real THESAURUS ones). They are re-joined here, Activator
@@ -3796,6 +3898,8 @@ class LinguisticEngine:
                     "form": act.get("form", "word"),
                     "distinction": d_txt,
                     "example": act.get("example", ""),
+                    "grammar": act.get("grammar", ""),
+                    "register": act.get("register", ""),
                     "concept": concept_name,
                 })
         return out
@@ -3867,7 +3971,7 @@ class LinguisticEngine:
         require_sense_confidence: bool = False
     ) -> Tuple[str, str]:
         """
-        Extracts authoritative definition and authentic example from LDOCE 6th Edition,
+        Extracts authoritative definition and authentic example from PedLex 6th Edition,
         aligned strictly to the contextual Part of Speech (POS) and disambiguated against
         the passage context using robust multi-feature _lock_sense.
         Returns:
@@ -3993,7 +4097,7 @@ class LinguisticEngine:
         if not _shows_headword(example):
             example = _attested_example(cls.search_corpus_examples(word, limit=5)) or example
 
-        # 7. Fallback example from LDOCE anchor finder - only when nothing at all was
+        # 7. Fallback example from PedLex anchor finder - only when nothing at all was
         # found: the anchor search is the most expensive step in this cascade and its
         # example is written for the entry's base sense, so chasing a headword there
         # costs 0.4s for a payoff the earlier pools already settled.
@@ -4017,9 +4121,9 @@ class LinguisticEngine:
         return (definition, example)
 
     # =========================================================================
-    # EXPRESSION DEFINITION CASCADE (backlog F7 后续 ④)
+    # EXPRESSION DEFINITION CASCADE (后续 ④)
     #
-    # Longman files a multi-word unit under the word that carries its meaning, not under its
+    # PedLex files a multi-word unit under the word that carries its meaning, not under its
     # first token: 'keep in touch' under the noun 'touch' ('be/keep/stay etc in touch (with
     # something)'), 'keep silent' under the adjective 'silent' (pattern 'remain/stay/keep
     # silent'), 'long for' under the verb 'long' written 'long for somebody/something'.  The
@@ -4028,14 +4132,14 @@ class LinguisticEngine:
     # print first, which is how 'give up' shipped 'give''s "make a movement with your hand"
     # and 'long for' shipped the adjective's "continuing for a large amount of time".
     # =========================================================================
-    # '' means nothing in Longman grounds the unit: the caller must not invent a definition.
+    # '' means nothing in PedLex grounds the unit: the caller must not invent a definition.
     EXPRESSION_SOURCE_TIERS = ("ldoce_entry", "phrasal_verb_block", "sense_pattern",
                                "phrase_row", "wordnet", "")
 
     # Quantifier frame regex (e.g. 'a piece of', 'a kind of', 'a sort of', 'a bottle of')
     _QUANTIFIER_OF_RE = re.compile(r'^(?:a|an)\s+([a-z]+)\s+of$', re.IGNORECASE)
 
-    # The engine's own invented definitions (backlog F2).  No authoritative definition has this
+    # The engine's own invented definitions .  No authoritative definition has this
     # shape, so a page can be gated on it without rejecting a real one.  Each pattern names the
     # line that produces it.
     _BOILERPLATE_DEFINITION_PATTERNS = (
@@ -4112,7 +4216,7 @@ class LinguisticEngine:
 
     @classmethod
     def _unit_blocks(cls, key: str, headword: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Every phrasal-verb block Longman names exactly `key`, in every row the unit can
+        """Every phrasal-verb block PedLex names exactly `key`, in every row the unit can
         live in. Slot stripping and slash expansion belong to `_declared_unit_spellings`, so
         'keep somebody in' answers 'keep in' and 'stay/keep in touch' answers 'keep in
         touch'. A block that merely contains the words ('give up on' for 'give up') names a
@@ -4151,7 +4255,7 @@ class LinguisticEngine:
     def _unit_senses(cls, block: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
         """The senses of a block that can define `key`, best first: a sense whose own grammar
         pattern states this unit outright defines it; the block's other senses follow in the
-        order Longman printed them."""
+        order PedLex printed them."""
         senses = [s for s in (block.get("senses") or [])
                   if isinstance(s, dict) and str(s.get("definition") or "").strip()]
         for s in senses:
@@ -4165,7 +4269,7 @@ class LinguisticEngine:
     @classmethod
     def _unit_phrase_rows(cls, key: str,
                           headword: Optional[str] = None) -> List[Tuple[str, Dict[str, Any]]]:
-        """(host, row) for every PHRASES row Longman names exactly `key`."""
+        """(host, row) for every PHRASES row PedLex names exactly `key`."""
         out: List[Tuple[str, Dict[str, Any]]] = []
         keys = {key} | cls._declared_unit_spellings(key)
         for host in cls._phrase_headwords(key, headword):
@@ -4182,7 +4286,7 @@ class LinguisticEngine:
     def _unit_owning_sense(cls, key: str,
                            headword: Optional[str] = None,
                            context_sentence: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any], str]]:
-        """(host, sense, source) for the sense Longman files `key` under.
+        """(host, sense, source) for the sense PedLex files `key` under.
 
         First the sense whose own grammar pattern reads as this unit: 'long for
         somebody/something' is a pattern of the verb 'long', and the definition that belongs
@@ -4404,7 +4508,7 @@ class LinguisticEngine:
         # 2. A sense whose own pattern states the same frame under a different head
         #    ('get in touch with' files 'keep in touch with').
         # 3. A sense whose examples actually show the unit.
-        # 4. Last the host entry's own first sense, which is the word Longman filed the row under.
+        # 4. Last the host entry's own first sense, which is the word PedLex filed the row under.
         # The host that is not the unit's own head word is tried first - 'take into
         # consideration' is filed under 'consideration', and 'take''s 92 senses have
         # nothing to say about it.
@@ -4485,18 +4589,18 @@ class LinguisticEngine:
                                      sense: Dict[str, Any],
                                      key: str,
                                      context_sentence: Optional[str]) -> Optional[Dict[str, Any]]:
-        """G5: a PHRASES row says which sense Longman FILED the unit under; it does not say
+        """G5: a PHRASES row says which sense PedLex FILED the unit under; it does not say
         this passage uses it that way. 'keep in touch with' is filed under
         'be/keep/stay etc in touch (with something)' - 'to have the latest information or
         knowledge about something' - but 'helped family members and friends to keep in touch
-        with each other' keeps in touch with PEOPLE, which Longman files under
+        with each other' keeps in touch with PEOPLE, which PedLex files under
         'in touch (with somebody)' = 'talking or writing to someone'.
 
         The row's filing is overturned only when all four hold: the passage sentence actually
         demonstrates this unit; the host entry's own sense lock, fed the row's definition AND
         the sentence together, still lands on a different sense of the same POS; that lock is
         'high'; and its margin beats the row by UNIT_SENSE_QUOTE_MARGIN. Anything weaker keeps
-        Longman's filing, so a weak quote can never rewrite a grounded definition.
+        PedLex's filing, so a weak quote can never rewrite a grounded definition.
         """
         if not sense or not context_sentence:
             return None
@@ -4586,7 +4690,7 @@ class LinguisticEngine:
         staying in contact with people.
 
         Two filings count.  A row the sense names in its 'units' is filed under it outright.
-        So is a row whose own sentences demonstrate this unit: Longman files 'keep in close
+        So is a row whose own sentences demonstrate this unit: PedLex files 'keep in close
         contact/touch' - 'I am keen to keep in close touch with you on this subject.' - under
         the 'talking or writing to someone' sense, and that row is where the entry actually
         shows 'keep in touch with somebody' about people, because the sense's own sentences
@@ -4624,7 +4728,7 @@ class LinguisticEngine:
     @classmethod
     def _relaxed_unit_example(cls, key: str, pool: List[str]) -> str:
         """Match the unit inside an example, allowing a trailing particle the entry may not
-        repeat and a modifier Longman inserts inside the frame: Longman demonstrates 'keep in
+        repeat and a modifier PedLex inserts inside the frame: PedLex demonstrates 'keep in
         touch with somebody' both as 'Over the years, we kept in touch by telephone' and as
         'I am keen to keep in close touch with you on this subject'.
 
@@ -4670,71 +4774,28 @@ class LinguisticEngine:
         context_sentence: Optional[str] = None
     ) -> str:
         """
-        Synthesizes an accurate phrase-level definition when an expression is stored under
-        a constituent host word's sense_pattern or phrase_row, preventing bare single-word
-        definitions (e.g., defining 'family member' as 'a person, animal, or plant...' or
-        'keep silent' as 'without any sound').
+        Synthesizes a phrase-level definition using general grammatical composition rules
+        when a verbal collocation is defined by a noun or adjective host sense.
         """
         k_low = key.strip().lower()
-        q_low = (context_sentence or "").lower()
-        if k_low in ("on top of", "on top of sth") and ("on top of that" in q_low or "in addition" in raw_defn.lower()):
-            return "in addition to something, especially something unpleasant or difficult"
-        if k_low in ("pick up", "pick sth up") and any(w in q_low for w in ("pace", "speed", "wind", "sales", "business", "momentum")):
-            return "to increase or improve in speed, strength, or activity"
-        if k_low in ("clear up", "clear sth up") and any(w in q_low for w in ("pollution", "mess", "litter", "problem", "disease", "infection", "weather")):
-            return "to make a place clean and tidy, or to solve and remove a problem or pollution"
-        if k_low in ("fill up", "fill sth up") and "fill up with" not in q_low and "car" not in q_low and "tank" not in q_low:
-            return "to become completely full, or to make a container, room, or space completely full"
-
-        phrases_map = {
-            "keep silent": "to not say anything or make any sound",
-            "have a try": "to make an attempt to do something",
-            "family member": "someone who belongs to a particular family; a relative",
-            "make possible": "to make something able to happen, be done, or be achieved",
-            "passenger plane": "an aircraft designed and equipped to carry passengers",
-            "new generation": "a more advanced stage in the development of a product or technology",
-            "make time": "to find or arrange time to do something even when you are busy",
-            "be new to": "to be unfamiliar with or inexperienced in a particular activity, place, or situation",
-            "do one's part": "to do what one is able or responsible for doing to help achieve a goal",
-            "do part": "to do what one is able or responsible for doing to help achieve a goal",
-            "be smart about": "to handle or make decisions about something in a sensible, clever, and practical way",
-            "take action": "to do something officially or concertedly in order to deal with a problem",
-            "put into the atmosphere": "to release or emit a substance such as gas or smoke into the air surrounding the Earth",
-            "high praise": "strong approval and admiration for someone's achievements or qualities",
-            "a piece of": "a single unit, sheet, or portion of an uncountable material or substance",
-            "piece of": "a single unit, sheet, or portion of an uncountable material or substance",
-            "show thanks to": "to express gratitude or appreciation to someone",
-            "fill with": "to become full of or cause something to be full of a particular thing, quality, or emotion",
-            "stand for": "to represent a particular idea, quality, or meaning",
-            "model on": "to design or create something so that it copies the structure, system, or style of something else",
-            "to that end": "[formal] in order to achieve that particular aim or purpose",
-            "addict to": "to make someone unable to stop taking a harmful substance or doing an activity, or to be strongly devoted to it",
-            "be addicted to": "to be unable to stop taking a harmful drug or doing an activity as a habit",
-            "in the face of": "despite having to deal with a difficult situation, danger, or problem",
-            "be upon": "if an event or time is upon you, it has arrived or is about to happen very soon",
-            "look upon as": "to consider or regard someone or something in a particular way, or as a particular thing",
-            "look on as": "to consider or regard someone or something in a particular way, or as a particular thing",
-            "not up to par": "not as good as usual or below the expected standard",
-            "up to par": "at the usual or expected standard or quality",
-            "remain committed to": "to continue to be dedicated and loyal to a cause, activity, or goal",
-            "committed to": "willing to work very hard at something; dedicated to something",
-            "stay on track": "to continue making progress toward achieving a goal or desired result",
-            "spin out of control": "to become completely impossible to manage, direct, or stop",
-            "get in way": "to prevent someone from doing something, or prevent something from happening",
-            "get in one's way": "to prevent someone from doing something, or prevent something from happening",
-            "no exaggeration": "used to say that a strong statement is completely true and not making something seem larger or more important than it really is",
-            "feel lost": "to not feel confident about what to do or how to behave in a new or unfamiliar situation",
-            "be lost": "to not feel confident about what to do or how to behave, or to be unable to find your way",
-            "get lost": "to become unable to find your way, or to not know what to do in an unfamiliar situation",
-            "how was it": "[spoken] used to ask someone whether an experience, event, or trip was enjoyable or successful",
-            "pay a big price": "to experience serious unpleasant consequences as a result of an action or mistake",
-            "pay a price": "to experience unpleasant consequences as a result of something you have done",
-        }
-        if k_low in phrases_map:
-            return phrases_map[k_low]
-        for p_key, p_def in phrases_map.items():
-            if k_low.startswith(p_key + " ") or k_low.endswith(" " + p_key):
-                return p_def
+        s_pos = str(sense.get("pos") or "").lower()
+        defn_clean = (raw_defn or "").strip()
+        if defn_clean and not re.match(r"^to\s+", defn_clean, flags=re.IGNORECASE):
+            if k_low.startswith(("come to ", "rise to ", "achieve ")) and defn_clean.lower().startswith("the fact of being "):
+                return "to become " + defn_clean[len("the fact of being "):]
+            if k_low.startswith(("fall ", "keep ", "remain ", "stay ", "feel ", "get ")) and "adj" in s_pos:
+                v_head = k_low.split()[0]
+                if v_head in ("keep", "remain", "stay"):
+                    return "to continue to be " + defn_clean
+                return "to become or feel " + defn_clean
+        elif defn_clean.lower() == "to have or experience a particular feeling" and k_low.startswith("take "):
+            toks = [t for t in k_low.split()[1:] if len(t) >= 3 and t not in cls._PHRASE_PARTICLE_WORDS and t not in cls._PHRASE_SLOT_WORDS]
+            if toks:
+                n_entry = cls.get_ldoce_entry(toks[0])
+                for ns in (n_entry.get("senses") or []) if n_entry else []:
+                    nd = str(ns.get("definition") or "").strip()
+                    if nd.lower().startswith("the feeling of "):
+                        return "to feel or experience " + nd[len("the feeling of "):]
         return raw_defn
 
     @classmethod
@@ -4742,11 +4803,12 @@ class LinguisticEngine:
         cls,
         phrase: str,
         expr_type: Optional[str] = None,
-        context_sentence: Optional[str] = None
+        context_sentence: Optional[str] = None,
+        enable_llm_disambiguation: bool = True
     ) -> Tuple[str, str, str]:
         """(definition, example, source) for a multi-word unit, each tier grounded in the row
-        that hosts it. `source` is one of EXPRESSION_SOURCE_TIERS; '' means Longman states
-        nothing about this unit and the caller must not invent a definition (F2)."""
+        that hosts it. `source` is one of EXPRESSION_SOURCE_TIERS; '' means PedLex states
+        nothing about this unit and the caller must not invent a definition ."""
         clean_phrase = re.sub(r'\[.*?\]|\(.*?\)', '', str(phrase or ''),
                               flags=re.IGNORECASE).strip().lower()
         if not clean_phrase:
@@ -4755,18 +4817,7 @@ class LinguisticEngine:
         key = cls._unit_key(clean_phrase)
         is_multiword = len(key.split()) >= 2
 
-        # Early phrase-level synthesis check for curated collocations that lack dedicated LDOCE headword rows
-        early_composed = cls._compose_collocation_definition(key, expr_type, "", {}, "", context_sentence)
-        if early_composed and key in ("get in way", "get in one's way", "feel lost", "be lost", "get lost", "how was it", "no exaggeration", "look upon as", "not up to par", "remain committed to", "stay on track", "spin out of control", "pay a big price", "pay a price"):
-            ex = ""
-            try:
-                pool = [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
-                ex = cls._unit_example(key, pool)
-            except Exception:
-                pass
-            return (early_composed, ex, "sense_pattern")
-
-        # When expr_type is explicitly a phrasal verb or verbal multiword, check Longman's phrasal-verb block first
+        # When expr_type is explicitly a phrasal verb or verbal multiword, check PedLex's phrasal-verb block first
         # to prevent noun homographs (e.g. 'cutout' for 'cut out') from hijacking the unit.
         is_phrasal_v = is_multiword and (
             expr_type in ("phrasal verb", "v", "verb") or
@@ -4815,9 +4866,10 @@ class LinguisticEngine:
                         top_indices = [s_i for s_i, _ in sorted_scores[:4]]
                         if _idx is not None and _idx not in top_indices:
                             top_indices = [_idx] + top_indices[:3]
-                        if len(top_indices) > 1 and context_sentence and _margin < 25:
+                        if len(top_indices) > 1 and context_sentence and enable_llm_disambiguation:
+                            locked_et = expr_type if (expr_type in cls.EXPRESSION_TYPE_LABELS) else "phrasal verb"
                             top_cand_dicts = [
-                                {"definition": candidates[s_i][0].get("definition", ""), "pos": "verb"}
+                                {"definition": candidates[s_i][0].get("definition", ""), "pos": locked_et}
                                 for s_i in top_indices
                             ]
                             chosen_sub = cls.disambiguate_via_llm(key, context_sentence, top_cand_dicts)
@@ -4851,7 +4903,7 @@ class LinguisticEngine:
         if not is_multiword:
             return ("", "", "")
 
-        # Tier 2a: Longman's own phrasal-verb block. When a block names this unit its
+        # Tier 2a: PedLex's own phrasal-verb block. When a block names this unit its
         # definition is final - the entry's base senses describe the verb, not the unit.
         for block in cls._unit_blocks(key):
             for sense in cls._unit_senses(block, key):
@@ -4870,7 +4922,7 @@ class LinguisticEngine:
             definition = cls.format_ldoce_definition(sense) or str(sense.get("definition") or "").strip()
             if definition:
                 definition = cls._compose_collocation_definition(key, expr_type, _host, sense, definition, context_sentence)
-                # G5: Longman filed this unit under that sense, but the passage sentence is
+                # G5: PedLex filed this unit under that sense, but the passage sentence is
                 # evidence too. When it demonstrates the unit and the host entry's own sense
                 # lock lands firmly on a different same-POS sense, THAT sense is what this
                 # item teaches - 'keep in touch with each other' is about people, not about
@@ -4898,13 +4950,18 @@ class LinguisticEngine:
                             v_entry = cls.get_ldoce_entry(v_host)
                             if not v_entry:
                                 continue
+                            v_senses_all = v_entry.get("senses", [])
                             v_idx = cls._lock_sense(v_entry, quote=context_sentence, target_pos="verb")
-                            if v_idx is not None and v_idx < len(v_entry.get("senses", [])):
-                                v_sense = v_entry["senses"][v_idx]
+                            cand_v_indices = ([v_idx] if v_idx is not None and 0 <= v_idx < len(v_senses_all) else []) + [
+                                idx for idx, vs in enumerate(v_senses_all)
+                                if idx != v_idx and cls._pos_code(vs.get("pos")) == "v"
+                            ]
+                            other_tokens = [tok for tok in tokens if tok != v_host]
+                            for cand_vi in cand_v_indices:
+                                v_sense = v_senses_all[cand_vi]
                                 v_defn = cls.format_ldoce_definition(v_sense) or str(v_sense.get("definition") or "").strip()
                                 if not v_defn:
                                     continue
-                                other_tokens = [tok for tok in tokens if tok != v_host]
                                 v_pats = v_sense.get("patterns") or []
                                 matches_pat = any(
                                     all(re.search(r'(?<!\w)' + re.escape(tok) + r'(?!\w)', cls._entry_text_normalizer(p))
@@ -4950,20 +5007,7 @@ class LinguisticEngine:
                     if not found_ex and bare_q:
                         found_ex = cls._unit_example(bare_q, pool)
                 definition = cls._compose_collocation_definition(key, expr_type, _host, sense, definition, context_sentence)
-                if any(w in key.lower() for w in ("push up", "push (sb/sth) up", "push sth up")) and "increase or decrease" in definition.lower():
-                    definition = re.sub(r"(?i)\bto increase or decrease\b", "to make something higher or larger; to increase", definition)
-                if "run late" in key and "late, early, or at the right time" in definition:
-                    definition = re.sub(r"late, early, or at the right time", "late or behind schedule", definition)
                 return (definition, found_ex, source)
-
-        if early_composed:
-            ex = ""
-            try:
-                pool = [str(e) for e in (cls.search_corpus_examples(key, limit=3) or []) if e]
-                ex = cls._unit_example(key, pool)
-            except Exception:
-                pass
-            return (early_composed, ex, "sense_pattern")
 
         # Tier 2c: Verb base senses matching for verb multi-word units (e.g. 'turn around', 'push up')
         # When a verb + particle/preposition unit does not match a dedicated headword or whose phrasal-verb
@@ -5053,7 +5097,7 @@ class LinguisticEngine:
         if definition:
             return (definition, example)
 
-        # Tier 4: nothing in Longman grounds this unit. F2 gates this string out of the
+        # Tier 4: nothing in PedLex grounds this unit. F2 gates this string out of the
         # pages; it is kept here only so a caller that asked for a definition at any cost
         # still gets one.
         type_str = expr_type or "multi-word expression"
@@ -5067,8 +5111,8 @@ class LinguisticEngine:
         context_sentence: Optional[str] = None,
     ) -> Any:
         """
-        Retrieves authoritative, semantically prioritized collocations from LDOCE 6th Edition.
-        When word is None, returns a dict-like view of all headwords in LDOCE that resolves
+        Retrieves authoritative, semantically prioritized collocations from PedLex 6th Edition.
+        When word is None, returns a dict-like view of all headwords in PedLex that resolves
         collocation entries on demand.
         When word is given, extracts preposition patterns, verb-noun, adjective-noun, and adverb collocations.
         """
@@ -5124,7 +5168,7 @@ class LinguisticEngine:
                         if p not in res["prep"]:
                             res["prep"].append(p)
 
-        # 2. Collocation boxes in LDOCE
+        # 2. Collocation boxes in PedLex
         for it in colls.get("verbs", []):
             c_str = it.get("collocation", "")
             if c_str:
@@ -5149,7 +5193,7 @@ class LinguisticEngine:
                 res["noun_after"].append(c_str)
         # 'ADVERB' is its own section inside a COLLOCATIONS box, and the F7 ingestion files
         # those collocates under 'adverbs' instead of lumping them into 'verbs' the way the
-        # shipped database did. Nothing read that bucket, so Longman's intensifiers for an
+        # shipped database did. Nothing read that bucket, so PedLex's intensifiers for an
         # adjective ('completely wrong', 'hopelessly wrong', 'terribly wrong') were stored
         # but unreachable. They get their own key rather than 'verb_before', because
         # get_rich_collocations renders 'verb_before' items as '<item> <word>' - a phrase
@@ -5198,18 +5242,18 @@ class LinguisticEngine:
         context_sentence: Optional[str] = None,
     ) -> Any:
         """
-        [DEPRECATED in favor of LDOCE 6th Edition]
+        [DEPRECATED in favor of PedLex 6th Edition]
         Redirects to get_ldoce_collocations to eliminate mechanical A-Z alphabetical bias
-        and ground all collocation resolution 100% in LDOCE frequency & pedagogical salience.
+        and ground all collocation resolution 100% in PedLex frequency & pedagogical salience.
         """
         return cls.get_ldoce_collocations(word=word, pos=pos, context_sentence=context_sentence)
 
 
     # ------------------------------------------------------------------
-    # Collocation rendering (backlog E7 遗留 ①)
+    # Collocation rendering (遗留 ①)
     # ------------------------------------------------------------------
     # A rendered collocation has to be a phrase the entry's own data supports.
-    # Longman's boxes mix bare collocates ('lie', 'firm', 'music', 'birth') with whole
+    # PedLex's boxes mix bare collocates ('lie', 'firm', 'music', 'birth') with whole
     # phrases ('get something wrong', 'part-time work', 'take control of'), and gluing
     # the headword onto a bare collocate is only grammatical for some
     # headword-POS x bucket combinations:
@@ -5287,7 +5331,7 @@ class LinguisticEngine:
     ) -> Optional[Tuple[str, List[str], str]]:
         """Find the headword and one collocate side by side in authentic text.
 
-        Returns (order, gap, head_form): which of the two Longman's own text puts first,
+        Returns (order, gap, head_form): which of the two PedLex's own text puts first,
         the tokens sitting between them, and the headword form that matched. Every gap
         token must be a function word, so 'listening to the conversation' is a frame
         while 'based on what rotten foundations' is not. Headword and collocate are
@@ -5358,7 +5402,7 @@ class LinguisticEngine:
         head_forms = sorted({f for f in cls.inflected_forms(head) if f}, key=len, reverse=True)
         head_alt = "(?:%s)" % "|".join(re.escape(f) for f in head_forms)
         head_any_re = rf"(?<!\w){head_alt}(?!\w)"
-        # Longman's COLLOCATIONS box for a noun prints the headword at the END of its own
+        # PedLex's COLLOCATIONS box for a noun prints the headword at the END of its own
         # ADJECTIVE and NOUNS items ('part-time work', 'human rights'), and its VERBS
         # section then lists the verbs that govern the headword. A verb headword's box
         # prints the headword at the START instead ('do the shopping', 'lose weight'), and
@@ -5374,7 +5418,7 @@ class LinguisticEngine:
             for bucket in ("adj", "colloc_nouns")
             for s in (entry.get(bucket) or [])
         )
-        # Each box item carries the example Longman printed beside it, which is the entry's
+        # Each box item carries the example PedLex printed beside it, which is the entry's
         # own statement of what the pairing means.
         box_examples: dict = {}
         for bucket_items in (ldoce.get("collocations") or {}).values():
@@ -5405,7 +5449,7 @@ class LinguisticEngine:
                         and re.search(noun_head_re, example))
 
         def normalize(item: str) -> str:
-            """Longman prints alternatives and holes inside a box
+            """PedLex prints alternatives and holes inside a box
             ('completely/totally/quite wrong', 'work in industry/education/publishing
             etc', 'lay ... foundations'), and it prints optional words in brackets
             ('keep (somebody/something) warm/safe/dry etc', 'fit (into) a mould',
@@ -5479,7 +5523,7 @@ class LinguisticEngine:
 
             Two defects were real. Gluing the headword onto a phrase that already
             contains it produced 'get something wrong wrong' - a boundary test fixes
-            that. Gluing it onto a bare collocate in a combination Longman never prints
+            that. Gluing it onto a bare collocate in a combination PedLex never prints
             produced 'lie listen', 'listen music', 'work home', 'control birth' - that
             one needs the entry's own text, because the box never says how a collocate
             attaches.
@@ -5492,7 +5536,7 @@ class LinguisticEngine:
                 # The item is nothing but the headword in another form ('notes' under
                 # 'note'). There is no collocation in it to render.
                 return None
-            # Already a phrase Longman wrote - the headword stands in it as its own word,
+            # Already a phrase PedLex wrote - the headword stands in it as its own word,
             # in any form the entry allows (hyphen boundaries count, so 'part-time' counts
             # for 'time' but 'network' does not count for 'work', and 'human rights' is
             # already the phrase rather than something to glue a second 'right' onto).
@@ -5502,7 +5546,7 @@ class LinguisticEngine:
             if mode == "verb_before":
                 # Where the entry's own text puts the collocate in front of the headword
                 # that frame decides the phrase. Where it does not, the collocate is only
-                # safe to glue when the box is a noun box - Longman's VERBS section there
+                # safe to glue when the box is a noun box - PedLex's VERBS section there
                 # lists the verbs that govern the headword ('begin work', 'lay foundations')
                 # - and even then the entry has to show the pairing somewhere: a frame in
                 # either order, or the box's own example using the headword as a noun.
@@ -5787,11 +5831,20 @@ class LinguisticEngine:
             quote_clean = quote or ""
             def_doc = nlp(def_clean.lower())
             quote_doc = nlp(quote_clean.lower())
-            def_tokens = {t.lemma_.lower() for t in def_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
-            quote_tokens = ({t.lemma_.lower() for t in quote_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - def_tokens
+            self_forms = {clean_target, target_lemma} | {t.lemma_.lower() for t in nlp(clean_target)}
+            def_tokens = ({t.lemma_.lower() for t in def_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
+            quote_tokens = (({t.lemma_.lower() for t in quote_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - def_tokens) - self_forms
 
             scored_synsets = []
             seen_syn_ids = set()
+            def_lower_stripped = re.sub(r"^\s*(?:\[[^\]]+\]\s*)+", "", def_clean).strip().lower()
+            is_human_def = (
+                any(h in def_tokens for h in ("people", "person", "organization", "employee", "staff", "student", "worker", "member", "social", "human", "group"))
+                or def_lower_stripped.startswith(("a person", "someone ", "a man", "a woman", "people who"))
+            )
+            is_bio_sample_def = any(b in def_tokens for b in ("blood", "urine", "tissue", "medical", "scientific", "plant", "animal", "mineral", "bacteria", "cell", "organ"))
+            is_military_def = any(m in def_tokens for m in ("military", "army", "soldier", "war", "battle", "weapon", "navy"))
+
             for w in words:
                 for s in w.synsets():
                     if s.id in seen_syn_ids:
@@ -5799,7 +5852,7 @@ class LinguisticEngine:
                     seen_syn_ids.add(s.id)
 
                     s_direct_doc = nlp((s.definition() + " " + " ".join(s.examples())).lower())
-                    s_direct_lemmas = {t.lemma_.lower() for t in s_direct_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
+                    s_direct_lemmas = ({t.lemma_.lower() for t in s_direct_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
 
                     chain_texts = []
                     cur = s
@@ -5811,18 +5864,25 @@ class LinguisticEngine:
                             chain_texts.append(hw.lemma())
                         depth += 1
                     chain_doc = nlp(" ".join(chain_texts).lower())
-                    chain_lemmas = {t.lemma_.lower() for t in chain_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS
+                    chain_lemmas = ({t.lemma_.lower() for t in chain_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
 
                     # Semantic Domain Guardrails:
-                    # Penalize animal group senses if target definition is human/organization
-                    is_human_def = any(h in def_tokens for h in ("people", "person", "organization", "employee", "staff", "student", "worker", "member", "social", "human", "group"))
+                    # Penalize animal group or biological/substance/body-sample senses if target definition is human/social/person
                     penalty = 0
-                    if is_human_def and ("animal" in chain_lemmas or "animal group" in " ".join(chain_texts).lower()):
-                        penalty += 15
+                    s_lf = s.lexfile() or ""
+                    s_def_low = s.definition().lower()
+                    chain_str_low = " ".join(chain_texts).lower()
+                    if is_human_def and not is_bio_sample_def:
+                        if (
+                            "animal" in chain_lemmas
+                            or "animal group" in chain_str_low
+                            or s_lf in ("noun.body", "noun.animal", "noun.plant", "noun.substance")
+                            or any(bio_w in s_def_low for bio_w in ("tissue", "blood", "urine", "biological", "plant", "mineral"))
+                        ):
+                            penalty += 15
 
                     # Penalize military/war senses if definition is not military/war
-                    is_military_def = any(m in def_tokens for m in ("military", "army", "soldier", "war", "battle", "weapon", "navy"))
-                    if not is_military_def and ("military" in s.definition().lower() or "military" in " ".join(chain_texts).lower()):
+                    if not is_military_def and ("military" in s_def_low or "military" in chain_str_low):
                         penalty += 8
 
                     score = (
@@ -5838,7 +5898,7 @@ class LinguisticEngine:
             if scored_synsets:
                 best_ov = scored_synsets[0][0]
                 if best_ov > 0:
-                    target_synsets = [s for ov, s in scored_synsets if ov >= best_ov - 1]
+                    target_synsets = [s for ov, s in scored_synsets if ov >= max(1, best_ov - 1)]
                 else:
                     target_synsets = [scored_synsets[0][1]]
         if not target_synsets:
@@ -5853,7 +5913,7 @@ class LinguisticEngine:
                 dedup_synsets.append(s)
         target_synsets = dedup_synsets
 
-        # 2. Extract Sense-Locked Antonyms directly from matched synsets (Scheme 2: Bipolar Opposite Cluster)
+        # 2. Extract Sense-Locked Antonyms directly from matched synsets (Bipolar Opposite Cluster)
         sense_antonyms: List[str] = []
         raw_antonyms: List[Tuple[str, int]] = []
 
@@ -5870,7 +5930,7 @@ class LinguisticEngine:
             ):
                 if al in ocd:
                     prio = 0 - priority_bonus
-                elif al in cls.get_awl_words() or any(al.startswith(p) and al[len(p):] in ocd for p in ("un", "in", "im", "ir", "il", "non", "dis")):
+                elif cls.get_word_cefr(al) in ("B1", "B2", "C1") or any(al.startswith(p) and al[len(p):] in ocd for p in ("un", "in", "im", "ir", "il", "non", "dis")):
                     prio = 1 - priority_bonus
                 elif wn_pos == "a":
                     prio = 2 - priority_bonus
@@ -5917,14 +5977,26 @@ class LinguisticEngine:
             if al not in sense_antonyms:
                 sense_antonyms.append(al)
 
-        # LDOCE 6th Edition Thesaurus & Topic/Activator Integration (Tier 0: Primary Pedagogical Lexical Source)
+        # PedLex 6th Edition Thesaurus, Grammar Box Comparison Peers & Activator Integration (Tier 0: Primary Pedagogical Lexical Source)
         tier0_ldoce_thesaurus: List[str] = []
         seen = {clean_target}
         seen.update(sense_antonyms)
 
-        thes_items = cls.get_ldoce_thesaurus(clean_target)
+        thes_items = list(cls.get_ldoce_thesaurus(clean_target))
+        t_gram_prof = cls.get_word_gram_profile(clean_target, pos=pos)
+        for peer_w in t_gram_prof.get("comparison_peers", set()):
+            thes_items.append({
+                "word": peer_w,
+                "form": "word",
+                "distinction": definition or "",
+                "grammar": "",
+                "register": "",
+                "concept": "",
+                "is_grambox_peer": True,
+            })
+
         if thes_items:
-            # Rank items by definition and quote overlap
+            # Rank items by definition and quote overlap + syntactic slot clash bonus
             q_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", (quote or "").lower()))
             d_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", (definition or "").lower()))
             content_words = d_words | q_words
@@ -5934,11 +6006,21 @@ class LinguisticEngine:
                 t_toks = set(re.findall(r"\b[a-zA-Z]{3,}\b", t_text))
                 overlap_score = len(t_toks & d_words) * 3 + len(t_toks & q_words)
                 # If definition/quote provided, filter out Activator/Thesaurus clusters with zero overlap against the target sense
-                if content_words and overlap_score == 0:
+                if content_words and overlap_score == 0 and not it.get("is_grambox_peer"):
                     continue
                 # Boost true Thesaurus distinction records slightly over broad Activator clusters
                 if not it.get("concept"):
                     overlap_score += 1
+                if it.get("is_grambox_peer"):
+                    overlap_score += 5
+                raw_cand_head = str(it.get("word", "")).strip().lower().split("/")[0].split()[0] if it.get("word") else ""
+                if raw_cand_head:
+                    has_clash, _ = cls.evaluate_syntactic_slot_clash(
+                        clean_target, raw_cand_head,
+                        anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )
+                    if has_clash:
+                        overlap_score += 15
                 scored_thes_items.append((overlap_score, it))
             scored_thes_items.sort(key=lambda x: x[0], reverse=True)
 
@@ -5954,7 +6036,6 @@ class LinguisticEngine:
                     if any(" " in p for p in parts_check):
                         continue
                 chunks = [ch.strip() for ch in raw_w.split("/")] if "/" in raw_w else [raw_w]
-                item_picked = False
                 for chunk in chunks:
                     if not chunk:
                         continue
@@ -5981,12 +6062,16 @@ class LinguisticEngine:
                     cand_doc = nlp(cand)
                     cand_lemma = cand_doc[0].lemma_.lower()
                     picked = cand_lemma if cls.get_ldoce_entry(cand_lemma) else cand
+                    has_picked_clash, _ = cls.evaluate_syntactic_slot_clash(
+                        clean_target, picked,
+                        anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )
 
                     if (
                         picked
                         and picked != clean_target
                         and picked not in seen
-                        and picked not in global_synonyms
+                        and (picked not in global_synonyms or has_picked_clash)
                         and not cls.are_same_word_family(picked, clean_target)
                         and not any(cls.are_same_word_family(picked, existing) for existing in tier0_ldoce_thesaurus)
                         and _pos_ok(picked)
@@ -5999,7 +6084,7 @@ class LinguisticEngine:
                             if wn_pos == "n":
                                 if not any("noun" in p for p in c_poses):
                                     continue
-                                # Reject if primary LDOCE POS is verb or adjective and spacy also detects non-noun
+                                # Reject if primary PedLex POS is verb or adjective and spacy also detects non-noun
                                 if c_primary in ("verb", "adjective", "adverb"):
                                     continue
                             elif wn_pos == "v":
@@ -6032,20 +6117,22 @@ class LinguisticEngine:
                         and " " not in lemma
                         and "_" not in lemma
                         and "-" not in lemma
-                        and (lemma in ocd or lemma in cls.get_awl_words())
+                        and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                     ):
                         if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
+                            continue
+                        if lemma in global_synonyms:
                             continue
                         seen.add(lemma)
                         tier1_synonyms.append(lemma)
 
             if wn_pos == "a":
-                # For Adjectives: WordNet organizes concepts into Bipolar Clusters (Scheme 1: Satellite Synset Harvester)
+                # For Adjectives: WordNet organizes concepts into Bipolar Clusters (Satellite Synset Harvester)
                 # Tier 2: Satellite synsets (fine-grained descriptive neighbors in the bipolar cluster)
                 sat_synsets = []
                 if s.pos == "a":
-                    sat_synsets.extend(s.get_related("similar") + s.get_related("also"))
+                    sat_synsets.extend(s.get_related("also") + s.get_related("similar"))
                 elif s.pos == "s":
                     for head in s.get_related("similar"):
                         for hw in head.words():
@@ -6054,13 +6141,13 @@ class LinguisticEngine:
                                 hl not in seen
                                 and hl not in global_synonyms
                                 and " " not in hl and "_" not in hl and "-" not in hl
-                                and (hl in ocd or hl in cls.get_awl_words())
+                                and (hl in ocd or bool(cls.get_ldoce_entry(hl)))
                                 and _pos_ok(hl)
                                 and cls.is_cefr_compliant_distractor(hl, clean_target)
                             ):
                                 seen.add(hl)
                                 tier2_satellites.append(hl)
-                        sat_synsets.extend(head.get_related("similar") + head.get_related("also"))
+                        sat_synsets.extend(head.get_related("also") + head.get_related("similar"))
 
                 for sim in sat_synsets:
                     for sw in sim.words():
@@ -6071,7 +6158,7 @@ class LinguisticEngine:
                             and " " not in lemma
                             and "_" not in lemma
                             and "-" not in lemma
-                            and (lemma in ocd or lemma in cls.get_awl_words())
+                            and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                             and _pos_ok(lemma)
                             and cls.is_cefr_compliant_distractor(lemma, clean_target)
                         ):
@@ -6093,7 +6180,7 @@ class LinguisticEngine:
                                 and " " not in lemma
                                 and "_" not in lemma
                                 and "-" not in lemma
-                                and (lemma in ocd or lemma in cls.get_awl_words())
+                                and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                                 and _pos_ok(lemma)
                                 and cls.is_cefr_compliant_distractor(lemma, clean_target)
                             ):
@@ -6108,7 +6195,7 @@ class LinguisticEngine:
                                     and " " not in lemma
                                     and "_" not in lemma
                                     and "-" not in lemma
-                                    and (lemma in ocd or lemma in cls.get_awl_words())
+                                    and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                                     and _pos_ok(lemma)
                                     and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                 ):
@@ -6116,23 +6203,24 @@ class LinguisticEngine:
                                     tier3_attributes.append(lemma)
             else:
                 # Tier 2: Hyponyms (more specific concepts / troponyms)
-                for hypo in s.hyponyms():
-                    for hw in hypo.words():
-                        lemma = hw.lemma().lower()
-                        if (
-                            lemma not in seen
-                            and lemma not in global_synonyms
-                            and " " not in lemma
-                            and "_" not in lemma
-                            and "-" not in lemma
-                            and (lemma in ocd or lemma in cls.get_awl_words())
-                            and _pos_ok(lemma)
-                            and cls.is_cefr_compliant_distractor(lemma, clean_target)
-                        ):
-                            if wn_pos == "n" and _is_primarily_adj_or_verb(lemma):
-                                continue
-                            seen.add(lemma)
-                            tier2_hyponyms.append(lemma)
+                # Only harvest hyponyms from the locked target_synsets (already represented by `s in target_synsets`),
+                # and for nouns skip hyponyms to prevent synonym-pile double-keys with semantic_fields.
+                if wn_pos == "v":
+                    for hypo in s.hyponyms():
+                        for hw in hypo.words():
+                            lemma = hw.lemma().lower()
+                            if (
+                                lemma not in seen
+                                and lemma not in global_synonyms
+                                and " " not in lemma
+                                and "_" not in lemma
+                                and "-" not in lemma
+                                and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                                and _pos_ok(lemma)
+                                and cls.is_cefr_compliant_distractor(lemma, clean_target)
+                            ):
+                                seen.add(lemma)
+                                tier2_hyponyms.append(lemma)
                 # Tier 3: Coordinate terms (sisters under same hypernym - Troponyms for verbs)
                 for hyper in s.hypernyms():
                     # For verbs: skip broad generic root hypernyms (e.g. > 50 hyponyms)
@@ -6149,7 +6237,7 @@ class LinguisticEngine:
                                 and " " not in lemma
                                 and "_" not in lemma
                                 and "-" not in lemma
-                                and (lemma in ocd or lemma in cls.get_awl_words())
+                                and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                                 and _pos_ok(lemma)
                                 and cls.is_cefr_compliant_distractor(lemma, clean_target)
                             ):
@@ -6178,7 +6266,7 @@ class LinguisticEngine:
                                         and " " not in lemma
                                         and "_" not in lemma
                                         and "-" not in lemma
-                                        and (lemma in ocd or lemma in cls.get_awl_words())
+                                        and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
                                         and _pos_ok(lemma)
                                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                     ):
@@ -6187,18 +6275,30 @@ class LinguisticEngine:
                                         seen.add(lemma)
                                         tier3_coordinates.append(lemma)
 
-        # Candidate prioritization: LDOCE Thesaurus & Activators are primary (Tier 0); WordNet is secondary/fallback
+        # Sort tier3_coordinates by PedLex richness (attested examples/collocations) and CEFR rank proximity
+        if tier3_coordinates:
+            t_lvl_str = cls._lexicon_profile(clean_target)[2] or "B1"
+            t_rank = cls.CEFR_ORDER.get(t_lvl_str, 3)
+            def _coord_sort_key(cand_w: str) -> Tuple[int, int]:
+                c_ent = cls.get_ldoce_entry(cand_w) or {}
+                has_ex = any(s.get("examples") for s in c_ent.get("senses", []))
+                c_lvl = cls._lexicon_profile(cand_w)[2] or "C1"
+                c_rank = cls.CEFR_ORDER.get(c_lvl, 5)
+                return (0 if has_ex else 1, abs(c_rank - t_rank))
+            tier3_coordinates.sort(key=_coord_sort_key)
+
+        # Candidate prioritization: PedLex Thesaurus & Activators are primary (Tier 0); WordNet is secondary/fallback
         if wn_pos == "v":
             candidates = tier0_ldoce_thesaurus + [c for c in (tier2_hyponyms + tier3_coordinates) if c not in global_synonyms]
         elif wn_pos == "a":
             # For adjectives: retain satellite_synonyms first to satisfy existing fine-grained satellite tests,
-            # then inject LDOCE thesaurus peers, compliant antonyms, followed by attribute coordinates.
+            # then inject PedLex thesaurus peers, compliant antonyms, followed by attribute coordinates.
             antonym_candidates = [
                 ant for ant in sense_antonyms
                 if ant != clean_target and cls.is_cefr_compliant_distractor(ant, clean_target)
             ]
             candidates = tier2_satellites + tier0_ldoce_thesaurus + antonym_candidates + tier3_attributes + tier1_synonyms
-            # Preposition valency cloze (Scheme 4): prioritize academic adjectives governing DIFFERENT prepositions
+            # Preposition valency cloze (): prioritize academic adjectives governing DIFFERENT prepositions
             if anchor_type == "prep" and context_anchor:
                 clean_anchor = context_anchor.strip().lower()
                 valency_candidates = []
@@ -6207,24 +6307,30 @@ class LinguisticEngine:
                         for a in adjs:
                             if a != clean_target and a not in exclude_words and cls.is_cefr_compliant_distractor(a, clean_target):
                                 valency_candidates.append(a)
-                # Prioritize local semantic peers (satellites, LDOCE thesaurus) for domain relevance,
+                # Prioritize local semantic peers (satellites, PedLex thesaurus) for domain relevance,
                 # then complement with academic adjectives governing distinct prepositions
                 candidates = tier2_satellites + tier0_ldoce_thesaurus + antonym_candidates + valency_candidates + tier3_attributes + tier1_synonyms
         else:
             candidates = tier0_ldoce_thesaurus + tier1_synonyms + tier2_hyponyms + tier3_coordinates
 
         # 3. Oxford Collision Clearance (Anti Double-Key Gate - Schemes 3 & 4)
-        forbidden_words = set(global_synonyms) if wn_pos == "v" else {clean_target}
+        # Exempt candidates that have a verified syntactic slot clash with target's slot from global_synonyms ban
+        forbidden_words = {
+            gw for gw in global_synonyms
+            if not cls.evaluate_syntactic_slot_clash(
+                clean_target, gw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+            )[0]
+        } | {clean_target}
         if context_anchor:
             clean_anchor = context_anchor.strip().lower()
             if wn_pos == "a" and anchor_type == "prep":
-                # Scheme 4: Preposition Valency Gate - reject candidates that also govern the target preposition
+                # Preposition Valency Gate - reject candidates that also govern the target preposition
                 for cand in candidates:
                     cand_preps = ocd.get(cand, {}).get("prep", [])
                     if clean_anchor in cand_preps or cand in cls._ADJ_PREP_VALENCY_MAP.get(clean_anchor, []):
                         forbidden_words.add(cand)
             elif wn_pos == "a" and anchor_type == "modified_noun":
-                # Scheme 3: Modified Noun Collocation Clash - reject legal adjectives that also collocate with the noun
+                # Modified Noun Collocation Clash - reject legal adjectives that also collocate with the noun
                 anchor_entry = ocd.get(clean_anchor, {})
                 for a in anchor_entry.get("adj", []):
                     tok = a.split()[0].lower()
@@ -6250,7 +6356,7 @@ class LinguisticEngine:
         # Slot 1: Sense-Locked Antonym (if available)
         # Antonyms are whitelisted from context_anchor collision clearance because their
         # collocational plausibility is deliberate, to be eliminated by sentence polarity/logic.
-        max_antonyms = 2 if wn_pos == "a" else 1
+        max_antonyms = 1 if (wn_pos != "a" or len(tier2_satellites) >= 2) else 2
         for ant in sense_antonyms:
             if len([s for s in safe_distractors if distractor_metadata.get(s) == "antonym"]) >= max_antonyms:
                 break
@@ -6259,9 +6365,17 @@ class LinguisticEngine:
                     safe_distractors.append(ant)
                     distractor_metadata[ant] = "antonym"
 
-        # Slots 2 & 3: Candidates from LDOCE Thesaurus & Activator / Coordinate / Troponym / Synonym trees
+        # Slots 2 & 3: Candidates from PedLex Thesaurus & Activator / Coordinate / Troponym / Synonym trees
+        near_set_for_pile, ants_for_pile = cls.semantic_fields(clean_target, pos=pos)
+        near_only_for_pile = near_set_for_pile - ants_for_pile - set(sense_antonyms)
         for cand in candidates:
             if cand in safe_distractors:
+                continue
+            has_cand_clash, _ = cls.evaluate_syntactic_slot_clash(
+                clean_target, cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+            )
+            # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
+            if not has_cand_clash and cand in near_only_for_pile and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
                 continue
             # Attributive position check: if modifying a noun, reject predicative-only adjectives
             if anchor_type == "modified_noun" and cand in cls._PREDICATIVE_ONLY_ADJS:
@@ -6344,12 +6458,64 @@ class LinguisticEngine:
                                 break
                     break
 
+        # Orthographic / Paronym Distractor Tier (with Cognate Near-Synonym Guard):
+        # 1. If candidate pool is sparse (len(safe_distractors) < target_count), fill remaining slots with
+        #    verified orthographic paronyms / orthogonal-domain root peers.
+        # 2. If all 3 slots were filled, blend 1 paronym into Slot 3 when:
+        #    - Slot 3 is a generic coordinate/troponym/attribute_coordinate or a 3rd antonym and a sharp
+        #      paronym (score >= 45, e.g. adapt/adopt, complement/compliment, simulate/stimulate,
+        #      industrial/industrious, considerate/considerable, respectful/respective) exists, OR
+        #    - All 3 slots are generic coordinates and a clean orthogonal-domain root peer (score >= 28,
+        #      e.g. specimen -> spectrum/spectacle/speculation) exists.
+        if wn_pos in ("n", "v", "a", "r"):
+            need_paronym_fill = len(safe_distractors) < target_count
+            pure_generic_coords = (
+                len(safe_distractors) >= target_count
+                and all(
+                    distractor_metadata.get(d) in ("coordinate", "troponym", "attribute_coordinate")
+                    for d in safe_distractors
+                )
+            )
+            slot3_replaceable = (
+                len(safe_distractors) >= target_count
+                and (
+                    distractor_metadata.get(safe_distractors[-1]) in ("coordinate", "troponym", "attribute_coordinate")
+                    or sum(1 for d in safe_distractors if distractor_metadata.get(d) == "antonym") >= 3
+                )
+            )
+            if need_paronym_fill or pure_generic_coords or slot3_replaceable:
+                paronym_cands = cls.get_orthographic_paronym_distractors(
+                    clean_target,
+                    pos=wn_pos,
+                    target_count=target_count,
+                    exclude_words=(exclude_words | forbidden_words | set(safe_distractors)),
+                    context_anchor=context_anchor,
+                    anchor_type=anchor_type,
+                    quote=quote,
+                    return_scores=True,
+                )
+                if need_paronym_fill:
+                    for p_word, _p_score in paronym_cands:
+                        if p_word not in safe_distractors:
+                            safe_distractors.append(p_word)
+                            distractor_metadata[p_word] = "orthographic_paronym"
+                            if len(safe_distractors) >= target_count:
+                                break
+                elif paronym_cands:
+                    best_p_word, best_p_score = paronym_cands[0]
+                    threshold = 28 if pure_generic_coords else 45
+                    if best_p_score >= threshold and best_p_word not in safe_distractors:
+                        popped = safe_distractors.pop()
+                        distractor_metadata.pop(popped, None)
+                        safe_distractors.append(best_p_word)
+                        distractor_metadata[best_p_word] = "orthographic_paronym"
+
         # Second Defense: Dynamic domain-aligned fallback using target WordNet lexfile
         # When candidates pool is still sparse, extract homogeneous fallback words from the target's
-        # exact WordNet lexfile (e.g. noun.group, noun.communication) to prevent Domain/Category Mismatch.
+        # sense-locked WordNet lexfile (e.g. noun.cognition, noun.group) to prevent Domain/Category Mismatch.
         if len(safe_distractors) < target_count and wn_pos == "n":
-            target_syns = [s for s in wn.synsets(clean_target, "n") if s.lexfile()]
-            target_lfs = set(s.lexfile() for s in target_syns)
+            target_syns = [s for s in target_synsets if s.lexfile()] or [s for s in wn.synsets(clean_target, "n") if s.lexfile()]
+            target_lfs = [s.lexfile() for s in target_syns if s.lexfile()]
             if target_lfs:
                 # Lazy-build or retrieve lexfile-indexed OCD nouns
                 if not cls._ocd_lexfile_cache:
@@ -6416,6 +6582,366 @@ class LinguisticEngine:
         return final_distractors
 
     # -------------------------------------------------------------------------
+    # Orthographic / Paronym Distractor Tier (with Cognate Near-Synonym Guard)
+    # -------------------------------------------------------------------------
+    _PARONYM_STOP_DEF_TOKS = frozenset({
+        "someone", "something", "person", "people", "thing", "things", "make", "made",
+        "have", "having", "used", "very", "more", "most", "much", "many", "good", "bad",
+        "way", "time", "place", "part", "group", "kind", "type", "form", "state", "act",
+        "process", "quality", "relating", "connected", "particular", "certain",
+        "able", "likely", "full", "without", "especially", "usually", "often", "always",
+        "from", "that", "with", "into", "this", "these", "those", "which", "what", "when",
+        "where", "while", "whose", "whom", "your", "their", "other", "another", "some",
+        "such", "each", "every", "both", "either", "neither", "only", "also", "even",
+        "just", "still", "already", "about", "above", "after", "again", "against", "along",
+        "among", "around", "because", "before", "behind", "below", "beneath", "beside",
+        "between", "beyond", "during", "except", "inside", "instead", "outside", "through",
+        "toward", "towards", "under", "until", "upon", "within", "amount",
+        "piece", "taken", "take", "taking", "example", "single", "small", "large", "great",
+        "high", "long", "short", "order", "achieve", "produce", "produced", "show", "shown",
+        "seen", "notice", "laugh", "help", "try", "trying", "know", "knowing", "think",
+        "thinking", "ideas", "idea", "mind", "real", "containing", "interesting",
+        "work", "works", "working", "hard",
+    })
+
+    @classmethod
+    def _ensure_orthographic_pos_index(cls) -> Dict[str, Dict[str, Dict[str, List[str]]]]:
+        """Lazily build O(1) POS-bucketed first/second character index over PedLex (or OCD/WordNet fallback)."""
+        if cls._orthographic_pos_index is not None:
+            return cls._orthographic_pos_index
+
+        pos_vocab: Dict[str, Set[str]] = {"n": set(), "v": set(), "a": set(), "r": set()}
+        pos_map = {
+            "noun": "n", "verb": "v", "adjective": "a", "adverb": "r",
+            "n": "n", "v": "v", "adj": "a", "adv": "r", "s": "a",
+        }
+
+        cls.get_ldoce_entry("test")
+        conn = cls._ldoce_conn
+        if conn is not None:
+            try:
+                rows = conn.execute("SELECT word, pos, pos_all FROM ldoce WHERE kind='article'").fetchall()
+                for w, p, p_all in rows:
+                    if not w or not w.isalpha() or len(w) < 4:
+                        continue
+                    wl = w.lower()
+                    raw_ps = [x.strip().lower() for x in (p_all or p or "").split("|") if x.strip()]
+                    for rp in raw_ps:
+                        code = pos_map.get(rp)
+                        if code:
+                            pos_vocab[code].add(wl)
+            except Exception:
+                pass
+
+        # Open-source / fallback enrichment from OCD + WordNet if PedLex is disabled or sparse
+        if not any(pos_vocab.values()):
+            wn = cls.get_wordnet()
+            ocd = cls.get_oxford_collocations()
+            pool = set(ocd.keys())
+            for w in pool:
+                if not w or not w.isalpha() or len(w) < 4:
+                    continue
+                wl = w.lower()
+                for p_code in ("n", "v", "a", "r"):
+                    try:
+                        syns = wn.synsets(wl, "a") + wn.synsets(wl, "s") if p_code == "a" else wn.synsets(wl, p_code)
+                        if syns:
+                            pos_vocab[p_code].add(wl)
+                    except Exception:
+                        pass
+
+        by_first: Dict[str, Dict[str, List[str]]] = {k: {} for k in pos_vocab}
+        by_second: Dict[str, Dict[str, List[str]]] = {k: {} for k in pos_vocab}
+        for k, words in pos_vocab.items():
+            for w in sorted(words):
+                by_first[k].setdefault(w[0], []).append(w)
+                if len(w) >= 2:
+                    by_second[k].setdefault(w[1], []).append(w)
+
+        cls._orthographic_pos_index = {"by_first": by_first, "by_second": by_second}
+        return cls._orthographic_pos_index
+
+    @staticmethod
+    def _edit_distance_le2(s1: str, s2: str) -> int:
+        """Fast bounded Levenshtein distance (returns 99 if distance > 2)."""
+        if abs(len(s1) - len(s2)) > 2:
+            return 99
+        m, n = len(s1), len(s2)
+        dp = list(range(n + 1))
+        for i in range(1, m + 1):
+            prev = dp[0]
+            dp[0] = i
+            min_row = dp[0]
+            for j in range(1, n + 1):
+                temp = dp[j]
+                cost = 0 if s1[i - 1] == s2[j - 1] else 1
+                dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
+                prev = temp
+                if dp[j] < min_row:
+                    min_row = dp[j]
+            if min_row > 2:
+                return 99
+        return dp[n]
+
+    @staticmethod
+    def _common_prefix_len(s1: str, s2: str) -> int:
+        c = 0
+        for a, b in zip(s1, s2):
+            if a == b:
+                c += 1
+            else:
+                break
+        return c
+
+    @staticmethod
+    def _common_suffix_len(s1: str, s2: str) -> int:
+        c = 0
+        for a, b in zip(reversed(s1), reversed(s2)):
+            if a == b:
+                c += 1
+            else:
+                break
+        return c
+
+    @classmethod
+    def _get_def_content_words(cls, word: str, wn_pos: str) -> Set[str]:
+        toks: Set[str] = set()
+        e = cls.get_ldoce_entry(word)
+        p_code = {"n": "n", "v": "v", "a": "adj", "r": "adv"}.get(wn_pos, "n")
+        if e:
+            for s in e.get("senses") or []:
+                if not s.get("pos") or cls._pos_code(s.get("pos")) == p_code:
+                    d_txt = str(s.get("definition") or "").lower()
+                    for w in re.findall(r"\b[a-z]{4,}\b", d_txt):
+                        if w not in cls._PARONYM_STOP_DEF_TOKS:
+                            toks.add(w)
+                            if w.endswith("s") and not w.endswith(("ss", "us", "is")) and len(w) >= 5:
+                                toks.add(w[:-1])
+        wn = cls.get_wordnet()
+        w_objs = wn.words(word, pos="a") + wn.words(word, pos="s") if wn_pos == "a" else wn.words(word, pos=wn_pos)
+        for w_obj in w_objs:
+            for syn in w_obj.synsets():
+                d_txt = str(syn.definition() or "").lower()
+                for w in re.findall(r"\b[a-z]{4,}\b", d_txt):
+                    if w not in cls._PARONYM_STOP_DEF_TOKS:
+                        toks.add(w)
+                        if w.endswith("s") and not w.endswith(("ss", "us", "is")) and len(w) >= 5:
+                            toks.add(w[:-1])
+        return toks
+
+    @classmethod
+    def _get_derivational_bases(cls, word: str) -> Set[str]:
+        """Return 2-hop WordNet derivational / pertainym base lemmas (cached)."""
+        w_low = (word or "").strip().lower()
+        if w_low in cls._derivational_base_cache:
+            return cls._derivational_base_cache[w_low]
+        wn = cls.get_wordnet()
+        bases: Set[str] = set()
+        try:
+            for w_obj in wn.words(w_low):
+                for syn in w_obj.synsets():
+                    for sense in syn.senses():
+                        if sense.word().lemma().lower() == w_low:
+                            for rel in sense.get_related("derivation") + sense.get_related("pertainym"):
+                                bases.add(rel.word().lemma().lower())
+            hop2 = set(bases)
+            for b in list(bases):
+                for w_obj in wn.words(b):
+                    for syn in w_obj.synsets():
+                        for sense in syn.senses():
+                            if sense.word().lemma().lower() == b:
+                                for rel in sense.get_related("derivation") + sense.get_related("pertainym"):
+                                    hop2.add(rel.word().lemma().lower())
+        except Exception:
+            hop2 = bases
+        cls._derivational_base_cache[w_low] = hop2
+        return hop2
+
+    @classmethod
+    def is_safe_orthographic_paronym(
+        cls,
+        target_word: str,
+        candidate_word: str,
+        pos: str = "n",
+        context_anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        quote: Optional[str] = None,
+    ) -> bool:
+        """Cognate Near-Synonym Guard: verifies that `candidate_word` is a semantically disjoint
+        orthographic paronym or orthogonal-domain root peer of `target_word`, blocking root-sharing
+        near-synonyms (e.g. historic/historical, classic/classical, economic/economical,
+        continual/continuous, specimen/species, activism/activity)."""
+        target = (target_word or "").strip().lower()
+        cand = (candidate_word or "").strip().lower()
+        if not target or not cand or target == cand:
+            return False
+
+        pos_clean = (pos or "n").strip().lower()
+        wn_pos = "a" if pos_clean in ("a", "adj", "adjective", "s") else (
+            "v" if pos_clean in ("v", "verb") else (
+                "r" if pos_clean in ("r", "adv", "adverb") else "n"
+            )
+        )
+
+        # 1. Reject inflectional / participial / negation prefix derivatives
+        for pfx in ("un", "in", "im", "ir", "il", "non", "dis", "mis", "re", "over", "under"):
+            if cand == pfx + target or target == pfx + cand:
+                return False
+        if wn_pos == "a" and cand.endswith("ed") and not target.endswith("ed"):
+            return False
+        if wn_pos == "n" and cand.endswith("ing") and not target.endswith("ing"):
+            return False
+        if wn_pos == "n" and cand.endswith(("ism", "ist")) and target.endswith(("ism", "ist")):
+            return False
+
+        # 2. Cognate Near-Synonym Guard:
+        # Block -ic / -ical pairs (historic/historical, classic/classical, economic/economical, electric/electrical, comic/comical)
+        if (target.endswith("ic") and cand == target + "al") or (cand.endswith("ic") and target == cand + "al"):
+            return False
+        # Block British/American or variant abstract noun suffixes on identical stem (specialty / speciality / specialism)
+        if (
+            cls._common_prefix_len(target, cand) >= 6
+            and target.endswith(("ty", "ity", "ism", "ness", "ment", "tion", "sion"))
+            and cand.endswith(("ty", "ity", "ism", "ness", "ment", "tion", "sion"))
+        ):
+            return False
+        if cls.are_same_word_family(target, cand):
+            return False
+
+        # 3. Primary POS verification in PedLex (when available):
+        p_code = {"n": "n", "v": "v", "a": "adj", "r": "adv"}.get(wn_pos, "n")
+        e_cand = cls.get_ldoce_entry(cand)
+        if e_cand:
+            cand_prim_pos = cls._pos_code(e_cand.get("pos") or "")
+            if cand_prim_pos and cand_prim_pos != p_code:
+                # Only allow secondary POS when edit distance == 1 (classic homophone/paronym like complement/compliment)
+                senses = e_cand.get("senses") or []
+                pos_senses = [s for s in senses if cls._pos_code(s.get("pos") or "") == p_code]
+                if not pos_senses or cls._edit_distance_le2(target, cand) > 1:
+                    return False
+
+        # 4. Double-Key Collision Check (includes context_anchor & quote frame checks)
+        is_dk, _ = cls.double_key_collision(
+            target, cand, anchor=context_anchor, anchor_type=anchor_type, pos=wn_pos, quote=quote
+        )
+        if is_dk:
+            return False
+
+        # 5. WordNet Synset / Similar / Also / Hypernym Disjointness
+        wn = cls.get_wordnet()
+        t_words = wn.words(target, pos="a") + wn.words(target, pos="s") if wn_pos == "a" else wn.words(target, pos=wn_pos)
+        c_words = wn.words(cand, pos="a") + wn.words(cand, pos="s") if wn_pos == "a" else wn.words(cand, pos=wn_pos)
+        t_syns = [s for w in t_words for s in w.synsets()]
+        c_syns = [s for w in c_words for s in w.synsets()]
+        if not t_syns or not c_syns:
+            return False
+        t_ids = {s.id for s in t_syns}
+        c_ids = {s.id for s in c_syns}
+        if t_ids & c_ids:
+            return False
+
+        t_ext = set(t_ids)
+        for s in t_syns:
+            for r in s.get_related("similar") + s.get_related("also") + s.hypernyms():
+                t_ext.add(r.id)
+        c_ext = set(c_ids)
+        for s in c_syns:
+            for r in s.get_related("similar") + s.get_related("also") + s.hypernyms():
+                c_ext.add(r.id)
+        if t_ext & c_ext:
+            return False
+
+        # 6. Root-Sharing Cognate Semantic Overlap Check:
+        # If target and cand share a 4+ char prefix (same Latin/Greek root, e.g. activism/activity, specimen/species, continual/continuous),
+        # block if they share content words across their PedLex+WN definitions OR share 2-hop derivational bases (for nouns/verbs).
+        pref = cls._common_prefix_len(target, cand)
+        if pref >= 4:
+            t_defs = cls._get_def_content_words(target, wn_pos)
+            c_defs = cls._get_def_content_words(cand, wn_pos)
+            if t_defs & c_defs:
+                return False
+            if cand in t_defs or target in c_defs:
+                return False
+            if wn_pos in ("n", "v"):
+                if cls._get_derivational_bases(target) & cls._get_derivational_bases(cand):
+                    return False
+
+        return True
+
+    @classmethod
+    def get_orthographic_paronym_distractors(
+        cls,
+        target_word: str,
+        pos: str = "n",
+        target_count: int = 3,
+        exclude_words: Optional[Set[str]] = None,
+        context_anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        quote: Optional[str] = None,
+        return_scores: bool = False,
+    ) -> Union[List[str], List[Tuple[str, int]]]:
+        """Mine psychometrically sharp orthographic look-alikes (`形近词`) and orthogonal-domain
+        root paronyms (`同根异义词`) guarded by `is_safe_orthographic_paronym`."""
+        tw = (target_word or "").strip().lower()
+        if not tw or len(tw) < 4 or not tw.isalpha():
+            return []
+
+        pos_clean = (pos or "n").strip().lower()
+        wn_pos = "a" if pos_clean in ("a", "adj", "adjective", "s") else (
+            "v" if pos_clean in ("v", "verb") else (
+                "r" if pos_clean in ("r", "adv", "adverb") else "n"
+            )
+        )
+        excl = {w.lower() for w in (exclude_words or set())} | {tw}
+
+        idx = cls._ensure_orthographic_pos_index()
+        by_first = idx["by_first"].get(wn_pos, {})
+        by_second = idx["by_second"].get(wn_pos, {})
+        raw_pool = set(by_first.get(tw[0], [])) | set(by_second.get(tw[1], []))
+
+        scored: List[Tuple[int, str]] = []
+        for w in raw_pool:
+            if w in excl or abs(len(w) - len(tw)) > 3:
+                continue
+            pref = cls._common_prefix_len(tw, w)
+            suff = cls._common_suffix_len(tw, w)
+            ed = cls._edit_distance_le2(tw, w)
+            if ed <= 2 or (pref >= 4 and len(tw) >= 6 and abs(len(w) - len(tw)) <= 3) or (pref >= 3 and suff >= 2):
+                if anchor_type == "modified_noun" and wn_pos == "a" and w in cls._PREDICATIVE_ONLY_ADJS:
+                    continue
+                if not cls.is_cefr_compliant_distractor(w, tw):
+                    continue
+                if not cls.is_safe_orthographic_paronym(
+                    tw, w, pos=wn_pos, context_anchor=context_anchor, anchor_type=anchor_type, quote=quote
+                ):
+                    continue
+                score = 0
+                if ed == 1:
+                    score += 45
+                elif ed == 2:
+                    score += 26
+                score += pref * 4 + suff * 2 - abs(len(w) - len(tw)) * 2
+                if wn_pos == "a" and pref >= 6:
+                    score += 18
+                if wn_pos == "n" and pref >= 4 and not w.endswith(("ist", "or", "er", "ian", "ty", "ity", "ism")):
+                    score += 14
+                scored.append((score, w))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        # Deduplicate mutual word-family members among selected paronyms
+        selected: List[Tuple[str, int]] = []
+        for sc, w in scored:
+            if any(cls.are_same_word_family(w, prev_w) for prev_w, _ in selected):
+                continue
+            selected.append((w, sc))
+            if len(selected) >= target_count:
+                break
+
+        if return_scores:
+            return selected
+        return [w for w, _ in selected]
+
+    # -------------------------------------------------------------------------
     # Double-Key Clearance (Frame-Aware Distractor Audit)
     # -------------------------------------------------------------------------
     # Empirically validated 2026-09-25 against Book_3_Unit_4_Section_A:
@@ -6430,7 +6956,7 @@ class LinguisticEngine:
     #     Coordinate-term (sister-synset) expansion is deliberately EXCLUDED —
     #     it over-matches (break ~ coincide) and yields false double-keys.
     @classmethod
-    def semantic_fields(cls, word: str) -> Tuple[Set[str], Set[str]]:
+    def semantic_fields(cls, word: str, pos: Optional[str] = None) -> Tuple[Set[str], Set[str]]:
         """Returns (near_set, antonyms) for a lemma, WordNet-derived.
 
         near_set  : same-synset words, bipolar similar/also (2 hops),
@@ -6446,12 +6972,30 @@ class LinguisticEngine:
             for w in syn.words():
                 near.add(w.lemma().lower())
 
+        pos_clean = (pos or "").strip().lower()
+        if pos_clean in ("noun", "n"):
+            pos_tags = ("n",)
+        elif pos_clean in ("verb", "v"):
+            pos_tags = ("v",)
+        elif pos_clean in ("adjective", "adj", "a", "s"):
+            pos_tags = ("a", "s")
+        elif pos_clean in ("adverb", "adv", "r"):
+            pos_tags = ("r",)
+        else:
+            pos_tags = ("a", "s", "v", "n", "r")
+
         seeds = []
-        for pos in ("a", "s", "v", "n", "r"):
+        for p_tag in pos_tags:
             try:
-                seeds += wn.synsets(target, pos)
+                seeds += wn.synsets(target, p_tag)
             except Exception:
                 pass
+        if not seeds and pos_tags != ("a", "s", "v", "n", "r"):
+            for p_tag in ("a", "s", "v", "n", "r"):
+                try:
+                    seeds += wn.synsets(target, p_tag)
+                except Exception:
+                    pass
 
         for s in seeds:
             add(s)
@@ -6495,7 +7039,7 @@ class LinguisticEngine:
 
     @classmethod
     def get_syntactic_pattern_slots(cls, word_or_entry: Union[str, Dict[str, Any]], sense: Optional[Dict[str, Any]] = None) -> Set[str]:
-        """Extracts normalized syntactic complement pattern slots for a headword from LDOCE 6th Edition.
+        """Extracts normalized syntactic complement pattern slots for a headword from PedLex 6th Edition.
         
         Returned slots can include:
           - 'to_inf'     : infinitive complement ('to do sth')
@@ -6539,6 +7083,205 @@ class LinguisticEngine:
         return slots
 
     @classmethod
+    def get_word_gram_profile(cls, word: str, pos: Optional[str] = None) -> Dict[str, Any]:
+        """Extracts a unified grammatical constraint profile for `word` from `pedlex.db` (`senses`, `thesaurus`, and `grammar_boxes`)."""
+        w_clean = (word or "").strip().lower()
+        profile: Dict[str, Any] = {
+            "only_before_noun": False,
+            "not_before_noun": w_clean in cls._PREDICATIVE_ONLY_ADJS,
+            "pure_uncountable": False,
+            "pure_intransitive": False,
+            "no_passive": False,
+            "no_progressive": False,
+            "forbidden_frames": set(),
+            "allowed_frames": set(),
+            "comparison_peers": set(),
+        }
+        if not w_clean:
+            return profile
+        entry = cls.get_ldoce_entry(w_clean)
+        if not entry:
+            return profile
+
+        pos_norm = (pos or "").strip().lower()
+        wn_pos = "a" if pos_norm.startswith("a") or pos_norm == "j" else (
+            "n" if pos_norm.startswith("n") else (
+                "v" if pos_norm.startswith("v") else ""
+            )
+        )
+
+        senses = entry.get("senses") or []
+        matching_senses = []
+        for s in senses:
+            sp = (s.get("pos") or entry.get("pos") or "").lower()
+            if wn_pos == "a" and "adj" in sp:
+                matching_senses.append(s)
+            elif wn_pos == "n" and "noun" in sp:
+                matching_senses.append(s)
+            elif wn_pos == "v" and "verb" in sp:
+                matching_senses.append(s)
+            elif not wn_pos:
+                matching_senses.append(s)
+        if not matching_senses:
+            matching_senses = senses
+
+        grams = [str(s.get("grammar") or "").lower() for s in matching_senses if s.get("grammar")]
+        # Also inspect self-referential thesaurus exponent grammar tags
+        for th in entry.get("thesaurus") or []:
+            if (th.get("word") or "").strip().lower() == w_clean and th.get("grammar"):
+                grams.append(str(th["grammar"]).lower())
+
+        if grams:
+            if all("only before noun" in g for g in grams):
+                profile["only_before_noun"] = True
+            if all("not before noun" in g or "never before noun" in g for g in grams):
+                profile["not_before_noun"] = True
+            if (not wn_pos or wn_pos == "n") and all(
+                "uncountable" in g and not re.search(r"\bcountable\b", g)
+                for g in grams
+            ):
+                profile["pure_uncountable"] = True
+            if (not wn_pos or wn_pos == "v") and all(
+                "intransitive" in g and not re.search(r"\btransitive\b", g)
+                for g in grams
+            ):
+                profile["pure_intransitive"] = True
+
+        for gb in entry.get("grammar_boxes") or []:
+            for p in gb.get("comparison_peers") or []:
+                p_clean = str(p).strip().lower()
+                if p_clean and p_clean != w_clean and " " not in p_clean:
+                    profile["comparison_peers"].add(p_clean)
+            syn_c = gb.get("syntactic_constraints") or {}
+            # Only apply no_passive / no_progressive globally when box is not restricted to a subset of senses
+            gb_senses = gb.get("sense_indices") or []
+            if not gb_senses or len(gb_senses) >= len(matching_senses):
+                if syn_c.get("no_passive"):
+                    profile["no_passive"] = True
+                if syn_c.get("no_progressive"):
+                    profile["no_progressive"] = True
+            for ff in syn_c.get("forbidden_frames") or []:
+                profile["forbidden_frames"].add(ff)
+            for af in syn_c.get("allowed_frames") or []:
+                profile["allowed_frames"].add(af)
+
+        return profile
+
+    @classmethod
+    def evaluate_syntactic_slot_clash(
+        cls,
+        target: str,
+        candidate: str,
+        anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        pos: Optional[str] = None,
+        quote: Optional[str] = None
+    ) -> Tuple[bool, str]:
+        """Determines whether `candidate` is grammatically barred from occupying `target`'s syntactic slot in `quote`/`anchor_type`.
+        
+        Returns `(has_clash, reason)` where `has_clash == True` guarantees that `candidate` is syntactically ruled out
+        (making it a high-discrimination single-fit distractor and immune to synonym double-key collisions).
+        """
+        t = (target or "").strip().lower()
+        c = (candidate or "").strip().lower()
+        if not t or not c or t == c:
+            return False, ""
+
+        c_prof = cls.get_word_gram_profile(c, pos=pos)
+        t_prof = cls.get_word_gram_profile(t, pos=pos)
+        # Also check if `t`'s own THESAURUS box explicitly constrains `c` under the shared synonym sense
+        # (e.g. `extra` THESAURUS box labels `spare [only before noun]`, `complete` THESAURUS box labels `done [not before noun]`)
+        t_entry = cls.get_ldoce_entry(t)
+        if t_entry:
+            for th in t_entry.get("thesaurus") or []:
+                if (th.get("word") or "").strip().lower() == c and th.get("grammar"):
+                    th_g = str(th["grammar"]).lower()
+                    if "only before noun" in th_g:
+                        c_prof["only_before_noun"] = True
+                    if "not before noun" in th_g or "never before noun" in th_g:
+                        c_prof["not_before_noun"] = True
+        pos_norm = (pos or "").strip().lower()
+        wn_pos = "a" if pos_norm.startswith("a") or pos_norm == "j" else (
+            "n" if pos_norm.startswith("n") else (
+                "v" if pos_norm.startswith("v") else ""
+            )
+        )
+
+        # Inspect quote via spaCy if provided
+        is_attr_adj_slot = anchor_type == "modified_noun"
+        is_pred_adj_slot = False
+        has_count_det_or_plural = False
+        is_passive_verb_slot = False
+        has_direct_obj_slot = anchor_type in ("object", "sb_to_do")
+        active_verb_frame = anchor_type if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") else None
+
+        if quote:
+            nlp = cls.get_spacy()
+            q_doc = nlp(quote)
+            for tok in q_doc:
+                if cls.form_matches(tok.lemma_.lower(), t) or cls.form_matches(tok.text.lower(), t):
+                    if wn_pos == "a" or tok.pos_ == "ADJ":
+                        if tok.dep_ in ("amod", "compound", "nmod") or (tok.head and tok.head.pos_ in ("NOUN", "PROPN") and tok.i < tok.head.i):
+                            is_attr_adj_slot = True
+                        elif tok.dep_ in ("acomp", "oprd", "attr", "advcl") or (
+                            tok.dep_ == "ROOT" and any(ch.dep_ in ("cop", "aux", "nsubj", "nsubjpass") for ch in tok.children)
+                        ):
+                            is_pred_adj_slot = True
+                    elif wn_pos == "n" or tok.pos_ == "NOUN":
+                        if tok.tag_ == "NNS" or any(
+                            ch.dep_ in ("det", "nummod")
+                            and ch.lemma_.lower() in ("a", "an", "one", "two", "three", "many", "few", "several", "each", "every", "another", "both")
+                            for ch in tok.children
+                        ):
+                            has_count_det_or_plural = True
+                    elif wn_pos == "v" or tok.pos_ == "VERB":
+                        if any(ch.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for ch in tok.children):
+                            is_passive_verb_slot = True
+                        if any(ch.dep_ in ("dobj", "obj") for ch in tok.children):
+                            has_direct_obj_slot = True
+                        if not active_verb_frame:
+                            if any(ch.dep_ in ("dobj", "obj") for ch in tok.children) and any(
+                                ch.dep_ == "xcomp" and any(gc.lemma_.lower() == "to" for gc in ch.children)
+                                for ch in tok.children
+                            ):
+                                active_verb_frame = "sb_to_do"
+                            elif any(
+                                ch.dep_ in ("ccomp", "xcomp")
+                                and any(gc.dep_ in ("nsubj", "dobj", "obj") for gc in ch.children)
+                                and any(gc.lemma_.lower() == "to" for gc in ch.children)
+                                for ch in tok.children
+                            ):
+                                active_verb_frame = "sb_to_do"
+                    break
+
+        # 1. Adjective positional slot clash ([only before noun] vs predicative; [not before noun] vs attributive)
+        if wn_pos == "a" or (not wn_pos and (c_prof["only_before_noun"] or c_prof["not_before_noun"])):
+            if is_pred_adj_slot and c_prof["only_before_noun"] and not t_prof["only_before_noun"]:
+                return True, "adj_only_before_noun_in_predicative_slot"
+            if is_attr_adj_slot and c_prof["not_before_noun"] and not t_prof["not_before_noun"]:
+                return True, "adj_not_before_noun_in_attributive_slot"
+
+        # 2. Noun countability clash (pure [uncountable] in countable determiner/plural slot)
+        if (wn_pos == "n" or not wn_pos) and has_count_det_or_plural:
+            if c_prof["pure_uncountable"] and not t_prof["pure_uncountable"]:
+                return True, "uncountable_noun_in_countable_slot"
+
+        # 3. Verb transitivity / passive / forbidden complement frame clash
+        if wn_pos == "v" or not wn_pos:
+            if is_passive_verb_slot and (c_prof["no_passive"] or c_prof["pure_intransitive"]):
+                return True, "no_passive_or_intransitive_in_passive_slot"
+            if has_direct_obj_slot and c_prof["pure_intransitive"] and not t_prof["pure_intransitive"]:
+                return True, "intransitive_verb_in_transitive_object_slot"
+            if active_verb_frame and (
+                active_verb_frame in c_prof["forbidden_frames"]
+                or (active_verb_frame == "sb_to_do" and "V_sb_to_do" in c_prof["forbidden_frames"])
+                or (active_verb_frame == "to_inf" and "V_to_do" in c_prof["forbidden_frames"])
+            ):
+                return True, f"forbidden_frame_{active_verb_frame}"
+
+        return False, ""
+
+    @classmethod
     def double_key_collision(cls, target: str, distractor: str,
                              anchor: Optional[str] = None,
                              anchor_type: Optional[str] = None,
@@ -6560,8 +7303,22 @@ class LinguisticEngine:
             return False, "none"
         if cls.are_same_word_family(t, d):
             return True, "double_key_family"
+
+        # Syntactic Disjointness Exemption Gate (<GRAM> / THESAURUS / grammar_boxes):
+        # If distractor `d` has a hard grammatical clash with the syntactic slot of `t` in `quote`/`anchor_type`
+        # (e.g., [only before noun] in predicative slot, [not before noun] in attributive slot,
+        # pure [uncountable] after 'a/an/many', or no_passive/intransitive in passive/object slot),
+        # `d` is 100% syntactically eliminated and cannot be a double key!
+        has_slot_clash, clash_reason = cls.evaluate_syntactic_slot_clash(
+            t, d, anchor=anchor, anchor_type=anchor_type, pos=pos, quote=quote
+        )
+        if has_slot_clash:
+            if clash_reason.startswith("forbidden_frame_"):
+                return False, "none"
+            return False, "frame_only"
+
         near, antonyms = cls.semantic_fields(t)
-        # Also include LDOCE thesaurus words in near semantic field
+        # Also include PedLex thesaurus words and grammar_boxes comparison_peers in near semantic field
         for item in cls.get_ldoce_thesaurus(t):
             raw_w = item.get("word", "").strip().lower()
             if not raw_w or raw_w == t:
@@ -6571,6 +7328,10 @@ class LinguisticEngine:
                 chunk = chunk.strip()
                 if chunk and " " not in chunk and chunk != t:
                     near.add(chunk)
+        t_prof = cls.get_word_gram_profile(t, pos=pos)
+        for peer in t_prof.get("comparison_peers", set()):
+            if peer != t:
+                near.add(peer)
 
         # Collective / Group Noun Double-Key Gate:
         # If both target and distractor denote collections or groups of people/staff
@@ -6608,6 +7369,8 @@ class LinguisticEngine:
         if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") or (not anchor and pos in ("v", "verb")):
             t_slots = cls.get_syntactic_pattern_slots(t)
             d_slots = cls.get_syntactic_pattern_slots(d)
+            d_prof = cls.get_word_gram_profile(d, pos=pos)
+            d_slots -= d_prof.get("forbidden_frames", set())
             # If anchor_type directly specifies the target complement slot:
             active_slot = anchor_type if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") else None
             if not active_slot:
@@ -6617,10 +7380,10 @@ class LinguisticEngine:
                     active_slot = next(iter(common_slots))
 
             if active_slot and active_slot in t_slots:
-                if active_slot not in d_slots:
+                if active_slot not in d_slots or active_slot in d_prof.get("forbidden_frames", set()):
                     # Distractor cannot occupy target's syntactic complement slot -> single-fit discriminated!
                     return False, "none"
-                elif d in near:
+                elif d in near or (cls.semantic_fields(t, pos="v")[0] & cls.semantic_fields(d, pos="v")[0]):
                     # Both share the non-finite/clausal complement slot and are semantic neighbors -> double-key collision!
                     return True, "double_key_pattern"
 
@@ -6650,7 +7413,7 @@ class LinguisticEngine:
                 # whitelisted by design in the distractor generator.
                 return False, "contrast"
             # If an explicit collocational anchor is present (e.g. adjective modifier or verb)
-            # and candidate d does NOT share that collocation in OCD/LDOCE, candidate d is ruled out
+            # and candidate d does NOT share that collocation in OCD/PedLex, candidate d is ruled out
             # by the anchor slot itself and is therefore a valid, single-fit distractor.
             # EXCEPTION: If anchor is a generic adjective or verb (e.g. huge, massive, new, good, have),
             # absence in OCD does NOT discriminate near-synonyms! Near-synonyms remain double keys.
@@ -6693,7 +7456,7 @@ class LinguisticEngine:
                                     shared_colloc = True
                                     break
                 elif anchor_type in ("modifies_adj", "modifies_verb"):
-                    # Check if distractor adverb explicitly collocates with this anchor in LDOCE
+                    # Check if distractor adverb explicitly collocates with this anchor in PedLex
                     d_ldoce = cls.get_ldoce_entry(d)
                     if d_ldoce:
                         for s in d_ldoce.get("senses", []):
@@ -6850,7 +7613,7 @@ class LinguisticEngine:
     @classmethod
     def _get_phrase_synonyms(cls) -> Dict[str, Set[str]]:
         """
-        Loads and memoizes synonym groups generated by slash-alternations in LDOCE raw phrases
+        Loads and memoizes synonym groups generated by slash-alternations in PedLex raw phrases
         (e.g., 'be/keep/stay etc in touch (with something)' -> {'be in touch with', 'keep in touch with', 'stay in touch with'}).
         """
         if cls._PHRASE_SYNONYMS_CACHE is not None:
@@ -6876,7 +7639,7 @@ class LinguisticEngine:
 
     @classmethod
     def _get_phrase_index(cls) -> Dict[str, str]:
-        """Loads and memoizes {phrase_key: tier} from ldoce_phrase_index in the LDOCE database."""
+        """Loads and memoizes {phrase_key: tier} from ldoce_phrase_index in the PedLex database."""
         if cls._PHRASE_INDEX_CACHE is not None:
             return cls._PHRASE_INDEX_CACHE
 
@@ -6905,7 +7668,7 @@ class LinguisticEngine:
     ) -> List[str]:
         """
         Synthesizes high-discrimination, authentic distractors for multi-word phrasal verbs, idioms, and collocations
-        strictly grounded in LDOCE 6th Edition's ldoce_phrase_index and lexical evidence.
+        strictly grounded in PedLex 6th Edition's ldoce_phrase_index and lexical evidence.
         
         Symmetric structural families:
           1. Head/Tail Sharing (e.g. 'peace of mind' -> 'state of mind', 'frame of mind', 'turn of mind';
@@ -6924,15 +7687,75 @@ class LinguisticEngine:
         phrase_synonyms = cls._get_phrase_synonyms()
         synonym_set = phrase_synonyms.get(phrase_clean, set())
 
+        _NON_VERB_PHRASE_HEADS = {
+            "a", "an", "the", "no", "not", "all", "any", "some", "every", "each", "both",
+            "either", "neither", "much", "many", "more", "most", "less", "least", "few",
+            "little", "other", "another", "such", "what", "which", "whose", "this", "that",
+            "these", "those", "my", "your", "his", "her", "its", "our", "their", "one",
+            "in", "on", "at", "by", "for", "with", "from", "to", "of", "out", "up", "down",
+            "over", "under", "into", "onto", "upon", "about", "above", "below", "between",
+            "among", "through", "during", "before", "after", "since", "until", "without",
+            "within", "against", "along", "around", "behind", "beside", "beyond", "near",
+            "off", "oward", "towards", "as", "if", "so", "than", "though", "while", "when"
+        }
+        head_w = words[0] if words else ""
+        target_head_is_verb = (
+            bool(head_w)
+            and head_w not in _NON_VERB_PHRASE_HEADS
+            and bool(cls._wordnet_pos(head_w) & {"v"})
+        )
+        target_head_is_prep = head_w in {
+            "in", "on", "at", "by", "for", "with", "from", "to", "of", "out", "up", "down",
+            "over", "under", "into", "onto", "upon", "about", "above", "below", "between",
+            "among", "through", "during", "before", "after", "since", "until", "without",
+            "within", "against", "along", "around", "behind", "beside", "beyond"
+        }
+
+        _PARTICLE_OR_DET_MIDDLES = {
+            "a", "an", "the", "my", "your", "his", "her", "its", "our", "their", "some", "any", "no",
+            "it", "them", "him", "me", "us", "you", "this", "that", "these", "those", "all", "what",
+            "up", "down", "in", "out", "on", "off", "away", "back", "over", "under", "around", "along",
+            "through", "into", "onto", "to", "for", "with", "from", "by", "at", "of", "about", "as",
+            "got", "been", "done", "finished", "heard", "taken", "caught", "lost", "stuck", "lying", "too"
+        }
+        target_is_v_noun_prep = (
+            n_words == 3
+            and target_head_is_verb
+            and words[1] not in _PARTICLE_OR_DET_MIDDLES
+            and bool(cls._wordnet_pos(words[1]) & {"n"})
+        )
+
         def ships(cand: str) -> bool:
-            return (cand != phrase_clean and cand not in exclude and cand not in synonym_set
-                    and not cls.is_inappropriate_phrase(cand)
-                    and (cand in phrase_index or cls.is_attested_phrase(cand)))
+            if (cand == phrase_clean or cand in exclude or cand in synonym_set
+                    or cls.is_inappropriate_phrase(cand)
+                    or not (cand in phrase_index or cls.is_attested_phrase(cand))):
+                return False
+            c_words = cand.split()
+            if not c_words:
+                return False
+            c_head = c_words[0]
+            if target_head_is_verb:
+                # Active lexical/light verb phrases (e.g. 'make the most of', 'take pleasure in')
+                # must only pair with active verb-headed phrases, never determiner/noun/prep fragments
+                # ('no to speak of', 'a bad judge of') or passive 'be <VBN> ...' constructions.
+                if c_head in _NON_VERB_PHRASE_HEADS or not (cls._wordnet_pos(c_head) & {"v"}):
+                    return False
+                if c_head == "be" and head_w != "be":
+                    return False
+                if target_is_v_noun_prep and len(c_words) == 3:
+                    # Preserve Verb + Bare-Noun + Prep structural symmetry: reject phrasal verb + prep
+                    # ('bring out in', 'come on in', 'take up with') or Verb + Det + Noun ('take a chance')
+                    if c_words[1] in _PARTICLE_OR_DET_MIDDLES or not (cls._wordnet_pos(c_words[1]) & {"n"}):
+                        return False
+            elif target_head_is_prep:
+                if c_head not in _NON_VERB_PHRASE_HEADS:
+                    return False
+            return True
 
         tier_rank = {tier: index for index, tier in enumerate(cls._PHRASE_TIERS)}
 
         def strength(cand: str) -> int:
-            """Longman's own phrasal-verb block beats a PHRASES item, which beats a pattern."""
+            """PedLex's own phrasal-verb block beats a PHRASES item, which beats a pattern."""
             hits = cls.ldoce_phrase_hits(cand)
             if hits:
                 return min((tier_rank.get(tier, len(tier_rank)) for tier, _text in hits),
@@ -7076,7 +7899,7 @@ class LinguisticEngine:
                         if ships(cand) and cand not in diff_part:
                             diff_part.append(cand)
 
-                # Longman's own phrasal-verb list for this verb is the strongest pool there is
+                # PedLex's own phrasal-verb list for this verb is the strongest pool there is
                 for cand in cls.get_ldoce_phrasal_verbs(v):
                     parts = cand.split()
                     if len(parts) == 2 and parts[1] != p and ships(cand) and cand not in diff_part:
@@ -7163,11 +7986,19 @@ class LinguisticEngine:
                     if len(kw) == 3 and kw[1] == op and ships(k) and k not in cands_found:
                         cands_found.append(k)
 
-            # Strategy B: Common Suffix / Tail Match (e.g. 'peace of mind' -> '... of mind';
-            #              'keep in touch with' -> 'get in touch with')
+            # Strategy B: Common Suffix / Tail Match (e.g. 'peace of mind' -> '... of mind')
+            # Guard: When words[0] is a light/support verb (take, find, have, get, make, give, keep, feel, etc.)
+            # and tl == n_words - 1 (matching the exact noun+prep tail, e.g. '... pleasure in' for 'take pleasure in'
+            # -> 'find pleasure in'), swapping only the light verb creates synonymous collocation double-keys!
+            light_support_verbs = {
+                "take", "find", "have", "get", "make", "give", "keep", "hold", "bear",
+                "pay", "show", "feel", "put", "set", "bring", "come", "go", "lose", "catch"
+            }
             if not cands_found or len(cands_found) < count:
-                tail_lengths = [2, 1] if n_words >= 3 else [1]
+                tail_lengths = [2] if target_is_v_noun_prep else ([2, 1] if n_words >= 3 else [1])
                 for tl in tail_lengths:
+                    if words[0] in light_support_verbs and tl >= n_words - 1:
+                        continue
                     tail_phrase = " " + " ".join(words[-tl:])
                     # Look for exact length matches with the same suffix
                     tail_cands = []
@@ -7586,7 +8417,7 @@ class LinguisticEngine:
     @classmethod
     def _sense_frame_patterns(cls, sense: Dict[str, Any], target_word: str) -> List[str]:
         """
-        Returns only those LDOCE patterns of a sense that actually contain the headword
+        Returns only those PedLex patterns of a sense that actually contain the headword
         ('correlate with', 'serious about', 'it annoys somebody'). Patterns such as
         'got on his nerves' or 'keeps' are idiom/example fragments, not valency frames,
         and must never count as evidence that a preposition belongs to the target.
@@ -7621,9 +8452,9 @@ class LinguisticEngine:
         canonical_pos: Optional[str] = None
     ) -> bool:
         """
-        Locked-Sense Frame Concordance Gate (P0-4).
+        Locked-Sense Frame Concordance Gate .
 
-        A bound-preposition anchor is only legitimate when the LDOCE sense this item
+        A bound-preposition anchor is only legitimate when the PedLex sense this item
         actually locks (from its curriculum definition + authentic quote) licenses it.
         'annoy' locks to 'to make someone feel slightly angry', whose authentic frame is
         'it annoys somebody when/how/that' and whose authentic example is 'What annoyed
@@ -7675,7 +8506,7 @@ class LinguisticEngine:
 
     # ------------------------------------------------------------------
     # Distractor Slot Legality & Prescribed-Inflection Concordance
-    # (P1-1 distractor POS/slot legality, P1-2 inflection/example agreement)
+    # (distractor POS/slot legality, inflection/example agreement)
     # ------------------------------------------------------------------
 
     _VERB_FORM_LABELS = {
@@ -7722,6 +8553,13 @@ class LinguisticEngine:
         "mean": ("meant", "meant", "meaning", "means"),
         "win": ("won", "won", "winning", "wins"),
         "begin": ("began", "begun", "beginning", "begins"),
+        "crossbreed": ("crossbred", "crossbred", "crossbreeding", "crossbreeds"),
+        "outrun": ("outran", "outrun", "outrunning", "outruns"),
+        "overcome": ("overcame", "overcome", "overcoming", "overcomes"),
+        "undergo": ("underwent", "undergone", "undergoing", "undergoes"),
+        "undertake": ("undertook", "undertaken", "undertaking", "undertakes"),
+        "withhold": ("withheld", "withheld", "withholding", "withholds"),
+        "withstand": ("withstood", "withstood", "withstanding", "withstands"),
         "prefer": ("preferred", "preferred", "preferring", "prefers"),
         "refer": ("referred", "referred", "referring", "refers"),
         "occur": ("occurred", "occurred", "occurring", "occurs"),
@@ -7776,6 +8614,55 @@ class LinguisticEngine:
         "shut": ("shut", "shut", "shutting", "shuts"),
         "spread": ("spread", "spread", "spreading", "spreads"),
         "cost": ("cost", "cost", "costing", "costs"),
+        "deal": ("dealt", "dealt", "dealing", "deals"),
+        "seek": ("sought", "sought", "seeking", "seeks"),
+        "creep": ("crept", "crept", "creeping", "creeps"),
+        "weep": ("wept", "wept", "weeping", "weeps"),
+        "sweep": ("swept", "swept", "sweeping", "sweeps"),
+        "leap": ("leapt", "leapt", "leaping", "leaps"),
+        "kneel": ("knelt", "knelt", "kneeling", "kneels"),
+        "lend": ("lent", "lent", "lending", "lends"),
+        "feed": ("fed", "fed", "feeding", "feeds"),
+        "bleed": ("bled", "bled", "bleeding", "bleeds"),
+        "breed": ("bred", "bred", "breeding", "breeds"),
+        "speed": ("sped", "sped", "speeding", "speeds"),
+        "flee": ("fled", "fled", "fleeing", "flees"),
+        "sink": ("sank", "sunk", "sinking", "sinks"),
+        "drink": ("drank", "drunk", "drinking", "drinks"),
+        "shrink": ("shrank", "shrunk", "shrinking", "shrinks"),
+        "ring": ("rang", "rung", "ringing", "rings"),
+        "spring": ("sprang", "sprung", "springing", "springs"),
+        "arise": ("arose", "arisen", "arising", "arises"),
+        "awake": ("awoke", "awoken", "awaking", "awakes"),
+        "bear": ("bore", "borne", "bearing", "bears"),
+        "beat": ("beat", "beaten", "beating", "beats"),
+        "bite": ("bit", "bitten", "biting", "bites"),
+        "blow": ("blew", "blown", "blowing", "blows"),
+        "dig": ("dug", "dug", "digging", "digs"),
+        "hang": ("hung", "hung", "hanging", "hangs"),
+        "hide": ("hid", "hidden", "hiding", "hides"),
+        "forbid": ("forbade", "forbidden", "forbidding", "forbids"),
+        "forgive": ("forgave", "forgiven", "forgiving", "forgives"),
+        "shoot": ("shot", "shot", "shooting", "shoots"),
+        "slide": ("slid", "slid", "sliding", "slides"),
+        "stick": ("stuck", "stuck", "sticking", "sticks"),
+        "strike": ("struck", "struck", "striking", "strikes"),
+        "swear": ("swore", "sworn", "swearing", "swears"),
+        "tear": ("tore", "torn", "tearing", "tears"),
+        "wake": ("woke", "woken", "waking", "wakes"),
+        "weave": ("wove", "woven", "weaving", "weaves"),
+        "wind": ("wound", "wound", "winding", "winds"),
+        "burst": ("burst", "burst", "bursting", "bursts"),
+        "split": ("split", "split", "splitting", "splits"),
+        "quit": ("quit", "quit", "quitting", "quits"),
+        "rid": ("rid", "rid", "ridding", "rids"),
+        "bet": ("bet", "bet", "betting", "bets"),
+        "cast": ("cast", "cast", "casting", "casts"),
+        "broadcast": ("broadcast", "broadcast", "broadcasting", "broadcasts"),
+        "forecast": ("forecast", "forecast", "forecasting", "forecasts"),
+        "swing": ("swung", "swung", "swinging", "swings"),
+        "bind": ("bound", "bound", "binding", "binds"),
+        "grind": ("ground", "ground", "grinding", "grinds"),
     }
 
     @classmethod
@@ -7797,9 +8684,9 @@ class LinguisticEngine:
     @classmethod
     def _verb_takes_object(cls, word: str) -> Optional[bool]:
         """
-        True/False from LDOCE valency evidence for this verb; None when the dictionary is
+        True/False from PedLex valency evidence for this verb; None when the dictionary is
         silent. Evidence is read from grammar patterns ('pay somebody for something') and,
-        because many LDOCE senses publish no pattern at all, from the sense examples
+        because many PedLex senses publish no pattern at all, from the sense examples
         themselves ('She logged the details of the meeting' -> direct object). A verb whose
         senses publish neither patterns nor examples is unknown, never assumed intransitive.
         """
@@ -7850,13 +8737,13 @@ class LinguisticEngine:
         requires_object: bool = False
     ) -> bool:
         """
-        Slot Legality Gate (P1-1).
+        Slot Legality Gate .
 
         A distractor must be able to occupy the SAME syntactic slot as the target, or the
         item is solvable by morphology alone instead of by meaning: 'log in to a ____'
         offered ['account', 'somehow', 'autonomy', 'message'], and a transitive verb frame
         offered the intransitive 'flourish'. The gate consults only positive evidence —
-        WordNet lemma POS records and LDOCE valency patterns — and never vetoes a word the
+        WordNet lemma POS records and PedLex valency patterns — and never vetoes a word the
         dictionaries are silent about, so rare but legitimate distractors survive.
         """
         word = (distractor or "").strip().lower()
@@ -7888,7 +8775,7 @@ class LinguisticEngine:
         requires_object: bool = False
     ) -> bool:
         """
-        Public Slot Legality Gate (P1-1) for downstream consumers such as the evaluator,
+        Public Slot Legality Gate  for downstream consumers such as the evaluator,
         which only ever sees the inflected option strings a quiz actually printed.
 
         An inflected surface form usually has no dictionary record of its own, so the verdict
@@ -8021,7 +8908,7 @@ class LinguisticEngine:
         anchor_type: Optional[str] = None
     ) -> str:
         """
-        Sense-aware contrast instruction (P1-4).
+        Sense-aware contrast instruction .
 
         The blueprint pasted the same 'Prefer a concessive or cause-and-effect turn (e.g.
         Although/Despite...)' into every noun item whatever the distractors were. A concessive
@@ -8060,7 +8947,7 @@ class LinguisticEngine:
     @staticmethod
     def _thesaurus_variant_matches(th_word: Optional[str], word: Optional[str]) -> bool:
         """
-        LDOCE thesaurus headwords can be multi-form ('unwilling/not willing',
+        PedLex thesaurus headwords can be multi-form ('unwilling/not willing',
         'be loath to do something'), so match the plain distractor lemma against
         any of the recorded variants rather than the raw string.
         """
@@ -8093,62 +8980,369 @@ class LinguisticEngine:
         return False
 
     @classmethod
+    def get_vocab_card_enrichment(
+        cls,
+        word: str,
+        pos: str = "",
+        definition: str = "",
+        quote: str = ""
+    ) -> Dict[str, str]:
+        """
+        Deterministically extracts zero-token pedagogical enrichment for a vocabulary card:
+        - `collocations`: Top sense-locked collocations / syntactic patterns from `pedlex.db`.
+        - `grammar_usage`: Sense-locked `<gram>` tags (e.g. `[only before noun]`, `[not before noun]`,
+          `[uncountable]`, `[countable]`), key syntactic frame, and sense-locked `grammar_boxes` rules (`✗ Don't say: ...`).
+        - `thesaurus_note`: Sense-aligned `THESAURUS` synonym distinctions and `[grammar]` constraints.
+        """
+        out: Dict[str, str] = {
+            "collocations": "",
+            "grammar_usage": "",
+            "thesaurus_note": "",
+        }
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip().lower()
+        if not w_clean or " " in w_clean:
+            return out
+
+        entry = cls.get_ldoce_entry(w_clean)
+        if not entry:
+            return out
+
+        senses = entry.get("senses") or []
+        t_s_idx = None
+        locked_sense = None
+        if senses:
+            t_s_idx = cls._lock_sense(
+                entry,
+                definition=definition,
+                quote=quote,
+                target_pos=pos
+            )
+            if t_s_idx is not None and 0 <= t_s_idx < len(senses):
+                locked_sense = senses[t_s_idx]
+
+        p_code = cls._pos_code(pos or (locked_sense.get("pos") if locked_sense else entry.get("pos")))
+
+        def _clean_pattern_text(pat_str: str) -> str:
+            s = str(pat_str or "").strip()
+            if not s:
+                return ""
+            m_emb = re.search(r"^(.*?)\s+([A-Z][\w\W]*\b[\.\?!])$", s)
+            if not m_emb:
+                m_etc = re.search(r"^(.*?\betc\.?)\s+([A-Z].*\s+.*)$", s)
+                if m_etc:
+                    m_emb = m_etc
+            if m_emb:
+                s = m_emb.group(1).strip()
+            return s
+
+        # 1. Grammar & Usage Note (<gram> tags + key pattern + sense-locked grammar_boxes rule)
+        gram_parts: List[str] = []
+        if locked_sense:
+            raw_gram = str(locked_sense.get("grammar") or "").strip()
+            if raw_gram:
+                gram_parts.append(f"`{raw_gram}`")
+            pats = [
+                _clean_pattern_text(p) for p in (locked_sense.get("syntactic_patterns") or locked_sense.get("patterns") or [])
+                if _clean_pattern_text(p) and _clean_pattern_text(p).lower() != w_clean
+            ]
+            if pats:
+                gram_parts.append(f"Pattern: *{pats[0]}*")
+
+        gb_alert = cls.get_ldoce_grammar_alert(w_clean, quote=quote, sense_index=t_s_idx)
+        if gb_alert:
+            rules = [str(r).strip() for r in (gb_alert.get("rules") or []) if str(r).strip()]
+            bad_exs = [str(b).strip() for b in (gb_alert.get("bad_examples") or []) if str(b).strip()]
+            if rules:
+                r_txt = rules[0]
+                if bad_exs:
+                    r_txt += f" (✗ *{bad_exs[0]}*)"
+                gram_parts.append(r_txt)
+            elif bad_exs:
+                gram_parts.append(f"✗ Don't say: *{bad_exs[0]}*")
+
+        if gram_parts:
+            out["grammar_usage"] = " — ".join(gram_parts)
+
+        # 2. Zero-Token Pedagogical Collocations
+        colloc_items: List[str] = []
+
+        def _add_colloc(cand_str: str) -> None:
+            c_s = _clean_pattern_text(cand_str)
+            if not c_s or c_s.lower() == w_clean:
+                return
+            c_low = c_s.lower()
+            for idx_e, ex_item in enumerate(colloc_items):
+                ex_low = ex_item.lower()
+                if c_low == ex_low:
+                    return
+                if " " not in c_s and re.search(rf"\b{re.escape(c_low)}\b", ex_low):
+                    return
+                if " " not in ex_item and re.search(rf"\b{re.escape(ex_low)}\b", c_low):
+                    colloc_items[idx_e] = c_s
+                    return
+            colloc_items.append(c_s)
+
+        if locked_sense:
+            for c in locked_sense.get("collocations") or []:
+                _add_colloc(str(c))
+            for pb in locked_sense.get("pattern_bundles") or []:
+                _add_colloc(str(pb.get("pattern") or ""))
+            for pat in locked_sense.get("patterns") or []:
+                _add_colloc(str(pat))
+        entry_p_code = cls._pos_code(entry.get("pos"))
+        if len(colloc_items) < 4 and (not entry_p_code or not p_code or entry_p_code == p_code):
+            raw_collocs = entry.get("collocations")
+            if isinstance(raw_collocs, dict):
+                # Prefer non-corpus PedLex Collocations Box entries first, then corpus collocates
+                flat_collocs: List[Tuple[str, Dict[str, Any]]] = []
+                for cat_k in ("phrases", "verbs", "adjectives", "nouns", "adverbs"):
+                    for it_c in (raw_collocs.get(cat_k) or []):
+                        if isinstance(it_c, dict):
+                            flat_collocs.append((cat_k, it_c))
+                flat_collocs.sort(key=lambda pair: 0 if pair[1].get("source") != "corpus" else 1)
+                for cat_k, it_c in flat_collocs:
+                    c_val = _clean_pattern_text(str(it_c.get("collocation") or ""))
+                    if not c_val or c_val.lower() == w_clean:
+                        continue
+                    if " " not in c_val:
+                        if cat_k == "adjectives" and p_code == "n":
+                            c_val = f"{c_val} {w_clean}"
+                        elif cat_k == "verbs" and p_code == "n":
+                            c_val = f"{c_val} (a/the) {w_clean}"
+                        elif cat_k == "nouns" and p_code in ("v", "a", "j"):
+                            c_val = f"{w_clean} {c_val}"
+                        elif cat_k == "adverbs":
+                            c_val = f"{c_val} {w_clean}"
+                        elif p_code in ("r", "adv"):
+                            if cat_k in ("adjectives", "verbs"):
+                                c_val = f"{w_clean} {c_val}"
+                            else:
+                                continue
+                        elif p_code in ("a", "j") and cat_k == "verbs":
+                            c_val = f"{c_val} {w_clean}"
+                        else:
+                            continue
+                    _add_colloc(c_val)
+                    if len(colloc_items) >= 5:
+                        break
+        if colloc_items:
+            out["collocations"] = "; ".join(colloc_items[:5])
+
+        # 3. Sense-Aligned THESAURUS Note (exclude target word itself; rank peers by semantic overlap & proximity)
+        thes_list = entry.get("thesaurus") or []
+        if thes_list:
+            locked_def = (definition or (cls.format_ldoce_definition(locked_sense) if locked_sense else "")).strip()
+            self_indices = [
+                idx_t for idx_t, t in enumerate(thes_list)
+                if cls._thesaurus_variant_matches(t.get("word"), w_clean)
+            ]
+            self_exp = thes_list[self_indices[0]] if self_indices else None
+            # Only surface THESAURUS box when its cluster aligns with the locked sense (or entry has 1 POS)
+            box_matches_sense = True
+            if self_exp and locked_def and len(senses) > 1:
+                self_dist = str(self_exp.get("distinction") or "").strip()
+                if self_dist and cls._definition_overlap_ratio(self_dist, locked_def) < 0.25:
+                    box_matches_sense = False
+            if box_matches_sense:
+                # Reference text combines the locked definition and the target's own thesaurus distinction(s)
+                ref_texts = [locked_def] if locked_def else []
+                for s_idx in self_indices:
+                    s_dist = str(thes_list[s_idx].get("distinction") or "").strip()
+                    if s_dist:
+                        ref_texts.append(s_dist)
+                ref_combined = " ".join(ref_texts)
+
+                scored_peers: List[Tuple[float, int, str]] = []
+                seen_peer_words: Set[str] = set()
+                for idx_t, t in enumerate(thes_list):
+                    ew = str(t.get("word") or "").strip()
+                    ed = str(t.get("distinction") or "").strip()
+                    eg = str(t.get("grammar") or "").strip()
+                    er = str(t.get("register") or "").strip()
+                    if not ew or not ed:
+                        continue
+                    # Never list the target headword itself in Thesaurus Note (already defined above)
+                    if cls._thesaurus_variant_matches(ew, w_clean) or ew.lower() == w_clean:
+                        continue
+                    ew_key = ew.lower()
+                    if ew_key in seen_peer_words:
+                        continue
+                    seen_peer_words.add(ew_key)
+
+                    # Score peer by lexical overlap with target definition/distinction + box proximity to self_indices
+                    overlap_score = cls._definition_overlap_ratio(ed, ref_combined) if ref_combined else 0.0
+                    prox_bonus = 0.0
+                    if self_indices:
+                        min_dist = min(abs(idx_t - s_i) for s_i in self_indices)
+                        if min_dist == 1:
+                            prox_bonus = 0.12
+                        elif min_dist == 2:
+                            prox_bonus = 0.05
+                    total_score = overlap_score + prox_bonus
+
+                    badges: List[str] = []
+                    if eg:
+                        badges.append(eg if eg.startswith("[") else f"[{eg}]")
+                    if er:
+                        badges.append(er if er.startswith("[") else f"[{er}]")
+                    badge_str = f" `{' '.join(badges)}`" if badges else ""
+                    chunk_str = f"**{ew}**{badge_str} ({ed})"
+                    scored_peers.append((total_score, -idx_t, chunk_str))
+
+                scored_peers.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                contrast_chunks = [item[2] for item in scored_peers[:3]]
+                if contrast_chunks:
+                    out["thesaurus_note"] = " vs. ".join(contrast_chunks)
+
+        return out
+
+    @classmethod
     def _semantic_discriminator_note(
         cls,
         target_word: str,
         target_definition: Optional[str],
         dist_list: List[str],
-        dist_meta: Optional[Dict[str, str]] = None
+        dist_meta: Optional[Dict[str, str]] = None,
+        pos: Optional[str] = None,
+        sense_index: Optional[int] = None,
+        quote: Optional[str] = None
     ) -> str:
         """
-        Target-anchored semantic discriminator (P1-5).
+        Target-anchored semantic & grammatical discriminator (+ <GRAM>/Grammar-Box Slot Guard).
 
-        LDOCE thesaurus items carry only {word, distinction, example}, and 'distinction'
-        is that word's own cluster definition. Emitting a distractor's distinction alone
-        produced "Semantic Discriminator: <what the distractor means> (strictly ruling out
-        <the distractor>)" — a distractor defining itself, which the model then copied
-        verbatim into 'why_wrong'. Every note is now stated as a DISTINCTION whose subject
-        is the locked target sense, and a note that merely restates the target's own
-        definition (carrying no contrast) is rejected rather than pasted.
+        Combines:
+        1. Explicit `<gram>` / `grammar_boxes` syntactic slot clashes (`syntactic_slot_clash:*`,
+           `grambox_peer:*`, `[only before noun]`, `[not before noun]`, `[uncountable]`, `forbidden_frames`).
+        2. Sense-locked `grammar_boxes` usage rules (`✗ Don't say: ...`).
+        3. PedLex `THESAURUS` exponent distinctions (including exponent `[grammar]` tags).
         """
         tw = (target_word or "").strip().lower()
         dists = [d for d in (dist_list or []) if d]
         if not tw or not dists:
             return ""
-        cluster_nuance = ""
-        thes_items = cls.get_ldoce_thesaurus(tw)
-        for th in thes_items:
-            if cls._thesaurus_variant_matches(th.get("word"), tw):
-                cluster_nuance = (th.get("distinction") or "").strip()
-                break
-        locked = (target_definition or "").strip()
-        # The subject of the contrast must be the sense this item actually teaches. A thesaurus
-        # cluster can sit under a different part of speech than the locked sense ('charge' the
-        # amount vs 'charge' to ask somebody to pay), so its wording is only adopted when it is
-        # effectively the same sense; otherwise the locked definition anchors the note.
-        target_side = locked
-        if cluster_nuance and (not locked or
-                               cls._definition_overlap_ratio(cluster_nuance, locked) >= 0.7):
-            target_side = cluster_nuance
-        if not target_side:
-            return ""
+
         meta = dist_meta or {}
+        notes: List[str] = []
+
+        # 1. Check explicit grammatical/syntactic slot clashes & grammar_boxes peer rules first
+        thes_items = cls.get_ldoce_thesaurus(tw)
         for dist in dists:
-            dist_note = ""
+            d_low = dist.strip().lower()
+            mechanism = meta.get(dist) or meta.get(d_low) or ""
+            # Check THESAURUS grammar badge on distractor
+            th_gram = ""
+            th_dist = ""
             for th in thes_items:
                 if cls._thesaurus_variant_matches(th.get("word"), dist):
-                    dist_note = (th.get("distinction") or "").strip()
+                    th_gram = (th.get("grammar") or "").strip()
+                    th_dist = (th.get("distinction") or "").strip()
                     break
-            mechanism = meta.get(dist) or meta.get(dist.lower()) or ""
-            if not dist_note:
-                if mechanism != "antonym":
-                    continue
-                return f"Contrast: vs '{dist}' (polar opposite of target meaning)."
-            if cls._definition_overlap_ratio(dist_note, target_side) >= 0.8:
-                continue  # no real contrast in this cluster pairing
-            hinge = ("polar opposite" if mechanism == "antonym" else "different degree/scale or collocational frame")
-            return f"Contrast: vs '{dist}' ({hinge})."
-        return ""
+
+            if mechanism.startswith("syntactic_slot_clash:") or mechanism.startswith("grambox_peer:"):
+                reason_code = mechanism.split(":", 1)[1]
+                if "only_before_noun" in reason_code:
+                    notes.append(
+                        f"Contrast: vs '{dist}' (`[only before noun]` — grammatically barred from predicative slot after a linking verb)."
+                    )
+                elif "not_before_noun" in reason_code:
+                    notes.append(
+                        f"Contrast: vs '{dist}' (`[not before noun]` — grammatically barred from attributive pre-noun slot)."
+                    )
+                elif "uncountable" in reason_code:
+                    notes.append(
+                        f"Contrast: vs '{dist}' (`[uncountable]` — cannot take countable determiners or plural form)."
+                    )
+                elif "forbidden_frame" in reason_code:
+                    frame_lbl = reason_code.replace("forbidden_frame_", "")
+                    d_alert = cls.get_ldoce_grammar_alert(d_low)
+                    bad_ex = ""
+                    if d_alert and d_alert.get("bad_examples"):
+                        bad_ex = f", ✗ Don't say: {d_alert['bad_examples'][0]}"
+                    notes.append(
+                        f"Contrast: vs '{dist}' (Grammar Box: barred from '{frame_lbl}' complement frame{bad_ex})."
+                    )
+                elif "no_passive" in reason_code or "intransitive" in reason_code:
+                    notes.append(
+                        f"Contrast: vs '{dist}' (intransitive / no-passive constraint — cannot occupy this syntactic voice/object slot)."
+                    )
+                else:
+                    notes.append(
+                        f"Contrast: vs '{dist}' (Grammar Box contrast: {reason_code})."
+                    )
+                break
+
+            # Also check if distractor carries a strict positional <gram> tag that contrasts with target
+            d_prof = cls.get_word_gram_profile(d_low, pos=pos)
+            t_prof = cls.get_word_gram_profile(tw, pos=pos)
+            if (d_prof.get("only_before_noun") or "only before noun" in th_gram.lower()) and not t_prof.get("only_before_noun"):
+                nuance_tail = f"; nuance: {th_dist}" if th_dist else ""
+                notes.append(
+                    f"Contrast: vs '{dist}' (`[only before noun]` constraint{nuance_tail})."
+                )
+                break
+            if (d_prof.get("not_before_noun") or "not before noun" in th_gram.lower()) and not t_prof.get("not_before_noun"):
+                nuance_tail = f"; nuance: {th_dist}" if th_dist else ""
+                notes.append(
+                    f"Contrast: vs '{dist}' (`[not before noun]` predicative-only constraint{nuance_tail})."
+                )
+                break
+
+        # 2. Standard THESAURUS / antonym discriminator if no grammatical clash note fired yet
+        if not notes:
+            cluster_nuance = ""
+            for th in thes_items:
+                if cls._thesaurus_variant_matches(th.get("word"), tw):
+                    cluster_nuance = (th.get("distinction") or "").strip()
+                    break
+            locked = (target_definition or "").strip()
+            target_side = locked
+            if cluster_nuance and (not locked or
+                                   cls._definition_overlap_ratio(cluster_nuance, locked) >= 0.7):
+                target_side = cluster_nuance
+            if target_side:
+                for dist in dists:
+                    dist_note = ""
+                    dist_gram = ""
+                    for th in thes_items:
+                        if cls._thesaurus_variant_matches(th.get("word"), dist):
+                            dist_note = (th.get("distinction") or "").strip()
+                            dist_gram = (th.get("grammar") or "").strip()
+                            break
+                    mechanism = meta.get(dist) or meta.get(dist.lower()) or ""
+                    if not dist_note:
+                        if mechanism == "antonym":
+                            notes.append(f"Contrast: vs '{dist}' (polar opposite of target meaning).")
+                            break
+                        if mechanism == "orthographic_paronym":
+                            notes.append(f"Contrast: vs '{dist}' (orthographic look-alike / paronym with distinct meaning).")
+                            break
+                        continue
+                    if cls._definition_overlap_ratio(dist_note, target_side) >= 0.8 and not dist_gram:
+                        continue  # no real contrast in this cluster pairing
+                    hinge = ("polar opposite" if mechanism == "antonym" else "different degree/scale or collocational frame")
+                    if dist_gram:
+                        hinge = f"`{dist_gram}`; {hinge}"
+                    notes.append(f"Contrast: vs '{dist}' ({hinge}).")
+                    break
+            else:
+                for dist in dists:
+                    mechanism = meta.get(dist) or meta.get(dist.lower()) or ""
+                    if mechanism == "orthographic_paronym":
+                        notes.append(f"Contrast: vs '{dist}' (orthographic look-alike / paronym with distinct meaning).")
+                        break
+
+        # 3. Target-side sense-locked Grammar Box rule (if any)
+        gb_alert = cls.get_ldoce_grammar_alert(tw, quote=quote or "", sense_index=sense_index)
+        if gb_alert:
+            rules = [str(r).strip() for r in (gb_alert.get("rules") or []) if str(r).strip()]
+            bad_exs = [str(b).strip() for b in (gb_alert.get("bad_examples") or []) if str(b).strip()]
+            if rules:
+                r_short = rules[0]
+                if bad_exs:
+                    r_short += f" (✗ Don't say: {bad_exs[0]})"
+                notes.append(f"Grammar Box: {r_short}")
+
+        return " ".join(notes)
 
     _FORM_CARRIERS = {
         "VBD": "she {form} it",
@@ -8162,12 +9356,12 @@ class LinguisticEngine:
     # Verbs that double the final consonant in the past and the progressive even though they
     # have two syllables, because the stress falls on the last one: emBED -> embedded, reFER
     # -> referred, conTROL -> controlled, ocCUR -> occurred.  The shape test below only
-    # recognises monosyllables, so without this list Longman's pattern 'be embedded in
+    # recognises monosyllables, so without this list PedLex's pattern 'be embedded in
     # something' can never be reached from 'embed'.  Verbs that end in -er or -or but stress
     # the first syllable ('differ', 'offer', 'visit', 'profit') are correctly left out.
     _DOUBLING_VERBS = frozenset({
         "embed", "refer", "prefer", "transfer", "confer", "defer", "concur", "demur",
-        "occur", "recur", "abhor", "control", "patrol", "regret", "offset", "upset",
+        "occur", "recur", "incur", "deter", "abhor", "control", "patrol", "regret", "offset", "upset",
         "submit", "admit", "omit", "commit", "permit", "transmit", "remit", "repel",
         "expel", "compel", "dispel", "recap",
     })
@@ -8237,6 +9431,8 @@ class LinguisticEngine:
         if tag == "VBZ":
             if w.endswith(("s", "x", "z", "ch", "sh")):
                 return w + "es"
+            if w in ("echo", "go", "do", "veto", "torpedo", "embargo", "undergo", "forego", "outdo"):
+                return w + "es"
             if len(w) > 2 and w.endswith("y") and w[-2] not in "aeiou":
                 return w[:-1] + "ies"
             return w + "s"
@@ -8254,6 +9450,8 @@ class LinguisticEngine:
         tag = (tag or "").upper()
         if not b or not f:
             return False
+        if not cls.is_attested_form(f):
+            return False
         nlp = cls.get_spacy()
         if not nlp:
             return f == b
@@ -8270,7 +9468,7 @@ class LinguisticEngine:
     @classmethod
     def inflected_forms(cls, word: str, pos: Optional[str] = None) -> Set[str]:
         """
-        Backlog A1: the single legal-form generator.
+        the single legal-form generator.
 
         Every gate that compares a word against a surface form (pattern evidence in
         _lock_sense, 'does the example contain the headword', the CEFR ceiling) needs
@@ -8304,11 +9502,24 @@ class LinguisticEngine:
             if plural:
                 forms.add(plural)
 
-        if p in ("adjective", "adj", "a", "s"):
+        if p in ("", "adjective", "adj", "a", "s") and " " not in w:
             if len(w) > 3:
                 forms.update({w + "er", w + "est"})
-                if w.endswith("y"):
+                if w.endswith("e"):
+                    forms.update({w + "r", w + "st"})
+                elif w.endswith("y") and len(w) > 2 and w[-2] not in "aeiou":
                     forms.update({w[:-1] + "ier", w[:-1] + "iest"})
+
+        # US/UK -or / -our spelling equivalence (e.g. vigor/vigour, labor/labour, favor/favour, honor/honour, color/colour, behavior/behaviour)
+        for f_cand in list(forms):
+            if len(f_cand) >= 5 and f_cand.endswith("or") and not f_cand.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior", "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor", "mirror", "error", "terror", "horror", "sensor")):
+                uk_f = f_cand[:-2] + "our"
+                forms.add(uk_f)
+                forms.add(uk_f + "s")
+            elif len(f_cand) >= 6 and f_cand.endswith("our") and not f_cand.endswith(("four", "hour", "pour", "tour", "sour", "flour", "devour")):
+                us_f = f_cand[:-3] + "or"
+                forms.add(us_f)
+                forms.add(us_f + "s")
 
         forms = {f for f in forms if f}
         cls._inflected_forms_cache[key] = set(forms)
@@ -8368,21 +9579,15 @@ class LinguisticEngine:
         # lemmatize back to the target ('choosed' -> 'choose') counts as a match.
         return cls.is_attested_form(s) and cls._surface_lemma(s) == t
 
-    _TRANSPARENT_HYPHEN_PREFIX_RE = (
-        r"(?:self|non|re|un|in|im|il|ir|dis|mis|pre|post|co|counter|anti|pro|sub|super|"
-        r"inter|trans|over|under|out|up|cross|multi|well|ill|half|all|ex|vice|ultra|"
-        r"neo|pseudo|quasi|auto|bio|eco|cyber|micro|macro|mini|mega|mid)"
-    )
-
     @classmethod
     def text_contains_form(cls, text: Optional[str], target: str, standalone: bool = True) -> bool:
         """
         Does `text` contain `target` as a word or as any legal inflection of it?
         
-        When `standalone=True` (default), prevents extracting isolated atomic words
-        from opaque hyphenated compounds (e.g. 'son' in 'son-in-law'), while permitting
-        transparent derivational prefix-compounds (e.g. 'self-balance' attests 'balance',
-        'self-confidence' attests 'confidence').
+        When `standalone=True` (default), strictly requires non-hyphen word boundaries
+        for non-hyphenated targets so severed sub-tokens of hyphenated compounds
+        (e.g. 'prone' in 'waste-prone', 'indulgent' in 'self-indulgent', 'son' in 'son-in-law')
+        never falsely count as standalone occurrences.
         If `target` itself contains a hyphen (e.g. 'in-person'), also matches its open
         space-separated form ('in person') in dictionary examples.
         """
@@ -8399,16 +9604,15 @@ class LinguisticEngine:
 
         for f in forms:
             if "-" in f:
-                pat = rf"(?<![a-zA-Z0-9]){re.escape(f)}(?![a-zA-Z0-9])"
+                pat = rf"(?<![a-zA-Z0-9\-]){re.escape(f)}(?![a-zA-Z0-9\-])"
                 if re.search(pat, body):
                     return True
                 open_f = f.replace("-", " ")
-                pat_open = rf"(?<![a-zA-Z0-9]){re.escape(open_f)}(?![a-zA-Z0-9])"
+                pat_open = rf"(?<![a-zA-Z0-9\-]){re.escape(open_f)}(?![a-zA-Z0-9\-])"
                 if re.search(pat_open, body):
                     return True
             elif standalone:
-                # Allow word boundary preceded either by non-hyphen/alphanumeric OR by a transparent prefix + hyphen
-                pat = rf"(?:(?<![a-zA-Z0-9\-])|\b{cls._TRANSPARENT_HYPHEN_PREFIX_RE}-)\b{re.escape(f)}\b(?![a-zA-Z0-9\-])"
+                pat = rf"(?<![a-zA-Z0-9\-])\b{re.escape(f)}\b(?![a-zA-Z0-9\-])"
                 if re.search(pat, body):
                     return True
             else:
@@ -8422,10 +9626,10 @@ class LinguisticEngine:
         """
         Is this surface form an actual English word form?
 
-        Grounds on WordNet and LDOCE 6th Edition (SQLite `ldoce` table). If the form
-        is attested in WordNet or directly in the LDOCE database, it is accepted immediately.
+        Grounds on WordNet and PedLex 6th Edition (SQLite `pedlex` table). If the form
+        is attested in WordNet or directly in the PedLex database, it is accepted immediately.
         Otherwise, resolves lemma via spaCy and verifies that the lemma is attested in WordNet
-        or LDOCE and that the form legitimately derives from that lemma (e.g. regular noun plural
+        or PedLex and that the form legitimately derives from that lemma (e.g. regular noun plural
         or verb inflection).
         """
         f = (form or "").strip().lower()
@@ -8447,7 +9651,7 @@ class LinguisticEngine:
             if not verdict:
                 lemma = cls._surface_lemma(f)
                 if lemma:
-                    # Lemma must be a real attested word in WordNet or LDOCE
+                    # Lemma must be a real attested word in WordNet or PedLex
                     lemma_attested = False
                     if wn and wn.words(lemma):
                         lemma_attested = True
@@ -8458,7 +9662,7 @@ class LinguisticEngine:
                             lemma_attested = True
 
                     if lemma_attested:
-                        # Guard against lemma being an inflected form alias in LDOCE (e.g. 'spake' -> 'a past tense of speak', 'chose' -> 'past tense of choose')
+                        # Guard against lemma being an inflected form alias in PedLex (e.g. 'spake' -> 'a past tense of speak', 'chose' -> 'past tense of choose')
                         entry = cls.get_ldoce_entry(lemma) if cls._ensure_ldoce_conn() else None
                         is_inflected_alias = False
                         if entry:
@@ -8488,7 +9692,7 @@ class LinguisticEngine:
         report: Optional[Dict[str, object]] = None,
     ) -> List[str]:
         """
-        Backlog A1: compliance gates must see the form the student actually reads.
+        compliance gates must see the form the student actually reads.
 
         Distractors were screened before inflection; 'costliness' passed the length and
         CEFR gates, then 'pluralize_noun' turned it into 'costlinesses', which no gate
@@ -8570,11 +9774,11 @@ class LinguisticEngine:
         authentic_example: Optional[str]
     ) -> Tuple[str, List[str], str, str]:
         """
-        Prescribed-Inflection Concordance (P1-2).
+        Prescribed-Inflection Concordance .
 
         The blueprint declares `inflection` and the LLM must obey it, so the declaration
         must come from the same evidence the item is built on. For verbs it was always
-        'base form' even when the authentic LDOCE example that supplied the frame read
+        'base form' even when the authentic PedLex example that supplied the frame read
         'What annoyed him most was that he had received no apology.' — a past-tense frame.
         The blueprint then demanded a base-form verb inside a past-tense cloze, which is
         unanswerable. When the anchoring example is inflected, every option is inflected to
@@ -8598,10 +9802,16 @@ class LinguisticEngine:
         if not cls.is_attested_form(new_target):
             return inflection_desc, base_options, target_word, "VB"
 
-        # Lexical POS Boundary Guard: reject inflection if the inflected form is an independent
-        # dictionary entry with a non-verb POS (e.g. annoy[verb] -> annoyed[adjective entry]).
+        # Lexical POS Boundary Guard: reject inflection ONLY if the inflected form is an independent
+        # dictionary headword entry (`word == new_target`) with a non-verb POS (e.g. annoy[verb] -> annoyed[adjective entry]).
+        # Note: get_ldoce_entry('pledged') falls back to the lemma entry 'pledge' (homograph 1 = noun),
+        # whose `word` is 'pledge', NOT 'pledged' — that is a lemmatized fallback, not a dedicated participial-adjective entry!
         _inflected_entry = cls.get_ldoce_entry(new_target)
-        if _inflected_entry and _inflected_entry.get("kind") == "article":
+        if (
+            _inflected_entry
+            and _inflected_entry.get("kind") == "article"
+            and (_inflected_entry.get("word") or "").strip().lower() == new_target.lower()
+        ):
             _inflected_pos = (_inflected_entry.get("pos") or "").lower()
             if _inflected_pos and _inflected_pos not in ("verb", "v"):
                 return inflection_desc, base_options, target_word, "VB"
@@ -8664,8 +9874,8 @@ class LinguisticEngine:
         quote: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
-        [DEPRECATED in favor of LDOCE 6th Edition]
-        Delegates directly to find_ldoce_zero_collision_anchor to ensure 100% LDOCE semantic ordering
+        [DEPRECATED in favor of PedLex 6th Edition]
+        Delegates directly to find_ldoce_zero_collision_anchor to ensure 100% PedLex semantic ordering
         and pedagogical grounding across all callers.
         """
         return cls.find_ldoce_zero_collision_anchor(
@@ -8678,7 +9888,7 @@ class LinguisticEngine:
 
 
     # Every cascade in find_ldoce_zero_collision_anchor needs a collocation item or a
-    # grammar pattern to hang the anchor on. 18,884 LDOCE entries have neither - only
+    # grammar pattern to hang the anchor on. 18,884 PedLex entries have neither - only
     # plain sense examples - so the lookup returned nothing and the item shipped with
     # no structural model at all. Read the partner straight off the dependency tree of
     # the example that illustrates the sense this item teaches.
@@ -8949,8 +10159,8 @@ class LinguisticEngine:
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
         Retrieves an authoritative, natural collocational anchor and authentic corpus example
-        from Longman Dictionary of Contemporary English (LDOCE 6th Edition).
-        Guarantees that the chosen anchor collocates with the target word in LDOCE with authentic
+        from PedLex Dictionary of Contemporary English (PedLex 6th Edition).
+        Guarantees that the chosen anchor collocates with the target word in PedLex with authentic
         native-speaker example backing, while preventing double-key collisions with distractors.
         Strictly enforces Sense-First Primacy (GEMINI.md §1.10): when a sense is locked, sense
         patterns and examples are drawn exclusively from the locked sense, never roaming across
@@ -8971,9 +10181,9 @@ class LinguisticEngine:
 
         anchor, atype, frame_desc, authentic_ex = None, None, None, None
 
-        # Resolve locked_sense once if not passed in
+        # Resolve locked_sense once if not passed in (only when definition or quote provides context)
         senses = entry.get("senses", [])
-        if locked_sense is None and senses:
+        if locked_sense is None and senses and (definition or quote):
             target_pos_norm = (
                 "adj" if (p_low.startswith("adj") or p_low == "a") else
                 "verb" if p_low.startswith("v") else
@@ -8996,6 +10206,7 @@ class LinguisticEngine:
 
         # Precompute sense lemma set for filtering entry-level collocations against the locked sense
         sense_lemmas: Set[str] = set()
+        is_polysemous = len(senses) > 1 and locked_sense is not None
         if locked_sense is not None:
             try:
                 nlp = cls.get_spacy()
@@ -9004,15 +10215,32 @@ class LinguisticEngine:
                     + " "
                     + " ".join(locked_sense.get("examples") or [])
                     + " "
-                    + (quote or "")
+                    + (locked_sense.get("signpost") or "")
                 ).lower()
+                self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
                 sense_lemmas = {
                     tok.lemma_.lower()
                     for tok in nlp(s_text)
                     if tok.is_alpha and not tok.is_stop and len(tok.lemma_) >= 3
-                }
+                } - self_forms - cls._ANCHOR_STOPWORDS
             except Exception:
                 sense_lemmas = set()
+
+        def _score_colloc_item(it_c: Dict[str, Any]) -> int:
+            if not sense_lemmas:
+                return 0
+            try:
+                nlp = cls.get_spacy()
+                self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
+                c_text = ((it_c.get("collocation") or "") + " " + (it_c.get("example") or "")).lower()
+                c_lems = {
+                    t.lemma_.lower()
+                    for t in nlp(c_text)
+                    if t.is_alpha and not t.is_stop and len(t.lemma_) >= 3
+                } - self_forms - cls._ANCHOR_STOPWORDS
+                return len(c_lems & sense_lemmas)
+            except Exception:
+                return 0
 
         # 1. Adjective Cascades (prep valency >> modified_noun >> adv_mod)
         if p_low.startswith("adj") or p_low == "a":
@@ -9070,18 +10298,9 @@ class LinguisticEngine:
             if not anchor and entry.get("collocations", {}).get("nouns"):
                 colloc_nouns = list(entry["collocations"]["nouns"])
                 if sense_lemmas:
-                    try:
-                        nlp = cls.get_spacy()
-                        colloc_nouns.sort(
-                            key=lambda it_c: len({
-                                t.lemma_.lower()
-                                for t in nlp(((it_c.get("collocation") or "") + " " + (it_c.get("example") or "")).lower())
-                                if t.is_alpha and not t.is_stop and len(t.lemma_) >= 3
-                            } & sense_lemmas),
-                            reverse=True
-                        )
-                    except Exception:
-                        pass
+                    if is_polysemous:
+                        colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
+                    colloc_nouns.sort(key=_score_colloc_item, reverse=True)
                 for it in colloc_nouns:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
@@ -9096,7 +10315,10 @@ class LinguisticEngine:
 
             # Level 2.5: Causative / Predicative Verb Frames (e.g. 'make it possible', 'render possible', 'find possible')
             if not anchor and entry.get("collocations", {}).get("phrases"):
-                for it in entry["collocations"]["phrases"]:
+                colloc_phrases = list(entry["collocations"]["phrases"])
+                if is_polysemous and sense_lemmas:
+                    colloc_phrases = [it_c for it_c in colloc_phrases if _score_colloc_item(it_c) > 0]
+                for it in colloc_phrases:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
                     for cv in ("make", "render", "find", "deem", "keep", "consider"):
@@ -9113,6 +10335,8 @@ class LinguisticEngine:
             # Level 3: Evaluative Adverb Modifiers (e.g. 'deceptively simple', 'perfectly possible')
             if not anchor:
                 verb_collocs = entry.get("collocations", {}).get("verbs", []) + entry.get("collocations", {}).get("adverbs", [])
+                if is_polysemous and sense_lemmas:
+                    verb_collocs = [it_c for it_c in verb_collocs if _score_colloc_item(it_c) > 0]
                 for it in verb_collocs:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
@@ -9163,17 +10387,9 @@ class LinguisticEngine:
                     nlp = None
                 colloc_nouns = list(entry["collocations"]["nouns"])
                 if sense_lemmas and nlp is not None:
-                    try:
-                        colloc_nouns.sort(
-                            key=lambda it_c: len({
-                                t.lemma_.lower()
-                                for t in nlp(((it_c.get("collocation") or "") + " " + (it_c.get("example") or "")).lower())
-                                if t.is_alpha and not t.is_stop and len(t.lemma_) >= 3
-                            } & sense_lemmas),
-                            reverse=True
-                        )
-                    except Exception:
-                        pass
+                    if is_polysemous:
+                        colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
+                    colloc_nouns.sort(key=_score_colloc_item, reverse=True)
                 for it in colloc_nouns:
                     ex = it.get("example", "")
                     c_str = it.get("collocation", "").lower()
@@ -9227,7 +10443,10 @@ class LinguisticEngine:
         # 3. Noun Cascades (agentive subject verbs >> governing verbs >> locked-sense preposition valency >> descriptive adjectives)
         elif p_low.startswith("n"):
             # Level 1: Agentive / Characteristic Subject Verbs (e.g. 'telephone rings', 'clock chimes', 'heart beats')
-            for it in entry.get("collocations", {}).get("verbs", []):
+            subj_verb_collocs = list(entry.get("collocations", {}).get("verbs", []))
+            if is_polysemous and sense_lemmas:
+                subj_verb_collocs = [it_c for it_c in subj_verb_collocs if _score_colloc_item(it_c) > 0]
+            for it in subj_verb_collocs:
                 c_str = it.get("collocation", "").lower()
                 ex = it.get("example", "")
                 is_subj = bool(re.search(
@@ -9257,15 +10476,9 @@ class LinguisticEngine:
             if not anchor:
                 c_verbs = list(entry.get("collocations", {}).get("verbs", []))
                 if sense_lemmas and c_verbs:
-                    try:
-                        nlp = cls.get_spacy()
-                        def _score_colloc_verb(it_item):
-                            v_text = (it_item.get("collocation", "") + " " + it_item.get("example", "")).lower()
-                            v_lemmas = {tok.lemma_.lower() for tok in nlp(v_text) if tok.is_alpha and not tok.is_stop and len(tok.lemma_) >= 3}
-                            return len(v_lemmas & sense_lemmas)
-                        c_verbs.sort(key=_score_colloc_verb, reverse=True)
-                    except Exception:
-                        pass
+                    if is_polysemous:
+                        c_verbs = [it_c for it_c in c_verbs if _score_colloc_item(it_c) > 0]
+                    c_verbs.sort(key=_score_colloc_item, reverse=True)
                 for it in c_verbs:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
@@ -9310,24 +10523,22 @@ class LinguisticEngine:
             if not anchor:
                 c_adjs = list(entry.get("collocations", {}).get("adjectives", []))
                 if sense_lemmas and c_adjs:
-                    try:
-                        nlp = cls.get_spacy()
-                        c_adjs.sort(
-                            key=lambda it_a: len({
-                                t.lemma_.lower()
-                                for t in nlp(((it_a.get("collocation") or "") + " " + (it_a.get("example") or "")).lower())
-                                if t.is_alpha and not t.is_stop and len(t.lemma_) >= 3
-                            } & sense_lemmas),
-                            reverse=True
-                        )
-                    except Exception:
-                        pass
+                    if is_polysemous:
+                        c_adjs = [it_c for it_c in c_adjs if _score_colloc_item(it_c) > 0]
+                    c_adjs.sort(key=_score_colloc_item, reverse=True)
                 for it in c_adjs:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
                     tok_partner = cls._pick_anchor_token([c_str], target_word=tw_clean, prefer_pos="adj")
                     if tok_partner and tok_partner not in ("good", "bad", "great"):
                         if not any(cls.double_key_collision(tw_clean, d, anchor=tok_partner, anchor_type="adj", pos="noun")[0] for d in dists):
+                            if locked_sense is not None:
+                                sense_match_exs = [
+                                    s_ex for s_ex in (locked_sense.get("examples") or [])
+                                    if re.search(rf"\b{re.escape(tok_partner)}\b", s_ex.lower())
+                                ]
+                                if sense_match_exs:
+                                    ex = sense_match_exs[0]
                             anchor = tok_partner
                             atype = "adj"
                             frame_desc = f"modified by adjective {tok_partner}"
@@ -9357,7 +10568,7 @@ class LinguisticEngine:
                 except Exception:
                     pass
 
-            # Second priority: Syntactic extraction strictly from locked LDOCE sense examples
+            # Second priority: Syntactic extraction strictly from locked PedLex sense examples
             if not anchor:
                 try:
                     nlp = cls.get_spacy()
@@ -9417,7 +10628,7 @@ class LinguisticEngine:
         pos: Optional[str] = None
     ) -> Optional[str]:
         """
-        The authentic LDOCE sentence that demonstrates the (target, anchor) pair.
+        The authentic PedLex sentence that demonstrates the (target, anchor) pair.
         Returning None is meaningful: it means the dictionary never puts these two words
         together in the locked sense, so a quote-derived anchor is an accident of one sentence
         ('further penalty', 'maintain contact') and cannot serve as a structural model.
@@ -9521,40 +10732,6 @@ class LinguisticEngine:
                 if isinstance(pb, dict) and pb.get("example") and len(pb["example"].split()) >= 3:
                     return pb["example"]
         return None
-
-    @classmethod
-    def get_acl_collocations(cls) -> Dict[str, str]:
-        """Lazy-loads the Academic Collocation List (ACL, ~2474 items). Returns dict mapping core pattern -> canonical original."""
-        if cls._acl_data is None:
-            cls._acl_data = {}
-            acl_path = Path(__file__).parent / "data" / "academic_collocations.json"
-            if acl_path.exists():
-                try:
-                    with open(acl_path, "r", encoding="utf-8") as f:
-                        raw_items = json.load(f)
-                    for item in raw_items:
-                        # strip optional prefixes/suffixes like (a), (be), (to), (of) for robust matching
-                        core = re.sub(r"^\([a-z\s]+\)\s*", "", item)
-                        core = re.sub(r"\s*\([a-z\s]+\)$", "", core).strip().lower()
-                        if len(core) >= 3:
-                            cls._acl_data[core] = item
-                except Exception:
-                    pass
-        return cls._acl_data
-
-    @classmethod
-    def get_awl_words(cls) -> Set[str]:
-        """Lazy-loads the Academic Word List (AWL, 560+ headwords)."""
-        if cls._awl_data is None:
-            cls._awl_data = set()
-            awl_path = Path(__file__).parent / "data" / "academic_word_list.json"
-            if awl_path.exists():
-                try:
-                    with open(awl_path, "r", encoding="utf-8") as f:
-                        cls._awl_data = set(json.load(f))
-                except Exception:
-                    pass
-        return cls._awl_data
 
     # -------------------------------------------------------------------------
     # 1. Sentence Boundary Tokenization & Indexing ([S-1], [S-2])
@@ -9664,8 +10841,9 @@ class LinguisticEngine:
                 raw_sent = re.sub(r'\s*§DOT§\s*', '. ', raw_sent)
                 raw_sent = re.sub(r'\s*§EXCL§\s*', '! ', raw_sent)
                 raw_sent = re.sub(r'\s*§QUES§\s*', '? ', raw_sent)
-                raw_sent = re.sub(r'\s+([”"»])', r'\1', raw_sent)
-                raw_sent = re.sub(r'([“"«])\s+', r'\1', raw_sent)
+                raw_sent = re.sub(r'([,:;])(["“«])', r'\1 \2', raw_sent)
+                raw_sent = re.sub(r'\s+([”»])', r'\1', raw_sent)
+                raw_sent = re.sub(r'([“«])\s+', r'\1', raw_sent)
                 raw_sent = re.sub(r'\s{2,}', ' ', raw_sent).strip()
                 if not raw_sent:
                     continue
@@ -9824,7 +11002,7 @@ class LinguisticEngine:
         w_toks = clean_w.split()
         target_tok = w_toks[0] if w_toks else clean_w
 
-        # 0. High-priority compound lookup: check LDOCE first for authentic pedagogical POS, then WordNet
+        # 0. High-priority compound lookup: check PedLex first for authentic pedagogical POS, then WordNet
         # ONLY for genuine multi-word or hyphenated compounds
         # (Do NOT run on single words like 'firm' or 'log', where default sense overrides contextual dependency)
         if "-" in clean_w or " " in clean_w:
@@ -9837,10 +11015,10 @@ class LinguisticEngine:
                         return "noun"
                     if any("adj" in p for p in c_poses):
                         return "adjective"
-                    if any("verb" in p for p in c_poses):
-                        return "verb"
                     if any("adv" in p for p in c_poses):
                         return "adverb"
+                    if any("verb" in p and "adverb" not in p for p in c_poses):
+                        return "verb"
 
         wn = cls.get_wordnet()
         if wn and ("-" in clean_w or " " in clean_w):
@@ -9879,7 +11057,7 @@ class LinguisticEngine:
                 if clean_w in ("vaguely", "furiously", "tearfully"):
                     return "adverb"
 
-                # Collect dictionary-attested POS tags for clean_w (if clean_w is in LDOCE)
+                # Collect dictionary-attested POS tags for clean_w (if clean_w is in PedLex)
                 ld_target = cls.get_ldoce_entry(clean_w)
                 dict_poses: Set[str] = set()
                 if ld_target:
@@ -9887,12 +11065,12 @@ class LinguisticEngine:
                         p_low = str(p).lower()
                         if "noun" in p_low:
                             dict_poses.add("noun")
-                        if "verb" in p_low:
+                        if "adv" in p_low:
+                            dict_poses.add("adverb")
+                        if "verb" in p_low and "adverb" not in p_low:
                             dict_poses.add("verb")
                         if "adj" in p_low:
                             dict_poses.add("adjective")
-                        if "adv" in p_low:
-                            dict_poses.add("adverb")
                         if "prep" in p_low:
                             dict_poses.add("preposition")
                         if "conj" in p_low:
@@ -9901,31 +11079,31 @@ class LinguisticEngine:
                         sp = str(s.get("pos") or "").lower()
                         if "noun" in sp:
                             dict_poses.add("noun")
+                        elif "adv" in sp:
+                            dict_poses.add("adverb")
                         elif "verb" in sp:
                             dict_poses.add("verb")
                         elif "adj" in sp:
                             dict_poses.add("adjective")
-                        elif "adv" in sp:
-                            dict_poses.add("adverb")
                         elif "prep" in sp:
                             dict_poses.add("preposition")
                         elif "conj" in sp:
                             dict_poses.add("conjunction")
 
                 if len(dict_poses) == 1 and wn:
-                    if tok.pos_ == "VERB" and wn.synsets(clean_w, pos="v"):
+                    if tok.pos_ == "VERB" and (wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v")):
                         dict_poses.add("verb")
                     elif tok.pos_ == "ADJ" and (wn.synsets(clean_w, pos="a") or wn.synsets(clean_w, pos="s")):
                         dict_poses.add("adjective")
 
-                # If LDOCE exclusively defines this headword under a single POS (e.g. 'elicit' -> verb, 'namely' -> adverb, 'stripe' -> noun),
+                # If PedLex exclusively defines this headword under a single POS (e.g. 'elicit' -> verb, 'namely' -> adverb, 'stripe' -> noun),
                 # return that authoritative dictionary POS immediately so headword and definition never desynchronize!
                 if len(dict_poses) == 1:
                     return next(iter(dict_poses))
 
                 # 0. Dictionary POS hard gate for spaCy mistagged VERB:
                 if tok.pos_ in ("VERB", "AUX"):
-                    has_v = ("verb" in dict_poses) if dict_poses else bool(wn and wn.synsets(clean_w, pos="v"))
+                    has_v = ("verb" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v")))
                     if not has_v:
                         if dict_poses:
                             for pref in ("noun", "adjective", "adverb"):
@@ -9937,37 +11115,53 @@ class LinguisticEngine:
                 if tok.pos_ == "ADV" and ("adverb" in dict_poses or not ("adjective" in dict_poses)):
                     return "adverb"
 
-                # If modifying a noun as an adjectival modifier (amod) or compound modifier (e.g. Title Case 'Take Corporate Action')
+                # If modifying a noun as an adjectival modifier (amod) or compound modifier (e.g. Title Case 'Take Corporate Action', 'premier hotels', 'amateur runners')
                 if (tok.dep_ == "amod" or tok.dep_ == "compound") and tok.head.pos_ in ("NOUN", "PROPN"):
                     if tok.dep_ == "compound":
-                        has_adj = ("adjective" in dict_poses) if dict_poses else bool(wn and wn.synsets(clean_w, pos="a"))
+                        has_adj = ("adjective" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="a") or wn.synsets(clean_w, pos="s")))
                         has_noun = ("noun" in dict_poses) if dict_poses else bool(wn and wn.synsets(clean_w, pos="n"))
                         if has_adj and not has_noun:
                             return "adjective"
+                        # If PedLex lists adjective BEFORE noun in all_poses (or primary pos is adjective, e.g. 'premier', 'amateur', 'veteran'),
+                        # only treat as adjective when modifying a common NOUN ('premier hotels', 'amateur runners'), NOT a PROPN title ('Premier Zhou Enlai')
+                        if tok.head.pos_ == "NOUN" and has_adj and ld_target and "adj" in str((ld_target.get("all_poses") or [ld_target.get("pos", "")])[0]).lower():
+                            return "adjective"
                     else:
                         if tok.tag_ in ("VBN", "VBG") or tok.pos_ == "VERB":
-                            has_adj = ("adjective" in dict_poses) if dict_poses else bool(wn and wn.synsets(clean_w, pos="a"))
+                            has_adj = ("adjective" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="a") or wn.synsets(clean_w, pos="s")))
                             if has_adj:
                                 return "adjective"
                             else:
                                 return "verb"
                         if not dict_poses or "adjective" in dict_poses:
                             return "adjective"
-                # Participle adjective / predicate adjective check vs Passive Voice:
+                # Participle adjective / predicate adjective / prepositional participle check vs Passive Voice:
+                if tok.tag_ in ("VBN", "VBG") or tok.pos_ == "VERB":
+                    # Prepositional participles (e.g. 'Given that...', 'Given the difficulty...', 'Considering...')
+                    if "preposition" in dict_poses and tok.dep_ in ("prep", "mark", "advcl") and not any(c.dep_ in ("aux", "auxpass", "nsubj", "nsubjpass") for c in tok.children):
+                        if any(c.dep_ in ("pobj", "dobj", "ccomp", "mark") or c.text.lower() == "that" for c in tok.children) or (tok.i + 1 < len(doc) and doc[tok.i + 1].text.lower() == "that"):
+                            return "preposition"
                 if tok.tag_ == "VBN" or tok.pos_ == "VERB":
+                    surf = tok.text.lower()
+                    if clean_w != surf and dict_poses and "adjective" not in dict_poses and "verb" in dict_poses:
+                        return "verb"
+                    ld_entry = cls.get_ldoce_entry(surf)
+                    surf_poses = {cls._pos_code(s.get("pos")) for s in (ld_entry.get("senses") or []) if s.get("pos")} if (ld_entry and ld_entry.get("word") == surf) else set()
                     has_auxpass = any(c.dep_ == "auxpass" for c in tok.children) or (tok.dep_ == "auxpass")
                     if has_auxpass:
+                        if surf_poses == {"adj"} and not any(c.dep_ == "agent" or (c.dep_ == "prep" and c.lemma_.lower() in ("by", "with")) for c in tok.children):
+                            return "adjective"
                         return "verb"
                     has_be_gov = any(c.lemma_ == "be" for c in tok.children if c.dep_ in ("aux", "cop")) or (tok.head.lemma_ == "be")
                     if has_be_gov:
-                        surf = tok.text.lower()
-                        ld_entry = cls.get_ldoce_entry(surf)
                         has_adj = False
                         if ld_entry:
                             has_adj = any("adj" in p for p in ld_entry.get("all_poses", [])) or any("adj" in (s.get("pos") or "") for s in ld_entry.get("senses", []))
                         if not has_adj and wn:
                             has_adj = bool(wn.synsets(surf, pos="a") or wn.synsets(surf, pos="s"))
                         if has_adj:
+                            if surf_poses == {"adj"}:
+                                return "adjective"
                             if dict_poses and "adjective" not in dict_poses and "verb" in dict_poses:
                                 return "verb"
                             return "adjective"
@@ -10002,6 +11196,12 @@ class LinguisticEngine:
                             if (has_nsubj or (has_compound_subj and has_prep_comp)) and not has_clause_finite_verb:
                                 return "verb"
 
+                        if tok.dep_ == "pobj" and tok.head.lemma_.lower() in ("until", "before", "after", "since", "as", "when", "while"):
+                            has_det_child = any(c.dep_ == "det" for c in tok.children)
+                            has_comp_subj = any(c.dep_ in ("compound", "amod", "poss") and c.i < tok.i for c in tok.children)
+                            if has_det_child and has_comp_subj and tok.tag_ == "NNS":
+                                return "verb"
+
                 # Syntactic dependency repair for misparsed ADJ coordinated with a finite verb (e.g. 'bodies wear out and degenerate'):
                 if tok.pos_ == "ADJ" and tok.dep_ == "conj" and tok.head.pos_ == "VERB":
                     has_verb_entry = ("verb" in dict_poses) if dict_poses else bool(wn and wn.synsets(clean_w, pos="v"))
@@ -10022,13 +11222,13 @@ class LinguisticEngine:
         if ld_target_fallback:
             for p in (ld_target_fallback.get("all_poses") or []):
                 p_low = str(p).lower()
-                for k, v in (("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("adv", "adverb"), ("prep", "preposition"), ("conj", "conjunction")):
-                    if k in p_low:
+                for k, v in (("noun", "noun"), ("adv", "adverb"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
+                    if k in p_low and not (k == "verb" and "adverb" in p_low):
                         dict_poses_fb.add(v)
             for s in (ld_target_fallback.get("senses") or []):
                 sp = str(s.get("pos") or "").lower()
-                for k, v in (("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("adv", "adverb"), ("prep", "preposition"), ("conj", "conjunction")):
-                    if k in sp:
+                for k, v in (("noun", "noun"), ("adv", "adverb"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
+                    if k in sp and not (k == "verb" and "adverb" in sp):
                         dict_poses_fb.add(v)
         if len(dict_poses_fb) == 1:
             return next(iter(dict_poses_fb))
@@ -10080,19 +11280,26 @@ class LinguisticEngine:
     ) -> str:
         """
         Unified Single Source of Truth for resolving the canonical part of speech of a vocabulary item.
-        Harmonizes contextual syntactic evidence (quote + spaCy) with LDOCE dictionary lexical truth.
+        Harmonizes contextual syntactic evidence (quote + spaCy) with PedLex dictionary lexical truth.
 
         Lifecycle Entry Points:
           1. Extraction stage (before writing to markdown)
           2. Quiz skeletons builder (runtime calibration, without touching markdown files)
         """
-        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", word or "").strip().lower()
+        raw_word = str(word or "").strip()
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", raw_word).strip().lower()
         if not w_clean:
             return "noun"
 
-        # 1. Multi-word Expressions Gate
-        if " " in w_clean or cls.is_multiword_expression(w_clean):
-            return cls.classify_expression_type(w_clean, quote or "") or "collocation"
+        # 1. Multi-word Expressions Gate (preserve slot-bearing formulas like 'reverse [oneself]' or 'name [sb] [sth]')
+        m_pos_low = str(manual_pos or "").strip().lower()
+        if (
+            " " in w_clean
+            or cls.is_multiword_expression(raw_word)
+            or cls.is_multiword_expression(w_clean)
+            or m_pos_low in cls.EXPRESSION_TYPE_LABELS
+        ):
+            return cls.classify_expression_type(raw_word, quote or "") or (m_pos_low if m_pos_low in cls.EXPRESSION_TYPE_LABELS else "collocation")
 
         # 2. Contextual Evidence Gate (Quote + spaCy)
         contextual_pos = None
@@ -10103,12 +11310,12 @@ class LinguisticEngine:
         norm_manual = None
         if manual_pos and str(manual_pos).strip():
             m_lower = str(manual_pos).strip().lower()
-            if "verb" in m_lower or m_lower.startswith("v"):
+            if "adv" in m_lower or m_lower.startswith("r"):
+                norm_manual = "adverb"
+            elif "verb" in m_lower or m_lower.startswith("v"):
                 norm_manual = "verb"
             elif "adj" in m_lower or m_lower.startswith("a"):
                 norm_manual = "adjective"
-            elif "adv" in m_lower or m_lower.startswith("r"):
-                norm_manual = "adverb"
             elif "prep" in m_lower or m_lower.startswith("p"):
                 norm_manual = "preposition"
             elif "conj" in m_lower or m_lower.startswith("c"):
@@ -10122,9 +11329,9 @@ class LinguisticEngine:
             ld_poses = [p.lower() for p in ld_entry.get("all_poses", [ld_entry.get("pos", "")])]
 
         # 2b. Lexicon POS Hard Gate:
-        # If the headword in LDOCE has entries and strictly NO verb entry (e.g. 'emblem', 'climate', 'table'),
+        # If the headword in PedLex has entries and strictly NO verb entry (e.g. 'emblem', 'climate', 'table'),
         # it can never be classified as a verb regardless of spaCy misparses or manual hints.
-        if ld_poses and not any("verb" in p for p in ld_poses):
+        if ld_poses and not any("verb" in p and "adverb" not in p for p in ld_poses):
             wn = cls.get_wordnet()
             if not wn or not wn.synsets(w_clean, pos="v"):
                 if contextual_pos in ("adjective", "adverb", "preposition", "conjunction") and any(contextual_pos[:4] in p or contextual_pos[:3] in p for p in ld_poses):
@@ -10146,13 +11353,13 @@ class LinguisticEngine:
 
         # Contextual Predicate / Finite Verb Primacy:
         # If sentence context clearly marks the word as a predicate/finite verb (e.g. 'You may shrug your shoulders')
-        # and LDOCE confirms verb entry, context strictly overrides manual misclassification
+        # and PedLex confirms verb entry, context strictly overrides manual misclassification
         if contextual_pos == "verb":
             wn = cls.get_wordnet()
-            if not ld_poses or any("verb" in p for p in ld_poses) or (wn and wn.synsets(w_clean, pos="v")):
+            if not ld_poses or any("verb" in p and "adverb" not in p for p in ld_poses) or (wn and wn.synsets(w_clean, pos="v")):
                 return "verb"
 
-        # If context indicates an adjective, adverb, preposition, or conjunction and LDOCE confirms
+        # If context indicates an adjective, adverb, preposition, or conjunction and PedLex confirms
         if contextual_pos in ("adjective", "adverb", "preposition", "conjunction"):
             prefix = "adj" if contextual_pos == "adjective" else ("adv" if contextual_pos == "adverb" else contextual_pos[:4])
             has_pos = not ld_poses or any(prefix in p for p in ld_poses)
@@ -10167,7 +11374,7 @@ class LinguisticEngine:
             if has_pos:
                 return contextual_pos
 
-        # If manual_pos is supported by LDOCE and context does not strongly contradict
+        # If manual_pos is supported by PedLex and context does not strongly contradict
         if norm_manual:
             prefix = "adj" if norm_manual == "adjective" else ("adv" if norm_manual == "adverb" else norm_manual[:4])
             if not ld_poses or any(prefix in p for p in ld_poses):
@@ -10177,10 +11384,12 @@ class LinguisticEngine:
         if contextual_pos:
             return contextual_pos
 
-        # Fallback to LDOCE primary pos
+        # Fallback to PedLex primary pos
         if ld_poses:
             first_p = ld_poses[0]
-            if "verb" in first_p:
+            if "adv" in first_p:
+                return "adverb"
+            elif "verb" in first_p:
                 return "verb"
             elif "adj" in first_p:
                 return "adjective"
@@ -10188,23 +11397,21 @@ class LinguisticEngine:
                 return "preposition"
             elif "conj" in first_p:
                 return "conjunction"
-            elif "adv" in first_p:
-                return "adverb"
 
         return "noun"
 
     # =========================================================================
     # EXPRESSION TYPE CLASSIFICATION (multi-word units)
-    # A multi-word unit is not a noun or a verb: Longman files it as a phrasal
+    # A multi-word unit is not a noun or a verb: PedLex files it as a phrasal
     # verb, a collocation, a set phrase or an idiom. The label is read from the
     # dictionary evidence the entry was built on; syntax is consulted only when
-    # Longman does not state the phrase at all.
+    # PedLex does not state the phrase at all.
     # =========================================================================
     EXPRESSION_TYPE_LABELS = ("phrasal verb", "collocation", "set phrase", "idiom")
 
     # Units opening with a closed-class word are fixed frames ('as long as',
     # 'in the wake of', 'no exaggeration'), not verb-noun combinations. 'be' is left out:
-    # 'be passionate about something' is Longman's pattern for the adjective, which a
+    # 'be passionate about something' is PedLex's pattern for the adjective, which a
     # learner holds as a collocation rather than as a fixed frame.
     _SET_PHRASE_OPENERS = frozenset({
         "as", "no", "not", "in", "on", "at", "by", "for", "with", "without",
@@ -10225,7 +11432,7 @@ class LinguisticEngine:
         "about", "after", "before", "against", "between", "upon",
     })
 
-    # Words Longman uses in a unit name to mark a slot or an open list rather than a
+    # Words PedLex uses in a unit name to mark a slot or an open list rather than a
     # word the learner has to say ('tap into something', 'be/keep/stay etc in touch').
     _SLOT_WORDS = frozenset({
         "somebody", "someone", "something", "sth", "sb", "oneself", "yourself",
@@ -10235,10 +11442,10 @@ class LinguisticEngine:
 
     @classmethod
     def _unit_tokens(cls, text: str, keep_brackets: bool = True) -> List[str]:
-        """The comparison key of a unit: lowercase word tokens with Longman's slots and
+        """The comparison key of a unit: lowercase word tokens with PedLex's slots and
         punctuation removed ('keep [sb] off' and 'keep somebody off' both give
         ['keep', 'off']).
-        Bracketed material is Longman's way of marking an optional part ('lose touch
+        Bracketed material is PedLex's way of marking an optional part ('lose touch
         (with somebody)'), so it is kept unless the caller also wants the shorter
         reading of the name."""
         raw = str(text or "").lower().replace("\u2019", "'").replace("\u2018", "'")
@@ -10325,7 +11532,7 @@ class LinguisticEngine:
 
     @classmethod
     def _declared_unit_spellings(cls, name: Any) -> Set[str]:
-        """Every spelling a Longman unit name can be read as: slots stripped, slash
+        """Every spelling a PedLex unit name can be read as: slots stripped, slash
         groups expanded and optional bracketed parts taken or left
         ('be/keep/stay etc in touch (with something)' yields 'keep in touch with')."""
         if isinstance(name, dict):
@@ -10376,7 +11583,7 @@ class LinguisticEngine:
 
     @classmethod
     def ldoce_declared_unit(cls, phrase: str, headword: Optional[str] = None) -> str:
-        """'phrasal_verb' or 'phrase' when Longman lists this exact unit as a headword of
+        """'phrasal_verb' or 'phrase' when PedLex lists this exact unit as a headword of
         its own, '' when it does not.
         Unlike ldoce_phrase_evidence, a unit that merely appears inside a longer declared
         phrase does not count: 'worry about' is not the idiom 'nothing to worry about',
@@ -10414,11 +11621,11 @@ class LinguisticEngine:
     @classmethod
     def classify_expression_type(cls, phrase: str, context_sentence: str = "") -> str:
         """
-        Determines the Longman expression type of a multi-word unit: one of
+        Determines the PedLex expression type of a multi-word unit: one of
         EXPRESSION_TYPE_LABELS, or "" when `phrase` is a single headword (a single
         word keeps a part of speech instead).
 
-        Priority follows the evidence the entry was built from: a Longman phrasal-verb
+        Priority follows the evidence the entry was built from: a PedLex phrasal-verb
         block or PHRASES entry named exactly this unit, then a phrasal-verb block that
         states it with extra words, then a frame opened by a closed-class word
         ('as long as', 'regardless of'), then a verb followed directly by its particle or
@@ -10431,7 +11638,7 @@ class LinguisticEngine:
         if len(tokens) < 2:
             return ""
 
-        # Longman's own headwords decide it first: a phrasal-verb block or a PHRASES entry
+        # PedLex's own headwords decide it first: a phrasal-verb block or a PHRASES entry
         # named exactly this unit.
         declared = cls.ldoce_declared_unit(clean)
         if declared == "phrasal_verb":
@@ -10454,8 +11661,8 @@ class LinguisticEngine:
             return "set phrase"
 
         # A verb followed directly by its particle or preposition is a phrasal verb
-        # only when substantiated by LDOCE phrasal-verb blocks or authoritative evidence.
-        # Arbitrary verb+prep combinations without LDOCE phrasal verb blocks (e.g. 'work for',
+        # only when substantiated by PedLex phrasal-verb blocks or authoritative evidence.
+        # Arbitrary verb+prep combinations without PedLex phrasal verb blocks (e.g. 'work for',
         # 'wait for', 'post on') are collocations rather than lexicalised phrasal verbs.
         if tail in cls._PHRASAL_TAILS and len(tokens) == 2:
             head_is_verb = bool(context_sentence) and cls.determine_contextual_pos(head, context_sentence) == "verb"
@@ -10470,7 +11677,7 @@ class LinguisticEngine:
                 if has_pv_blocks or clean == "worry about":
                     return "phrasal verb"
 
-        # Attested in Longman's collocation / pattern tiers, or simply a verb-noun
+        # Attested in PedLex's collocation / pattern tiers, or simply a verb-noun
         # pairing that the learner must hold together: both are collocations.
         return "collocation"
 
@@ -10512,10 +11719,11 @@ class LinguisticEngine:
             elif any(t.dep_ == "expl" and t.text.lower() == "it" for t in doc):
                 for t in doc:
                     if t.dep_ == "expl" and t.head.lemma_ in ("be", "seem"):
-                        if any(c.dep_ == "relcl" or any(gc.dep_ == "relcl" for gc in c.children) for c in t.head.children):
-                            dep_type = "cleft"
-                            core_anchor = "it...that"
-                            break
+                        if not any(c.dep_ == "attr" and c.lemma_.lower() == "time" for c in t.head.children):
+                            if any(c.dep_ == "relcl" or any(gc.dep_ == "relcl" for gc in c.children) for c in t.head.children):
+                                dep_type = "cleft"
+                                core_anchor = "it...that"
+                                break
 
         # 2. Logic & Stance
         if dep_type == "generic":
@@ -10601,7 +11809,7 @@ class LinguisticEngine:
             if alt != w and len(wn_client.lemmas(alt)) > 0:
                 return True
 
-            # Fallback 1: LDOCE 6th Edition dictionary check (covers contemporary words like 'selfie' and function words like 'whether', 'until', 'what')
+            # Fallback 1: PedLex 6th Edition dictionary check (covers contemporary words like 'selfie' and function words like 'whether', 'until', 'what')
             try:
                 ldoce_entry = cls.get_ldoce_entry(w)
                 if ldoce_entry:
@@ -10700,6 +11908,48 @@ class LinguisticEngine:
         return result
 
     @classmethod
+    def _is_genuine_plural_noun(cls, word: str) -> bool:
+        """
+        Determines whether `word` is genuinely an already-plural noun form (e.g. 'things',
+        'assets', 'criteria', 'men', 'goods') while rejecting spaCy tagger suffix hallucinations
+        on singular Latinate `-men` nouns (`specimen` -> `speciman`, `omen` -> `oman`,
+        `regimen` -> `regiman`, `acumen` -> `acuman`).
+        """
+        w = (word or "").strip().lower()
+        if not w:
+            return False
+        plural_tantum = {
+            "goods", "customs", "clothes", "belongings", "surroundings",
+            "fireworks", "premises", "congratulations", "people", "men",
+            "women", "children", "feet", "teeth", "mice", "criteria",
+            "phenomena", "data", "analyses", "crises", "theses", "bases", "foci"
+        }
+        if w in plural_tantum:
+            return True
+        if w.endswith(("ss", "us", "is")):
+            return False
+        nlp = cls.get_spacy()
+        doc = nlp(f"these {w}")
+        tok = doc[1] if len(doc) > 1 else doc[0]
+        if tok.tag_ != "NNS":
+            return False
+        lem = tok.lemma_.lower()
+        if lem == w:
+            return False
+        # Verify that the lemmatized singular `lem` is a real attested lowercase noun in WordNet or PedLex
+        # (rejecting fake -man lemmas like 'speciman'/'regiman' and proper-noun collisions like 'Oman').
+        try:
+            wn = cls.get_wordnet()
+            if any(x.lemma() == lem for x in wn.words(lem, pos="n")):
+                return True
+        except Exception:
+            pass
+        ld_ent = cls.get_ldoce_entry(lem)
+        if ld_ent and any("noun" in (p or "").lower() for p in ld_ent.get("all_poses", [ld_ent.get("pos") or ""])):
+            return True
+        return False
+
+    @classmethod
     def _pluralize_noun_uncached(cls, w: str) -> str:
         irregulars = {
             'person': 'people', 'man': 'men', 'woman': 'women', 'child': 'children',
@@ -10717,15 +11967,14 @@ class LinguisticEngine:
         if w == 'lens':
             return 'lenses'
 
-        # Check if word is already recognized as plural noun (e.g. 'things', 'assets', 'possessions', 'dreams')
-        # to prevent corrupt pseudo-plurals like 'thingses' or 'dreamses'
-        nlp = cls.get_spacy()
-        doc = nlp(f"these {w}")
-        tok = doc[1] if len(doc) > 1 else doc[0]
-        if tok.tag_ == 'NNS' and tok.lemma_.lower() != w and not w.endswith(('ss', 'us', 'is')):
+        # Check if word is already recognized as a genuine plural noun (e.g. 'things', 'assets', 'possessions', 'dreams')
+        # to prevent corrupt pseudo-plurals like 'thingses' or 'dreamses' while properly pluralizing 'specimen' -> 'specimens'.
+        if cls._is_genuine_plural_noun(w):
             return w
 
         if w.endswith(('s', 'sh', 'ch', 'x', 'z')):
+            return w + 'es'
+        if w in ('echo', 'hero', 'potato', 'tomato', 'veto', 'torpedo', 'embargo', 'volcano'):
             return w + 'es'
         if w.endswith('y') and len(w) > 1 and w[-2] not in 'aeiou':
             return w[:-1] + 'ies'
@@ -10862,6 +12111,8 @@ class LinguisticEngine:
                 # Check copula verb
                 head = token.head
                 if head.lemma_ in ("be", "seem"):
+                    if any(c.dep_ == "attr" and c.lemma_.lower() == "time" for c in head.children):
+                        continue
                     # 1. Relcl under focal constituent with relative pronoun
                     has_relcl = False
                     for child in head.children:
@@ -10884,14 +12135,27 @@ class LinguisticEngine:
                                 for gc in child.children
                             )
                             if has_marker:
-                                # Ensure focal element is not an evaluative adjective (dummy-it)
-                                has_eval_adj = any(c.dep_ == "acomp" and c.pos_ == "ADJ" for c in head.children)
+                                # Ensure focal element is not an evaluative adjective or extraposition noun (dummy-it)
+                                _EXTRAPOSITION_NOUNS = {
+                                    "surprise", "wonder", "secret", "doubt", "coincidence", "accident",
+                                    "pity", "shame", "mystery", "fact", "truth", "news", "use", "good",
+                                    "point", "time", "question", "matter"
+                                }
+                                has_eval_adj = any(
+                                    (c.dep_ == "acomp" and c.pos_ == "ADJ")
+                                    or (c.dep_ == "attr" and c.lemma_.lower() in _EXTRAPOSITION_NOUNS)
+                                    for c in head.children
+                                )
                                 if not has_eval_adj:
                                     return "Rhetoric & Emphasis"
 
         # Antithesis / Correlative Parallelism check (not... but..., not only... but also)
         text_lower = sentence_norm.lower()
         if re.search(r"\bnot\s+.*?\s*,\s*but\b", text_lower) or re.search(r"\bnot\s+only\b.*?\bbut\s+also\b", text_lower):
+            return "Rhetoric & Emphasis"
+
+        # Resultative Degree Constructions (so + Adj/Adv + that / such + NP + that)
+        if re.search(r"\bso\s+[a-z-]{3,}(?:\s+[a-z-]{3,})?\s+that\b", text_lower) or re.search(r"\bsuch\s+(?:a\s+|an\s+)?[a-z-]{3,}(?:\s+[a-z-]{3,}){0,2}\s+that\b", text_lower):
             return "Rhetoric & Emphasis"
 
         # ---------------------------------------------------------------------
@@ -10940,7 +12204,7 @@ class LinguisticEngine:
         for token in doc:
             if token.lemma_.lower() in shell_nouns:
                 for child in token.children:
-                    if child.dep_ in ("acl", "appos", "ccomp"):
+                    if child.dep_ in ("acl", "appos", "ccomp") and any(gc.dep_ == "mark" and gc.lower_ in ("that", "whether") for gc in child.children):
                         return "Cohesion & Framing"
 
         # ---------------------------------------------------------------------
@@ -11023,10 +12287,11 @@ class LinguisticEngine:
                     return "Information Packaging"
 
         # Passive voice (agentless or agentive passive foregrounding patient)
+        _UNACCUSATIVE_STATE_VERBS = {"go", "come", "fall", "rise", "arrive", "depart", "vanish", "disappear", "die", "remain", "stay"}
         for token in doc:
             if token.dep_ in ("nsubjpass", "auxpass"):
                 head = token.head
-                if head.pos_ in ("VERB", "AUX"):
+                if head.pos_ in ("VERB", "AUX") and head.lemma_.lower() not in _UNACCUSATIVE_STATE_VERBS:
                     return "Information Packaging"
 
         return None
@@ -11072,8 +12337,19 @@ class LinguisticEngine:
                             if first_tok in ("hardly", "scarcely", "seldom", "never", "rarely", "barely", "only", "not", "no"):
                                 return f"{doc[0].text} + [aux/be] + [Subject] + [VP]"
             # Cleft
+            _EXTRAPOSITION_NOUNS = {
+                "surprise", "wonder", "secret", "doubt", "coincidence", "accident",
+                "pity", "shame", "mystery", "fact", "truth", "news", "use", "good",
+                "point", "time", "question", "matter"
+            }
             for token in doc:
                 if token.text.lower() == "it" and token.dep_ in ("expl", "nsubj") and token.head.lemma_ in ("be", "seem"):
+                    if any(
+                        (c.dep_ == "acomp" and c.pos_ == "ADJ")
+                        or (c.dep_ == "attr" and c.lemma_.lower() in _EXTRAPOSITION_NOUNS)
+                        for c in token.head.children
+                    ):
+                        continue
                     # Check relcl
                     has_relcl = any(
                         (c.dep_ == "relcl" and any(gc.text.lower() in ("that", "who", "whom", "which", "whose") for gc in c.children))
@@ -11088,12 +12364,19 @@ class LinguisticEngine:
                     )
                     if has_relcl or has_cleft_marker:
                         return "It + [be] + [Focal Element] + that/who + [Clause]"
-            # Correlative Parallelism
-            if re.search(r"\bnot\s+only\b.*?\bbut\s+also\b", text_lower):
+            # Correlative Parallelism (with or without Fronted Negative Inversion)
+            if re.search(r"\bnot\s+only\b.*?\bbut\s+(?:also\b|[a-z]+\s+also\b)", text_lower):
+                if re.search(r"(?:^|[,;—–-]\s*)not\s+only\s+(?:can|could|will|would|shall|should|may|might|must|do|does|did|have|has|had|am|is|are|was|were)\b", text_lower):
+                    return "Not only + [Aux] + [Subject] + [VP], but + [Subject] + [also] + [VP]"
                 return "[Subject] + not only + [VP], but also + [VP]"
             # Antithesis
             if re.search(r"\bnot\s+.*?\s*,\s*but\b", text_lower):
                 return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
+            # Resultative so/such ... that
+            if re.search(r"\bsuch\s+(?:a\s+|an\s+)?[a-z-]{3,}(?:\s+[a-z-]{3,}){0,2}\s+that\b", text_lower):
+                return "such + [NP] + that + [Result Clause]"
+            if re.search(r"\bso\s+[a-z-]{3,}(?:\s+[a-z-]{3,})?\s+that\b", text_lower):
+                return "so + [Adj/Adv] + that + [Result Clause]"
 
         # 2. Logic & Stance
         if cat == "Logic & Stance" or not cat:
@@ -11127,10 +12410,15 @@ class LinguisticEngine:
                     if any(c.dep_ in ("nsubj", "nsubjpass") and c.text.lower() == "which" for c in token.children):
                         return f", which + {token.lemma_.lower()}s + that + [Proposition Clause]"
             # Shell noun frame
-            shell_nouns = {"fact", "idea", "conclusion", "claim", "belief", "hypothesis", "notion", "argument", "difference", "discrepancy"}
+            shell_nouns = {"fact", "idea", "conclusion", "claim", "belief", "hypothesis", "notion", "argument", "evidence", "assumption"}
             for token in doc:
                 if token.lemma_.lower() in shell_nouns:
-                    return f"The + {token.lemma_.lower()} + that/of + [Proposition Clause]"
+                    if any(
+                        c.dep_ in ("acl", "appos", "ccomp")
+                        and any(gc.dep_ == "mark" and gc.lower_ in ("that", "whether") for gc in c.children)
+                        for c in token.children
+                    ):
+                        return f"The + {token.lemma_.lower()} + that/of + [Proposition Clause]"
 
         # 4. Information Packaging
         if cat == "Information Packaging" or not cat:
@@ -11197,7 +12485,16 @@ class LinguisticEngine:
                         main_has_subj = any(c.dep_ in ("nsubj", "nsubjpass") for c in token.head.children)
                         if main_has_subj:
                             is_fronted = token.i < token.head.i
-                            v_type = "V-ing" if token.tag_ == "VBG" else "V-ed"
+                            has_having = any(c.dep_ in ("aux", "auxpass") and c.lower_ == "having" for c in token.children)
+                            has_being = any(c.dep_ in ("aux", "auxpass") and c.lower_ == "being" for c in token.children)
+                            if has_having:
+                                v_type = "Having + V-ed"
+                            elif has_being:
+                                v_type = "Being + V-ed"
+                            elif token.tag_ == "VBG":
+                                v_type = "V-ing"
+                            else:
+                                v_type = "V-ed"
                             if is_fronted:
                                 return f"[{v_type} Phrase], [Subject] + [VP]"
                             else:
@@ -11214,7 +12511,7 @@ class LinguisticEngine:
 
             # Passive voice
             for token in doc:
-                if token.dep_ in ("nsubjpass", "auxpass"):
+                if token.dep_ in ("nsubjpass", "auxpass") and token.head.lemma_.lower() not in {"go", "come", "fall", "rise", "arrive", "depart", "vanish", "disappear", "die", "remain", "stay"}:
                     return "[Subject] + [be/modal be] + [V-ed]"
 
         # Default fallback standard formula
@@ -11225,14 +12522,17 @@ class LinguisticEngine:
         cls,
         sentence_pool: Dict[str, str],
         target_count: int = 5,
-        syllabus_grammar: Optional[List[str]] = None
+        syllabus_grammar: Optional[List[str]] = None,
+        cefr_band: Optional[str] = None
     ) -> List[Dict[str, str]]:
         """
         Deterministically mines genuine, non-trivial grammar structural skeletons from the sentence pool.
-        Selects sentences exhibiting rich dependency structures across the Four Macro Domains.
+        Selects sentences exhibiting rich dependency structures across the Four Macro Domains,
+        prioritized by the 3-band CEFR priority sequence (A1_A2, B1_B2, C1_C2) and intra-pattern complexity.
         Returns a list of dicts: [{'sid': 'S-9', 'quote': '...', 'category': '...', 'pattern_formula': '...'}]
         """
-        raw_skeletons: List[Dict[str, str]] = []
+        raw_skeletons: List[Dict[str, Any]] = []
+        band = cefr_band or cls.resolve_grammar_cefr_band(sentence_pool)
 
         nlp = cls.get_spacy()
         from librarian.grammar_patterns import GrammarPatternEngine
@@ -11243,8 +12543,8 @@ class LinguisticEngine:
             # Skip very short sentences
             if len(sent_clean.split()) < 7:
                 continue
-            # Skip passage title (S-1), section headers, and syllabus word-lists
-            if sid == "S-1":
+            # Skip passage title (S-1) when passage has multiple sentences, section headers, and syllabus word-lists
+            if sid == "S-1" and len(sentence_pool) > 1:
                 continue
             # If sentence does not end with standard sentence punctuation, skip (headings/titles)
             if not sent_clean.endswith((".", "!", "?", '"', "'")):
@@ -11282,8 +12582,48 @@ class LinguisticEngine:
         if not raw_skeletons:
             return []
 
-        # Diverse selection algorithm across macro domains and distinct formulas
-        # Normalize relative clauses and conditional clauses to avoid duplicate slots
+        # Score each skeleton using 3-band CEFR priority + Intra-Pattern Syntactic Complexity
+        def _score_skeleton(item: Dict[str, Any]) -> Tuple[float, int]:
+            formula_str = item["pattern_formula"]
+            quote_str = item["quote"]
+            cat_str = item["category"]
+            prof = cls.match_cobuild_grammar_profile(formula_str, quote_str, category=cat_str, cefr_band=band)
+            base_prio = float(prof.get("priority", 70))
+            prof_key = prof.get("profile_key", "")
+
+            words = quote_str.split()
+            w_cnt = len(words)
+            q_low = quote_str.lower()
+            f_low = formula_str.lower()
+
+            bonus = 0.0
+            # Perfective / passive participle or coordinated non-finite clauses boost
+            if "having + v-ed" in f_low or "being + v-ed" in f_low or re.search(r"\bhaving\s+[a-z]+ed\b", q_low):
+                bonus += 10.0
+            # Optimal pedagogical sentence length boost (14-38 words)
+            if 14 <= w_cnt <= 38:
+                bonus += 6.0
+            elif w_cnt < 10:
+                bonus -= 8.0
+            elif w_cnt > 48:
+                bonus -= 5.0
+
+            # In B1_B2 and C1_C2, penalize bare restrictive relative clauses (that/who/which without pied-piped prepositions)
+            # so non-finite participial adjuncts, clefts, inversions, and degree results win the macro-domain slots
+            if band in ("B1_B2", "C1_C2") and prof_key == "relative_clause_restrictive":
+                has_pied_piping = bool(re.search(r"\b(?:in|on|at|from|to|with|by|through|for|of|under|beyond|within|upon)\s+(?:which|whom)\b", q_low))
+                if has_pied_piping:
+                    bonus += 12.0
+                else:
+                    bonus -= 15.0
+
+            sid_m = re.search(r"\d+", item.get("sid", "999"))
+            sid_num = int(sid_m.group(0)) if sid_m else 999
+            return (-round(base_prio + bonus, 2), sid_num)
+
+        ranked_skeletons = sorted(raw_skeletons, key=_score_skeleton)
+
+        # Diverse selection algorithm across macro domains, distinct formulas, and strictly unique quotes
         def _norm_structure(formula_str: str) -> str:
             res = re.sub(
                 r"\[NP\]\s*(?:\+|,\s*)\s*(?:who|which|that|whom|whose)\s*\+\s*\[VP\]",
@@ -11297,45 +12637,73 @@ class LinguisticEngine:
                 res,
                 flags=re.IGNORECASE
             )
+            res = re.sub(
+                r"^\[(?:Having \+ V-ed|Being \+ V-ed|V-ing|V-ed) Phrase\],\s*\[Subject\] \+ \[VP\]",
+                "[Participial Phrase], [Subject] + [VP]",
+                res,
+                flags=re.IGNORECASE
+            )
             return res
 
         selected: List[Dict[str, str]] = []
         seen_cats: Set[str] = set()
         seen_structures: Set[str] = set()
+        seen_profiles: Set[str] = set()
+        seen_quotes: Set[str] = set()
 
-        # Pass 1: maximize category diversity across the 4 domains
-        for item in raw_skeletons:
+        def _get_prof_key(item: Dict[str, str]) -> str:
+            prof = cls.match_cobuild_grammar_profile(
+                item["pattern_formula"], item["quote"], category=item["category"], cefr_band=band
+            )
+            return str(prof.get("profile_key") or "")
+
+        # Pass 1: maximize category diversity across the 4 macro domains (highest priority first)
+        for item in ranked_skeletons:
             cat = item["category"]
+            quote = item["quote"]
             struct = _norm_structure(item["pattern_formula"])
-            if cat not in seen_cats and struct not in seen_structures:
+            pkey = _get_prof_key(item)
+            if quote not in seen_quotes and cat not in seen_cats and struct not in seen_structures and pkey not in seen_profiles:
                 selected.append(item)
                 seen_cats.add(cat)
                 seen_structures.add(struct)
+                if pkey:
+                    seen_profiles.add(pkey)
+                seen_quotes.add(quote)
             if len(selected) >= target_count:
                 break
 
-        # Pass 2: fill remaining slots with distinct structural formulas
+        # Pass 2: fill remaining slots with distinct structural formulas, distinct profiles, and unique quotes
         if len(selected) < target_count:
-            for item in raw_skeletons:
+            for item in ranked_skeletons:
+                quote = item["quote"]
                 struct = _norm_structure(item["pattern_formula"])
-                if item not in selected and struct not in seen_structures:
+                pkey = _get_prof_key(item)
+                if quote not in seen_quotes and struct not in seen_structures and pkey not in seen_profiles:
                     selected.append(item)
                     seen_structures.add(struct)
+                    if pkey:
+                        seen_profiles.add(pkey)
+                    seen_quotes.add(quote)
                 if len(selected) >= target_count:
                     break
 
-        # Pass 3: if still under target_count, append distinct quotes with unique formulas
+        # Pass 3: if still under target_count, append remaining distinct quotes
         if len(selected) < target_count:
-            selected_quotes = {s["quote"] for s in selected}
-            for item in raw_skeletons:
-                struct = _norm_structure(item["pattern_formula"])
-                if item["quote"] not in selected_quotes and struct not in seen_structures:
+            for item in ranked_skeletons:
+                quote = item["quote"]
+                if quote not in seen_quotes:
                     selected.append(item)
-                    selected_quotes.add(item["quote"])
-                    seen_structures.add(struct)
+                    seen_quotes.add(quote)
                 if len(selected) >= target_count:
                     break
 
+        # Restore natural passage appearance order (by sentence ID) for coherent reading flow
+        def _sid_order(item: Dict[str, str]) -> int:
+            m = re.search(r"\d+", item.get("sid", "999"))
+            return int(m.group(0)) if m else 999
+
+        selected.sort(key=_sid_order)
         return selected[:target_count]
 
     # -------------------------------------------------------------------------
@@ -11369,8 +12737,6 @@ class LinguisticEngine:
             return []
 
         nlp = cls.get_spacy()
-        acl_map = cls.get_acl_collocations()
-        awl_set = cls.get_awl_words()
 
         COMMON_PARTICLES = frozenset({"away", "back", "down", "in", "off", "on", "out", "over", "round", "through", "up"})
         DEPENDENT_PREPS = frozenset({"on", "upon", "to", "with", "for", "from", "into", "against", "about", "of", "in"})
@@ -11385,31 +12751,7 @@ class LinguisticEngine:
             doc = nlp(sent_clean)
             text_lower = sent_clean.lower()
 
-            # 1. Academic Collocation List (ACL) Matcher
-            for core, original in acl_map.items():
-                pattern = r"\b" + re.escape(core) + r"\b"
-                if re.search(pattern, text_lower):
-                    # Determine type: verb+noun or adj+noun
-                    words = core.split()
-                    expr_type = "collocation"
-                    formula = core
-                    if original.endswith("(to)") or original.endswith("(of)") or original.endswith("(in)") or original.endswith("(with)"):
-                        prep_match = re.search(r"\(([a-z]+)\)$", original)
-                        if prep_match:
-                            formula = f"{core} {prep_match.group(1)} [sth]"
-                    elif len(words) == 2 and any(w in awl_set for w in words):
-                        formula = f"{core}"
-
-                    raw_candidates.append({
-                        "sid": sid,
-                        "quote": sent_clean,
-                        "phrase": core,
-                        "type": expr_type,
-                        "pattern_formula": formula,
-                        "score": 10 + (2 if any(w in awl_set for w in words) else 0),
-                    })
-
-            # 2. Dependency Syntax Phrasal Verbs & Prepositional Combinations via Declarative Expression Pattern Engine
+            # 1. Dependency Syntax Phrasal Verbs & Prepositional Combinations via Declarative Expression Pattern Engine
             from librarian.expression_patterns import ExpressionPatternEngine
             expr_engine = ExpressionPatternEngine.get_engine(nlp)
             for match in expr_engine.match_sentence(doc):
@@ -11428,7 +12770,7 @@ class LinguisticEngine:
         if not raw_candidates:
             return []
 
-        # LDOCE attestation gate: a candidate ships only when Longman itself states the unit.
+        # PedLex attestation gate: a candidate ships only when PedLex itself states the unit.
         # The old gate asked the Oxford Collocations file whether it had a headword for the
         # phrase, which is a weaker test than it sounds - 'keep of' is a preposition lifted out
         # of 'keep somebody out of something' and no dictionary has it as a unit.
@@ -11449,10 +12791,10 @@ class LinguisticEngine:
             if item_type == "phrasal verb":
                 attested = cls.is_attested_phrase(phrase)
                 if not attested and "touch" in words and any(v in words for v in ("keep", "get", "stay", "lose")):
-                    # Longman states it as 'be/keep/stay etc in touch (with something)'
+                    # PedLex states it as 'be/keep/stay etc in touch (with something)'
                     attested = cls.is_attested_phrase(" ".join(w for w in words if w != "with"))
                 if attested:
-                    # 'keep in' is a real phrasal verb, but Longman's frame for it is 'keep
+                    # 'keep in' is a real phrasal verb, but PedLex's frame for it is 'keep
                     # somebody in', so a parse of 'keep in WeChat Moments' - or of 'keep in
                     # touch' - has read a locative 'in ...' as the particle and is not that
                     # frame.  The check runs for any object, not only a proper noun, because
@@ -11468,7 +12810,7 @@ class LinguisticEngine:
                 verified_candidates.append(item)
                 continue
 
-            # Verbal idioms (e.g. 'take into consideration') that Longman does not list as a
+            # Verbal idioms (e.g. 'take into consideration') that PedLex does not list as a
             # PHRASES item: the head noun's own grammar patterns must show the verb governing it.
             if item_type == "idiom":
                 v_lemma, head_noun = words[0], words[-1]
@@ -11504,17 +12846,48 @@ class LinguisticEngine:
             for raw_expr in syllabus_expressions:
                 raw_norm = re.sub(r"\s+", " ", raw_expr.strip())
                 raw_norm = raw_norm.replace("\u2019", "'").replace("\u2018", "'").replace("…", "...")
-                # Strip nested optional parentheticals in syllabus items (e.g. 'no exaggeration (to say (sth) / that (sth))' -> 'no exaggeration')
+                # Strip trailing ', etc.' or 'etc.'
+                raw_norm = re.sub(r",?\s*\betc\.?(?=\s+to\b|\s+for\b|\s+in\b|\s+on\b|\s+with\b|$)", "", raw_norm, flags=re.IGNORECASE)
+                # Preserve parenthesized metasyntax slots: (sb) -> [sb], (sth) -> [sth], (oneself) -> [oneself]
+                raw_norm = re.sub(r"(?:\(\s*|\[\s*)+(?:sb\.?|somebody|someone)(?:\s*\)|\s*\])+", "[sb]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"(?:\(\s*|\[\s*)+(?:sth\.?|something)(?:\s*\)|\s*\])+", "[sth]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"(?:\(\s*|\[\s*)+(?:sb/sth|sth/sb)(?:\s*\)|\s*\])+", "[sth/sb]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"(?:\(\s*|\[\s*)+oneself(?:\s*\)|\s*\])+", "[oneself]", raw_norm, flags=re.IGNORECASE)
+                # Strip remaining optional parentheticals (e.g. 'no exaggeration (to say (sth) / that (sth))', 'protect [sth] (from)')
                 while re.search(r"\([^()]*\)", raw_norm):
                     raw_norm = re.sub(r"\([^()]*\)", "", raw_norm).strip()
                 raw_norm = re.sub(r"\s+", " ", raw_norm).strip()
-                # Normalize metasyntax placeholders: one's / ones / sb's / somebody's -> [one's]; ... -> [sth]
-                raw_norm = re.sub(r"\b(?:one's|ones|sb's|somebody's|someone's)\b", "[one's]", raw_norm, flags=re.IGNORECASE)
+                # Normalize metasyntax placeholders:
+                # 1. Possessive placeholders: one's / ones / sb.'s / sb's / somebody's / someone's -> [one's]
+                raw_norm = re.sub(r"\b(?:one's|ones|sb\.?'s|somebody's|someone's)\b", "[one's]", raw_norm, flags=re.IGNORECASE)
+                # 2. Reflexive placeholder: oneself -> [oneself]
+                raw_norm = re.sub(r"\boneself\b", "[oneself]", raw_norm, flags=re.IGNORECASE)
+                # 3. Object placeholders: sb. / sb / somebody / someone -> [sb]; sth. / sth / something / ... -> [sth]
+                raw_norm = re.sub(r"\b(?:sb|somebody|someone)\b\.?", "[sb]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\b(?:sth|something)\b\.?", "[sth]", raw_norm, flags=re.IGNORECASE)
                 raw_norm = re.sub(r"\.{2,}", "[sth]", raw_norm)
+                raw_norm = re.sub(r"\[+\s*(one's|oneself|sth/sb|sb/sth|sth|sb)\s*\]+", r"[\1]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\s+", " ", raw_norm).strip()
 
-                # Expand slash alternatives (e.g. 'put [sth] into the atmosphere/air' ->
+                # Pre-expand multi-word slash alternatives (e.g. 'have a edge over / an edge on',
+                # 'not have the heart to do [sth] / for [sth]', 'open the door to [sth] / to doing [sth]')
+                raw_norm = re.sub(r"\s*/\s*to\s+doing\s+\[sth\]$", "", raw_norm, flags=re.IGNORECASE)
+                multi_slash_seeds = [raw_norm]
+                if " / " in raw_norm:
+                    m_tail = re.match(r"^(.*?)\s+(to\s+do\s+\[sth\]|for\s+\[sth\]|an?\s+edge\s+(?:over|on))\s*/\s*(.+)$", raw_norm, flags=re.IGNORECASE)
+                    if m_tail:
+                        prefix_p, alt1, alt2 = m_tail.group(1).strip(), m_tail.group(2).strip(), m_tail.group(3).strip()
+                        alt1 = re.sub(r"^a\s+edge\b", "an edge", alt1, flags=re.IGNORECASE)
+                        alt2 = re.sub(r"^a\s+edge\b", "an edge", alt2, flags=re.IGNORECASE)
+                        multi_slash_seeds = [f"{prefix_p} {alt1}".strip(), f"{prefix_p} {alt2}".strip()]
+
+                # Expand single-token slash alternatives (e.g. 'put [sth] into the atmosphere/air' ->
                 # ['put [sth] into the atmosphere', 'put [sth] into the air'])
-                branch_variants = cls._slash_variants(raw_norm)
+                branch_variants: List[str] = []
+                for seed in multi_slash_seeds:
+                    for bv in cls._slash_variants(seed):
+                        if bv not in branch_variants:
+                            branch_variants.append(bv)
                 matched_branch_expr = None
                 matched_sid = None
                 matched_sent = None
@@ -11529,7 +12902,7 @@ class LinguisticEngine:
                         continue
 
                     # If syllabus expression starts with passive auxiliary 'be' (e.g. 'be admitted to', 'be featured in'),
-                    # check if it is a genuine LDOCE dictionary idiom/entry or a copular adjective frame ('be smart about').
+                    # check if it is a genuine PedLex dictionary idiom/entry or a copular adjective frame ('be smart about').
                     # Only strip leading 'be' when followed by a passive participle (VBN / -ed).
                     if len(words) > 1 and words[0].lower() in ("be", "is", "was", "were", "are", "been") and expr_clean.lower() not in ("be lost", "feel lost"):
                         has_genuine_be = bool(
@@ -11563,29 +12936,47 @@ class LinguisticEngine:
                         words = expr_clean.split()
 
                     # Build regex for placeholder-bearing or standard contiguous expressions
-                    has_placeholder = bool(re.search(r"\[(?:one's|sth|sb|sth/sb)\]", expr_clean, re.IGNORECASE))
+                    has_placeholder = bool(re.search(r"\[(?:one's|oneself|sth|sb|sth/sb)\]", expr_clean, re.IGNORECASE))
+                    search_core = re.sub(r"(?:\s+\[(?:sth|sb|sth/sb)\])+$", "", expr_clean, flags=re.IGNORECASE).strip() or expr_clean
+                    search_words = search_core.split()
                     placeholder_rx = None
                     if has_placeholder:
                         rx_chunks = []
-                        for tok in words:
+                        for tok in search_words:
                             tl = tok.lower()
                             if tl == "[one's]":
                                 rx_chunks.append(r"(?:my|your|his|her|its|our|their|one's|ones|[a-z]+'s)")
+                            elif tl == "[oneself]":
+                                rx_chunks.append(r"(?:myself|yourself|himself|herself|itself|ourselves|yourselves|themselves|oneself)")
                             elif tl in ("[sth]", "[sb]", "[sth/sb]"):
-                                rx_chunks.append(r"(?:[a-z0-9'\-]+(?:\s+[a-z0-9'\-]+){0,4})")
+                                rx_chunks.append(r"(?:[a-z0-9'\-]+(?:\s+[a-z0-9'\-]+){0,5})")
+                            elif tl == "not":
+                                rx_chunks.append(r"(?:not|n't|never|hardly|barely|scarcely)")
                             else:
                                 forms = sorted(cls.inflected_forms(tl) | {tl}, key=len, reverse=True)
                                 rx_chunks.append(r"(?:" + "|".join(re.escape(f) for f in forms if f) + r")")
                         placeholder_rx = re.compile(r"\b" + r"\s+".join(rx_chunks) + r"\b", re.IGNORECASE)
 
                     phrase_rx = None
-                    tokens = cls._phrase_tokens(expr_clean)
+                    tokens = cls._phrase_tokens(search_core)
                     if len(tokens) >= 2:
                         rx_pat = cls._phrase_regex(tokens, 2, allow_modifier=False)
                         if rx_pat:
                             phrase_rx = re.compile(rx_pat, re.IGNORECASE)
 
-                    content_words = [w for w in words if not (w.startswith("[") and w.endswith("]"))]
+                    content_words = [w for w in search_words if not (w.startswith("[") and w.endswith("]")) and w.lower() != "not"]
+
+                    def _verify_verb_placeholder_match(sent_str: str) -> bool:
+                        if not (has_placeholder and len(content_words) == 1):
+                            return True
+                        v_word = content_words[0].lower()
+                        v_forms = cls.inflected_forms(v_word) | {v_word}
+                        s_doc = nlp(sent_str)
+                        for t in s_doc:
+                            if t.text.lower() in v_forms or t.lemma_.lower() == v_word:
+                                if t.pos_ in ("VERB", "AUX") and not any(c.dep_ in ("det", "poss") for c in t.children):
+                                    return True
+                        return False
 
                     # Two-pass sentence search: Pass A requires anchor_evidence_ok(s);
                     # Pass B falls back to all sentences in pool (recovering subheadings like "Hats Off to Volunteers" / "Take Corporate Action")
@@ -11594,8 +12985,8 @@ class LinguisticEngine:
                             if not allow_short_headings and not cls.anchor_evidence_ok(s):
                                 continue
                             s_lower = s.lower()
-                            e_lower = expr_clean.lower()
-                            if placeholder_rx and placeholder_rx.search(s):
+                            e_lower = search_core.lower()
+                            if placeholder_rx and placeholder_rx.search(s) and _verify_verb_placeholder_match(s):
                                 matched_sid = sid
                                 matched_sent = s
                                 break
@@ -11611,6 +13002,8 @@ class LinguisticEngine:
                         if not matched_sid and content_words and not expr_clean.endswith("?"):
                             for sid, s in pool.items():
                                 if not allow_short_headings and not cls.anchor_evidence_ok(s):
+                                    continue
+                                if not _verify_verb_placeholder_match(s):
                                     continue
                                 s_lower = s.lower()
                                 if all(re.search(r"\b" + re.escape(w.lower().rstrip("?.!")) + r"\b", s_lower) for w in content_words):
@@ -11638,7 +13031,7 @@ class LinguisticEngine:
 
                 expr_clean = matched_branch_expr
                 words = expr_clean.split()
-                has_placeholder = bool(re.search(r"\[(?:one's|sth|sb|sth/sb)\]", expr_clean, re.IGNORECASE))
+                has_placeholder = bool(re.search(r"\[(?:one's|oneself|sth|sb|sth/sb)\]", expr_clean, re.IGNORECASE))
                 e_lower = expr_clean.lower()
                 cand_item = None
 
@@ -11698,12 +13091,13 @@ class LinguisticEngine:
                         "score": 85,
                     }
                 elif has_placeholder:
-                    # Syllabus item already declares an explicit slot formula ('do [one\'s] part', 'put [sth] into the atmosphere')
-                    cand_type = cls.classify_expression_type(expr_clean, matched_sent) or "collocation"
+                    # Syllabus item already declares an explicit slot formula ('do [one\'s] part', 'put [sth] into the atmosphere', 'make the most of [sth]')
+                    lookup_phrase = re.sub(r"\s+", " ", re.sub(r"\[(?:one's|oneself|sth|sb|sth/sb|sb/sth)\]", "", expr_clean, flags=re.IGNORECASE)).strip() or expr_clean
+                    cand_type = cls.classify_expression_type(lookup_phrase, matched_sent) or "collocation"
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
-                        "phrase": expr_clean,
+                        "phrase": lookup_phrase,
                         "type": cand_type,
                         "pattern_formula": expr_clean,
                         "score": 85,
@@ -11732,7 +13126,7 @@ class LinguisticEngine:
                             if start_t.lemma_.lower() == words_lower[0] or start_t.text.lower() == words_lower[0]:
                                 curr = [start_t]
                                 for w in words_lower[1:]:
-                                    cands = [t for t in doc if t.i > curr[-1].i and (t.lemma_.lower() == w or t.text.lower() == w)]
+                                    cands = [t for t in doc if 0 < (t.i - curr[-1].i) <= 5 and (t.lemma_.lower() == w or t.text.lower() == w)]
                                     if not cands:
                                         break
                                     curr.append(cands[0])
@@ -11747,7 +13141,12 @@ class LinguisticEngine:
                             dedup_tokens = []
                             for w_item in words_lower:
                                 matched_t = next(
-                                    (t for t in doc if (t.text.lower() == w_item or t.lemma_.lower() == w_item) and t not in dedup_tokens),
+                                    (
+                                        t for t in doc
+                                        if (t.text.lower() == w_item or t.lemma_.lower() == w_item)
+                                        and t not in dedup_tokens
+                                        and (not dedup_tokens or 0 < (t.i - dedup_tokens[-1].i) <= 5)
+                                    ),
                                     None
                                 )
                                 if matched_t is not None:
@@ -11776,22 +13175,31 @@ class LinguisticEngine:
                         elif last_tok.pos_ in ("ADP", "PART") or last_tok.dep_ in ("prep", "prt"):
                             prep_word = last_tok.text.lower()
                             # Dynamic Transitivity Audit via Sentence Dependency Tree & Valence
-                            # Check whether the verb or particle takes an authentic object in the context sentence
+                            # Check whether the verb or particle takes an authentic nominal object in the context sentence
                             verb_tok = expr_tokens[0] if expr_tokens else None
                             has_contextual_obj = False
                             if verb_tok is not None:
-                                # 1. Verb direct object (dobj / obj)
-                                verb_objs = [c for c in verb_tok.children if c.dep_ in ("dobj", "obj")]
-                                # 2. Particle / prepositional object (pobj)
-                                prep_objs = [c for c in last_tok.children if c.dep_ == "pobj"]
+                                def _is_valid_obj(c_tok, anchor_tok) -> bool:
+                                    if c_tok.pos_ not in ("NOUN", "PROPN", "PRON"):
+                                        return False
+                                    span_start = min(c_tok.i, anchor_tok.i)
+                                    span_end = max(c_tok.i, anchor_tok.i)
+                                    if any(t.text in (",", ";", ":", "\"", "'", "“", "”", "‘", "’") for t in doc[span_start : span_end + 1]):
+                                        return False
+                                    return True
+
+                                # 1. Verb direct object (dobj / obj) — only for separable phrasal verb particles (prt)
+                                verb_objs = [c for c in verb_tok.children if c.dep_ in ("dobj", "obj") and _is_valid_obj(c, last_tok)] if last_tok.dep_ == "prt" else []
+                                # 2. Particle / prepositional object (pobj / obj)
+                                prep_objs = [c for c in last_tok.children if c.dep_ in ("pobj", "obj", "dobj") and _is_valid_obj(c, last_tok)]
                                 # 3. Passive voice extraction (e.g. 'the lights were turned off')
                                 is_passive = any(c.dep_ in ("auxpass", "nsubjpass") for c in verb_tok.children)
                                 if verb_objs or prep_objs or is_passive:
                                     has_contextual_obj = True
 
-                            # If the particle is an adverbial particle (prt) with no object in context (e.g. 'show up'),
+                            # If the verb+particle has no object in context (e.g. 'show up', 'go on'),
                             # it is an authentic intransitive phrasal verb: generate clean formula without [sth/sb]
-                            is_intransitive = (not has_contextual_obj and last_tok.dep_ == "prt")
+                            is_intransitive = not has_contextual_obj
 
                             has_internal_noun_or_adj = (
                                 len(words) >= 3
@@ -11977,7 +13385,6 @@ class LinguisticEngine:
             return []
 
         nlp = cls.get_spacy()
-        awl_set = cls.get_awl_words()
 
         # Closed whitelist of parts of speech accepted by schema
         VALID_POS_MAP = {
@@ -12030,7 +13437,31 @@ class LinguisticEngine:
                 continue
 
             doc = nlp(sent_clean)
+            # First pass: mine any attested hyphenated compounds in the sentence as intact units
+            for m_hc in re.finditer(r"\b([a-zA-Z]+(?:-[a-zA-Z]+)+)\b", sent_clean):
+                hc = m_hc.group(1).lower()
+                if hc in seen_lemmas:
+                    continue
+                hc_entry = cls.get_ldoce_entry(hc)
+                if hc_entry and hc_entry.get("senses"):
+                    hc_pos_raw = (hc_entry.get("pos") or "adjective").lower()
+                    hc_pos = "noun" if "noun" in hc_pos_raw else ("verb" if "verb" in hc_pos_raw else ("adverb" if "adverb" in hc_pos_raw else "adjective"))
+                    candidates.append({
+                        "sid": sid,
+                        "quote": sent_clean,
+                        "word": hc,
+                        "part_of_speech": hc_pos,
+                        "is_awl": False,
+                        "score": 12 + min(len(hc), 12)
+                    })
+                    seen_lemmas.add(hc)
+
             for token in doc:
+                # Never extract a severed sub-token that is attached to a hyphen (e.g. 'waste' or 'prone' in 'waste-prone')
+                if (token.i > 0 and doc[token.i - 1].text == "-" and not doc[token.i - 1].whitespace_) or (
+                    token.i + 1 < len(doc) and doc[token.i + 1].text == "-" and not token.whitespace_
+                ):
+                    continue
                 lemma = token.lemma_.lower().strip()
                 if len(lemma) < 3 or lemma in seen_lemmas or not lemma.isalpha():
                     continue
@@ -12052,7 +13483,7 @@ class LinguisticEngine:
                     _fam, stype = f_idx[lemma][0]
                     # Map syntactic complement type to schema-supported POS
                     assigned_pos = "preposition" if stype == "prepositional" else ("conjunction" if stype == "clausal" else "adverb")
-                    is_awl = lemma in awl_set
+                    is_awl = cls.get_word_cefr(lemma) in ("B2", "C1")
                     # Academic discourse connectors receive high priority
                     score = (25 if is_awl else 22) + min(len(lemma), 10)
 
@@ -12074,9 +13505,9 @@ class LinguisticEngine:
                 if token.is_stop:
                     continue
 
-                is_awl = lemma in awl_set
+                is_awl = cls.get_word_cefr(lemma) in ("B2", "C1")
 
-                # If not in AWL and is trivial or very short, skip
+                # If not B2/C1 and is trivial or very short, skip
                 if not is_awl and (lemma in TRIVIAL_WORDS or len(lemma) < 5):
                     continue
 
@@ -12111,7 +13542,7 @@ class LinguisticEngine:
                     seen_lemmas.add(phrase)
                     continue
 
-                # Scoring: AWL headwords get high priority, followed by word length and syllable complexity
+                # Scoring: B2/C1 headwords get high priority, followed by word length and syllable complexity
                 score = (20 if is_awl else 0) + min(len(lemma), 12)
 
                 candidates.append({
@@ -12208,118 +13639,484 @@ class LinguisticEngine:
     ) -> List[Dict[str, Any]]:
         """
         Pure Symbolic Candidate Selection (NO Embedding Model).
-        Retrieves top-k candidate senses from PedLex using:
+        Retrieves top-k (k <= 4) candidate senses from PedLex using:
         1. POS gating
         2. Syntactic valency / frame / particle agreement
         3. Simplified Lesk overlap and pedagogical cue scoring
         4. PedLex natural frequency order fallback
         """
         entry = cls.get_pedlex_entry(word)
-        if not entry:
-            return []
-        senses = entry.get("senses", [])
+        raw_senses = entry.get("senses", []) if entry else []
+
+        # Filter out morphological pointer senses ("the past participle of...", "the plural of...")
+        # whenever substantive semantic definitions exist in the entry
+        _morph_ptr_re = re.compile(
+            r"^(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b",
+            re.IGNORECASE
+        )
+        non_ptr_senses = [
+            s for s in raw_senses
+            if not _morph_ptr_re.match((s.get("definition") or "").strip())
+        ]
+        senses = non_ptr_senses if non_ptr_senses else raw_senses
+
+        target_pos = pos or (entry.get("pos") if entry else None)
+        target_p = cls._pos_code(target_pos)
+        q_low = (quote or "").lower()
+        has_pos_match = bool(target_p and any(cls._pos_code(s.get("pos")) == target_p for s in senses))
+
         if not senses:
-            return []
-        if len(senses) == 1:
+            candidates = []
+        elif len(senses) == 1 and (not target_p or not senses[0].get("pos") or cls._pos_code(senses[0].get("pos")) == target_p):
             s0 = senses[0]
-            return [{
+            candidates = [{
                 "definition": cls.format_ldoce_definition(s0) or s0.get("definition", ""),
-                "pos": s0.get("pos", pos or "noun"),
+                "pos": pos or s0.get("pos", "noun"),
                 "sense_idx": 0,
                 "signpost": s0.get("signpost", ""),
                 "patterns": s0.get("patterns", []),
-                "examples": s0.get("examples", [])
+                "examples": s0.get("examples", []),
+                "raw_sense": s0,
+                "score": 10.0,
+                "margin": 0.0,
             }]
+        else:
+            entry_filtered = dict(entry, senses=senses) if senses is not raw_senses else entry
+            res = cls._lock_sense(entry_filtered, quote=quote, target_pos=target_pos, return_scores=True)
 
-        target_pos = pos or entry.get("pos")
-        res = cls._lock_sense(entry, quote=quote, target_pos=target_pos, return_scores=True)
-        if not res or len(res) < 5:
-            target_p = cls._pos_code(target_pos)
-            matched = [s for s in senses if cls._pos_code(s.get("pos")) == target_p] or senses
-            return [{
-                "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
-                "pos": s.get("pos", target_pos),
-                "sense_idx": i,
-                "signpost": s.get("signpost", ""),
-                "patterns": s.get("patterns", []),
-                "examples": s.get("examples", [])
-            } for i, s in enumerate(matched[:k])]
+            def _is_unattested_phrase_unit_sense(s_obj: Dict[str, Any]) -> bool:
+                u_list = s_obj.get("units") or []
+                if not u_list:
+                    return False
+                # Check if any unit phrase is attested or shares its grammatical preposition/frame with the quote
+                all_multi_unattested = True
+                w_low = word.strip().lower()
+                for u_it in u_list:
+                    u_phr = (u_it.get("phrase") if isinstance(u_it, dict) else str(u_it or "")).strip()
+                    u_clean = re.sub(r'\[.*?\]|\(.*?\)', '', u_phr).strip().lower()
+                    u_clean = re.sub(r"\b(?:sb's|sb|sth|one's|oneself|etc)\b\.?", "", u_clean).strip()
+                    u_toks = [t for t in re.findall(r"[a-z]+", u_clean) if t not in ("a", "an", "the", "some", "any")]
+                    if len(u_toks) <= 1:
+                        all_multi_unattested = False
+                        break
+                    if all(cls.text_contains_form(q_low, t) or t in q_low for t in u_toks):
+                        all_multi_unattested = False
+                        break
+                    # Preserve unit sense if it is a <headword> + <preposition> frame (e.g. 'an embarrassment of riches')
+                    # and the quote contains <headword> + <preposition> (e.g. 'an embarrassment of possibilities')
+                    if len(u_toks) >= 2 and u_toks[0] == w_low and u_toks[1] in ("of", "to", "for", "with", "in", "on", "from", "about"):
+                        if f"{w_low} {u_toks[1]}" in q_low:
+                            all_multi_unattested = False
+                            break
+                    # Preserve unit sense if it is a 2-word nominal compound <headword> + <noun> (e.g. 'comic book')
+                    # whose definition defines the standalone headword rather than an opaque idiom
+                    if len(u_toks) == 2 and u_toks[0] == w_low and target_p == "n":
+                        all_multi_unattested = False
+                        break
+                return all_multi_unattested
 
-        idx, score, margin, conf, score_trace = res
-        sorted_trace = sorted(score_trace, key=lambda x: -x[1])
-        top_indices = [s_i for s_i, _ in sorted_trace[:k]]
-        if idx is not None:
-            top_indices = ([idx] + [s_i for s_i in top_indices if s_i != idx])[:k]
-        elif not top_indices:
-            top_indices = [0]
+            if not res or len(res) < 5:
+                matched = [
+                    s for s in senses
+                    if (not has_pos_match or cls._pos_code(s.get("pos")) == target_p)
+                    and not _is_unattested_phrase_unit_sense(s)
+                ] or [s for s in senses if not has_pos_match or cls._pos_code(s.get("pos")) == target_p] or senses
+                candidates = [{
+                    "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
+                    "pos": pos or s.get("pos", target_pos),
+                    "sense_idx": i,
+                    "signpost": s.get("signpost", ""),
+                    "patterns": s.get("patterns", []),
+                    "examples": s.get("examples", []),
+                    "raw_sense": s,
+                } for i, s in enumerate(matched[:k])]
+            else:
+                idx, score, margin, conf, score_trace = res
+                # Enforce POS hard gate and filter unattested multi-word idiom senses when standalone senses exist
+                pos_filtered_trace = [
+                    (s_i, sc) for s_i, sc in score_trace
+                    if (not has_pos_match or cls._pos_code(senses[s_i].get("pos")) == target_p)
+                ] or score_trace
+                non_idiom_trace = [
+                    (s_i, sc) for s_i, sc in pos_filtered_trace
+                    if not _is_unattested_phrase_unit_sense(senses[s_i])
+                ] or pos_filtered_trace
 
-        candidates = []
-        for s_i in top_indices:
-            s = senses[s_i]
-            candidates.append({
-                "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
-                "pos": s.get("pos", target_pos),
-                "sense_idx": s_i,
-                "signpost": s.get("signpost", ""),
-                "patterns": s.get("patterns", []),
-                "examples": s.get("examples", []),
-                "score": next((sc for s_idx, sc in score_trace if s_idx == s_i), 0.0),
-                "margin": float(margin or 0.0),
-            })
-        return candidates
+                sorted_trace = sorted(non_idiom_trace, key=lambda x: -x[1])
+                valid_idx_set = {s_i for s_i, _ in non_idiom_trace}
+                top_indices = [s_i for s_i, _ in sorted_trace[:k]]
+                if idx is not None and idx in valid_idx_set:
+                    top_indices = ([idx] + [s_i for s_i in top_indices if s_i != idx])[:k]
+                elif not top_indices:
+                    top_indices = [0]
+
+                candidates = []
+                for s_i in top_indices:
+                    s = senses[s_i]
+                    candidates.append({
+                        "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
+                        "pos": pos or s.get("pos", target_pos),
+                        "sense_idx": s_i,
+                        "signpost": s.get("signpost", ""),
+                        "patterns": s.get("patterns", []),
+                        "examples": s.get("examples", []),
+                        "raw_sense": s,
+                        "score": next((sc for s_idx, sc in score_trace if s_idx == s_i), 0.0),
+                        "margin": float(margin or 0.0),
+                    })
+
+        # Fallback with WordNet (oewn:2025+) synsets ONLY when PedLex has NO senses matching the target POS.
+        # This preserves the 0-token single-sense fast path for monosemous PedLex entries and prevents
+        # duplicate/unattested WordNet glosses from polluting pure PedLex candidate pools.
+        needs_wn_fallback = (
+            not candidates
+            or not has_pos_match
+        )
+        if needs_wn_fallback:
+            try:
+                wn = cls.get_wordnet()
+                if wn:
+                    wn_pos_map = {"n": ("n",), "v": ("v",), "a": ("a", "s"), "adj": ("a", "s"), "r": ("r",), "adv": ("r",)}
+                    wn_poses = wn_pos_map.get(target_p) if target_p else None
+                    syns = [s for p_code in wn_poses for s in (wn.synsets(word, pos=p_code) or [])] if wn_poses else wn.synsets(word)
+                    if syns:
+                        seen_norm = {re.sub(r"[^a-z0-9]+", " ", (c.get("definition") or "").lower()).strip() for c in candidates}
+                        q_words = set(re.findall(r"[a-z]{3,}", q_low))
+                        scored_syns = []
+                        for syn in syns:
+                            s_def = (syn.definition() or "").strip()
+                            if not s_def:
+                                continue
+                            s_norm = re.sub(r"[^a-z0-9]+", " ", s_def.lower()).strip()
+                            if s_norm in seen_norm:
+                                continue
+                            s_exs = [str(e).strip().strip('"“”') for e in (syn.examples() or []) if e]
+                            # Only include WordNet synsets that either have examples or when PedLex has 0 POS-matched candidates
+                            if not s_exs and candidates and has_pos_match:
+                                continue
+                            seen_norm.add(s_norm)
+                            s_bag = set(re.findall(r"[a-z]{3,}", (s_def + " " + " ".join(s_exs)).lower()))
+                            overlap = len(q_words & s_bag)
+                            if f"{word.lower()} of " in q_low and any(kw in s_def.lower() for kw in ("quantity", "excess", "number", "amount", "multitude", "group", "competitors")):
+                                overlap += 3
+                            scored_syns.append((overlap, syn, s_def, s_exs, s_norm))
+                        scored_syns.sort(key=lambda x: -x[0])
+                        if not has_pos_match and scored_syns:
+                            candidates = []
+                        wn_slots = min(2, len(scored_syns)) if (candidates and has_pos_match) else min(k, len(scored_syns))
+                        if candidates and has_pos_match and len(candidates) + wn_slots > k:
+                            candidates = candidates[:max(1, k - wn_slots)]
+                        for _ov, _syn, s_def, s_exs, s_norm in scored_syns[:wn_slots]:
+                            if len(candidates) >= k:
+                                break
+                            if target_p == "v" and not s_def.lower().startswith("to "):
+                                s_def = f"to {s_def}"
+                            candidates.append({
+                                "definition": s_def,
+                                "pos": target_pos or pos or "noun",
+                                "sense_idx": -1,
+                                "signpost": "",
+                                "patterns": [],
+                                "examples": s_exs,
+                                "raw_sense": {"definition": s_def, "pos": target_pos or pos or "noun", "examples": s_exs},
+                                "score": 0.0,
+                                "margin": 0.0,
+                            })
+            except Exception:
+                pass
+
+        return candidates[:k]
 
     @classmethod
     def build_top_k_expression_candidates(
         cls,
         expr_word: str,
         quote: str,
-        k: int = 4
+        k: int = 4,
+        expr_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Pure Symbolic Candidate Selection for Multi-Word Expressions (NO Embedding Model):
-        1. Phrasal verb blocks (particle matching)
-        2. PedLex phrase index candidates
-        3. Constituent word collocations and pattern units
+        1. Phrasal verb blocks & direct multi-word PedLex headword entries
+        2. PedLex phrase index candidates (exact, prefix, or slash-expanded unit_key match)
+        3. Strictly attested phrase units on constituent headwords (and WordNet/constituent fallbacks ONLY if unattested)
         """
         clean = re.sub(r'\[.*?\]|\(.*?\)', '', expr_word).strip().lower()
+        clean = re.sub(r"\b(?:sb's|sb|sth|one's|oneself)\b", "", clean).strip()
+        clean = re.sub(r"\s+", " ", clean).strip()
         tokens = clean.split()
+        lem_0 = cls.lemmatize_headword(tokens[0]) if tokens else ""
+        if tokens and lem_0 == tokens[0] and tokens[0].endswith("ed") and len(tokens[0]) > 4:
+            stem_ed = tokens[0][:-2]
+            if cls.get_pedlex_entry(stem_ed):
+                lem_0 = stem_ed
+        lem_tokens = ([lem_0] + tokens[1:]) if tokens else []
         candidates = []
         seen_defs = set()
+        q_low = (quote or "").lower()
+        locked_expr_type = (
+            expr_type
+            if (expr_type in cls.EXPRESSION_TYPE_LABELS)
+            else (cls.classify_expression_type(expr_word, quote) or "collocation")
+        )
 
-        # 1. Phrasal verb blocks (strictly matched via _unit_blocks + _unit_senses)
+        def _add_cand(df_str: str, pos_str: str, src_str: str, ex_list: List[str], raw_s: Optional[Dict[str, Any]], is_attested: bool = True):
+            if not df_str:
+                return
+            norm_d = re.sub(r"[^a-z0-9]+", " ", df_str.lower()).strip()
+            if not norm_d or norm_d in seen_defs:
+                return
+            # Guard against 'be there (for somebody)' when 'for' is absent from both formula and sentence
+            if clean == "be there" and " for " not in f" {q_low} ":
+                has_for_sb = "for somebody" in df_str.lower() or "help them" in df_str.lower() or any(
+                    "for somebody" in str(u.get("phrase") if isinstance(u, dict) else u).lower()
+                    for u in ((raw_s.get("units") if isinstance(raw_s, dict) else None) or [])
+                )
+                if has_for_sb:
+                    return
+            # Guard against [spoken] sympathy formula for 'think of' ('I'm thinking of you') when used in narrative recall
+            if clean in ("think of", "think about") and "used to say that you care about and feel sympathy" in df_str.lower():
+                if not any(p in q_low for p in ("thinking of you", "think of you", "thoughts are with")):
+                    return
+            seen_defs.add(norm_d)
+            cleaned_exs = [str(e).strip().strip('"“”') for e in (ex_list or []) if e and str(e).strip()]
+            candidates.append({
+                'definition': df_str,
+                'pos': locked_expr_type,
+                'source': src_str,
+                'examples': cleaned_exs,
+                'raw_sense': raw_s,
+                'attested': is_attested,
+            })
+
+        # 1. Phrasal verb blocks & direct multi-word PedLex headword entries (e.g. 'stuffed animal', 'comic book')
         u_key = cls._unit_key(clean)
-        if len(tokens) >= 2:
-            for block in cls._unit_blocks(u_key):
-                for s in cls._unit_senses(block, u_key):
-                    df = cls.format_ldoce_definition(s)
-                    if df and df.lower() not in seen_defs:
-                        seen_defs.add(df.lower())
-                        candidates.append({
-                            'definition': df,
-                            'pos': 'phrasal verb',
-                            'source': block.get('phrase') or block.get('headword'),
-                            'examples': s.get('examples', [])
-                        })
+        lem_u_key = cls._unit_key(" ".join(lem_tokens)) if lem_tokens else u_key
+        unit_keys = []
+        for uk_cand in (u_key, lem_u_key, clean, " ".join(lem_tokens)):
+            if uk_cand and uk_cand not in unit_keys:
+                unit_keys.append(uk_cand)
 
-        # 2. LDOCE phrase index candidates (exact unit_key match)
-        phrase_cands = cls.lookup_ldoce_phrase_candidates(clean)
-        for host, s_idx, tier, raw_p in phrase_cands:
-            if cls._unit_key(raw_p) != u_key:
+        def _unit_key_matches(cand_raw_or_uk: str, uk_target: str, allow_prefix: bool = False) -> bool:
+            cand_uk = cls._unit_key(cand_raw_or_uk)
+            if not cand_uk or not uk_target or len(cand_uk.split()) < 2:
+                return False
+            if cand_uk == uk_target:
+                return True
+            if allow_prefix and (cand_uk.startswith(uk_target + " ") or uk_target.startswith(cand_uk + " ")):
+                return True
+            # Check _declared_unit_spellings (which properly expands token-level slashes like 'open the door/way to something')
+            for sp in cls._declared_unit_spellings(cand_raw_or_uk):
+                sp_uk = cls._unit_key(re.sub(r"\bjust\b", "", sp).strip())
+                if len(sp_uk.split()) < 2:
+                    continue
+                if sp_uk == uk_target:
+                    return True
+                if allow_prefix and (sp_uk.startswith(uk_target + " ") or uk_target.startswith(sp_uk + " ")):
+                    return True
+            # Expand slash alternatives and optional words ('just') in unit phrases like 'may/might/could (just) as well'
+            for br in cls.clean_and_expand_pattern_slashes(cand_raw_or_uk):
+                br_uk = cls._unit_key(re.sub(r"\bjust\b", "", br).strip())
+                if len(br_uk.split()) < 2:
+                    continue
+                if br_uk == uk_target:
+                    return True
+                if allow_prefix and (br_uk.startswith(uk_target + " ") or uk_target.startswith(br_uk + " ")):
+                    return True
+            cand_no_just = re.sub(r"\s+", " ", re.sub(r"\bjust\b", "", cand_uk)).strip()
+            if len(cand_no_just.split()) >= 2 and cand_no_just == uk_target:
+                return True
+            return False
+
+        if len(tokens) >= 2:
+            for mw_cand in unit_keys:
+                mw_entry = cls.get_pedlex_entry(mw_cand)
+                if mw_entry and mw_entry.get("senses"):
+                    for s_i, s in enumerate(mw_entry.get("senses") or []):
+                        df = cls.format_ldoce_definition(s)
+                        _add_cand(df, locked_expr_type, f"{mw_cand} #{s_i}", s.get("examples", []), s, True)
+            for uk in unit_keys:
+                for block in cls._unit_blocks(uk):
+                    for s in cls._unit_senses(block, uk):
+                        df = cls.format_ldoce_definition(s)
+                        _add_cand(df, locked_expr_type, block.get('phrase') or block.get('headword') or uk, s.get('examples', []), s, True)
+
+        # 2. PedLex phrase index candidates (exact or slash-expanded unit_key match first, prefix fallback if empty)
+        query_list = []
+        for q_s in [clean, u_key, " ".join(lem_tokens), lem_u_key]:
+            if q_s and q_s not in query_list:
+                query_list.append(q_s)
+        for allow_pref in (False, True):
+            if allow_pref and candidates:
+                break
+            for query_str in query_list:
+                phrase_cands = cls.lookup_ldoce_phrase_candidates(query_str)
+                for host, s_idx, tier, raw_p in phrase_cands:
+                    if not any(_unit_key_matches(raw_p, uk, allow_prefix=allow_pref) for uk in unit_keys):
+                        continue
+                    h_entry = cls.get_pedlex_entry(host)
+                    if h_entry:
+                        senses = h_entry.get('senses', [])
+                        if s_idx is not None and s_idx < len(senses):
+                            s = senses[s_idx]
+                            df = cls._compose_collocation_definition(u_key, None, host, s, cls.format_ldoce_definition(s), quote)
+                            _add_cand(df, locked_expr_type, f"{host} #{s_idx}", s.get('examples', []), s, True)
+
+        # 3. Constituent headword senses:
+        # Pass 3A-1 scans all senses of each constituent token strictly for attested multi-word `units` matches.
+        stop_func = {
+            "a", "an", "the", "to", "of", "in", "on", "at", "by", "for", "with", "from",
+            "into", "onto", "upon", "over", "under", "up", "down", "off", "away",
+            "not", "no", "be", "do", "have", "one", "ones", "it", "that", "this", "as", "or", "and"
+        }
+        LIGHT_OR_MODAL_TOKS = {
+            "take", "make", "come", "go", "get", "give", "have", "do", "be", "put", "keep",
+            "fall", "turn", "set", "run", "hold", "bring", "find", "might", "can", "will",
+            "may", "would", "should", "could", "must", "there", "here"
+        }
+        raw_toks = []
+        for t in (lem_tokens + tokens):
+            if (len(t) >= 3 and (t not in stop_func or (t == "out" and clean == "out of"))) and t not in raw_toks:
+                raw_toks.append(t)
+        # Prioritize specific open-class content words ahead of light verbs/modals
+        content_toks = [t for t in raw_toks if t not in LIGHT_OR_MODAL_TOKS] + [t for t in raw_toks if t in LIGHT_OR_MODAL_TOKS]
+
+        def _sense_matches_unit_strictly(s_obj: Dict[str, Any], allow_sub: bool = False) -> Tuple[bool, List[str]]:
+            s_units = s_obj.get("units") or []
+            for u_obj in s_units:
+                u_raw = u_obj.get("phrase") if isinstance(u_obj, dict) else str(u_obj or "")
+                u_p = cls._unit_key(u_raw or "")
+                if not u_p or len(u_p.split()) < 2:
+                    continue
+                for uk in unit_keys:
+                    if _unit_key_matches(u_raw or u_p, uk, allow_prefix=allow_sub):
+                        u_ex = (u_obj.get("examples") or []) if isinstance(u_obj, dict) else []
+                        return True, u_ex
+                    if allow_sub and len(u_p.split()) >= 2 and len(uk.split()) >= 2 and (f" {u_p} " in f" {uk} " or f" {uk} " in f" {u_p} "):
+                        u_ex = (u_obj.get("examples") or []) if isinstance(u_obj, dict) else []
+                        return True, u_ex
+            return False, []
+
+        def _sense_matches_head_pattern(c_tok: str, s_obj: Dict[str, Any]) -> bool:
+            if tokens and c_tok in (tokens[0], lem_0):
+                other_content = [t for t in (lem_tokens + tokens) if t != c_tok and len(t) >= 3 and t not in stop_func]
+                other_toks = other_content if other_content else [t for t in (lem_tokens + tokens) if t != c_tok and len(t) >= 2]
+                if other_toks:
+                    pats = [str(p).lower() for p in (s_obj.get("patterns") or [])]
+                    for pb in (s_obj.get("pattern_bundles") or []):
+                        if isinstance(pb, dict) and pb.get("pattern"):
+                            pats.append(str(pb["pattern"]).lower())
+                    for pat_str in pats:
+                        pat_words = set(re.findall(r"[a-z]+", pat_str))
+                        if all(ot in pat_words for ot in other_toks):
+                            return True
+            return False
+
+        # Pass 3A-1: Strictly attested multi-word `units` across all senses of each constituent token
+        for c_tok in content_toks:
+            c_entry = cls.get_pedlex_entry(c_tok)
+            if not c_entry:
                 continue
-            h_entry = cls.get_pedlex_entry(host)
-            if h_entry:
-                senses = h_entry.get('senses', [])
-                if s_idx is not None and s_idx < len(senses):
-                    s = senses[s_idx]
-                    df = cls._compose_collocation_definition(u_key, None, host, s, cls.format_ldoce_definition(s), quote)
-                    if df and df.lower() not in seen_defs:
-                        seen_defs.add(df.lower())
-                        candidates.append({
-                            'definition': df,
-                            'pos': s.get('pos', 'set phrase'),
-                            'source': f"{host} #{s_idx}",
-                            'examples': s.get('examples', [])
-                        })
+            for s_i, s in enumerate(c_entry.get("senses") or []):
+                is_match, matched_unit_ex = _sense_matches_unit_strictly(s)
+                if not is_match:
+                    continue
+                raw_df = cls.format_ldoce_definition(s)
+                if not raw_df:
+                    continue
+                df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
+                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", matched_unit_ex or s.get('examples', []), s, True)
+
+        # Pass 3A-2: Headword `patterns` / `pattern_bundles` match when no multi-word unit/phrase entry exists,
+        # or when a verb + preposition frame (e.g. 'remind of') has competing main-entry pattern senses alongside phrasal-verb blocks.
+        has_second_content = any(t not in (tokens[0], lem_0) for t in content_toks) if tokens else False
+        if not candidates or (not has_second_content and len(candidates) < k):
+            for c_tok in content_toks:
+                c_entry = cls.get_pedlex_entry(c_tok)
+                if not c_entry:
+                    continue
+                for s_i, s in enumerate(c_entry.get("senses") or []):
+                    if not _sense_matches_head_pattern(c_tok, s):
+                        continue
+                    raw_df = cls.format_ldoce_definition(s)
+                    if not raw_df:
+                        continue
+                    df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
+                    _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, True)
+
+        # Pass 3B: WordNet (oewn:2025+) Multi-Word Synsets ONLY when PedLex has 0 attested phrase candidates
+        if not candidates and len(tokens) >= 2:
+            try:
+                wn = cls.get_wordnet()
+                if wn:
+                    for mw_q in (clean, " ".join(lem_tokens), u_key):
+                        if not mw_q or len(mw_q.split()) < 2:
+                            continue
+                        for syn in (wn.synsets(mw_q) or wn.synsets(mw_q.replace(" ", "_")) or []):
+                            s_def = (syn.definition() or "").strip()
+                            if not s_def:
+                                continue
+                            s_pos = getattr(syn, "pos", lambda: "")() if callable(getattr(syn, "pos", None)) else getattr(syn, "pos", "")
+                            if s_pos == "v" and not s_def.lower().startswith("to "):
+                                s_def = f"to {s_def}"
+                            s_exs = [str(e).strip().strip('"“”') for e in (syn.examples() or []) if e]
+                            _add_cand(s_def, locked_expr_type, f"wn:{mw_q}", s_exs, {"definition": s_def, "examples": s_exs}, True)
+            except Exception:
+                pass
+
+        # Pass 3C: Constituent single-word fallback ONLY if NO phrase-attested candidates were found above
+        if not candidates:
+            is_verb_slot_frame = bool(re.search(r"\[(?:sb|sth|oneself|one's)\]", expr_word, re.IGNORECASE)) and len(tokens) >= 1
+            non_light = [t for t in content_toks if t not in LIGHT_OR_MODAL_TOKS] or content_toks
+            expect_verb = is_verb_slot_frame and tokens and non_light and non_light[0] in (tokens[0], lem_0)
+            for c_tok in non_light:
+                c_entry = cls.get_pedlex_entry(c_tok)
+                if c_entry:
+                    for s_i, s in enumerate(c_entry.get("senses") or []):
+                        if expect_verb and c_tok in (tokens[0], lem_0) and cls._pos_code(s.get("pos")) != "v":
+                            continue
+                        # Skip unrelated multi-word unit senses (e.g. 'call somebody names', 'fall victim/prey to')
+                        s_units = s.get("units") or []
+                        if s_units:
+                            is_m, _ = _sense_matches_unit_strictly(s)
+                            if not is_m:
+                                continue
+                        raw_df = cls.format_ldoce_definition(s)
+                        if not raw_df:
+                            continue
+                        df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
+                        _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, False)
+                        if len(candidates) >= k - 2:
+                            break
+                # Also include WordNet verb synsets for verb-slot expressions (e.g. 'lift [sb] out of [sth]')
+                if expect_verb and c_tok in (tokens[0], lem_0) and len(candidates) < k:
+                    try:
+                        wn = cls.get_wordnet()
+                        if wn:
+                            q_words = set(re.findall(r"[a-z]{3,}", q_low))
+                            wn_syns = wn.synsets(c_tok, pos="v") or []
+                            scored_v_syns = []
+                            for syn in wn_syns:
+                                s_def = (syn.definition() or "").strip()
+                                if not s_def:
+                                    continue
+                                s_exs = [str(e).strip().strip('"“”') for e in (syn.examples() or []) if e]
+                                s_bag = set(re.findall(r"[a-z]{3,}", (s_def + " " + " ".join(s_exs)).lower()))
+                                ov = len(q_words & s_bag)
+                                if ("out of" in clean or "from" in clean) and any(w in (s_def + " " + " ".join(s_exs)).lower() for w in ("condition", "rank", "poverty", "state", "from")):
+                                    ov += 3
+                                scored_v_syns.append((ov, s_def, s_exs))
+                            scored_v_syns.sort(key=lambda x: -x[0])
+                            for _ov, s_def, s_exs in scored_v_syns[:4]:
+                                if not s_def.lower().startswith("to "):
+                                    s_def = f"to {s_def}"
+                                _add_cand(s_def, locked_expr_type, f"wn:{c_tok}", s_exs, {"definition": s_def, "examples": s_exs}, False)
+                                if len(candidates) >= k:
+                                    break
+                    except Exception:
+                        pass
+                if len(candidates) >= k:
+                    break
 
         return candidates[:k]
 
@@ -12334,271 +14131,150 @@ class LinguisticEngine:
     ) -> str:
         """
         Guarantees that Example Usage is NEVER a verbatim duplicate of Quoted Sentence,
-        and ALWAYS demonstrates the target word or expression in an authentic sentence.
+        and ALWAYS demonstrates the target word or expression in an authentic dictionary sentence
+        from its locked sense (or from monosemous corpus entries). Returns '' if no valid example exists.
         """
         clean_target = re.sub(r'\[.*?\]|\(.*?\)', '', str(word_or_formula or '')).strip()
+        clean_target = re.sub(r"\b(?:sb's|sb|sth|one's|oneself)\b", "", clean_target).strip()
+        clean_target = re.sub(r"\s+", " ", clean_target).strip()
         clean_low = clean_target.lower()
         u_key = cls._unit_key(clean_target)
         is_multi = len(u_key.split()) >= 2 and "-" not in clean_low
         q_norm = re.sub(r'\s+', ' ', str(quoted_sentence or '').strip()).lower()
         pos_low = str(pos or '').strip().lower()
 
-        def _is_valid_distinct(ex_str: str) -> bool:
+        def _is_valid_distinct(ex_str: str, check_pos: bool = True) -> bool:
             if not ex_str or not str(ex_str).strip():
                 return False
-            e_norm = re.sub(r'\s+', ' ', str(ex_str).strip()).lower()
+            ex_clean = str(ex_str).strip().strip('"“”')
+            e_norm = re.sub(r'\s+', ' ', ex_clean).lower()
             if e_norm == q_norm or (q_norm and (e_norm in q_norm or q_norm in e_norm) and abs(len(e_norm) - len(q_norm)) <= 12):
                 return False
             if is_multi:
-                return bool(cls._unit_example(u_key, [ex_str], allow_modifier=True))
-            return cls.text_contains_form(ex_str, clean_target)
+                if cls._unit_example(u_key, [ex_clean], allow_modifier=True):
+                    return True
+                norm_clean = re.sub(r"[^a-z0-9]+", " ", clean_low).strip()
+                norm_ex = re.sub(r"[^a-z0-9]+", " ", e_norm).strip()
+                return bool(norm_clean and norm_clean in norm_ex)
+            if not cls.text_contains_form(ex_clean, clean_target):
+                return False
+            if check_pos and pos_low in ("noun", "verb", "adjective", "adverb"):
+                ex_pos = cls.determine_contextual_pos(clean_target, ex_clean)
+                if ex_pos and ex_pos in ("noun", "verb", "adjective", "adverb") and ex_pos != pos_low:
+                    return False
+            return True
 
-        # Priority sense/POS-disambiguated examples for items prone to homograph or wrong-sense collisions
-        priority_sense_examples = {
-            ("tip", "verb"): "The old gentleman smiled and tipped his hat as he walked past.",
-            ("stand-by", "noun"): "Don't leave your computer on stand-by overnight; shut it down completely to save power.",
-            ("standby", "noun"): "Leaving television sets on standby wastes a surprising amount of electricity each year.",
-            ("well-kept", "adjective"): "The historic cottage was surrounded by a small, well-kept garden.",
-            ("show up", "phrasal verb"): "We waited for half an hour, but he never showed up for the meeting.",
-            ("stand for", "phrasal verb"): "The olive branch has long stood for peace and harmony.",
-            ("fill with", "collocation"): "The festival lantern is filled with the local people's warm wishes for the new year.",
-            ("do part", "collocation"): "Every team member did their part to ensure the project was completed on schedule.",
-            ("do one's part", "collocation"): "Everyone in the neighborhood must do their part to keep the public park clean.",
-            ("be through with", "set phrase"): "Are you through with the newspaper yet, or are you still reading it?",
-            ("through with", "set phrase"): "Are you through with the newspaper yet, or are you still reading it?",
-            ("drone", "noun"): "Unmanned drones are widely used for aerial photography, agriculture, and package delivery.",
-            ("way", "adverb"): "The old suitcase was way too heavy for her to carry up the stairs alone.",
-            ("blade", "noun"): "The three huge blades of the wind turbine rotated slowly against the blue sky.",
-            ("fill up", "phrasal verb"): "The rain barrel quickly filled up during the heavy afternoon thunderstorm.",
-            ("pick up", "phrasal verb"): "Sales of electric vehicles have begun to pick up rapidly over the past two years.",
-            ("clear up", "phrasal verb"): "Volunteers worked all weekend to clear up the mud and litter along the riverbank.",
-            ("in the face of", "set phrase"): "The rescue workers showed remarkable courage in the face of extreme danger.",
-            ("on top of", "set phrase"): "He lost his job last month, and on top of that, his car broke down yesterday.",
-            ("to that end", "set phrase"): "The city wants to reduce traffic congestion, and to that end it is building two new subway lines.",
-            ("model on", "phrasal verb"): "The country's new high-speed rail network was modeled on successful systems in Europe and Asia.",
-            ("addict to", "phrasal verb"): "Many teenagers have become addicted to checking social media on their smartphones every few minutes.",
-            ("be upon", "set phrase"): "The final examination week will soon be upon us, so we need to review our notes now.",
-            ("immerse", "verb"): "He immersed himself completely in his research on artificial intelligence.",
-            ("immersed", "adjective"): "She was so immersed in her book that she did not hear the doorbell ring.",
-            ("suite", "noun"): "The company equipped every employee with a full suite of mobile digital devices.",
-            ("tablet", "noun"): "Many students now take lecture notes on a lightweight tablet instead of carrying a laptop.",
-            ("substitute", "verb"): "Text messages can never fully substitute for warm face-to-face conversation.",
-            ("alter", "verb"): "Smartphones have fundamentally altered the way people communicate in daily life.",
-            ("escort", "verb"): "Two naval patrol boats escorted the cargo ship safely through the narrow strait.",
-            ("realm", "noun"): "The explorer's voyages extended trade connections across a vast maritime realm.",
-            ("diversion", "noun"): "City parks and museums offer residents a wide range of pleasant weekend diversions.",
-            ("dock", "verb"): "The supply spacecraft successfully docked with the orbiting space station.",
-            ("reclaim", "verb"): "After years of struggle, she finally managed to reclaim her sense of confidence and independence.",
-            ("wire", "verb"): "Her parents wired her five hundred dollars to help cover the emergency medical expenses.",
-            ("donate", "verb"): "Local businesses donated food and clothing to families affected by the economic crisis.",
-            ("hard-luck", "adjective"): "The documentary tells the hard-luck stories of factory workers who lost their homes during the recession.",
-            ("parasite", "noun"): "He refused to live off his relatives because he did not want to feel like a parasite.",
-            ("index", "noun"): "Students can search the online library index to find relevant academic journals.",
-            ("verge", "noun"): "After months of severe drought, the ancient lake was on the verge of drying up completely.",
-            ("vaguely", "adverb"): "She vaguely remembered meeting him at an academic conference several years ago.",
-            ("take place", "set phrase"): "The international maritime conference will take place in Shanghai next month.",
-            ("plunge into", "phrasal verb"): "After putting on the headset, players plunge into an immersive virtual world.",
-            ("load with", "phrasal verb"): "The merchant ships were loaded with fine silk, tea, and porcelain for trade.",
-            ("rebound", "noun"): "Economists are hoping for a strong rebound in consumer spending this autumn.",
-            ("eviction", "noun"): "The family faced eviction from their apartment after falling three months behind on rent.",
-            ("motel", "noun"): "After driving for eight hours along the highway, the tired travelers checked into a roadside motel.",
-            ("migrant", "noun"): "Many young migrants move to large coastal cities in search of better career opportunities.",
-            ("retail", "noun"): "After graduating from college, she worked in clothing retail for two years before opening her own store.",
-            ("correlate", "verb"): "Researchers found that regular physical exercise closely correlates with better sleep quality.",
-            ("get in way", ""): "She refused to let self-doubt get in her way while preparing for the national competition.",
-            ("get in one's way", ""): "She refused to let self-doubt get in her way while preparing for the national competition.",
-            ("feel lost", ""): "It is completely normal to feel lost during your first week at a new university.",
-            ("be lost", ""): "Many freshmen are lost at first when trying to navigate the large campus library.",
-            ("get lost", ""): "Take a campus map with you so you do not get lost on the way to the lecture hall.",
-            ("look upon as", ""): "Many students look upon their advisor as a trusted mentor and guide.",
-            ("not up to par", ""): "His performance in the first round was not up to par, so he practiced harder for the finals.",
-            ("remain committed to", ""): "The university remains committed to providing equal educational opportunities for all students.",
-            ("stay on track", ""): "Making a weekly study schedule will help you stay on track throughout the semester.",
-            ("spin out of control", ""): "Without strict safety rules, the small laboratory fire could have spun out of control.",
-            ("no exaggeration", ""): "It is no exaggeration to say that regular reading transforms the way you write and think.",
-            ("how was it", ""): "\"I went to the new science exhibition yesterday.\" \"Oh, how was it?\"",
-            ("underneath", "preposition"): "Beneath her calm and cheerful manner, she was hiding a deep sense of anxiety underneath her smile.",
-            ("get serious about", ""): "Once you get serious about learning a foreign language, you should practice speaking it every day.",
-            ("pay a big price", ""): "Companies that ignore safety regulations will eventually pay a big price.",
-            ("pay a price", ""): "If you neglect your health for years, you will eventually pay a heavy price.",
-        }
-        for (p_key, p_pos), p_ex in priority_sense_examples.items():
-            if (clean_low == p_key or u_key == p_key or u_key.startswith(p_key + " ")) and (not p_pos or p_pos in pos_low) and _is_valid_distinct(p_ex):
-                return p_ex
-
-        if _is_valid_distinct(current_example):
-            return str(current_example).strip()
-
-        # 1. Check sense examples and pattern_bundles if sense provided
+        # 1. Check locked sense examples, units, and pattern_bundles first (Strict Sense-Isolation)
         cand_pool: List[str] = []
         if sense and isinstance(sense, dict):
             for pb in (sense.get("pattern_bundles") or []):
                 if isinstance(pb, dict) and pb.get("example"):
                     cand_pool.append(str(pb["example"]).strip())
+            for u_obj in (sense.get("units") or []):
+                if isinstance(u_obj, dict):
+                    for ex in (u_obj.get("examples") or []):
+                        if ex:
+                            cand_pool.append(str(ex).strip())
             for ex in (sense.get("examples") or []):
                 if ex:
                     cand_pool.append(str(ex).strip())
+            # If multi-word expression has an extended preposition pattern attested in quoted_sentence (e.g. 'get by on'),
+            # prefer an example from the locked sense that demonstrates that exact extended pattern.
+            if is_multi and q_norm and cand_pool:
+                for pat in (sense.get("patterns") or []):
+                    for p_var in cls._slash_variants(str(pat)):
+                        p_k = cls._unit_key(p_var)
+                        if p_k and len(p_k.split()) > len(u_key.split()) and cls._unit_example(p_k, [quoted_sentence], allow_modifier=True):
+                            for cand_ex in cand_pool:
+                                if _is_valid_distinct(cand_ex, check_pos=False) and cls._unit_example(p_k, [cand_ex], allow_modifier=True):
+                                    return cand_ex.strip().strip('"“”')
 
-        # 2. Check LDOCE entry examples across senses matching target POS first
+        if _is_valid_distinct(current_example, check_pos=(sense is None)):
+            return str(current_example).strip().strip('"“”')
+
+        if cand_pool:
+            for cand_ex in cand_pool:
+                if _is_valid_distinct(cand_ex, check_pos=False):
+                    return cand_ex.strip().strip('"“”')
+
+        # Determine whether the entry is monosemous under the target POS
         entry = cls.get_ldoce_entry(clean_target)
-        if entry:
-            target_p = cls._pos_code(pos_low)
-            entry_senses = entry.get("senses") or []
-            ordered_senses = [s for s in entry_senses if not target_p or cls._pos_code(s.get("pos")) == target_p]
-            for s in ordered_senses:
+        target_p = cls._pos_code(pos_low)
+        entry_senses = (entry.get("senses") or []) if entry else []
+        pos_senses = [s for s in entry_senses if not target_p or cls._pos_code(s.get("pos")) == target_p]
+        is_monosemous = len(pos_senses) <= 1
+
+        # If sense was locked to a WordNet fallback sense while PedLex already has senses for this POS,
+        # do NOT steal examples from PedLex's different senses.
+        if sense and isinstance(sense, dict) and not is_multi:
+            s_def_norm = re.sub(r"[^a-z0-9]+", " ", str(sense.get("definition") or "").lower()).strip()
+            in_pedlex = any(
+                re.sub(r"[^a-z0-9]+", " ", str(cls.format_ldoce_definition(ps) or "").lower()).strip() == s_def_norm
+                for ps in pos_senses
+            )
+            if pos_senses and not in_pedlex:
+                return ""
+            if not is_monosemous:
+                # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense
+                return ""
+
+        # 2. Monosemous or unlocked entry-level & cross-entry corpus examples
+        if entry and is_monosemous:
+            for s in pos_senses:
                 for pb in (s.get("pattern_bundles") or []):
                     if isinstance(pb, dict) and pb.get("example"):
                         cand_pool.append(str(pb["example"]).strip())
                 for ex in (s.get("examples") or []):
                     if ex:
                         cand_pool.append(str(ex).strip())
+            for cc in (entry.get("cross_collocations") or []):
+                if isinstance(cc, dict) and cc.get("example"):
+                    cand_pool.append(str(cc["example"]).strip())
 
-        # 3. For multiword units, check _unit_phrase_rows and constituent senses
+        # 3. For multiword units, check _unit_phrase_rows and _unit_blocks when not polysemously conflicting
         if is_multi:
             for _h, row in cls._unit_phrase_rows(u_key):
                 for ex in (row.get("examples") or []):
                     if ex:
                         cand_pool.append(str(ex).strip())
             for block in cls._unit_blocks(u_key):
-                for s in cls._unit_senses(block, u_key):
-                    for ex in (s.get("examples") or []):
-                        if ex:
-                            cand_pool.append(str(ex).strip())
+                u_senses = cls._unit_senses(block, u_key)
+                if not sense or len(u_senses) <= 1:
+                    for s in u_senses:
+                        for ex in (s.get("examples") or []):
+                            if ex:
+                                cand_pool.append(str(ex).strip())
 
-        # 4. Curated high-utility pedagogical corpus sentences for neologisms, compound nouns, and multi-word frames
-        curated_examples = {
-            "selfie": "She took a quick selfie in front of the museum and posted it online.",
-            "skateboard": "He rode his skateboard down the sidewalk on his way to the park.",
-            "scooter": "Many commuters use an electric scooter to travel the last mile to work.",
-            "flying carpet": "In the ancient folktale, the prince traveled across the desert on a magic flying carpet.",
-            "carpooling": "Carpooling with coworkers is an effective way to reduce daily traffic congestion.",
-            "landfill": "Recycling paper and plastic helps reduce the amount of waste sent to the local landfill.",
-            "stand-by": "Don't leave your computer on stand-by overnight; shut it down completely to save power.",
-            "standby": "Leaving television sets on standby wastes a surprising amount of electricity each year.",
-            "well-kept": "The historic cottage was surrounded by a small, well-kept garden.",
-            "well kept": "The historic cottage was surrounded by a small, well-kept garden.",
-            "energy-saving": "Installing energy-saving light bulbs can significantly lower your household electricity bill.",
-            "energy saving": "Installing energy-saving light bulbs can significantly lower your household electricity bill.",
-            "punctuality": "Good punctuality makes a strong positive impression during a job interview.",
-            "intensively": "The medical team worked intensively for several hours to stabilize the patient.",
-            "popcorn": "We bought two large buckets of warm popcorn before the movie started.",
-            "teen": "The community center offers free coding workshops for local teens every Saturday.",
-            "tip": "The career counselor gave us several practical tips on how to prepare for an interview.",
-            "celebration": "The family gathered at a restaurant for a joyful birthday celebration.",
-            "push up": "Strong consumer demand has pushed up housing prices across the city.",
-            "show thanks to": "The students wrote a card to show thanks to their teacher at the end of the term.",
-            "be smart about": "Consumers need to be smart about how they manage their monthly household budget.",
-            "function as": "During emergencies, the school gymnasium can function as a temporary shelter.",
-            "do one's part": "Everyone in the neighborhood must do their part to keep the public park clean.",
-            "do part": "Every team member did their part to ensure the project was completed on schedule.",
-            "put into the atmosphere": "Burning fossil fuels puts millions of tons of carbon dioxide into the atmosphere every year.",
-            "passenger plane": "The new passenger plane can carry over three hundred travelers on transoceanic flights.",
-            "new generation": "Engineers are developing a new generation of solar panels with much higher efficiency.",
-            "family member": "Every family member helped prepare the traditional meal for the holiday reunion.",
-            "keep silent": "The witness chose to keep silent until his lawyer arrived at the station.",
-            "have a try": "Even if the puzzle looks difficult at first, you should still have a try.",
-            "make possible": "Modern satellite technology has made instant global communication possible.",
-            "make time": "No matter how busy her schedule gets, she always makes time to read before bed.",
-            "be new to": "Since he was new to the city, it took him a few weeks to learn the subway routes.",
-            "take action": "Local authorities must take immediate action to improve road safety near schools.",
-            "high praise": "The young pianist received high praise from the judges for her expressive performance.",
-            "a piece of": "He wrote the phone number down on a small piece of paper.",
-            "piece of": "He wrote the phone number down on a small piece of paper.",
-            "fill with": "Looking at the old photographs filled her with warm memories of her childhood.",
-            "be through with": "Are you through with the newspaper yet, or are you still reading it?",
-            "through with": "Are you through with the newspaper yet, or are you still reading it?",
-            "show up": "We waited for half an hour, but he never showed up for the meeting.",
-            "infrastructural": "The government announced a major infrastructural investment to modernize the country's rail network.",
-            "maximization": "Many corporations focus on profit maximization rather than long-term environmental protection.",
-            "sustainability": "Environmental sustainability requires reducing carbon emissions and protecting natural habitats.",
-            "instantaneously": "Modern fiber-optic networks allow data to be transmitted almost instantaneously across the globe.",
-            "enhancement": "Regular physical exercise leads to a significant enhancement of both mental and physical health.",
-            "esthetic": "The architect designed the museum to combine practical function with modern esthetic appeal.",
-            "psychotherapist": "She decided to consult a licensed psychotherapist to help manage her work-related stress.",
-            "attentively": "The students listened attentively as the professor explained the experimental procedure.",
-            "crowdfunding": "The young inventors raised over fifty thousand dollars for their prototype through online crowdfunding.",
-            "facilitation": "Effective facilitation by the team leader helped the committee reach an agreement quickly.",
-            "trustworthy": "In scientific research, it is essential to rely on accurate and trustworthy data sources.",
-            "microorganism": "Billions of tiny microorganisms live in the soil and help break down organic matter.",
-            "affluence": "Rising economic affluence has led to higher consumption of energy and consumer goods.",
-            "crusader": "He was a lifelong crusader for wildlife conservation and environmental justice.",
-            "particulates": "Diesel engines release fine particulates into the air that can harm human lungs.",
-            "counterclockwise": "Turn the knob counterclockwise to loosen the valve and release the pressure.",
-            "excavation": "Archaeological excavation at the site revealed ancient pottery and stone tools.",
-            "biomass": "Wood chips, crop waste, and other forms of biomass can be burned to generate renewable electricity.",
-            "be upon": "The final examination week will soon be upon us, so we need to review our notes now.",
-            "stand for": "The olive branch has long stood for peace and harmony.",
-            "furiously": "She was typing furiously at her keyboard to finish the report before the deadline.",
-            "adequacy": "Many scholars have questioned the adequacy of the current safety regulations.",
-            "globalize": "Modern communication technologies have helped globalize the financial market.",
-            "diligence": "Her diligence and attention to detail earned her the respect of the entire research team.",
-            "weightlessness": "Astronauts practice underwater to prepare for the feeling of weightlessness in space.",
-            "lift-off": "The crowd cheered as the rocket achieved a smooth lift-off from the launch pad.",
-            "rejuvenation": "The economic policy aimed at the national rejuvenation of science, culture, and industry.",
-            "sizable": "A sizable portion of the family's monthly income goes toward housing and utilities.",
-            "tearfully": "The athlete thanked her parents tearfully after winning the championship.",
-            "vaguely": "She vaguely remembered meeting him at an academic conference several years ago.",
-            "hard-luck": "The documentary tells the hard-luck stories of factory workers who lost their homes during the recession.",
-            "hard luck": "The documentary tells the hard-luck stories of factory workers who lost their homes during the recession.",
-            "subjunctive": "In formal English grammar, the subjunctive mood is used to express wishes, suggestions, or hypothetical situations.",
-            "magnificence": "Visitors from around the world admired the architectural magnificence of the ancient palace.",
-            "proofread": "Always proofread your essay carefully to catch any spelling or punctuation errors before submitting it.",
-            "persevering": "Through years of persevering effort, the research team finally developed an effective vaccine.",
-            "seamlessly": "The new software integrates seamlessly with the university's existing online learning platform.",
-            "geophysicist": "The geophysicist analyzed seismic waves to study the deep structure of the Earth's crust.",
-            "geological": "A detailed geological survey revealed rich mineral deposits beneath the mountain range.",
-            "geology": "Students majoring in geology spend several weeks each summer conducting fieldwork in the mountains.",
-            "workaholic": "As a self-confessed workaholic, he often stayed at the laboratory until midnight even on weekends.",
-            "patriotism": "His deep patriotism inspired him to return home and contribute to the nation's scientific development.",
-            "depiction": "The novel offers a vivid and realistic depiction of daily life in a nineteenth-century port city.",
-            "get in way": "She refused to let self-doubt get in her way while preparing for the national competition.",
-            "get in one's way": "She refused to let self-doubt get in her way while preparing for the national competition.",
-            "feel lost": "It is completely normal to feel lost during your first week at a new university.",
-            "be lost": "Many freshmen are lost at first when trying to navigate the large campus library.",
-            "get lost": "Take a campus map with you so you do not get lost on the way to the lecture hall.",
-            "look upon as": "Many students look upon their advisor as a trusted mentor and guide.",
-            "not up to par": "His performance in the first round was not up to par, so he practiced harder for the finals.",
-            "remain committed to": "The university remains committed to providing equal educational opportunities for all students.",
-            "stay on track": "Making a weekly study schedule will help you stay on track throughout the semester.",
-            "spin out of control": "Without strict safety rules, the small laboratory fire could have spun out of control.",
-            "no exaggeration": "It is no exaggeration to say that regular reading transforms the way you write and think.",
-            "how was it": "\"I went to the new science exhibition yesterday.\" \"Oh, how was it?\"",
-            "get serious about": "Once you get serious about learning a foreign language, you should practice speaking it every day.",
-            "pay a big price": "Companies that ignore safety regulations will eventually pay a big price.",
-            "pay a price": "If you neglect your health for years, you will eventually pay a heavy price.",
-        }
         for cand_ex in cand_pool:
             if _is_valid_distinct(cand_ex):
-                return cand_ex
+                return cand_ex.strip().strip('"“”')
 
-        for l_key in (clean_low, u_key):
-            if l_key in curated_examples:
-                return curated_examples[l_key]
-            for k_pat, k_ex in curated_examples.items():
-                if l_key.startswith(k_pat + " ") or l_key.endswith(" " + k_pat):
-                    return k_ex
-
-        # 5. Search corpus examples in PedLex SQLite
-        try:
-            search_q = u_key if is_multi else clean_target
-            for ex in (cls.search_corpus_examples(search_q, limit=15) or []):
-                if ex and _is_valid_distinct(str(ex).strip()):
-                    return str(ex).strip()
-        except Exception:
-            pass
-
-        # 6. Check WordNet synset examples
-        if not is_multi:
+        # 4. Search corpus examples in PedLex SQLite (only for monosemous words or multi-word units without polysemous sense clash)
+        if is_monosemous or is_multi:
             try:
-                from nltk.corpus import wordnet as wn
-                for syn in wn.synsets(clean_target.replace(" ", "_")):
-                    for ex in syn.examples():
-                        if ex and _is_valid_distinct(str(ex).strip()):
-                            return str(ex).strip()
+                search_q = u_key if is_multi else clean_target
+                for ex in (cls.search_corpus_examples(search_q, limit=15) or []):
+                    if ex and _is_valid_distinct(str(ex).strip()):
+                        return str(ex).strip().strip('"“”')
             except Exception:
                 pass
 
-        return current_example
+        # 5. Check WordNet synset examples (only when monosemous in both PedLex and WordNet for target POS)
+        if not is_multi and is_monosemous:
+            try:
+                from nltk.corpus import wordnet as wn
+                wn_pos_map = {"noun": ("n",), "verb": ("v",), "adjective": ("a", "s"), "adverb": ("r",)}
+                wn_poses = wn_pos_map.get(pos_low)
+                synsets = [s for p_code in wn_poses for s in (wn.synsets(clean_target.replace(" ", "_"), pos=p_code) or [])] if wn_poses else wn.synsets(clean_target.replace(" ", "_"))
+                if len(synsets) <= 1:
+                    for syn in synsets:
+                        for ex in syn.examples():
+                            if ex and _is_valid_distinct(str(ex).strip()):
+                                return str(ex).strip().strip('"“”')
+            except Exception:
+                pass
+
+        return ""
 
     @classmethod
     @contextmanager
@@ -12633,10 +14309,11 @@ class LinguisticEngine:
                 end_time = datetime.datetime.now()
                 duration = (end_time - session["start_time"]).total_seconds()
                 try:
+                    from librarian.config import config
                     from librarian.logger import log_wsd_session
                     log_wsd_session(
                         unit_name=session.get("unit_name") or "unit",
-                        model=session.get("model") or "llama3.1:8b",
+                        model=session.get("model") or config.get("model") or "unknown",
                         records=records,
                         duration=duration,
                         start_time=session["start_time"],
@@ -12651,34 +14328,61 @@ class LinguisticEngine:
         item_name: str,
         sentence: str,
         candidates: List[Dict[str, Any]],
-        model: str = "llama3.1:8b"
+        model: Optional[str] = None
     ) -> int:
         """
         Neuro-Symbolic Zero-Hallucination LLM Reranker.
-        Given an authentic sentence and 2-4 candidates from PedLex/LDOCE,
+        Given an authentic sentence and 2-4 candidates from PedLex/PedLex,
         prompts the local LLM to select the single best option letter (A/B/C/D).
         Returns chosen candidate index (0-based).
         """
         if len(candidates) <= 1:
             return 0
 
-        letters = ["A", "B", "C", "D"][:len(candidates)]
+        from librarian.config import config
+        active_model = str(model or config.get("model") or "").strip()
+
+        letters = ["A", "B", "C", "D", "E", "F", "G", "H"][:len(candidates)]
         options_text = []
         cand_sig_parts = []
-        for idx, cand in enumerate(candidates):
+        for idx, cand in enumerate(candidates[:len(letters)]):
             pos_str = f"({cand.get('pos', '')}) " if cand.get('pos') else ""
+            raw_s = cand.get("raw_sense") if isinstance(cand.get("raw_sense"), dict) else {}
+            gram_raw = str(raw_s.get("grammar") or "").strip()
             defn_str = cand.get('definition', '').strip()
-            options_text.append(f"{letters[idx]}. {pos_str}{defn_str}")
-            cand_sig_parts.append(f"{cand.get('pos', '')}:{defn_str}")
+            gram_str = (
+                f"{gram_raw} "
+                if any(
+                    tag in gram_raw.lower()
+                    for tag in (
+                        "plural",
+                        "singular",
+                        "only before noun",
+                        "not before noun",
+                        "uncountable",
+                        "countable",
+                        "intransitive",
+                        "transitive",
+                    )
+                )
+                and gram_raw.lower() not in defn_str.lower()
+                else ""
+            )
+            pats = cand.get('patterns') or ([cand['pattern']] if cand.get('pattern') else [])
+            pat_str = f" [Pattern: {', '.join(str(p) for p in pats[:2] if p)}]" if pats else ""
+            exs = cand.get('examples') or []
+            ex_str = f" (e.g. \"{str(exs[0]).strip()}\")" if exs and str(exs[0]).strip() else ""
+            options_text.append(f"{letters[idx]}. {pos_str}{gram_str}{defn_str}{pat_str}{ex_str}")
+            cand_sig_parts.append(f"{cand.get('pos', '')}:{gram_str}{defn_str}:{pat_str}")
 
-        cache_raw = f"{model}|{item_name.strip().lower()}|{sentence.strip()}|{'||'.join(cand_sig_parts)}"
+        cache_raw = f"{active_model}|v2|{item_name.strip().lower()}|{sentence.strip()}|{'||'.join(cand_sig_parts)}"
         cache_key = hashlib.sha1(cache_raw.encode("utf-8")).hexdigest()
 
         active_session = getattr(cls._wsd_session_local, "session", None)
         if cache_key in cls._wsd_llm_cache:
             cached_idx, cached_raw = cls._wsd_llm_cache[cache_key]
             if active_session is not None:
-                active_session["model"] = active_session.get("model") or model
+                active_session["model"] = active_session.get("model") or active_model
                 active_session["records"].append({
                     "item_name": item_name,
                     "sentence": sentence,
@@ -12694,6 +14398,9 @@ class LinguisticEngine:
             f"Select the single best dictionary sense for '{item_name}' as used in this sentence:\n"
             f"\"{sentence}\"\n\n"
             f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
+            f"Instructions:\n"
+            f"- Match the exact contextual meaning, subject/object domain, and syntactic frame in the sentence.\n"
+            f"- Avoid narrow technical, legal, medical, or '[spoken]' interjection senses unless the sentence explicitly uses them.\n"
             f"Reply with ONLY the letter of the correct sense (e.g. A):"
         )
 
@@ -12705,7 +14412,7 @@ class LinguisticEngine:
             from librarian.llm import llm
             resp = llm.chat(
                 [{"role": "user", "content": prompt}],
-                model_override=model,
+                model=active_model or None,
                 json_format=False,
                 temperature=0.0,
                 skip_log=True,
@@ -12734,7 +14441,7 @@ class LinguisticEngine:
             # 2. Plain text / single token matching:
             if parsed_idx is None:
                 raw_upper = raw.upper()
-                m = re.search(r'\b(?:OPTION\s+)?([A-D])\b', raw_upper)
+                m = re.search(r'\b(?:OPTION\s+)?([A-H])\b', raw_upper)
                 if m and m.group(1) in letters:
                     parsed_idx = letters.index(m.group(1))
                 else:
@@ -12750,7 +14457,7 @@ class LinguisticEngine:
 
         cls._wsd_llm_cache[cache_key] = (chosen_idx, raw)
         if active_session is not None:
-            active_session["model"] = active_session.get("model") or model
+            active_session["model"] = active_session.get("model") or active_model
             active_session["records"].append({
                 "item_name": item_name,
                 "sentence": sentence,
@@ -12774,19 +14481,16 @@ class LinguisticEngine:
         Pure Computational Linguistic & Lexicographic Extractor (0 Tokens, 100% Deterministic).
         Extracts academic target vocabulary, locates authentic quoted sentences with Sentence IDs,
         tags contextual Part of Speech via spaCy, and hydrates authoritative definitions & authentic
-        corpus examples from LDOCE 6th Edition.
+        corpus examples from PedLex 6th Edition.
         """
         with cls.wsd_log_session("vocabulary"):
             _, pool = cls.tokenize_and_index_sentences(text)
             if not pool:
                 return []
 
-            # 1. Determine target words
+            # 1. Determine target words (Syllabus primary + Passage reserve pool for Gate 2 backfill)
             target_candidates: List[Dict[str, Any]] = []
             if syllabus_vocab:
-                # Pedagogical Syllabus Fidelity:
-                # Syllabus items explicitly specified by course curricula (e.g. 'recognize' and 'recognition')
-                # must both be retained rather than artificially pruned by morphological clustering.
                 cleaned_syllabus: List[str] = []
                 seen_clean = set()
                 for w in syllabus_vocab:
@@ -12795,19 +14499,130 @@ class LinguisticEngine:
                         seen_clean.add(w_clean)
                         cleaned_syllabus.append(w_clean)
 
-                cleaned_syllabus = cleaned_syllabus[:target_count]
+                # Verbatim Compound Resolution (Passage = Ground Truth):
+                # If a bare syllabus word (e.g. 'indulgent', 'confidence', 'prone', 'reflective', 'balance')
+                # has zero standalone occurrences in the passage, check if it only appears as a sub-token
+                # of a hyphenated compound in the passage (e.g. 'self-indulgent', 'self-confidence', 'waste-prone').
+                # Promote the candidate to the verbatim passage compound so Gate 1 & Gate 2 evaluate the true
+                # passage word (accepting attested dictionary compounds like 'self-indulgent' / 'self-confidence'
+                # and cleanly dropping unattested coinages like 'waste-prone' / 'self-reflective' / 'self-balance').
+                if cleaned_syllabus and pool:
+                    passage_hyphen_compounds: List[str] = []
+                    seen_hyph: Set[str] = set()
+                    for _sid, sent in pool.items():
+                        for m_hc in re.finditer(r"\b([a-zA-Z]+(?:-[a-zA-Z]+)+)\b", sent):
+                            hc = m_hc.group(1).lower()
+                            if hc not in seen_hyph:
+                                seen_hyph.add(hc)
+                                passage_hyphen_compounds.append(hc)
+                    if passage_hyphen_compounds:
+                        resolved_syllabus: List[str] = []
+                        seen_resolved: Set[str] = set()
+                        for sw in cleaned_syllabus:
+                            resolved_w = sw
+                            if "-" not in sw and not any(cls.text_contains_form(sent, sw) for sent in pool.values()):
+                                for hc in passage_hyphen_compounds:
+                                    parts = hc.split("-")
+                                    if any(cls.form_matches(p, sw) for p in parts):
+                                        # Normalize plural hyphenated noun head to singular if attested in dictionary
+                                        hc_norm = hc
+                                        if not cls.get_ldoce_entry(hc) and len(parts) >= 2:
+                                            last_lem = cls._surface_lemma(parts[-1])
+                                            if last_lem and last_lem != parts[-1]:
+                                                cand_sing = "-".join(parts[:-1] + [last_lem])
+                                                if cls.get_ldoce_entry(cand_sing):
+                                                    hc_norm = cand_sing
+                                        resolved_w = hc_norm
+                                        break
+                            if resolved_w not in seen_resolved:
+                                seen_resolved.add(resolved_w)
+                                resolved_syllabus.append(resolved_w)
+                        cleaned_syllabus = resolved_syllabus
+                        seen_clean = set(cleaned_syllabus)
+
+                # Pre-filter same-word-family syllabus pairs (e.g. 'intrigue' + 'intrigued', 'predominant' + 'predominantly'):
+                # If a syllabus word has a same-family sibling in the syllabus, drop any member that:
+                #   (a) is completely unattested via text_contains_form while a sibling IS attested (e.g. 'predominant' vs 'predominantly'), OR
+                #   (b) only matches passage sentences where the exact surface token is another syllabus sibling (e.g. 'intrigue' in "feeling intrigued")
+                #       AND that sibling has a valid dictionary sense + example (otherwise retain the base headword).
+                if len(cleaned_syllabus) > 1 and pool:
+                    syl_shown_map: Dict[str, List[Tuple[str, str]]] = {
+                        sw: [(sid, sent) for sid, sent in pool.items() if cls.text_contains_form(sent, sw)]
+                        for sw in cleaned_syllabus
+                    }
+                    filtered_syllabus: List[str] = []
+                    for sw in cleaned_syllabus:
+                        siblings = [
+                            other for other in cleaned_syllabus
+                            if other != sw and cls.are_same_word_family(sw, other)
+                        ]
+                        if not siblings:
+                            filtered_syllabus.append(sw)
+                            continue
+                        sw_shown = syl_shown_map.get(sw, [])
+                        # Case (a): sw is not attested by any valid morphological form, while a sibling is attested
+                        if not sw_shown and any(syl_shown_map.get(sib) for sib in siblings):
+                            continue
+                        # Case (b): sw has no exact surface match in its attested sentences, while a longer/derived sibling
+                        # appears verbatim in those exact sentences AND has complete lexicon evidence (sense + example)
+                        sw_has_exact = any(
+                            bool(re.search(rf"\b{re.escape(sw)}\b", sent, flags=re.IGNORECASE))
+                            for _sid, sent in sw_shown
+                        )
+                        if not sw_has_exact and sw_shown:
+                            superseded = False
+                            for sib in siblings:
+                                sib_exact_sents = [
+                                    sent for _sid, sent in sw_shown
+                                    if re.search(rf"\b{re.escape(sib)}\b", sent, flags=re.IGNORECASE)
+                                ]
+                                if sib_exact_sents:
+                                    sib_cands = cls.build_top_k_vocab_candidates(sib, sib_exact_sents[0], k=2)
+                                    sib_ok = False
+                                    if sib_cands:
+                                        top_c = sib_cands[0]
+                                        sib_def = top_c.get("definition", "")
+                                        sib_ex = (top_c.get("examples") or [""])[0]
+                                        sib_ex = cls.ensure_distinct_example(
+                                            sib, str(top_c.get("pos") or "adjective"), sib_ex,
+                                            sib_exact_sents[0], sense=top_c.get("raw_sense")
+                                        )
+                                        if sib_def and not cls.is_boilerplate_definition(sib_def) and sib_ex:
+                                            sib_ok = True
+                                    if sib_ok:
+                                        superseded = True
+                                        break
+                            if superseded:
+                                continue
+                        filtered_syllabus.append(sw)
+                    cleaned_syllabus = filtered_syllabus
+
                 for w in cleaned_syllabus:
-                    target_candidates.append({"word": w, "sid": "", "quote": ""})
+                    target_candidates.append({"word": w, "sid": "", "quote": "", "is_syllabus": True})
+                # Reserve passage candidates to replace any syllabus item dropped by Gate 2 (Evidence-Completeness)
+                reserve_skels = cls.mine_vocabulary_skeletons(text, target_count=max(target_count, 20) + 15)
+                for sk in reserve_skels:
+                    rw = sk.get("word", "").strip().lower()
+                    if rw and rw not in seen_clean:
+                        seen_clean.add(rw)
+                        sk_copy = dict(sk)
+                        sk_copy["is_syllabus"] = False
+                        target_candidates.append(sk_copy)
             else:
-                skels = cls.mine_vocabulary_skeletons(text, target_count=target_count)
+                skels = cls.mine_vocabulary_skeletons(text, target_count=target_count + 15)
                 target_candidates = skels
 
             results: List[Dict[str, Any]] = []
             seen_words: Set[str] = set()
+            seen_word_quotes: List[Tuple[str, str]] = []
 
             for cand in target_candidates:
+                if len(results) >= target_count:
+                    break
                 w = cand["word"].strip().lower()
                 if not w or w in seen_words:
+                    continue
+                if any(cls.are_same_word_family(w, sw) for sw in seen_words):
                     continue
 
                 matching_sent = cand.get("quote", "")
@@ -12817,13 +14632,24 @@ class LinguisticEngine:
                 anchor_quality = "quote" if matching_sent else "syllabus"
                 if not matching_sent and pool:
                     w_clean = re.sub(r'[^a-z0-9]', '', w)
-                    # A1: an anchor found through an inflected occurrence ('attaches' for
-                    # 'attach') is as authentic as one found through the base spelling.
-                    # B1: the pool is no longer scanned for the FIRST sentence containing the
-                    # word. A heading ('**Punctuality Pays!**') and a bare fragment ('Why?')
-                    # demonstrate nothing, and among the sentences that do, the one where the
-                    # target governs the most syntax is the one worth locking a sense against.
                     shown = [(sid, sent) for sid, sent in pool.items() if cls.text_contains_form(sent, w)]
+                    # Avoid sentences already claimed by a same-word-family item
+                    if len(shown) > 1 and seen_word_quotes:
+                        non_clash_shown = [
+                            (sid, sent) for sid, sent in shown
+                            if not any(cls.are_same_word_family(w, sw) and sent == sq for sw, sq in seen_word_quotes)
+                        ]
+                        if non_clash_shown:
+                            shown = non_clash_shown
+                    # For deverbal prepositions/participial adjectives (e.g. 'given', 'provided', 'considering'),
+                    # prefer sentences where the word is NOT preceded by an auxiliary ('have/has/had/be/been')
+                    if w in ("given", "provided", "considering", "regarding", "concerning", "following", "including", "granted") and len(shown) > 1:
+                        non_aux_shown = [
+                            (sid, sent) for sid, sent in shown
+                            if not re.search(rf"\b(?:have|has|had|am|is|are|was|were|be|been|being)\s+(?:\w+\s+)?{re.escape(w)}\b", sent, flags=re.IGNORECASE)
+                        ]
+                        if non_aux_shown:
+                            shown = non_aux_shown
                     valid_shown = [(sid, sent) for sid, sent in shown if cls.anchor_evidence_ok(sent, w)]
                     best_sent, _best_rich = cls.pick_anchor_sentence(w, [s for _sid, s in shown])
                     if best_sent:
@@ -12834,46 +14660,52 @@ class LinguisticEngine:
                         matching_sid, matching_sent = valid_shown[0]
                         anchor_quality = "unqualified"
                     elif shown:
-                        # Attested in text (e.g. headline 'Punctuality Pays!', short question 'What are the causes?')
                         matching_sid, matching_sent = shown[0]
                         anchor_quality = "attested"
-                    else:
-                        for sid, sent in pool.items():
-                            if w in sent.lower() or (w_clean and w_clean in re.sub(r'[^a-z0-9]', '', sent.lower())):
-                                matching_sent = sent
-                                matching_sid = sid
-                                anchor_quality = "substring"
-                                break
+
+                # Ground-Truth Passage Gate: Never extract a word that is unattested as an independent word/inflection
+                # in the passage (no blind substring hijacking of hyphenated compounds like 'waste-prone' -> 'prone'
+                # or closed compounds like 'toothpaste' -> 'paste', 'microorganisms' -> 'organism').
+                if not matching_sent:
+                    continue
+
+                if any(cls.are_same_word_family(w, sw) and matching_sent == sq for sw, sq in seen_word_quotes):
+                    continue
 
                 # Infer contextual POS
                 pos = cand.get("part_of_speech")
-                if not pos and matching_sent:
-                    pos = cls.determine_contextual_pos(w, matching_sent)
-                if not pos:
+                if (not pos or pos == "function_word") and matching_sent:
+                    ctx_pos = cls.determine_contextual_pos(w, matching_sent)
+                    if ctx_pos and ctx_pos != "function_word":
+                        pos = ctx_pos
+                if not pos or pos == "function_word":
                     ld_w = cls.get_ldoce_entry(w)
-                    pos = (ld_w.get("pos") if ld_w else "") or "noun"
+                    pos = (ld_w.get("pos") if ld_w else "") or "adverb"
 
-                # Hydrate authoritative LDOCE definition and authentic example via Top-K Candidate Pool
+                # Gate 1: Hydrate authoritative PedLex definition and authentic example via Top-K Candidate Pool + WSD
                 definition = ""
                 example = ""
                 lock_confidence = "high"
                 lock_score = 0.0
                 lock_margin = 0.0
+                locked_raw_sense = None
 
                 cand_pool = cls.build_top_k_vocab_candidates(w, matching_sent, pos=pos, k=4) if matching_sent else []
                 if cand_pool:
-                    if len(cand_pool) > 1 and enable_llm_disambiguation and cand_pool[0].get("margin", 0.0) < 25.0:
+                    if len(cand_pool) > 1 and enable_llm_disambiguation:
                         chosen_idx = cls.disambiguate_via_llm(w, matching_sent, cand_pool)
                         chosen = cand_pool[chosen_idx]
                     else:
                         chosen = cand_pool[0]
                     definition = chosen.get("definition", "")
-                    chosen_pos = str(chosen.get("pos") or "").strip().lower()
-                    if chosen_pos:
-                        for k, v in (("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("adv", "adverb"), ("prep", "preposition"), ("conj", "conjunction")):
-                            if k in chosen_pos:
-                                pos = v
-                                break
+                    locked_raw_sense = chosen.get("raw_sense")
+                    if not pos:
+                        chosen_pos = str(chosen.get("pos") or "").strip().lower()
+                        if chosen_pos:
+                            for k, v in (("adv", "adverb"), ("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
+                                if k in chosen_pos:
+                                    pos = v
+                                    break
                     exs = chosen.get("examples") or []
                     if exs:
                         example = exs[0]
@@ -12885,196 +14717,28 @@ class LinguisticEngine:
                         require_sense_confidence=False
                     )
                 if not definition:
-                    # Fallback to WordNet definition if LDOCE headword missing
+                    # Fallback to WordNet definition if PedLex headword missing
                     try:
                         best_s = cls.disambiguate_wordnet_synset(w, pos=pos, context_sentence=matching_sent)
                         if best_s:
                             definition = best_s.definition()
                     except Exception:
                         pass
-                # Contextual sense alignment for domain/collocational items in passage context
-                q_low = (matching_sent or "").lower()
-                if w == "interconnected" and "interconnected information" in q_low:
-                    pos = "adjective"
-                elif w == "drone" and ("package" in q_low or "deliver" in q_low or "sky" in q_low or "aircraft" in q_low or "fly" in q_low):
-                    definition = "an aircraft that does not have a pilot, but is controlled from the ground"
-                    pos = "noun"
-                elif w == "way" and ("way too" in q_low or pos == "adverb"):
-                    definition = "by a very large amount or to a great degree; much"
-                    pos = "adverb"
-                elif w == "way" and "no way to" in q_low:
-                    definition = "a method or manner of doing something"
-                    example = "There is no easy way to solve this complex environmental problem."
-                    pos = "noun"
-                elif w == "blade" and ("turbine" in q_low or "wind" in q_low or "propeller" in q_low or "fan" in q_low):
-                    definition = "one of the flat spinning parts on a wind turbine, propeller, or fan that pushes against air or water"
-                    pos = "noun"
-                elif w == "standby" and ("on standby" in q_low or "power" in q_low):
-                    definition = "a state in which a piece of electronic equipment or power source is ready to be used immediately if needed"
-                    pos = "noun"
-                elif w == "crusader" and "feather" in definition.lower():
-                    definition = "someone who makes a determined effort to achieve or stop something because of their strong beliefs"
-                    pos = "noun"
-                elif w == "inclusive" and ("more inclusive" in q_low or "everyone" in q_low or "society" in q_low or "economy" in q_low):
-                    definition = "deliberately aiming to include all types of people and treat them fairly and equally"
-                    pos = "adjective"
-                elif w == "register" and ("concern" in q_low or "protest" in q_low or "complaint" in q_low):
-                    definition = "to officially express and record a feeling, opinion, or complaint"
-                    pos = "verb"
-                elif w == "authentic" and ("more authentic" in q_low or "friendship" in q_low or "experience" in q_low or "life" in q_low):
-                    definition = "genuine, real, and true, rather than fake or artificial"
-                    pos = "adjective"
-                elif w == "degenerate" and ("degenerate into" in q_low or "wear out and degenerate" in q_low):
-                    definition = "to become worse in quality, character, or physical condition"
-                    example = "Without regular exercise, muscle strength can gradually degenerate as people age."
-                    pos = "verb"
-                elif w == "purify" and ("air" in q_low or "water" in q_low or "plant" in q_low):
-                    definition = "to make water, air, or another substance clean and pure by removing harmful or dirty substances"
-                    pos = "verb"
-                elif w == "resolution" and ("year" in q_low or "make a" in q_low or "made a" in q_low):
-                    definition = "a firm promise to yourself to do or not to do something"
-                    pos = "noun"
-                elif w == "stumble" and ("stumble across" in q_low or "stumble on" in q_low or "stumble upon" in q_low):
-                    definition = "to find or discover something by chance and unexpectedly"
-                    pos = "verb"
-                elif w == "carnival" and ("festival" in q_low or "street" in q_low or "celebration" in q_low or "rio" in q_low or "brazil" in q_low):
-                    definition = "a public festival at which people dress in bright clothes and dance and play music in the streets"
-                    pos = "noun"
-                elif w == "commercialize":
-                    definition = "to organize or develop something mainly in order to make a financial profit"
-                    pos = "verb"
-                elif w == "intersection" and ("intersecting" in definition.lower() or "cross" not in definition.lower()):
-                    definition = "a place where roads, lines, or areas of activity meet and cross each other"
-                    pos = "noun"
-                elif w == "reactor" and definition.strip().lower() in ("a nuclear reactor", "nuclear reactor"):
-                    definition = "a large machine or structure used for producing nuclear energy by controlled atomic reactions"
-                    pos = "noun"
-                elif w == "ecosystem":
-                    definition = "all the animals and plants in a particular area, and the way in which they are related to each other and to their environment"
-                    pos = "noun"
-                elif w == "intrigue" and pos == "verb":
-                    definition = "if something intrigues you, it interests you a lot because it seems strange or mysterious"
-                elif w == "ventilate" and pos == "verb":
-                    definition = "to let fresh air into a room, building, etc."
-                elif w == "inaugurate" and pos == "verb":
-                    definition = "to officially open a new building or start an important new system, organization, or event"
-                elif w == "immerse":
-                    definition = "to involve yourself completely in an activity or subject"
-                    pos = "verb"
-                elif w == "immersed":
-                    definition = "completely involved in something that you are doing or thinking about"
-                    pos = "adjective"
-                elif w == "suite" and ("technologies" in q_low or "laptops" in q_low or "software" in q_low):
-                    definition = "a set of matched tools, devices, or computer programs used together"
-                    pos = "noun"
-                elif w == "tablet" and ("laptops" in q_low or "phones" in q_low or "technologies" in q_low or "screen" in q_low):
-                    definition = "a small flat mobile computer that is controlled by touching the screen"
-                    pos = "noun"
-                elif w == "substitute" and ("substitute for" in q_low or pos == "verb"):
-                    definition = "to take the place of someone or something else, or to use something instead of another thing"
-                    pos = "verb"
-                elif w == "converse" and pos == "verb":
-                    definition = "to talk with someone, especially in an informal or friendly way about ideas and feelings"
-                elif w == "alter" and ("habit" in q_low or pos == "verb"):
-                    definition = "to change, or to make someone or something change"
-                    pos = "verb"
-                elif w == "furiously":
-                    definition = "with great energy, speed, or effort"
-                    pos = "adverb"
-                elif w == "adequacy":
-                    definition = "the fact of being enough or satisfactory for a particular purpose"
-                    pos = "noun"
-                elif w == "escort" and ("junk" in q_low or "ship" in q_low or "boat" in q_low or "fleet" in q_low):
-                    definition = "to go somewhere with a person, vehicle, or ship in order to protect or guard them"
-                    pos = "verb"
-                elif w == "realm":
-                    definition = "a general area of knowledge, activity, or geographical influence; a kingdom"
-                    pos = "noun"
-                elif w == "complexity":
-                    definition = "the state of having many closely connected parts or details that make something difficult to understand"
-                    pos = "noun"
-                elif w == "vaguely":
-                    definition = "in a way that is not clear, exact, or detailed; slightly"
-                    pos = "adverb"
-                elif w == "luncheon":
-                    definition = "[formal] a formal meal eaten in the middle of the day"
-                    pos = "noun"
-                elif w == "globalize":
-                    definition = "to make a company, activity, or system operate or develop across the whole world"
-                    pos = "verb"
-                elif w == "societal":
-                    definition = "relating to society and the way people live and organize themselves in communities"
-                    pos = "adjective"
-                elif w == "diligence":
-                    definition = "careful and thorough work or effort"
-                    pos = "noun"
-                elif w == "celebrity" and "gossip" in q_low:
-                    definition = "a famous living person, especially in entertainment or sport"
-                    pos = "noun"
-                elif w == "tearfully":
-                    definition = "while crying or with tears in your eyes"
-                    pos = "adverb"
-                elif w == "weightlessness":
-                    definition = "the state of having no weight, especially when travelling in space where there is no gravity"
-                    pos = "noun"
-                elif w == "dock" and ("spacecraft" in q_low or "space station" in q_low or "docked with" in q_low):
-                    definition = "if two spacecraft dock, or if they are docked, they join together in space"
-                    pos = "verb"
-                elif w == "rejuvenation":
-                    definition = "the process of making someone or something look or feel young, strong, and energetic again"
-                    pos = "noun"
-                elif w == "verge" and "on the verge of" in q_low:
-                    definition = "the point at which something is about to happen"
-                    pos = "noun"
-                elif w == "reclaim":
-                    definition = "to get back something that was yours or that you had lost"
-                    pos = "verb"
-                elif w == "wire" and ("$200" in q_low or "wired her" in q_low or "money" in q_low):
-                    definition = "to send money or a message to someone using an electronic or banking system"
-                    pos = "verb"
-                elif w == "donate":
-                    definition = "to give money, goods, or property to a person or an organization that needs help"
-                    pos = "verb"
-                elif w == "likelihood":
-                    definition = "the degree to which something can reasonably be expected to happen; probability"
-                    pos = "noun"
-                elif w == "sizable":
-                    definition = "fairly large in size or amount"
-                    pos = "adjective"
-                elif w == "hard-luck":
-                    definition = "experiencing or involving many difficulties, misfortune, or bad luck"
-                    pos = "adjective"
-                elif w == "rebound" and pos == "noun":
-                    definition = "a recovery in value, amount, or strength after a previous decline or slump"
-                elif w == "eviction":
-                    definition = "the act of officially forcing someone to leave a house or apartment that they are renting"
-                    pos = "noun"
-                elif w == "retail" and "retail jobs" in q_low:
-                    definition = "the selling of goods to the public in stores or online, usually in small quantities"
-                    pos = "noun"
-                elif w == "magnificence":
-                    definition = "great beauty, grandeur, or impressive appearance"
-                    pos = "noun"
-                elif w == "seamlessly":
-                    definition = "smoothly and continuously, without any awkward transitions or interruptions"
-                    pos = "adverb"
-                elif w == "par" and "par" in q_low:
-                    definition = "the usual or expected standard or level"
-                    pos = "noun"
-                elif w == "stock" and "take stock" in q_low:
-                    definition = "an assessment or review of a situation or position, especially in the phrase 'take stock'"
-                    pos = "noun"
+
                 if pos == "adjective" and definition and re.match(r"^to\s+be\s+", definition.strip(), flags=re.IGNORECASE):
                     definition = re.sub(r"^to\s+be\s+", "", definition.strip(), flags=re.IGNORECASE)
                 if definition and re.match(r"^to\s+[a-z]+\b", definition.strip().lower()) and pos in ("noun", "adjective", "adverb", "function_word"):
                     pos = "verb"
                 if pos == "function_word":
                     pos = "adverb"
-                if not example:
+                if not example and not locked_raw_sense:
                     example = cls.ldoce_sense_example(w, pos=pos, quote=matching_sent)
-                example = cls.ensure_distinct_example(w, pos, example, matching_sent)
-                # Physical gate: If still no definition found, drop item to avoid empty/boilerplate definition
-                if not definition or cls.is_boilerplate_definition(definition):
+                example = cls.ensure_distinct_example(w, pos, example, matching_sent, sense=locked_raw_sense)
+
+                # Gate 2 (Evidence-Completeness Gate - 宁缺勿滥):
+                # Drop any candidate lacking a valid definition OR an authentic, non-duplicate dictionary example
+                # for its locked sense, allowing a fully attested reserve candidate to take its slot.
+                if not definition or cls.is_boilerplate_definition(definition) or not example:
                     continue
 
                 audit_sid = f"[{matching_sid}]" if matching_sid else "[S-1]"
@@ -13084,8 +14748,6 @@ class LinguisticEngine:
                     "definition": definition,
                     "quoted_sentence": matching_sent,
                     "example_usage": example,
-                    # B1: the evidence tier this row was built on, visible to the writer and to
-                    # the audit instead of being implicit in whichever sentence came first.
                     "anchor_quality": anchor_quality,
                     "sense_confidence": lock_confidence,
                     "sense_lock_score": lock_score,
@@ -13093,6 +14755,8 @@ class LinguisticEngine:
                     "design_audit": f"AUDIT: {audit_sid} -> [{w}] -> [VERBATIM_CONFIRMED]"
                 })
                 seen_words.add(w)
+                if matching_sent:
+                    seen_word_quotes.append((w, matching_sent))
 
             return results
 
@@ -13112,39 +14776,74 @@ class LinguisticEngine:
             {
                 "word": canonical formula (e.g. 'shut [sb/sth] down'),
                 "part_of_speech": 'collocation' | 'phrasal verb' | ...,
-                "definition": authoritative LDOCE / WordNet definition,
+                "definition": authoritative PedLex / WordNet definition,
                 "quoted_sentence": verbatim passage sentence,
-                "example_usage": authentic LDOCE example or passage sentence,
+                "example_usage": authentic PedLex example or passage sentence,
                 "design_audit": "AUDIT: [S-ID] -> [Formula] -> [VERBATIM_CONFIRMED]"
             }
         """
         with cls.wsd_log_session("expressions"):
             skeletons = cls.mine_expression_skeletons(
                 text,
-                target_count=target_count,
+                target_count=max(target_count, len(syllabus_expressions)) if syllabus_expressions else target_count + 8,
                 syllabus_expressions=syllabus_expressions
             )
+            if syllabus_expressions:
+                seen_ph = {re.sub(r'\[.*?\]|\(.*?\)', '', s.get("phrase", "")).strip().lower() for s in skeletons}
+                reserve_exprs = cls.mine_expression_skeletons(
+                    text,
+                    target_count=target_count + 10,
+                    syllabus_expressions=None
+                )
+                for rs in reserve_exprs:
+                    rph = re.sub(r'\[.*?\]|\(.*?\)', '', rs.get("phrase", "")).strip().lower()
+                    if rph and rph not in seen_ph:
+                        seen_ph.add(rph)
+                        skeletons.append(rs)
             if not skeletons:
                 return []
 
+            attested_sources = ("phrase_row", "unit_sense", "headword_entry", "phrasal_verb_block")
             results: List[Dict[str, Any]] = []
+            seen_formulas: Set[str] = set()
             for s in skeletons:
+                if len(results) >= target_count:
+                    break
                 phrase = s.get("phrase", "")
                 formula = s.get("pattern_formula", phrase)
+                norm_form = re.sub(r'\[.*?\]|\(.*?\)', '', formula).strip().lower()
+                if not norm_form or norm_form in seen_formulas:
+                    continue
                 sid = s.get("sid", "S-1")
                 quote = s.get("quote", "")
                 expr_type = s.get("type", "collocation")
 
                 # Primary: Ground multi-word expressions in authoritative PedLex expression evidence tiers
+                # (Disable inner LLM disambiguation here since Gate 1 below arbitrates across the full unified pool)
                 defn, ex, def_source = cls.expression_definition_evidence(
                     phrase=phrase,
                     expr_type=expr_type,
-                    context_sentence=quote
+                    context_sentence=quote,
+                    enable_llm_disambiguation=False
                 )
 
-                # Secondary / Arbitration: Only fall back to Top-K candidate pool when Primary tier is ungrounded
-                if quote and not defn:
-                    pool = cls.build_top_k_expression_candidates(formula, quote, k=4)
+                # Gate 1: Neuro-Symbolic Arbitration across Top-K (k=4) Expression Candidates
+                locked_expr_sense = None
+                if quote:
+                    pool = cls.build_top_k_expression_candidates(formula, quote, k=4, expr_type=expr_type)
+                    has_attested_pool = any(c.get("attested") for c in pool)
+                    if defn and (def_source in attested_sources or not has_attested_pool):
+                        norm_defn = re.sub(r'[^a-z0-9]+', ' ', defn.lower()).strip()
+                        if not any(re.sub(r'[^a-z0-9]+', ' ', c.get("definition", "").lower()).strip() == norm_defn for c in pool):
+                            pool.insert(0, {
+                                "definition": defn,
+                                "pos": expr_type,
+                                "examples": [ex] if ex else [],
+                                "score": 30.0,
+                                "margin": 0.0,
+                                "attested": def_source in attested_sources,
+                            })
+                    pool = pool[:4]
                     if pool:
                         if len(pool) > 1 and enable_llm_disambiguation:
                             chosen_idx = cls.disambiguate_via_llm(formula, quote, pool)
@@ -13152,32 +14851,29 @@ class LinguisticEngine:
                             if chosen.get("definition"):
                                 defn = chosen["definition"]
                                 def_source = def_source or "phrase_row"
+                            locked_expr_sense = chosen.get("raw_sense")
                             if chosen.get("examples"):
                                 ex = chosen["examples"][0]
-                        elif not defn:
+                        elif not defn or (has_attested_pool and def_source not in attested_sources):
                             chosen = pool[0]
                             if chosen.get("definition"):
                                 defn = chosen["definition"]
-                                def_source = "phrase_row"
-                            if chosen.get("examples") and not ex:
+                                def_source = def_source or "phrase_row"
+                            locked_expr_sense = chosen.get("raw_sense")
+                            if chosen.get("examples"):
                                 ex = chosen["examples"][0]
-                # Contextual expression sense alignment
-                f_low = formula.lower()
-                if f_low.startswith("take place"):
-                    defn = "to happen, especially after being planned or arranged"
-                    def_source = def_source or "phrase_row"
-                elif f_low.startswith("plunge into") and "virtual world" in quote.lower():
-                    defn = "to suddenly become deeply involved in a particular state, situation, or activity"
-                    def_source = def_source or "phrase_row"
-                elif f_low.startswith("load with"):
-                    defn = "to put a large quantity of things or goods onto a vehicle, ship, or container"
-                    def_source = def_source or "phrase_row"
-                # F2: an ungrounded cascade ships no definition at all rather than the invented
-                # 'A core idiomatic collocation functioning in ...' filler. The row carries the
-                # tier it was built on so the writer and the audit can see it was never grounded.
-                low_confidence = not def_source
-                ex = cls.ensure_distinct_example(formula, expr_type, ex, quote)
+                        elif locked_expr_sense is None:
+                            locked_expr_sense = pool[0].get("raw_sense")
 
+                low_confidence = not def_source
+                ex = cls.ensure_distinct_example(formula, expr_type, ex, quote, sense=locked_expr_sense)
+
+                # Gate 2 (Evidence-Completeness Gate - 宁缺勿滥):
+                # Drop any multi-word expression lacking an authoritative definition or distinct corpus example.
+                if not defn or cls.is_boilerplate_definition(defn) or not ex:
+                    continue
+
+                seen_formulas.add(norm_form)
                 results.append({
                     "word": formula,
                     "part_of_speech": expr_type,
@@ -13192,565 +14888,294 @@ class LinguisticEngine:
             return results
 
     # =========================================================================
-    # COBUILD CORE PATTERN PROFILES & COMMON LEARNER PITFALLS (0 Copyright DB)
-    # Grounded in John Sinclair's Pattern Grammar & Empirical Learner Syntax Pitfalls
+    # DECLARATIVE 3-BAND COBUILD GRAMMAR PROFILES & HOT-RELOAD LOADER
+    # Grounded in librarian/data/grammar_profiles.json (A1_A2 / B1_B2 / C1_C2)
     # =========================================================================
-    COBUILD_GRAMMAR_PROFILES: Dict[str, Dict[str, Any]] = {
-        "cleft_focus": {
-            "name": "Cleft Sentences & Rhetorical Focus",
-            "category": "Rhetoric & Emphasis",
-            "pattern_formula": "It + [be] + [Focal Element] + that/who + [Clause]",
-            "pedagogical_function": "Puts strong focus on a specific person, time, reason, or thing so the reader notices it immediately.",
-            "imitation_example": "It was a friendly smile that made the new student feel welcome on her first day.",
-            "common_mistakes": (
-                "Grammar Warning (Cleft Sentences): Learners frequently produce: "
-                "\"It was in the school hall [INCORRECT: where -> CORRECT: that] we held our volunteer meeting.\" "
-                "(Note: Even when focusing prepositional or time phrases, the cleft complement clause requires 'that', not 'where' or 'when')."
-            ),
-            "variants": [
-                {
-                    "keywords": ("hello", "say", "smile", "greeting", "talk", "word"),
-                    "imitation_example": "It was a warm \"hello\" that broke the ice between the two new neighbors.",
-                    "common_mistakes": (
-                        "Grammar Warning (Cleft Sentences): Learners frequently use 'what' instead of 'that' after the focused element: "
-                        "\"It was a simple greeting [INCORRECT: what -> CORRECT: that] started their long friendship.\" "
-                        "(Note: In an 'It is/was... that...' cleft sentence, the clause following the focused noun phrase is introduced by 'that' or 'who', never 'what')."
-                    )
-                },
-                {
-                    "keywords": ("december", "day", "year", "volunteer", "celebrate", "award", "prize"),
-                    "imitation_example": "It was in December that the volunteers organized their big annual celebration.",
-                    "common_mistakes": (
-                        "Grammar Warning (Cleft Sentences): Learners frequently produce: "
-                        "\"It was in the school hall [INCORRECT: where -> CORRECT: that] we held our volunteer meeting.\" "
-                        "(Note: Even when focusing prepositional or time phrases, the cleft complement clause requires 'that', not 'where' or 'when')."
-                    )
-                }
-            ]
-        },
-        "correlative_parallelism": {
-            "name": "Correlative Coordination Parallelism",
-            "category": "Rhetoric & Emphasis",
-            "pattern_formula": "[Subject] + not only + [VP], but also + [VP]",
-            "pedagogical_function": "Connects two balanced ideas or actions together to give equal weight to both points.",
-            "imitation_example": "The sports event not only builds fitness, but also brings friends together.",
-            "common_mistakes": (
-                "Grammar Warning (Correlative Coordinators): Learners frequently produce: "
-                "\"The club aims not only [INCORRECT: to help students, but also creating -> CORRECT: to help students, but also to create] fun events.\" "
-                "(Note: Conjoined predicates must maintain identical non-finite morphological forms)."
-            )
-        },
-        "antithesis_parallelism": {
-            "name": "Antithesis & Symmetrical Contrast (not... but...)",
-            "category": "Rhetoric & Emphasis",
-            "pattern_formula": "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]",
-            "pedagogical_function": "Contrasts two opposing elements directly using 'not... but...' to define what is truly meant.",
-            "imitation_example": "Volunteers work hard not for personal prizes, but for a warmer community.",
-            "common_mistakes": (
-                "Grammar Warning (Antithesis Coordination): Learners frequently fail to maintain parallel syntactic structures across 'not... but...': "
-                "\"The team values not [INCORRECT: money, but rather to help others -> CORRECT: money, but public service].\" "
-                "(Note: Elements coordinated by 'not... but...' must share identical syntactic category and morphological status)."
-            )
-        },
-        "fronted_negative_inversion": {
-            "name": "Fronted Negative & Subject-Auxiliary Inversion",
-            "category": "Rhetoric & Emphasis",
-            "pattern_formula": "[Negative Adv] + [aux/be] + [Subject] + [VP]",
-            "pedagogical_function": "Moves a negative or restrictive word to the very start of the sentence to create dramatic emphasis.",
-            "imitation_example": "Seldom do busy drivers realize how much fuel simple carpooling can save.",
-            "common_mistakes": (
-                "Grammar Warning (Negative Inversion): Learners frequently produce: "
-                "\"Not only [INCORRECT: the bus saves -> CORRECT: does the bus save] fuel, but it also reduces city traffic.\" "
-                "(Note: Fronted restrictive or negative adverbs strictly require Subject-Auxiliary Inversion)."
-            )
-        },
-        "relative_clause_restrictive": {
-            "name": "Adjective Clauses: Relative Pronoun Complementation",
-            "category": "Information Packaging",
-            "pattern_formula": "[NP] + which/that + [VP]",
-            "pedagogical_function": "Gives essential details directly after a noun to specify exactly which person or thing is being talked about.",
-            "imitation_example": "Students joined club activities that helped the local community.",
-            "common_mistakes": (
-                "Grammar Warning (Relative Clauses): Learners frequently retain redundant object pronouns in relative clauses: "
-                "\"This is the gift which we prepared [INCORRECT: it yesterday -> CORRECT: yesterday].\" "
-                "(Note: The relative pronoun 'which' already functions as the object of 'prepared', so the resumptive pronoun 'it' must be omitted)."
-            ),
-            "variants": [
-                {
-                    "keywords": ("car", "train", "bus", "plane", "drive", "travel", "wheel"),
-                    "imitation_example": "Many commuters now choose electric buses that produce zero smoke in the city.",
-                    "common_mistakes": (
-                        "Grammar Warning (Relative Clauses): Learners frequently use 'who' instead of 'which/that' for non-human antecedents: "
-                        "\"The high-speed train [INCORRECT: who -> CORRECT: that] connects the two cities runs every hour.\" "
-                        "(Note: Use 'which' or 'that' for things and vehicles, and reserve 'who' for people)."
-                    )
-                },
-                {
-                    "keywords": ("time", "early", "late", "appointment", "clock", "wait", "friend", "trust"),
-                    "imitation_example": "People usually trust coworkers who arrive on time for every morning meeting.",
-                    "common_mistakes": (
-                        "Grammar Warning (Relative Clauses): Learners frequently fail to match the verb in the relative clause with a plural noun antecedent: "
-                        "\"Friends who always [INCORRECT: keeps -> CORRECT: keep] their promises earn everyone's respect.\" "
-                        "(Note: The verb inside a relative clause must agree in number with the noun phrase it modifies)."
-                    )
-                },
-                {
-                    "keywords": ("emblem", "olympic", "seal", "design", "stamp", "character", "sport", "symbol"),
-                    "imitation_example": "The artist created a poster that combined traditional brush painting with modern sports.",
-                    "common_mistakes": (
-                        "Grammar Warning (Relative Clauses): Learners frequently retain redundant object pronouns in relative clauses: "
-                        "\"This is the emblem which the designers created [INCORRECT: it for the games -> CORRECT: for the games].\" "
-                        "(Note: The relative pronoun 'which' already serves as the object of 'created', so 'it' must be omitted)."
-                    )
-                }
-            ]
-        },
-        "relative_clause_elaborative": {
-            "name": "Non-Restrictive Relative Clauses & Propositional Encapsulation",
-            "category": "Cohesion & Framing",
-            "pattern_formula": ", which + [VP/interpretive verb] + [Clause]",
-            "pedagogical_function": "Comments directly on the entire preceding sentence to explain what it means, proves, or causes.",
-            "imitation_example": "The city added shared bike stations, which encouraged more residents to cycle to work.",
-            "common_mistakes": (
-                "Grammar Warning (Sentential Relative Clauses): Learners frequently produce: "
-                "\"The weather turned very cold, [INCORRECT: that -> CORRECT: which] made everyone stay indoors.\" "
-                "(Note: 'that' cannot head a non-restrictive sentential relative clause)."
-            )
-        },
-        "object_complement_adj": {
-            "name": "Complex Transitive Structures (Verb + Object + Adjective)",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + make/find/keep + [Object] + [Adj]",
-            "pedagogical_function": "Shows how an action changes someone or something into a new condition in one clear, concise phrase.",
-            "imitation_example": "Friendly greetings make daily school life pleasant and warm.",
-            "common_mistakes": (
-                "Grammar Warning (Object Complements): Learners frequently produce an adverb instead of an adjective: "
-                "\"Polite words make daily conversations [INCORRECT: easily -> CORRECT: easy].\" "
-                "(Note: The complement describes the state of the object noun, requiring an adjective rather than an adverb)."
-            ),
-            "variants": [
-                {
-                    "keywords": ("smile", "hello", "say", "feel", "good", "greeting", "talk"),
-                    "imitation_example": "A warm smile and a polite greeting can make a stranger feel welcome right away.",
-                    "common_mistakes": (
-                        "Grammar Warning (Object Complements): Learners frequently use an adverb instead of an adjective after 'make + object': "
-                        "\"Kind words make every newcomer feel [INCORRECT: happily -> CORRECT: happy].\" "
-                        "(Note: Use an adjective to describe the condition of the object noun phrase, not a manner adverb)."
-                    )
-                },
-                {
-                    "keywords": ("special", "volunteer", "card", "gift", "thank", "help"),
-                    "imitation_example": "Handwritten thank-you cards made all the student volunteers feel truly special.",
-                    "common_mistakes": (
-                        "Grammar Warning (Object Complements): Learners frequently use an adverb instead of an adjective as the object complement: "
-                        "\"The colourful flowers made the classroom [INCORRECT: brightly -> CORRECT: bright] and cheerful.\" "
-                        "(Note: After 'make + object', use an adjective to describe the object's state)."
-                    )
-                },
-                {
-                    "keywords": ("car", "find", "difficult", "wheel", "walk", "drive", "bus"),
-                    "imitation_example": "Many office workers find it difficult to give up their cars on rainy mornings.",
-                    "common_mistakes": (
-                        "Grammar Warning (Object Complements): Learners frequently omit the preparatory object 'it' before an adjective and infinitive phrase: "
-                        "\"New drivers often find [INCORRECT: hard to park -> CORRECT: it hard to park] in busy city streets.\" "
-                        "(Note: In 'find/make + it + adjective + to-V', the dummy object 'it' is required before the adjective)."
-                    )
-                }
-            ]
-        },
-        "object_complement_noun": {
-            "name": "Complex Transitive Structures (Verb + Object + Noun Phrase)",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + make + [Object] + [Noun/NP]",
-            "pedagogical_function": "Shows how an action turns someone or something into a new role, status, or kind of place.",
-            "imitation_example": "Planting more neighborhood trees will make our city a greener home for everyone.",
-            "common_mistakes": (
-                "Grammar Warning (Noun Object Complements): Learners frequently omit the required indefinite article 'a/an' before a singular countable noun complement: "
-                "\"Saving energy helps make the earth [INCORRECT: better place -> CORRECT: a better place] to live.\" "
-                "(Note: When the object complement is a singular countable noun phrase, keep the determiner 'a' or 'an')."
-            )
-        },
-        "causative_bare_infinitive": {
-            "name": "Causative Complementation (Make/Have/Let + Bare Infinitive)",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + make/let/have + [Object] + [Bare Verb]",
-            "pedagogical_function": "Expresses making, letting, or having someone perform an action directly without using extra words like 'to'.",
-            "imitation_example": "The teacher had each student share a short volunteer story with the class.",
-            "common_mistakes": (
-                "Grammar Warning (Causative Structures): Learners frequently produce: "
-                "\"The team leader made each volunteer [INCORRECT: to sign -> CORRECT: sign] the attendance sheet.\" "
-                "(Note: Active causative 'make' governs an unmarked bare infinitive, not a 'to'-infinitive)."
-            )
-        },
-        "dummy_it_extraposition": {
-            "name": "Dummy-It Extraposition & Evaluative Stance",
-            "category": "Information Packaging",
-            "pattern_formula": "It + [be] + [Evaluative Adj] + to-V/that + [Clause]",
-            "pedagogical_function": "Begins with 'It is' to state an opinion or evaluation upfront, keeping long details until later in the sentence.",
-            "imitation_example": "It is polite to arrive five minutes early when meeting a teacher or classmate.",
-            "common_mistakes": (
-                "Grammar Warning (Preparatory It): Learners frequently omit the dummy subject 'It' or use an '-ing' verb instead of 'to-V': "
-                "\"[INCORRECT: Is important to be -> CORRECT: It is important to be] on time for every class meeting.\""
-            )
-        },
-        "participial_adjunct": {
-            "name": "Non-Finite Participial Adjuncts",
-            "category": "Information Packaging",
-            "pattern_formula": "[V-ing / V-ed Phrase], [Subject] + [VP]",
-            "pedagogical_function": "Combines two related actions into one sentence using an -ing or -ed phrase, making writing tighter and smoother.",
-            "imitation_example": "Arriving at the station early, the visitors met the friendly student volunteers.",
-            "common_mistakes": (
-                "Grammar Warning (Participial Clauses): Learners frequently produce dangling modifiers: "
-                "\"[INCORRECT: Walking into the room, the noise surprised everyone -> CORRECT: Walking into the room, the teacher noticed the noise].\""
-            )
-        },
-        "participial_adjunct_post_ved": {
-            "name": "Post-Positioned Past Participial Adjuncts",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + [VP], [V-ed Phrase]",
-            "pedagogical_function": "Appends a passive or subsequent detail right after the main clause using a past participle phrase.",
-            "imitation_example": "The award ceremony ended at noon, followed by a friendly lunch with all the volunteers.",
-            "common_mistakes": (
-                "Grammar Warning (Participial Clauses): Learners frequently confuse active (-ing) and passive (-ed) participle forms in post-modifiers: "
-                "\"The speech ended at noon, [INCORRECT: following by -> CORRECT: followed by] warm applause.\" "
-                "(Note: Use the past participle 'followed by' to introduce the event that came next)."
-            )
-        },
-        "participial_adjunct_post_ving": {
-            "name": "Post-Positioned Present Participial Adjuncts",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + [VP], [V-ing Phrase]",
-            "pedagogical_function": "Adds an accompanying action, remark, or immediate result right after the main clause using an -ing phrase.",
-            "imitation_example": "The judges praised the student's poster design, calling it a wonderful symbol of friendship.",
-            "common_mistakes": (
-                "Grammar Warning (Participial Clauses): Learners frequently use a finite verb after a comma without a conjunction (comma splice) instead of a present participle: "
-                "\"The visitors admired the Olympic emblem, [INCORRECT: said -> CORRECT: saying] it looked lively and modern.\" "
-                "(Note: When attaching an accompanying remark after a comma without 'and', use the '-ing' participle 'saying')."
-            )
-        },
-        "gerund_subject_nominalization": {
-            "name": "Gerundial Subject Nominalization",
-            "category": "Information Packaging",
-            "pattern_formula": "[V-ing Phrase] + [V] + [NP/adj]",
-            "pedagogical_function": "Turns an everyday action into the main subject of the sentence so you can state what it means or causes.",
-            "imitation_example": "Planting trees provides clean air and makes our neighborhood cooler in summer.",
-            "common_mistakes": (
-                "Grammar Warning (Gerunds as Subject): Learners frequently use a bare verb as the subject or use a plural verb with a gerund subject: "
-                "\"[INCORRECT: Plant trees are -> CORRECT: Planting trees is] helpful for the environment.\" "
-                "(Note: A verb phrase functioning as a subject must take the '-ing' form and a singular predicate verb)."
-            ),
-            "variants": [
-                {
-                    "keywords": ("time", "early", "late", "punctual", "appointment", "wait", "schedule"),
-                    "imitation_example": "Being on time for meetings shows respect for other people's busy schedules.",
-                    "common_mistakes": (
-                        "Grammar Warning (Gerunds as Subject): Learners frequently use a bare verb instead of a gerund as the subject of a clause: "
-                        "\"[INCORRECT: Arrive early for class shows -> CORRECT: Arriving early for class shows] good study habits.\" "
-                        "(Note: When an action phrase serves as the grammatical subject, the verb must take the '-ing' gerund form)."
-                    )
-                },
-                {
-                    "keywords": ("planet", "earth", "tree", "green", "recycle", "water", "energy", "save"),
-                    "imitation_example": "Recycling paper and plastic bottles helps reduce waste in our school.",
-                    "common_mistakes": (
-                        "Grammar Warning (Gerunds as Subject): Learners frequently match a gerund subject with a plural verb because of a plural object noun: "
-                        "\"Saving water and electricity [INCORRECT: are -> CORRECT: is] an easy way to protect the planet.\" "
-                        "(Note: A single gerund phrase acting as the subject requires a singular verb)."
-                    )
-                }
-            ]
-        },
-        "adversative_concession": {
-            "name": "Adversative Coordination (but + also)",
-            "category": "Logic & Stance",
-            "pattern_formula": "[Subject] + [VP], but [Subject] + [also] + [VP]",
-            "pedagogical_function": "Links two contrasting facts or feelings across two clauses to give a complete, balanced picture.",
-            "imitation_example": "Many students feel shy on the first day of school, but they also want to make new friends.",
-            "common_mistakes": (
-                "Grammar Warning (Adversative Coordination): Learners frequently join two contrasting clauses with only a comma (comma splice) instead of using 'but': "
-                "\"We may feel nervous around strangers, [INCORRECT: we also hope -> CORRECT: but we also hope] to have a friendly chat.\" "
-                "(Note: Two independent clauses expressing contrasting ideas require a coordinating conjunction such as 'but')."
-            )
-        },
-        "discourse_transition_however": {
-            "name": "Discourse Stance & Transition Adverbs",
-            "category": "Logic & Stance",
-            "pattern_formula": "However, [Subject] + [Modal/VP]",
-            "pedagogical_function": "Alerts the reader that a shift, surprise, or contrasting point is coming right up.",
-            "imitation_example": "However, riding a bicycle is often faster than driving a car during rush hour.",
-            "common_mistakes": (
-                "Grammar Warning (Sentence Adverbials): Learners frequently produce comma splices with 'however': "
-                "\"[INCORRECT: The bus was crowded, however we arrived on time -> CORRECT: The bus was crowded. However, we arrived on time].\""
-            )
-        },
-        "subordinate_concessive": {
-            "name": "Subordinate Concessive Clauses (Although / While)",
-            "category": "Logic & Stance",
-            "pattern_formula": "Although/While + [Clause], [Subject] + [VP]",
-            "pedagogical_function": "Acknowledges an opposing point with 'although' or 'while' before making the main point stand out clearly.",
-            "imitation_example": "Although sorting trash takes a few extra minutes, it keeps our neighborhood clean.",
-            "common_mistakes": (
-                "Grammar Warning (Concessive Clauses): Learners frequently add a redundant 'but' after 'although' or 'while': "
-                "\"Although the design looks simple, [INCORRECT: but it carries -> CORRECT: it carries] a deep cultural meaning.\""
-            )
-        },
-        "prepositional_means_by_ving": {
-            "name": "Prepositional Means & Method Adjuncts (By + V-ing)",
-            "category": "Information Packaging",
-            "pattern_formula": "By + [V-ing Phrase], [Subject] + [VP]",
-            "pedagogical_function": "Specifies the exact action or method we use to achieve a good result.",
-            "imitation_example": "By turning off the lights before leaving the classroom, we can save electricity every day.",
-            "common_mistakes": (
-                "Grammar Warning (Prepositional Adjuncts): Learners frequently use a bare verb instead of the '-ing' form after the preposition 'by': "
-                "\"By [INCORRECT: turn off -> CORRECT: turning off] unused lights, every family can save energy.\" "
-                "(Note: Because 'by' is a preposition, any verb that follows it must take the '-ing' gerund form)."
-            )
-        },
-        "proportional_comparative": {
-            "name": "Proportional Comparative Clauses (The more..., the more...)",
-            "category": "Information Packaging",
-            "pattern_formula": "The + [comparative] + [Clause], the + [comparative] + [Clause]",
-            "pedagogical_function": "Shows how two things change together step by step in a clear cause-and-effect rhythm.",
-            "imitation_example": "The more often we walk or ride bikes, the cleaner our city air becomes.",
-            "common_mistakes": (
-                "Grammar Warning (Double Comparatives): Learners frequently omit 'the' before the comparative words: "
-                "\"[INCORRECT: More we practice speaking English, more confident we feel -> CORRECT: The more we practice speaking English, the more confident we feel].\""
-            )
-        },
-        "passive_voice_agentless": {
-            "name": "Agentless Passive & Objective Information Packaging",
-            "category": "Information Packaging",
-            "pattern_formula": "[Subject] + [be/modal be] + [V-ed]",
-            "pedagogical_function": "Focuses on the receiver of the action or the official result, giving the sentence a clear, objective tone.",
-            "imitation_example": "All visitors are invited to write their wishes on the community board.",
-            "common_mistakes": (
-                "Grammar Warning (Passive Voice): Learners frequently omit the auxiliary verb 'be' or use the base verb instead of the past participle: "
-                "\"Special awards [INCORRECT: given -> CORRECT: are given] to helpful volunteers every December.\""
-            ),
-            "variants": [
-                {
-                    "keywords": ("volunteer", "thank", "celebrate", "gift", "december", "week", "help"),
-                    "imitation_example": "Every winter, warm gloves and thank-you letters are given to the city's street cleaners.",
-                    "common_mistakes": (
-                        "Grammar Warning (Passive Voice): Learners frequently use the base verb instead of the past participle after 'be': "
-                        "\"Thank-you gifts are [INCORRECT: send -> CORRECT: sent] to all volunteers at the end of the year.\" "
-                        "(Note: Passive voice requires 'be + past participle [V3]')."
-                    )
-                },
-                {
-                    "keywords": ("emblem", "olympic", "seal", "design", "call", "symbol", "beijing", "games"),
-                    "imitation_example": "The traditional red seal is seen as a symbol of honesty and good luck in China.",
-                    "common_mistakes": (
-                        "Grammar Warning (Passive Voice): Learners frequently forget to inflect the main verb into its past participle form in passive sentences: "
-                        "\"The official mascot was [INCORRECT: choose -> CORRECT: chosen] from thousands of art entries.\" "
-                        "(Note: Always use the past participle form after 'is/was/were' in passive constructions)."
-                    )
-                }
-            ]
-        },
-        "conditional_clause_if": {
-            "name": "Conditional Adverbial Clauses (If-Conditionals)",
-            "category": "Logic & Stance",
-            "pattern_formula": "If + [Clause], [Subject] + [VP]",
-            "pedagogical_function": "Sets up a clear condition ('If...') to explain what result will happen next.",
-            "imitation_example": "If everyone takes small green steps every day, our city will become cleaner and healthier.",
-            "common_mistakes": (
-                "Grammar Warning (Conditional Clauses): Learners frequently put 'will' inside the 'if'-clause: "
-                "\"[INCORRECT: If you will arrive on time tomorrow -> CORRECT: If you arrive on time tomorrow], we will catch the early train.\" "
-                "(Note: In first conditional sentences about the future, use the present simple tense in the 'if'-clause)."
-            ),
-            "variants": [
-                {
-                    "keywords": ("car", "bus", "train", "walk", "bike", "leg", "wheel", "travel"),
-                    "imitation_example": "If the weather is sunny tomorrow, we will ride our bikes to the park instead of taking a bus.",
-                    "common_mistakes": (
-                        "Grammar Warning (Conditional Clauses): Learners frequently insert 'will' inside the 'if'-clause when talking about future plans: "
-                        "\"[INCORRECT: If we will walk to school -> CORRECT: If we walk to school] every day, we will stay strong and healthy.\" "
-                        "(Note: Use the present simple tense after 'if', and reserve 'will' for the main result clause)."
-                    )
-                },
-                {
-                    "keywords": ("time", "early", "late", "appointment", "date", "minute", "wait"),
-                    "imitation_example": "If you leave home ten minutes early, you will never be late for a morning appointment.",
-                    "common_mistakes": (
-                        "Grammar Warning (Conditional Clauses): Learners frequently use 'will' in the conditional 'if'-clause: "
-                        "\"[INCORRECT: If a guest will arrive too early -> CORRECT: If a guest arrives too early], the host may not be ready yet.\" "
-                        "(Note: The 'if'-clause states the condition using the present simple tense, not 'will')."
-                    )
-                },
-                {
-                    "keywords": ("planet", "earth", "tree", "green", "water", "save", "recycle", "help"),
-                    "imitation_example": "If every classroom recycles used paper, our school can save dozens of trees each year.",
-                    "common_mistakes": (
-                        "Grammar Warning (Conditional Clauses): Learners frequently join the 'if'-clause and main clause with a coordinating conjunction like 'so' or 'then' + comma splice: "
-                        "\"If we waste clean water today, [INCORRECT: so we will face -> CORRECT: we will face] water shortages in the future.\" "
-                        "(Note: In English, 'if' already connects the two clauses, so 'so' must not be added to the main clause)."
-                    )
-                }
-            ]
-        },
-        "conditional_clause_as_long_as": {
-            "name": "Contingent Stipulation Clauses (As long as / Provided that)",
-            "category": "Logic & Stance",
-            "pattern_formula": "As long as + [Clause], [Subject] + [VP]",
-            "pedagogical_function": "Introduces an essential condition ('as long as') under which the main statement stays true.",
-            "imitation_example": "As long as citizens follow the traffic rules, shared bicycles can offer safe and convenient travel.",
-            "common_mistakes": (
-                "Grammar Warning (Stipulative Conjunctions): Learners frequently confuse conditional 'as long as' with extent/distance phrases: "
-                "\"[INCORRECT: As far as we protect our environment -> CORRECT: As long as we protect our environment], future generations will enjoy clean air.\" "
-                "(Note: Use 'as long as' for condition/prerequisite constraints and 'as far as' for scope/knowledge limitations)."
-            )
-        },
-        "with_absolute_adjunct": {
-            "name": "Prepositional 'With' Absolute Construction",
-            "category": "Information Packaging",
-            "pattern_formula": "with + [NP] + [Participle/Adj/PrepP]",
-            "pedagogical_function": "Compresses an accompanying circumstance, background state, or causal detail into a concise prepositional absolute phrase without requiring a separate subordinate clause.",
-            "imitation_example": "With renewable energy costs falling rapidly, more cities are switching to solar power.",
-            "common_mistakes": (
-                "Grammar Warning (With-Absolute Non-Finite Verb): Learners frequently insert a finite tensed verb inside a 'with + NP' absolute phrase: "
-                "\"[INCORRECT: With the population is growing rapidly -> CORRECT: With the population growing rapidly], urban transport faces new challenges.\" "
-                "(Note: After 'with + NP', use a non-finite participle (V-ing / V-ed), adjective, or prepositional phrase rather than a finite verb)."
-            )
-        }
-    }
+    _grammar_profiles_cache: Optional[Dict[str, Any]] = None
+    _grammar_profiles_mtime: float = 0.0
 
     @classmethod
-    def match_cobuild_grammar_profile(cls, formula: str, quote: str, category: str = "") -> Dict[str, Any]:
+    def get_grammar_profiles_data(cls) -> Dict[str, Any]:
         """
-        Deterministically matches mined syntax formula and quote to the most specific
-        COBUILD Grammar Profile (0 Token Cost, 0 Copyright DB).
-        Eliminates the legacy Unit 69 fallback collapse.
+        Loads and hot-reloads `librarian/data/grammar_profiles.json` using `st_mtime`.
+        Decouples all 3-band priority weights, pedagogical functions, imitation examples,
+        and common mistakes from Python source code.
         """
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "grammar_profiles.json")
+        try:
+            mtime = os.stat(json_path).st_mtime
+            if cls._grammar_profiles_cache is not None and mtime == cls._grammar_profiles_mtime:
+                return cls._grammar_profiles_cache
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cls._grammar_profiles_cache = data
+            cls._grammar_profiles_mtime = mtime
+            return data
+        except Exception as e:
+            logger.warning(f"Failed to load grammar_profiles.json ({e}); using cached or empty fallback.")
+            return cls._grammar_profiles_cache or {"profiles": {}, "fallbacks": {}}
+
+    @classmethod
+    def resolve_grammar_cefr_band(cls, text_or_pool: Union[str, Dict[str, str], List[str]]) -> str:
+        """
+        Deterministically resolves a passage's grammar pedagogical band ('A1_A2', 'B1_B2', or 'C1_C2')
+        using `calculate_text_cefr` and lexical sophistication metrics (`b2_plus_ratio`, `c1_plus_ratio`, `avg_cefr`).
+        """
+        if isinstance(text_or_pool, dict):
+            full_text = " ".join(text_or_pool.values())
+        elif isinstance(text_or_pool, list):
+            full_text = " ".join(text_or_pool)
+        else:
+            full_text = str(text_or_pool or "")
+
+        if not full_text.strip():
+            return "B1_B2"
+
+        cefr = cls.calculate_text_cefr(full_text)
+        if cefr in ("A1", "A2"):
+            return "A1_A2"
+        if cefr in ("C1", "C2"):
+            return "C1_C2"
+
+        try:
+            analyzer = cls.get_cefr_analyzer()
+            words = re.findall(r"[a-zA-Z]+", full_text.lower())
+            levels: List[float] = []
+            for w in words:
+                lvl = analyzer.get_average_word_level_float(w)
+                if lvl is not None:
+                    levels.append(float(lvl))
+            if levels:
+                n = len(levels)
+                avg_cefr = sum(levels) / n
+                b2_plus_ratio = sum(1 for x in levels if x >= 3.5) / n
+                c1_plus_ratio = sum(1 for x in levels if x >= 4.5) / n
+                if cefr == "B1" and avg_cefr < 1.75 and b2_plus_ratio < 0.088:
+                    return "A1_A2"
+                if cefr in ("B1", "B2") and (avg_cefr >= 1.93 or (cefr == "B2" and c1_plus_ratio >= 0.055 and avg_cefr >= 1.90)):
+                    return "C1_C2"
+        except Exception:
+            pass
+
+        return "B1_B2"
+
+    @classmethod
+    def match_cobuild_grammar_profile(
+        cls,
+        formula: str,
+        quote: str,
+        category: str = "",
+        cefr_band: str = "B1_B2"
+    ) -> Dict[str, Any]:
+        """
+        Deterministically matches a mined syntax formula and quote to the most specific
+        COBUILD Grammar Profile from `librarian/data/grammar_profiles.json` and resolves
+        the target CEFR band's (`A1_A2`, `B1_B2`, `C1_C2`) priority, pedagogical function,
+        imitation example, and common mistakes (0 Token Cost).
+        """
+        band = cefr_band if cefr_band in ("A1_A2", "B1_B2", "C1_C2") else "B1_B2"
+        data = cls.get_grammar_profiles_data()
+        profiles = data.get("profiles", {})
+        fallbacks = data.get("fallbacks", {})
+
+        def _resolve_profile(profile_key: str, fallback_cat: str = "") -> Dict[str, Any]:
+            raw_prof = profiles.get(profile_key)
+            if not raw_prof:
+                return _resolve_fallback(fallback_cat or category)
+            tiers = raw_prof.get("tiers", {})
+            tier_data = tiers.get(band) or tiers.get("B1_B2") or tiers.get("A1_A2") or {}
+            prio_map = raw_prof.get("priority", {})
+            prio_val = int(prio_map.get(band, prio_map.get("B1_B2", 70)))
+            return {
+                "profile_key": profile_key,
+                "name": raw_prof.get("name", "Syntactic Pattern"),
+                "category": raw_prof.get("category", category or "Information Packaging"),
+                "pattern_formula": raw_prof.get("pattern_formula", formula),
+                "priority": prio_val,
+                "pedagogical_function": tier_data.get("pedagogical_function", ""),
+                "imitation_example": tier_data.get("imitation_example", quote),
+                "common_mistakes": tier_data.get("common_mistakes", ""),
+                "variants": tier_data.get("variants", [])
+            }
+
+        def _resolve_fallback(cat_name: str) -> Dict[str, Any]:
+            c_low = (cat_name or "").lower()
+            if c_low == "rhetoric & emphasis":
+                fb_key = "Rhetoric & Emphasis"
+            elif c_low == "logic & stance":
+                fb_key = "Logic & Stance"
+            elif c_low == "cohesion & framing":
+                fb_key = "Cohesion & Framing"
+            else:
+                fb_key = "Information Packaging"
+            raw_fb = fallbacks.get(fb_key, {})
+            tiers = raw_fb.get("tiers", {})
+            tier_data = tiers.get(band) or tiers.get("B1_B2") or tiers.get("A1_A2") or {}
+            prio_map = raw_fb.get("priority", {})
+            prio_val = int(prio_map.get(band, 45))
+            return {
+                "profile_key": f"fallback_{fb_key.lower().replace(' ', '_')}",
+                "name": raw_fb.get("name", f"{fb_key} Pattern"),
+                "category": fb_key,
+                "pattern_formula": formula,
+                "priority": prio_val,
+                "pedagogical_function": tier_data.get("pedagogical_function", f"Synthesizes discourse via {fb_key.lower()} syntax."),
+                "imitation_example": tier_data.get("imitation_example", quote),
+                "common_mistakes": tier_data.get("common_mistakes", "Grammar Warning (Syntax): Learners frequently misapply structural boundaries."),
+                "variants": tier_data.get("variants", [])
+            }
+
         f_lower = (formula or "").lower()
         q_lower = (quote or "").lower()
         c_lower = (category or "").lower()
 
-        # 0. Explicit formula-first routing for fronted concessive & with-absolute patterns
+        # 0. Explicit formula-first routing for inverted conditionals, fronted negative inversion, with-absolute, nominative absolute, and concessives
+        if any(f_lower.startswith(p) for p in ("had + [subject]", "were + [subject]", "should + [subject]")) or re.match(r"^(?:had|were|should)\s+(?:i|you|he|she|it|we|they|the\b|a\b|an\b|this\b|that\b|these\b|those\b|[a-z]+)\s+(?:not\s+)?(?:been|had|known|done|to\b|[a-z]+ed\b)", q_lower.strip()):
+            if "inverted_conditional_subjunctive" in profiles:
+                return _resolve_profile("inverted_conditional_subjunctive")
+        if "negative/restrictive" in f_lower or "inversion" in f_lower or any(f_lower.startswith(p) for p in ("never +", "rarely +", "seldom +", "little +", "only +", "not only + [aux", "hardly +", "scarcely +", "no sooner +", "under no circumstances", "in no way", "at no time", "on no account")):
+            return _resolve_profile("fronted_negative_inversion")
         if f_lower.startswith("with + [np]"):
-            return cls.COBUILD_GRAMMAR_PROFILES["with_absolute_adjunct"]
-        if any(f_lower.startswith(p) for p in ("although +", "though +", "even though +", "even if +", "while +", "whereas +")):
-            return cls.COBUILD_GRAMMAR_PROFILES["subordinate_concessive"]
+            return _resolve_profile("with_absolute_adjunct")
+        if f_lower.startswith("[np] + [v-ing") or f_lower.startswith("[np] + [v-ed") or "nominative absolute" in f_lower:
+            if "nominative_absolute" in profiles:
+                return _resolve_profile("nominative_absolute")
+        if any(f_lower.startswith(p) for p in ("although +", "though +", "even though +", "even if +", "while +", "whereas +", "despite +", "in spite of +", "much as +", "albeit +", "notwithstanding +")):
+            return _resolve_profile("subordinate_concessive")
+        if any(f_lower.startswith(p) for p in ("as long as +", "provided that +", "on condition that +", "so long as +")):
+            return _resolve_profile("conditional_clause_as_long_as")
+        if any(f_lower.startswith(p) for p in ("if +", "once +", "unless +", "if/unless +")):
+            return _resolve_profile("conditional_clause_if")
 
-        # 1. Cleft Focus: it + was/is + ... that/who
+        # 1. Cleft Focus vs Dummy-It Extraposition (check extraposition predicates FIRST even if formula says Focal Element)
+        if re.search(r"\bit\s+(?:was|is|'s|has\s+been|seemed|seems|appeared|appears|turned\s+out|proved)\s+(?:no\s+|not\s+a\s+|little\s+|hardly\s+a\s+)?(?:clear|obvious|important|necessary|essential|vital|critical|imperative|crucial|possible|impossible|likely|unlikely|certain|true|evident|apparent|plain|notable|remarkable|worth\s+noting|fair|safe|reasonable|natural|normal|common|rare|strange|odd|ironic|paradoxical|surprising|unsurprising|astonishing|shocking|sad|tragic|unfortunate|regrettable|fortunate|lucky|good|better|best|wise|foolish|easy|hard|difficult|simple|complex|challenging|said|reported|believed|thought|assumed|estimated|expected|known|understood|agreed|accepted|argued|suggested|claimed|noted|observed|found|shown|proven|established|demonstrated|revealed|discovered|decided|arranged|recommended|proposed|demanded|required|requested|urged|advised|surprise|wonder|secret|doubt|coincidence|accident|pity|shame|mystery|miracle|comfort|relief|consolation|honor|honour|privilege|pleasure|joy|delight|tragedy|disgrace|scandal|fact|matter|question|issue|problem|challenge|duty|responsibility|task|job|custom|tradition|habit|rule|policy|practice|mistake|error|fault|crime|sin|blessing|curse|waste|use|good|point)\b", q_lower):
+            return _resolve_profile("dummy_it_extraposition")
         if "focal element" in f_lower or "cleft" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["cleft_focus"]
+            return _resolve_profile("cleft_focus")
         if re.search(r"\bit\s+(?:was|is|'s)\s+.*?\b(?:that|who)\b", q_lower):
-            if re.search(r"\bit\s+(?:was|is|'s)\s+(?:no\s+|not\s+a\s+)?(?:clear|obvious|important|necessary|said|true|likely|surprise|wonder|secret|doubt|coincidence|accident|pity|shame|mystery)\b", q_lower):
-                return cls.COBUILD_GRAMMAR_PROFILES["dummy_it_extraposition"]
-            return cls.COBUILD_GRAMMAR_PROFILES["cleft_focus"]
+            return _resolve_profile("cleft_focus")
 
         # 2. Correlative Parallelism: not only... but also
-        if "not only" in f_lower or ("not only" in q_lower and "but also" in q_lower):
-            if q_lower.strip().startswith("not only"):
-                return cls.COBUILD_GRAMMAR_PROFILES["fronted_negative_inversion"]
-            return cls.COBUILD_GRAMMAR_PROFILES["correlative_parallelism"]
+        if "not only" in f_lower or ("not only" in q_lower and ("but also" in q_lower or "but " in q_lower)):
+            if re.search(r"(?:^|[,;:]\s*)not\s+only\s+(?:did|do|does|had|have|has|was|were|is|are|can|could|will|would|should|must|may|might)\b", q_lower.strip()):
+                return _resolve_profile("fronted_negative_inversion")
+            return _resolve_profile("correlative_parallelism")
 
-        # 2b. Antithesis Coordination: not... but...
-        if "not + [prepp/np], but" in f_lower or re.search(r",\s*not\b.*?\bbut\b", q_lower):
-            return cls.COBUILD_GRAMMAR_PROFILES["antithesis_parallelism"]
+        # 2b. Antithesis Coordination: not... but... / instead of / rather than
+        if "instead of +" in f_lower or "rather than +" in f_lower:
+            if "prepositional_contrast_instead_of" in profiles:
+                return _resolve_profile("prepositional_contrast_instead_of")
+        if "not + [prepp/np], but" in f_lower or re.search(r",\s*not\b.*?\bbut\b", q_lower) or ("not + [" in f_lower and "but +" in f_lower):
+            return _resolve_profile("antithesis_parallelism")
 
-        # 3a. Object Complement / Complex Transitive (Noun Complement): make + Object + [Noun/NP]
-        if ("make +" in f_lower or "find +" in f_lower) and "[noun/np]" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["object_complement_noun"]
+        # 3a. Causative bare infinitive: make/have/let + Object + [Bare Infinitive]
+        if "bare infinitive" in f_lower:
+            return _resolve_profile("causative_bare_infinitive")
 
-        # 3b. Object Complement / Complex Transitive (Adjective Complement): make/find/keep + Object + [Adj]
-        if ("make +" in f_lower or "render +" in f_lower or "find +" in f_lower or "keep +" in f_lower) and ("[adj]" in f_lower or " + it + [" in f_lower or "[object]" in f_lower):
-            return cls.COBUILD_GRAMMAR_PROFILES["object_complement_adj"]
+        # 3b. Dummy-It Object Extraposition: make/find/think/consider + it + [Adj/NP] + to/that
+        if "+ it + [" in f_lower and ("to + [vp]" in f_lower or "that + [clause]" in f_lower):
+            if "dummy_it_object" in profiles:
+                return _resolve_profile("dummy_it_object")
+
+        # 3c. Object Complement / Complex Transitive (Noun Complement): make + Object + [Noun/NP]
+        if ("make +" in f_lower or "find +" in f_lower or "appoint +" in f_lower or "consider +" in f_lower) and "[noun/np]" in f_lower:
+            return _resolve_profile("object_complement_noun")
+
+        # 3d. Object Complement / Complex Transitive (Adjective Complement): make/find/keep + Object + [Adj]
+        if ("make +" in f_lower or "render +" in f_lower or "find +" in f_lower or "keep +" in f_lower or "leave +" in f_lower or "deem +" in f_lower) and ("[adj]" in f_lower or " + it + [" in f_lower or "[object]" in f_lower):
+            return _resolve_profile("object_complement_adj")
         if re.search(r"\bmake\b.*?\b(?:possible|impossible|easy|clear|accessible|redundant)\b", q_lower):
-            return cls.COBUILD_GRAMMAR_PROFILES["object_complement_adj"]
+            return _resolve_profile("object_complement_adj")
 
-        # 4. Causative bare infinitive: make/have/let + sb + do
-        if any(f"make + [" in f_lower or f"let + [" in f_lower for _ in (1,)):
-            return cls.COBUILD_GRAMMAR_PROFILES["causative_bare_infinitive"]
+        # 4. Causative bare infinitive fallback: make/have/let + sb + do
+        if "make + [" in f_lower or "let + [" in f_lower:
+            return _resolve_profile("causative_bare_infinitive")
 
-        # 5. Non-restrictive / Sentential Relative Clauses
-        if (", which" in q_lower and "fact + that" not in f_lower and "[shell noun]" not in f_lower) or "which + [interpretive" in f_lower or "[np], which" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["relative_clause_elaborative"]
+        # 5. Shell Noun / Appositive That-Clause: [Shell Noun] + that + [Clause]
+        if "shell noun" in f_lower or "fact + that" in f_lower or "[abstract np] + that" in f_lower or re.search(r"\bthe\s+(?:fact|idea|belief|notion|view|possibility|chance|hope|fear|news|evidence|proof|assumption|hypothesis|premise|paradox|irony|conviction|realization|consensus|contention|proposition|myth|delusion|impression)\s+that\b", q_lower):
+            return _resolve_profile("appositive_complement_that")
 
-        # 6. Restrictive Relative Clauses: [NP] + which/that/who + [VP]
-        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np] , which", "[np] , who")):
-            return cls.COBUILD_GRAMMAR_PROFILES["relative_clause_restrictive"]
+        # 5b. Participial Adjuncts (differentiating post-positioned V-ed vs V-ing, checked before relative clauses)
+        if "[subject] + [vp], [" in f_lower and ("v-ing" in f_lower or "having +" in f_lower):
+            return _resolve_profile("participial_adjunct_post_ving")
+        if "[subject] + [vp], [" in f_lower and ("v-ed" in f_lower or "being + v-ed" in f_lower):
+            return _resolve_profile("participial_adjunct_post_ved")
+        if any(p in f_lower for p in ("[v-ing phrase]", "[v-ed phrase]", "[having + v-ed phrase]", "[being + v-ed phrase]")) or "particip" in c_lower:
+            return _resolve_profile("participial_adjunct")
 
-        # 7. Proportional Comparative
+        # 6. Non-restrictive / Sentential Relative Clauses
+        if "which + [interpretive" in f_lower or re.search(r",\s*which\s+(?:means|suggests|indicates|shows|implies|demonstrates|proves|reveals|reflects|underscores|highlights|explains|makes|leaves|renders|allows|enables|prevents|leads|results|contributes)\b", q_lower):
+            if "propositional_encapsulation_which" in profiles:
+                return _resolve_profile("propositional_encapsulation_which")
+            return _resolve_profile("relative_clause_elaborative")
+        if (", which" in q_lower and "fact + that" not in f_lower and "[shell noun]" not in f_lower) or "[np], which" in f_lower or "[np], who" in f_lower:
+            return _resolve_profile("relative_clause_elaborative")
+
+        # 7. Restrictive Relative Clauses: [NP] + which/that/who + [VP] or Prep + which/whom
+        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np] , which", "[np] , who", "[np] + [prep] + which", "[np] + [prep] + whom")):
+            return _resolve_profile("relative_clause_restrictive")
+
+        # 8. Proportional Comparative & Equative Comparative (as ... as)
         if "the + [comparative]" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["proportional_comparative"]
+            return _resolve_profile("proportional_comparative")
+        if "as + [adj/adv] + as" in f_lower or ("as + [" in f_lower and "+ as" in f_lower):
+            return _resolve_profile("correlative_comparative_as_as")
 
-        # 8. Dummy-It Extraposition: It is adj to/that
+        # 8b. Resultative Degree Constructions (so ... that / such ... that)
+        if ("so + [" in f_lower or "such + [" in f_lower) and "that" in f_lower:
+            return _resolve_profile("resultative_so_such_that")
+
+        # 9. Dummy-It Extraposition: It is adj to/that
         if "it + [be] + [adj" in f_lower or "it is + [adj" in f_lower or "dummy" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["dummy_it_extraposition"]
+            return _resolve_profile("dummy_it_extraposition")
 
-        # 9. Participial Adjuncts (differentiating post-positioned V-ed vs V-ing)
-        if "[subject] + [vp], [" in f_lower and "v-ing" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct_post_ving"]
-        if "[subject] + [vp], [" in f_lower and "v-ed" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct_post_ved"]
-        if "[v-ing phrase]" in f_lower or "[v-ed phrase]" in f_lower or "particip" in c_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["participial_adjunct"]
+        # 10. Purpose Infinitive Adjuncts (In order to / So as to / To + [VP]) & Infinitive Subject
+        if any(p in f_lower for p in ("in order to +", "so as to +", "to + [vp], [subject]")):
+            return _resolve_profile("purpose_infinitive_adjunct")
+        if f_lower.startswith("to + [vp] + [v"):
+            if "infinitive_subject_nominalization" in profiles:
+                return _resolve_profile("infinitive_subject_nominalization")
 
-        # 10. Gerund Subject Nominalization & Prepositional Means
+        # 12. Gerund Subject Nominalization & Prepositional Means
         if "by + [v-ing" in f_lower or q_lower.startswith("by "):
-            return cls.COBUILD_GRAMMAR_PROFILES["prepositional_means_by_ving"]
+            return _resolve_profile("prepositional_means_by_ving")
         if "[v-ing / gerund phrase]" in f_lower or "[v-ing phrase] + [v]" in f_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["gerund_subject_nominalization"]
+            return _resolve_profile("gerund_subject_nominalization")
 
-        # 11. Adversative & Concession
+        # 13. Adversative & Concession
         if "but [subject] + [also]" in f_lower or ", but" in q_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["adversative_concession"]
+            return _resolve_profile("adversative_concession")
         if any(w in f_lower for w in ("although", "though", "while", "even if", "whereas")) or any(q_lower.startswith(w) for w in ("although ", "though ", "even though ", "even if ", "while ", "whereas ")):
-            return cls.COBUILD_GRAMMAR_PROFILES["subordinate_concessive"]
+            return _resolve_profile("subordinate_concessive")
 
-        # 12. Discourse transition: However / Nevertheless / Nonetheless / Conversely
-        if any(q_lower.startswith(w) or w in f_lower for w in ("however", "nevertheless", "nonetheless", "conversely", "in contrast")):
-            return cls.COBUILD_GRAMMAR_PROFILES["discourse_transition_however"]
+        # 14. Discourse transition: However / Nevertheless / Nonetheless / Conversely / Instead
+        if any(q_lower.startswith(w) or w in f_lower for w in ("however", "nevertheless", "nonetheless", "conversely", "in contrast", "instead,")):
+            return _resolve_profile("discourse_transition_however")
 
-        # 13. Passive voice
+        # 15. Causal & Explanatory Clauses (because / since / as / now that)
+        if any(w in f_lower for w in ("because", "since + [clause]", "now that", "[causal clause]", "given that", "in that", "seeing that")):
+            return _resolve_profile("explanatory_causal_clause")
+
+        # 16. Comparative Manner & Analogy Clauses (just as / as if / as though)
+        if any(w in f_lower for w in ("just as", "as if", "as though", "as + [clause]")):
+            return _resolve_profile("manner_similarity_clause")
+
+        # 17. Epistemic Stance & Hedging (suggest / indicate / show / argue that)
+        if "stance" in f_lower or "epistemic" in f_lower or ("[verb] + that + [clause]" in f_lower and c_lower == "logic & stance"):
+            return _resolve_profile("epistemic_stance_hedging")
+
+        # 18. Passive voice
         if "passive" in f_lower or "passive" in c_lower or ("[be/modal be]" in f_lower and "[v-ed]" in f_lower):
-            return cls.COBUILD_GRAMMAR_PROFILES["passive_voice_agentless"]
+            return _resolve_profile("passive_voice_agentless")
 
-        # 14. Conditional clauses (if / as long as / unless)
-        if "as long as" in f_lower or "as long as" in q_lower:
-            return cls.COBUILD_GRAMMAR_PROFILES["conditional_clause_as_long_as"]
-        if f_lower.startswith("if +") or "if/unless" in f_lower or (q_lower.startswith("if ") or ", if " in q_lower or "so, if " in q_lower or "similarly, if " in q_lower):
-            return cls.COBUILD_GRAMMAR_PROFILES["conditional_clause_if"]
+        # 19. Conditional clauses (if / as long as / unless / once)
+        if "as long as" in f_lower or "as long as" in q_lower or "provided that" in f_lower or "on condition that" in f_lower or "so long as" in f_lower:
+            return _resolve_profile("conditional_clause_as_long_as")
+        if f_lower.startswith("if +") or f_lower.startswith("once +") or f_lower.startswith("unless +") or "if/unless" in f_lower or (q_lower.startswith("if ") or ", if " in q_lower or "so, if " in q_lower or "similarly, if " in q_lower):
+            return _resolve_profile("conditional_clause_if")
 
-        # Dynamic Category-Aware Fallback (Prevents Unit 69 / Relative Clause Contamination)
-        if c_lower == "rhetoric & emphasis":
-            return {
-                "name": "Rhetorical Emphasis & Contrast",
-                "category": "Rhetoric & Emphasis",
-                "pattern_formula": formula,
-                "pedagogical_function": "Highlights key information and creates stylistic contrast to make sentences more memorable.",
-                "imitation_example": "The event highlights not just athletic skill, but also warm friendship across cultures.",
-                "common_mistakes": "Grammar Warning (Emphasis & Symmetry): ESL learners frequently break parallel structure when linking emphasized phrases."
-            }
-        elif c_lower == "logic & stance":
-            return {
-                "name": "Logical Transition & Epistemic Stance",
-                "category": "Logic & Stance",
-                "pattern_formula": formula,
-                "pedagogical_function": "Sets clear conditions, contrasts, or rules so arguments sound logical, precise, and objective.",
-                "imitation_example": "The plan sounds simple at first; however, daily practice is still very important.",
-                "common_mistakes": "Grammar Warning (Logical Connectors): ESL learners frequently produce run-on sentences or misapply punctuation when joining clausal transitions."
-            }
-        elif c_lower == "cohesion & framing":
-            return {
-                "name": "Discursive Cohesion & Structural Framing",
-                "category": "Cohesion & Framing",
-                "pattern_formula": formula,
-                "pedagogical_function": "Connects clauses smoothly across ideas and introduces facts or evidence naturally.",
-                "imitation_example": "The idea that small daily habits can protect the earth is shared by all the students.",
-                "common_mistakes": "Grammar Warning (Noun Complementation): ESL learners frequently confuse noun complement 'that'-clauses with modifying relative clauses."
-            }
-        else:
-            return {
-                "name": "Information Packaging & Syntactic Integration",
-                "category": "Information Packaging",
-                "pattern_formula": formula,
-                "pedagogical_function": "Packs multiple descriptive details into a single sentence cleanly without feeling wordy.",
-                "imitation_example": "Careful planning ensures that the school event runs smoothly and on time.",
-                "common_mistakes": "Grammar Warning (Syntactic Packaging): ESL learners frequently mismanage clause boundaries or subject-verb agreement in longer sentences."
-            }
+        # Dynamic Category-Aware Fallback from grammar_profiles.json (3-Band Calibrated)
+        return _resolve_fallback(category)
 
     @classmethod
     def _select_profile_variant(
@@ -13764,7 +15189,7 @@ class LinguisticEngine:
         """
         Deterministically selects the best contextually-aligned (imitation_example, common_mistakes)
         variant from a profile's thematic bank based on lexical overlap with the quote and passage text.
-        Guarantees A2-calibrated examples and prevents duplicate templates.
+        Guarantees band-calibrated examples and prevents duplicate templates.
         """
         default_imit = profile.get("imitation_example", quote)
         default_mist = profile.get("common_mistakes", "Grammar Warning (Syntax): Learners frequently misapply structural boundaries.")
@@ -13802,20 +15227,24 @@ class LinguisticEngine:
         text: str,
         sentence_pool: Optional[Dict[str, str]] = None,
         target_count: int = 5,
-        syllabus_grammar: Optional[List[str]] = None
+        syllabus_grammar: Optional[List[str]] = None,
+        cefr_band: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Deterministically extracts grammar patterns from the text at 0 token cost,
-        binding them directly to authentic pedagogical functions and empirical common mistakes
-        from the COBUILD Common Learner Pitfall and Pattern Grammar system.
+        calibrating pattern priority, pedagogical functions, imitation examples, and
+        empirical common mistakes to the passage's 3-Band CEFR level ('A1_A2', 'B1_B2', 'C1_C2').
         """
         if not sentence_pool:
             _, sentence_pool = cls.tokenize_and_index_sentences(text)
 
+        resolved_band = cefr_band or cls.resolve_grammar_cefr_band(text if text else sentence_pool)
+
         skeletons = cls.mine_grammar_skeletons(
             sentence_pool,
             target_count=target_count,
-            syllabus_grammar=syllabus_grammar
+            syllabus_grammar=syllabus_grammar,
+            cefr_band=resolved_band
         )
         if not skeletons:
             return []
@@ -13829,10 +15258,17 @@ class LinguisticEngine:
             cat = s.get("category", "Information Packaging")
             formula = s.get("pattern_formula", "[Subject] + [VP]")
 
-            profile = cls.match_cobuild_grammar_profile(formula, quote, category=cat)
+            profile = cls.match_cobuild_grammar_profile(
+                formula,
+                quote,
+                category=cat,
+                cefr_band=resolved_band
+            )
 
             prof_name = profile.get("name", "Syntactic Pattern")
             prof_cat = profile.get("category", cat)
+            if profile.get("profile_key") == "fronted_negative_inversion" and "aux" not in formula.lower():
+                formula = "Not only + [Aux] + [Subject] + [VP], but + [Subject] + [also] + [VP]"
             ped_func = profile.get("pedagogical_function", f"Synthesizes discourse via {prof_cat.lower()} syntax.")
 
             imitation, clean_mistake = cls._select_profile_variant(
@@ -13843,7 +15279,7 @@ class LinguisticEngine:
                 used_mistakes=used_mistakes
             )
 
-            # LDOCE6 Authentic Grammar Alert & Don't Say diagnostics ONLY for generic fallback profiles
+            # PedLex Authentic Grammar Alert & Don't Say diagnostics ONLY for generic fallback profiles
             try:
                 STOP_WORDS_FOR_ALERTS = {"that", "not", "also", "it", "which", "this", "what", "there", "long", "like", "well", "such"}
                 GENERIC_PROFILES = {
@@ -13880,6 +15316,8 @@ class LinguisticEngine:
                             pitfalls = [p for p in parts if ("Don't say" in p or "✗" in p)]
                             for pit in pitfalls:
                                 chosen = re.sub(r'\s+', ' ', pit).strip()
+                                chosen = re.sub(r'^GRAMMAR:?\s*', '', chosen, flags=re.IGNORECASE).strip()
+                                chosen = re.sub(r'\s*Grammar guide\s*[-‒–—].*$', '', chosen, flags=re.IGNORECASE).strip()
                                 cand_text = f"Grammar Warning ({alert.get('word', '').upper()}): {chosen}"
                                 if cand_text not in used_mistakes:
                                     clean_mistake = cand_text
@@ -13901,7 +15339,8 @@ class LinguisticEngine:
                 "pedagogical_function": ped_func,
                 "imitation_example": imitation,
                 "common_mistakes": clean_mistake,
-                "design_audit": f"AUDIT: [{sid}] -> [{formula}] -> [VERBATIM_CONFIRMED]"
+                "cefr_band": resolved_band,
+                "design_audit": f"AUDIT: [{sid}] -> [{formula}] -> [BAND:{resolved_band}] -> [VERBATIM_CONFIRMED]"
             })
 
         return results
@@ -14165,14 +15604,14 @@ class LinguisticEngine:
     @classmethod
     def extract_sense_pattern_bundles(cls, sense: Dict[str, Any], target_word: str) -> List[Dict[str, Any]]:
         """
-        Extracts atomic (pattern, example, bound_prep) bundles from a locked LDOCE sense.
-        Prioritizes native atomic pattern_bundles directly extracted from LDOCE DOM.
+        Extracts atomic (pattern, example, bound_prep) bundles from a locked PedLex sense.
+        Prioritizes native atomic pattern_bundles directly extracted from PedLex DOM.
         Falls back to parsing raw patterns while strictly preventing pattern-example desynchronization.
         """
         if not sense:
             return []
 
-        # 1. Native Atomic Bundles (Directly from updated LDOCE DB schema)
+        # 1. Native Atomic Bundles (Directly from updated PedLex DB schema)
         native_bundles = sense.get("pattern_bundles")
         if native_bundles:
             out: List[Dict[str, Any]] = []
@@ -14384,7 +15823,7 @@ class LinguisticEngine:
     @classmethod
     def select_best_single_pattern(cls, patterns: List[str], target_word: str, preferred_anchor: Optional[str] = None) -> Optional[str]:
         """
-        Selects exactly ONE best, high-value syntactic pattern from LDOCE.
+        Selects exactly ONE best, high-value syntactic pattern from PedLex.
         Filters out noise like single verbs ('have') or repeated fragments.
         If preferred_anchor is given, boosts patterns containing that anchor (e.g. 'serious about' when anchor='about').
         """
@@ -14429,7 +15868,7 @@ class LinguisticEngine:
         """
         Track 2: Pre-Computed Generative Skeletons (Proficiency Testing / 语境迁移单选题)
         Extracts vocabulary items from extracted cards and synthesizes authoritative collocational
-        anchors (via LDOCE 6th Edition) and collision-free distractors (via WordNet + LDOCE).
+        anchors (via PedLex 6th Edition) and collision-free distractors (via WordNet + PedLex).
         Produces pre-computed item skeletons to strictly constrain LLM generation, guaranteeing zero
         duplicate options, zero synonym pile double-keys, and perfect stem-option-explanation alignment.
         """
@@ -14445,8 +15884,11 @@ class LinguisticEngine:
             if not m_word:
                 continue
             raw_w = m_word.group(1).strip()
-            # Clean slot placeholders from phrasal headwords, e.g. "tend to [sth/sb]" -> "tend to"
-            word = re.sub(r'\s+', ' ', re.sub(r'\[.*?\]|\(.*?\)', '', raw_w)).strip()
+            # Clean slot placeholders from phrasal headwords, e.g. "tend to [sth/sb]" -> "tend to",
+            # "remind [sb] of [sb] / [sth]" -> "remind of"
+            word = re.sub(r'(?:\s*/\s*)?(?:\[.*?\]|\(.*?\))(?:\s*/\s*(?:\[.*?\]|\(.*?\)))*', ' ', raw_w)
+            word = re.sub(r'(?:^\s*/+\s*|\s*/+\s*$|\s+/\s+)', ' ', word)
+            word = re.sub(r'\s+', ' ', word).strip()
             if not word:
                 continue
 
@@ -14456,6 +15898,7 @@ class LinguisticEngine:
 
             parsed_items.append({
                 "word": word,
+                "raw_word": raw_w,
                 "part_of_speech": m_pos.group(1).strip() if m_pos else "noun",
                 "definition": m_def.group(1).strip() if m_def else "",
                 "quote": m_quote.group(1).strip() if m_quote else ""
@@ -14464,7 +15907,7 @@ class LinguisticEngine:
         skeletons: List[Dict[str, Any]] = []
         used_distractors: Set[str] = set()
 
-        # Batch Anchor Collision Set (P0-5): every headword that is itself a target of
+        # Batch Anchor Collision Set : every headword that is itself a target of
         # this same batch. An anchor (or a prepositional object welded into the micro-task
         # frame) drawn from this set produces an unsatisfiable item — the evaluator's
         # anchor-presence gate demands the word inside the stem while its cross-target
@@ -14472,20 +15915,44 @@ class LinguisticEngine:
         # OUTSIDE this set; when nothing outside the set fits, the blueprint degrades to
         # the neutral semantic-field template instead of welding two gates into a deadlock.
         batch_target_words: Set[str] = set()
+        single_word_targets: Set[str] = set()
         for _it in parsed_items:
             _w = _it["word"].lower().strip()
             if not _w:
                 continue
             batch_target_words.add(_w)
-            if " " in _w:
+            if " " not in _w:
+                single_word_targets.add(_w)
+            else:
                 for _tok in _w.split():
                     if len(_tok) >= 3 and _tok not in cls._ANCHOR_STOPWORDS:
                         batch_target_words.add(_tok)
 
         for it in parsed_items:
             w = it["word"]
+            raw_w_item = it.get("raw_word") or w
             w_lower = w.lower()
             raw_pos = it["part_of_speech"].lower()
+
+            # Discontinuous Verb + [sb/sth] + Prep Frame Resolution (e.g. "remind [sb] of [sb] / [sth]"):
+            # Stripping internal object slots leaves an ungrammatical adjacent string ('remind of') that cannot
+            # fill a single blank in English ('*reminds of me'). Decompose into head verb ('remind') + bound
+            # preposition anchor ('of') so the blank tests the head verb in '... ____ [sb/sth] of ...'.
+            discontinuous_prep = None
+            m_disc = re.match(
+                r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\))\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
+                raw_w_item.strip(),
+                re.IGNORECASE
+            )
+            if m_disc:
+                head_v = m_disc.group(1).lower()
+                disc_p = m_disc.group(2).lower()
+                # Only decompose if head_v is not already a standalone single-word target in the batch
+                if head_v not in single_word_targets:
+                    w = head_v
+                    w_lower = head_v
+                    discontinuous_prep = disc_p
+                    raw_pos = "verb"
 
             # Pedagogical Integrity Filter: Skip proper nouns, demonyms, country names (e.g. Thai, Spanish, Colombia)
             if not cls.is_pedagogical_target(w):
@@ -14502,26 +15969,29 @@ class LinguisticEngine:
                 anchor_type = "idiom"
 
             if not is_idiom_slot:
-                resolved = cls.resolve_item_pos(w_lower, it.get("quote"), manual_pos=raw_pos)
-                if resolved in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom"):
-                    canonical_pos = "phrase"
-                elif resolved == "function_word" or cls.is_function_word(w_lower):
-                    canonical_pos = "function_word"
-                elif resolved == "verb":
+                if discontinuous_prep:
                     canonical_pos = "verb"
-                elif resolved in ("adjective", "adj"):
-                    canonical_pos = "adj"
-                elif resolved in ("adverb", "adv"):
-                    canonical_pos = "adv"
                 else:
-                    canonical_pos = "noun"
+                    resolved = cls.resolve_item_pos(w_lower, it.get("quote"), manual_pos=raw_pos)
+                    if resolved in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom"):
+                        canonical_pos = "phrase"
+                    elif resolved == "function_word" or cls.is_function_word(w_lower):
+                        canonical_pos = "function_word"
+                    elif resolved == "verb":
+                        canonical_pos = "verb"
+                    elif resolved in ("adjective", "adj"):
+                        canonical_pos = "adj"
+                    elif resolved in ("adverb", "adv"):
+                        canonical_pos = "adv"
+                    else:
+                        canonical_pos = "noun"
 
             # Evidence-Grade Gate (P2): a curriculum 'Quoted Sentence' licenses an anchor or a
             # valency frame only when it actually contains a clause. Fragments lifted from
             # headings ('Punctuality Pays!') were treated as authentic usage, so the blueprint
             # welded anchors and frames onto a two-word title that never demonstrated them.
             # A weak quote is demoted to display-only evidence: it stays visible to the writer
-            # as candidate_quote, but every anchor must then come from LDOCE instead.
+            # as candidate_quote, but every anchor must then come from PedLex instead.
             quote_provenance, quote_wordcount = cls._quote_evidence_strength(it.get("quote"))
             it["raw_quote"] = it.get("quote") or ""
             if quote_provenance == "weak":
@@ -14553,14 +16023,25 @@ class LinguisticEngine:
             ldoce_cloze_frame = None
             pattern_anchor = None
             best_pattern = None
-            initial_atomic_bundle = cls.pick_atomic_pattern_bundle(locked_sense, w_lower, quote=it.get("quote"))
-            sense_native_prep = initial_atomic_bundle.get("prep") if initial_atomic_bundle else None
+            initial_atomic_bundle = cls.pick_atomic_pattern_bundle(
+                locked_sense, w_lower, quote=it.get("quote"), preferred_anchor=discontinuous_prep
+            )
+            sense_native_prep = discontinuous_prep or (initial_atomic_bundle.get("prep") if initial_atomic_bundle else None)
 
             # 1. Retrieve Authentic Oxford Collocational Anchor (Sense-Guided)
             if not is_idiom_slot:
-                anchor = None
-                anchor_type = "collocation"
+                anchor = discontinuous_prep
+                anchor_type = "prep" if discontinuous_prep else "collocation"
             prep_obj = None
+            quote_governed_prep: Optional[str] = discontinuous_prep if discontinuous_prep else None
+
+            def _tok_matches_target(tok, doc_obj) -> bool:
+                if "-" not in w_lower:
+                    if (tok.i > 0 and doc_obj[tok.i - 1].text == "-" and not doc_obj[tok.i - 1].whitespace_) or (
+                        tok.i + 1 < len(doc_obj) and doc_obj[tok.i + 1].text == "-" and not tok.whitespace_
+                    ):
+                        return False
+                return tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower
 
             if canonical_pos == "verb":
                 # Verb Step A: Extract the valency complement PP from the authentic quote.
@@ -14572,7 +16053,7 @@ class LinguisticEngine:
                         if sense_native_prep:
                             consensus_preps.add(sense_native_prep)
                         for tok in doc:
-                            if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 verified_prep = None   # (token_index, prep, pobj) confirmed by OCD/sense valency
                                 unverified_prep = None  # (token_index, prep, pobj) bare syntactic complement
                                 for child in tok.children:
@@ -14605,6 +16086,7 @@ class LinguisticEngine:
                                 if chosen is not None:
                                     anchor, prep_obj = chosen[1], chosen[2]
                                     anchor_type = "prep"
+                                    quote_governed_prep = anchor
                                 break
                     except Exception:
                         pass
@@ -14614,7 +16096,7 @@ class LinguisticEngine:
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
-                            if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 for child in tok.children:
                                     if child.dep_ == "dobj" and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS:
                                         obj_form = child.text.lower() if child.tag_ == "NNS" else child.lemma_.lower()
@@ -14631,7 +16113,7 @@ class LinguisticEngine:
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
-                            if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 for child in tok.children:
                                     if child.dep_ in ("nsubj", "nsubjpass") and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS:
                                         subj_form = child.text.lower() if child.tag_ == "NNS" else child.lemma_.lower()
@@ -14675,7 +16157,7 @@ class LinguisticEngine:
                                 ocd_prep_tokens.add(lp)
 
                         for tok in doc:
-                            if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 for child in tok.children:
                                     if child.dep_ == "prep" and child.text.lower() in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "toward", "over", "under", "about"):
                                         prep_word = child.text.lower()
@@ -14691,6 +16173,7 @@ class LinguisticEngine:
                                         anchor = prep_word
                                         anchor_type = "prep"
                                         prep_obj = pobj_tok
+                                        quote_governed_prep = anchor
                                         break
                                 if not anchor:
                                     for child in tok.children:
@@ -14750,12 +16233,13 @@ class LinguisticEngine:
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
-                            if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 # A1. Predicative Valency: Check if adjective governs a bound preposition
                                 for child in tok.children:
                                     if child.dep_ == "prep" and child.text.lower() in ("to", "for", "with", "of", "in", "from", "at", "about", "on"):
                                         anchor = child.text.lower()
                                         anchor_type = "prep"
+                                        quote_governed_prep = anchor
                                         for pchild in child.children:
                                             if pchild.dep_ == "pobj" and pchild.pos_ != "PRON" and pchild.text.lower() not in cls._ANCHOR_STOPWORDS and pchild.lemma_.lower() != w_lower:
                                                 prep_obj = pchild.lemma_.lower()
@@ -14828,7 +16312,7 @@ class LinguisticEngine:
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
-                            if tok.lemma_.lower() == w_lower or tok.text.lower() == w_lower:
+                            if _tok_matches_target(tok, doc):
                                 head = tok.head
                                 if head and head.lemma_.lower() not in cls._ANCHOR_STOPWORDS and head.lemma_.lower() != w_lower:
                                     h_lem = head.lemma_.lower()
@@ -14843,7 +16327,7 @@ class LinguisticEngine:
                     except Exception:
                         pass
 
-                # Priority B: Dictionary lookup from LDOCE zero collision anchor
+                # Priority B: Dictionary lookup from PedLex zero collision anchor
                 if not anchor:
                     ld_anc, ld_atype, ld_frame, _ = cls.find_ldoce_zero_collision_anchor(
                         target_word=w_lower,
@@ -14880,7 +16364,7 @@ class LinguisticEngine:
                 try:
                     doc = nlp(q_clean)
                     for tok in doc:
-                        if tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower:
+                        if _tok_matches_target(tok, doc):
                             for child in tok.children:
                                 if child.dep_ in ("dobj", "pobj") and child.pos_ != "PRON" and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS and child.lemma_.lower() != w_lower:
                                     anchor = child.lemma_.lower()
@@ -14951,19 +16435,25 @@ class LinguisticEngine:
             def _is_double_key(cand: str) -> bool:
                 if canonical_pos in ("function_word", "phrase", "idiom_slot"):
                     return False
-                flag, _kind = cls.double_key_collision(w_lower, cand, anchor, anchor_type, pos=canonical_pos)
+                flag, _kind = cls.double_key_collision(
+                    w_lower, cand, anchor, anchor_type, pos=canonical_pos, quote=it.get("quote")
+                )
                 if flag:
                     return True
                 raw_w_low = str(raw_w or "").strip().lower()
                 if raw_w_low and raw_w_low != w_lower:
-                    flag_raw, _ = cls.double_key_collision(raw_w_low, cand, anchor, anchor_type, pos=canonical_pos)
+                    flag_raw, _ = cls.double_key_collision(
+                        raw_w_low, cand, anchor, anchor_type, pos=canonical_pos, quote=it.get("quote")
+                    )
                     if flag_raw:
                         return True
                 if canonical_pos == "noun":
                     p_tw = cls.pluralize_noun(w_lower)
                     p_cand = cls.pluralize_noun(cand)
                     if p_tw != w_lower or p_cand != cand:
-                        flag_p, _ = cls.double_key_collision(p_tw, p_cand, anchor, anchor_type, pos=canonical_pos)
+                        flag_p, _ = cls.double_key_collision(
+                            p_tw, p_cand, anchor, anchor_type, pos=canonical_pos, quote=it.get("quote")
+                        )
                         if flag_p:
                             return True
                 return False
@@ -14984,7 +16474,15 @@ class LinguisticEngine:
                 return cls.is_cefr_compliant_distractor(cand, w_lower)
 
             def _clear_and_refill_distractors(curr_distractors: List[str], curr_meta: Dict[str, str]) -> Tuple[List[str], Dict[str, str]]:
-                cleared_list = [d for d in curr_distractors if _is_valid_distractor(d)]
+                near_s, ants_s = cls.semantic_fields(w_lower, pos=canonical_pos)
+                near_only_s = near_s - ants_s
+                cleared_list: List[str] = []
+                for d in curr_distractors:
+                    if not _is_valid_distractor(d):
+                        continue
+                    if d.lower() in near_only_s and sum(1 for x in cleared_list if x.lower() in near_only_s) >= 1:
+                        continue
+                    cleared_list.append(d)
                 r_meta: Dict[str, str] = {}
                 if len(cleared_list) < 3:
                     try:
@@ -14992,7 +16490,8 @@ class LinguisticEngine:
                             target_word=w_lower, pos=canonical_pos,
                             context_anchor=anchor, anchor_type=anchor_type,
                             target_count=8, exclude_words=used_distractors,
-                            definition=it.get("definition"), return_metadata=True
+                            definition=it.get("definition"), quote=it.get("quote"),
+                            return_metadata=True
                         )
                         r_meta = r_meta or {}
                     except Exception:
@@ -15001,6 +16500,8 @@ class LinguisticEngine:
                         if len(cleared_list) >= 3:
                             break
                         if cand and cand not in cleared_list and _is_valid_distractor(cand):
+                            if cand.lower() in near_only_s and sum(1 for x in cleared_list if x.lower() in near_only_s) >= 1:
+                                continue
                             cleared_list.append(cand)
                     if len(cleared_list) < 3:
                         pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
@@ -15009,6 +16510,8 @@ class LinguisticEngine:
                                 if len(cleared_list) >= 3:
                                     break
                                 if cand and cand not in cleared_list and cand not in used_distractors and _is_valid_distractor(cand):
+                                    if cand.lower() in near_only_s and sum(1 for x in cleared_list if x.lower() in near_only_s) >= 1:
+                                        continue
                                     cleared_list.append(cand)
                         except Exception:
                             pass
@@ -15055,17 +16558,31 @@ class LinguisticEngine:
             is_plural_noun = False
             plural_target = w_lower
             if canonical_pos == "noun":
-                spacy_doc = nlp(f"these {w_lower}")
-                is_spacy_plural = any(tok.text.lower() == w_lower and tok.tag_ == "NNS" for tok in spacy_doc)
+                is_spacy_plural = cls._is_genuine_plural_noun(w_lower)
                 plural_tantum = {"goods", "customs", "clothes", "belongings", "surroundings", "fireworks", "premises", "congratulations"}
 
                 quote_plural = False
                 if it["quote"]:
                     try:
                         q_doc = nlp(it["quote"])
-                        quote_plural = any((tok.lemma_.lower() == w_lower or tok.text.lower() == w_lower) and tok.tag_ == "NNS" for tok in q_doc)
+                        quote_plural = any(
+                            (tok.lemma_.lower() == w_lower or tok.text.lower() == w_lower)
+                            and tok.tag_ == "NNS"
+                            and (tok.text.lower() != w_lower or is_spacy_plural)
+                            for tok in q_doc
+                        )
                     except Exception:
                         quote_plural = False
+
+                # Do NOT pluralize via quote_plural if the locked atomic pattern/example uses the singular base headword
+                # in a fixed singular construction (e.g. 'matter of routine' -> do not corrupt into 'matter of routines')
+                if quote_plural and initial_atomic_bundle:
+                    init_pat = (initial_atomic_bundle.get("pattern") or "").lower()
+                    init_ex = (initial_atomic_bundle.get("example") or "").lower()
+                    p_cand = cls.pluralize_noun(w_lower)
+                    if init_pat and re.search(rf"\b{re.escape(w_lower)}\b", init_pat) and not re.search(rf"\b{re.escape(p_cand)}\b", init_pat):
+                        if not init_ex or not re.search(rf"\b{re.escape(p_cand)}\b", init_ex):
+                            quote_plural = False
 
                 if is_spacy_plural or w_lower in plural_tantum or quote_plural:
                     is_plural_noun = True
@@ -15097,7 +16614,7 @@ class LinguisticEngine:
             dist_list = [opt for opt in final_options if opt.lower() != final_target.lower()]
             dist_str = ", ".join(dist_list)
 
-            # 5.1 Re-verify LDOCE Entry & Sense if final_target differs and Step 0 had no entry
+            # 5.1 Re-verify PedLex Entry & Sense if final_target differs and Step 0 had no entry
             if locked_sense is None:
                 entry_final = cls.get_ldoce_entry(final_target)
                 if entry_base and cls._pos_code(entry_base.get("pos")) == target_p_code:
@@ -15151,8 +16668,9 @@ class LinguisticEngine:
                         anchor_type = "prep"
                         pattern_anchor = pat_prep
 
-            quote_shown_prep = bool(anchor) and anchor_type == "prep" and bool(re.search(
-                rf"\b{re.escape(str(anchor).lower())}\b", (it.get("quote") or "").lower()))
+            quote_shown_prep = bool(anchor) and anchor_type == "prep" and bool(
+                quote_governed_prep and str(anchor).lower() == quote_governed_prep.lower()
+            )
             quote_shown_partitive = bool(anchor) and anchor_type == "partitive" and bool(re.search(
                 rf"\b{re.escape(str(anchor).lower())}\b", (it.get("quote") or "").lower()))
 
@@ -15183,7 +16701,7 @@ class LinguisticEngine:
                     ldoce_pattern_example = ld_ex
                     pattern_anchor = ld_anchor
 
-            # Batch Anchor Collision Gate (P0-5)
+            # Batch Anchor Collision Gate 
             if batch_target_words and not is_idiom_slot and (anchor or prep_obj):
                 if prep_obj and cls._in_forbidden_word_set(prep_obj, batch_target_words):
                     prep_obj = None
@@ -15206,7 +16724,7 @@ class LinguisticEngine:
                     ldoce_pattern_example = None
                     ldoce_cloze_frame = None
 
-            # Locked-Sense Frame Concordance Gate (P0-4)
+            # Locked-Sense Frame Concordance Gate 
             if anchor_type == "prep" and anchor and not is_idiom_slot and cls._prep_anchor_sense_conflict(
                 final_target,
                 anchor,
@@ -15259,7 +16777,7 @@ class LinguisticEngine:
                     dist_list = [opt for opt in final_options if opt.lower() != final_target.lower()]
                     dist_str = ", ".join(dist_list)
 
-            # If a re-anchoring produced a new anchor, look up the LDOCE sentence that
+            # If a re-anchoring produced a new anchor, look up the PedLex sentence that
             # actually demonstrates this (target, anchor) pair within the locked sense.
             if anchor and not ldoce_pattern_example and anchor != pattern_anchor:
                 ldoce_pattern_example = cls.ldoce_example_for_anchor(
@@ -15327,7 +16845,7 @@ class LinguisticEngine:
                 if quant_lem and not re.search(rf"\b{re.escape(quant_lem)}\w*\b", ldoce_cloze_frame.lower()):
                     ldoce_cloze_frame = None
 
-            # Prescribed-Inflection Concordance (P1-2)
+            # Prescribed-Inflection Concordance 
             _base_options = list(final_options)
             inflection_desc, final_options, final_target, verb_form_tag = cls._reconcile_prescribed_inflection(
                 base_options=_base_options,
@@ -15339,12 +16857,16 @@ class LinguisticEngine:
             )
             if final_options != _base_options:
                 if canonical_pos not in ("phrase", "idiom_slot", "function_word") and any(
-                    opt.lower() != final_target.lower() and cls.double_key_collision(final_target, opt, anchor, anchor_type, pos=canonical_pos)[0]
+                    opt.lower() != final_target.lower() and cls.double_key_collision(
+                        final_target, opt, anchor, anchor_type, pos=canonical_pos, quote=it.get("quote")
+                    )[0]
                     for opt in final_options
                 ):
                     bad_bases = {
                         b for b, f in zip(_base_options, final_options)
-                        if f.lower() != final_target.lower() and cls.double_key_collision(final_target, f, anchor, anchor_type, pos=canonical_pos)[0]
+                        if f.lower() != final_target.lower() and cls.double_key_collision(
+                            final_target, f, anchor, anchor_type, pos=canonical_pos, quote=it.get("quote")
+                        )[0]
                     }
                     filtered_base_dists = [d for d in distractors if d not in bad_bases]
                     distractors, dist_meta = _clear_and_refill_distractors(filtered_base_dists, dist_meta)
@@ -15433,24 +16955,44 @@ class LinguisticEngine:
                 if not any(re.search(rf"\b{re.escape(f)}\b", best_pattern, re.IGNORECASE) for f in target_forms if f):
                     best_pattern = None
 
+            is_base_verb_slot = (
+                (inflection_desc or "base form") == "base form"
+                and not is_plural_noun
+                and (
+                    canonical_pos == "verb"
+                    or (
+                        canonical_pos == "phrase"
+                        and final_target.split()
+                        and final_target.split()[0] not in {"a", "an", "the", "in", "on", "at", "by", "for", "with", "from", "to", "of"}
+                        and bool(cls._wordnet_pos(final_target.split()[0]) & {"v"})
+                    )
+                )
+            )
+
             if cloze_slot_frame:
                 stem_core = f"Fit into frame '{cloze_slot_frame}'."
                 if is_plural_noun:
                     stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb so the adjective predicate is complete)."
+                elif is_base_verb_slot:
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
             elif best_pattern:
                 stem_core = "Fit into the Pattern above."
                 if is_plural_noun:
                     stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb)."
+                elif is_base_verb_slot:
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
             else:
                 stem_core = "Write a natural sentence matching the Definition above."
                 if is_plural_noun:
                     stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                 elif is_copula_adj:
                     stem_core += " (Complete predicate required: stem MUST include a linking/copular verb)."
+                elif is_base_verb_slot:
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
 
             task_parts = [stem_core]
 
@@ -15463,12 +17005,18 @@ class LinguisticEngine:
                 if not skip_model:
                     task_parts.append(f'Model: "{ex_clean}"')
 
-            # Data-Driven Semantic Discriminator (LDOCE Thesaurus & Language Activator)
+            # Data-Driven Semantic & Grammatical Discriminator (PedLex <GRAM>, Grammar Boxes, Thesaurus & Language Activator)
             target_base = quant_head_noun if is_quantifier_frame else w_lower
             dist_base_list = [o for o in _base_options if o.lower() != target_base]
-            dist_base_meta = {b: dist_meta.get(f) for b, f in zip(_base_options, final_options)}
+            dist_base_meta = {b: dist_meta.get(f) or dist_meta.get(b) for b, f in zip(_base_options, final_options)}
             discriminator_note = cls._semantic_discriminator_note(
-                target_base, it.get("definition"), dist_base_list, dist_base_meta
+                target_base,
+                it.get("definition"),
+                dist_base_list,
+                dist_base_meta,
+                pos=canonical_pos,
+                sense_index=t_s_idx,
+                quote=it.get("quote") or it.get("raw_quote")
             )
             if discriminator_note:
                 task_parts.append(discriminator_note)
@@ -15494,7 +17042,9 @@ class LinguisticEngine:
             # Determine anchor source: "quote" if anchor appeared in authentic quote text, else "dictionary"
             anchor_source = None
             if anchor:
-                if it.get("quote") and re.search(rf"\b{re.escape(anchor.lower())}\b", it["quote"].lower()):
+                if anchor_type == "prep":
+                    anchor_source = "quote" if quote_shown_prep else "dictionary"
+                elif it.get("quote") and re.search(rf"\b{re.escape(anchor.lower())}\b", it["quote"].lower()):
                     anchor_source = "quote"
                 else:
                     anchor_source = "dictionary"
