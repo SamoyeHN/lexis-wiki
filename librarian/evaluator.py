@@ -44,7 +44,7 @@ ALLOWED_GRAMMAR_SLOTS = frozenset({
 
 # Standard COBUILD bare POS tokens for unbracketed pattern formulas
 COBUILD_POS_TOKENS = frozenset({
-    "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "adj", "adv",
+    "np", "vp", "v", "be", "aux", "v-ed", "v3", "v-ing", "to-v", "to-inf", "inf", "adj", "adv",
     "det", "prep", "conj", "clause", "s", "n", "pron", "modal"
 })
 # Canonical identities for COBUILD slot labels. Two labels that name the same
@@ -1239,7 +1239,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             clean_imitation_raw = imitation.lower()
             if pattern:
                 # Check for explicit literal connector / subordinator words in formula (supporting slash alternatives e.g. is/was)
-                raw_lits = re.findall(r"[a-zA-Z0-9_\'/]+", re.sub(r"\[.*?\]|\(.*?\)", " ", pattern))
+                raw_lits = re.findall(r"[a-zA-Z0-9_\'/-]+", re.sub(r"\[.*?\]|\(.*?\)", " ", pattern))
                 expanded_quote = _clean_core(_expand_contractions(quote))
                 expanded_imitation = _clean_core(_expand_contractions(imitation))
                 quote_tokens = set(clean_quote.split()) | set(expanded_quote.split())
@@ -1248,17 +1248,26 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 missing_anchors_imitation = []
                 for lit in raw_lits:
                     alts = [a.strip() for a in lit.split("/") if a.strip()]
-                    valid_alts = [a for a in alts if len(_clean_core(a)) >= 2 and _clean_core(a) not in COBUILD_POS_TOKENS]
+                    expanded_alts = []
+                    for a in alts:
+                        if a.lower() in ("to-v", "to-inf"):
+                            expanded_alts.append("to")
+                        elif len(_clean_core(a)) >= 2 and _clean_core(a) not in COBUILD_POS_TOKENS and a.lower() not in COBUILD_POS_TOKENS:
+                            expanded_alts.append(a)
+                    valid_alts = expanded_alts
                     if not valid_alts:
                         continue
-                    if not any(_clean_core(a) in quote_tokens for a in valid_alts):
+                    if not any(_clean_core(a) in quote_tokens or _form_in_text(_clean_core(a), clean_quote) for a in valid_alts):
                         missing_anchors_quote.append(lit)
                     if imitation and len(imitation.split()) >= 3:
-                        is_instantiated = any(_clean_core(a) in imitation_tokens for a in valid_alts)
+                        is_instantiated = any(_clean_core(a) in imitation_tokens or _form_in_text(_clean_core(a), clean_imitation) for a in valid_alts)
                         # propositional encapsulation interpretive verbs (show/suggest/mean/indicate)
                         # allow cross-verb instantiation within the closed interpretive verb paradigm
                         if not is_instantiated and any(re.match(r"^(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)$", a, re.IGNORECASE) for a in valid_alts):
                             if re.search(r"\b(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        if not is_instantiated and any(a.lower() in ("although", "though", "while", "whereas") for a in valid_alts):
+                            if re.search(r"\b(?:although|though|even though|while|whereas)\b", imitation, re.IGNORECASE):
                                 is_instantiated = True
                         if not is_instantiated:
                             missing_anchors_imitation.append(lit)

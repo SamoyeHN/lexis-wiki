@@ -577,6 +577,26 @@ class ExpressionPatternEngine:
             if p_text not in COMMON_PARTICLES:
                 return None
 
+            # Check if particle is immediately followed by an adverb/adjective forming an attested 3-word PedLex phrase (e.g. 'laugh out loud')
+            if particle.i + 1 < len(doc):
+                next_tok = doc[particle.i + 1]
+                if next_tok.is_alpha and next_tok.pos_ in ("ADV", "ADJ") and next_tok.head in (root_verb, particle):
+                    cand_3w = f"{v_lemma} {p_text} {next_tok.lower_}"
+                    from .linguistics import LinguisticEngine
+                    if (
+                        LinguisticEngine.lookup_ldoce_phrase_candidates(cand_3w)
+                        or LinguisticEngine.get_pedlex_entry(cand_3w)
+                        or LinguisticEngine.is_attested_phrase(cand_3w)
+                    ):
+                        return {
+                            "pattern_id": pattern_id,
+                            "phrase": cand_3w,
+                            "pattern_formula": cand_3w,
+                            "type": "set phrase",
+                            "priority": priority + 5,
+                            "token_indices": [root_verb.i, particle.i, next_tok.i]
+                        }
+
             # Contextual Transitivity Audit
             has_dobj = any(c.dep_ in ("dobj", "obj") for c in root_verb.children)
             is_passive = any(c.dep_ in ("auxpass", "nsubjpass") for c in root_verb.children)

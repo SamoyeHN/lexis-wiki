@@ -509,17 +509,55 @@ class WikiProcessor:
         return cls.unwrap_literal_brackets(formula)
 
     @staticmethod
-    def _sanitize_vocab_for_quiz(vocab_content: str) -> Tuple[str, List[str], List[str]]:
+    def _sanitize_vocab_for_quiz(vocab_content: Any) -> Tuple[str, List[str], List[str]]:
         """
         Physically isolates the quiz generator from example sentences:
-        1. Strips all '- **Quoted Sentence**:' and '- **Example Usage**:' lines.
+        1. Accepts structured List[VocabularyItem | Dict] directly (or legacy markdown string for unit tests).
         2. Returns:
-           - sanitized_content: Clean markdown with only headword, part of speech, definition, and CEFR level.
+           - sanitized_content: Clean prompt summary with only headword, part of speech, definition, and CEFR level.
            - headwords: List of lowercase headword strings in this unit.
            - banned_sentences: List of the raw quoted and example sentences to audit stems against.
         """
         if not vocab_content:
             return "", [], []
+
+        if isinstance(vocab_content, (list, tuple)):
+            headwords: List[str] = []
+            banned_sentences: List[str] = []
+            blocks: List[str] = []
+            for item in vocab_content:
+                if isinstance(item, dict):
+                    raw_w = str(item.get("word") or "").strip()
+                    pos = str(item.get("part_of_speech") or "noun").strip()
+                    defn = str(item.get("definition") or "").strip()
+                    quote = str(item.get("quoted_sentence") or item.get("quote") or "").strip()
+                    ex_usage = str(item.get("example_usage") or "").strip()
+                else:
+                    raw_w = str(getattr(item, "word", "") or "").strip()
+                    pos = str(getattr(item, "part_of_speech", "noun") or "noun").strip()
+                    defn = str(getattr(item, "definition", "") or "").strip()
+                    quote = str(getattr(item, "quoted_sentence", "") or "").strip()
+                    ex_usage = str(getattr(item, "example_usage", "") or "").strip()
+                if not raw_w:
+                    continue
+                hw_clean = raw_w.lower()
+                headwords.append(hw_clean)
+                hw_stripped = re.sub(r'\[.*?\]|\(.*?\)', '', hw_clean)
+                hw_stripped = re.sub(r'\s+', ' ', hw_stripped).strip()
+                if hw_stripped and hw_stripped != hw_clean:
+                    headwords.append(hw_stripped)
+                if quote:
+                    banned_sentences.append(quote)
+                if ex_usage:
+                    banned_sentences.append(ex_usage)
+                w_cefr = LinguisticEngine.get_word_cefr(raw_w, default="B1")
+                blocks.append(
+                    f"## [[{raw_w}]]\n"
+                    f"- **Part of Speech**: {pos}\n"
+                    f"- **Word CEFR Level**: {w_cefr}\n"
+                    f"- **Definition**: {defn}"
+                )
+            return "\n\n".join(blocks).strip(), headwords, banned_sentences
 
         headwords = []
         for hw in re.findall(r'##\s*\[\[(.*?)\]\]', vocab_content):
@@ -540,7 +578,9 @@ class WikiProcessor:
                 sent = m.group(1).strip()
                 if sent:
                     banned_sentences.append(sent)
-            elif re.match(r'^\s*-\s*\*\*(?:Collocations|Grammar & Usage|Thesaurus Note)\*\*:\s*(.*)', line, re.IGNORECASE):
+            elif re.match(r'^\s*-\s*\*\*(?:Collocations|Grammar & Usage|Pattern|Thesaurus Note)\*\*:\s*(.*)', line, re.IGNORECASE):
+                continue
+            elif re.match(r'^\s{2,}\*\*', line):
                 continue
             else:
                 clean_lines.append(line)
@@ -549,15 +589,46 @@ class WikiProcessor:
         return sanitized_content, headwords, banned_sentences
 
     @classmethod
-    def _sanitize_grammar_for_quiz(cls, grammar_content: str) -> Tuple[str, List[str]]:
+    def _sanitize_grammar_for_quiz(cls, grammar_content: Any) -> Tuple[str, List[str]]:
         """
         Physically isolates the quiz generator from grammar example sentences:
-        Strips '- **Quote**:' and '- **Imitation Example**:' lines,
-        preserving Pattern Formula, Pedagogical Function, Common Mistakes, and CEFR level.
+        Accepts structured List[GrammarItem | Dict] directly (or legacy markdown string for unit tests),
+        preserving Pattern Formula, Pedagogical Function, and Common Mistakes while excluding
+        Quote and Imitation Example.
         Also extracts a concise, high-density summary list of grammar patterns & common mistakes.
         """
         if not grammar_content:
             return "", []
+
+        if isinstance(grammar_content, (list, tuple)):
+            blocks: List[str] = []
+            pattern_summaries: List[str] = []
+            for item in grammar_content:
+                if isinstance(item, dict):
+                    raw_formula = str(item.get("pattern_formula") or "").strip()
+                    ped_func = str(item.get("pedagogical_function") or "").strip()
+                    mistakes = str(item.get("common_mistakes") or "").strip()
+                else:
+                    raw_formula = str(getattr(item, "pattern_formula", "") or "").strip()
+                    ped_func = str(getattr(item, "pedagogical_function", "") or "").strip()
+                    mistakes = str(getattr(item, "common_mistakes", "") or "").strip()
+                norm_formula = cls.normalize_grammar_formula(raw_formula)
+                name = norm_formula or raw_formula or "Grammar Pattern"
+                if ":" in name:
+                    name = name.split(":", 1)[0].strip()
+                blocks.append(
+                    f"## [[{name}]]\n"
+                    f"- **Pattern Formula**: {norm_formula}\n"
+                    f"- **Pedagogical Function**: {ped_func}\n"
+                    f"- **Common Mistakes**: {mistakes}"
+                )
+                summary = f"* {name}"
+                if norm_formula:
+                    summary += f": {norm_formula}"
+                if mistakes:
+                    summary += f" (Common Mistake: {mistakes})"
+                pattern_summaries.append(summary)
+            return "\n\n".join(blocks).strip(), pattern_summaries
 
         clean_lines = []
         pattern_summaries = []
@@ -4166,6 +4237,30 @@ class WikiProcessor:
         # QA status & review flag are recorded in frontmatter for teacher visibility
         # -------------------------------------------------------------
         qa_audit = getattr(data, "_qa_audit", None) if dataclasses.is_dataclass(data) else (data.get("_qa_audit") if isinstance(data, dict) else None)
+        if qa_audit is None and category in ("vocabulary", "grammar", "summary"):
+            try:
+                from .evaluator import LogEvaluator
+                import json as _json
+                payload_dict = dataclasses.asdict(data) if dataclasses.is_dataclass(data) else (dict(data) if isinstance(data, dict) else {})
+                payload_dict.pop("_qa_audit", None)
+                src_ctx = getattr(self, "_last_source_content", "") or ""
+                if not src_ctx:
+                    src_md = unit_dir / "sources" / f"{filename_stem}.md"
+                    if src_md.exists():
+                        src_ctx = src_md.read_text(encoding="utf-8", errors="ignore")
+                qa_audit = LogEvaluator.evaluate_log({
+                    "task": f"extract_{category}_{filename_stem}",
+                    "parsed_json": payload_dict,
+                    "response": _json.dumps(payload_dict, ensure_ascii=False),
+                    "user_prompt": src_ctx,
+                    "context_prompt": src_ctx,
+                })
+                if dataclasses.is_dataclass(data):
+                    object.__setattr__(data, "_qa_audit", qa_audit)
+                elif isinstance(data, dict):
+                    data["_qa_audit"] = qa_audit
+            except Exception as e:
+                logger.debug(f"Deterministic QA audit evaluation skipped for {category}: {e}")
         has_fatal_flags = False
         if qa_audit and isinstance(qa_audit, dict):
             composite = qa_audit.get("composite_score")
@@ -4414,12 +4509,12 @@ class WikiProcessor:
                 # Normalize inner brackets to parentheses so wikilinks [[...]] stay valid in Obsidian
                 inner = inner.replace("[", "(").replace("]", ")")
                 header_val = f"[[{inner}]]"
-                
-                lines.append(f"## {header_val}")
 
-                # For vocabulary items, deterministically calculate Word CEFR Level and Part of Speech if not present
+                # For vocabulary items, deterministically calculate Word CEFR Level, Part of Speech, and Enrichment
+                header_suffix_parts: List[str] = []
                 if category == "vocabulary":
                     has_cefr = any(k.lower() == "word_cefr_level" and v for k, v in body_entries)
+                    derived_cefr = ""
                     if not has_cefr and primary_key == "word":
                         clean_target_word = re.sub(r'\[.*?\]|\(.*?\)', '', str(header_entry[1])).strip().lower()
                         # If multi-word expression, take first core content word (skipping determiners, prepositions, and articles)
@@ -4432,24 +4527,19 @@ class WikiProcessor:
                         content_tokens = [tok for tok in tokens if tok not in STOP_WORDS_FOR_CEFR]
                         lookup_w = content_tokens[0] if content_tokens else (tokens[0] if tokens else clean_target_word)
                         derived_cefr = LinguisticEngine.get_word_cefr(lookup_w, default="B1")
-                        body_entries.append(("word_cefr_level", derived_cefr))
+                    else:
+                        derived_cefr = str(next((v for k, v in body_entries if k.lower() == "word_cefr_level" and v), "") or "").strip()
 
-                    has_pos = any(k.lower() == "part_of_speech" and v for k, v in body_entries)
+                    authoritative_pos = ""
+                    gram_tag_inline = ""
                     if primary_key == "word":
                         raw_quote = next((v for k, v in body_entries if k.lower() in ("quoted_sentence", "quote")), "")
                         raw_defn = next((v for k, v in body_entries if k.lower() == "definition"), "")
                         headword = str(header_entry[1])
                         current_pos_val = next((v for k, v in body_entries if k.lower() == "part_of_speech"), None)
                         authoritative_pos = LinguisticEngine.resolve_item_pos(headword, str(raw_quote), manual_pos=current_pos_val)
-                        if not has_pos:
-                            body_entries.append(("part_of_speech", authoritative_pos))
-                        else:
-                            for j, (field_key, field_val) in enumerate(body_entries):
-                                if field_key.lower() == "part_of_speech":
-                                    body_entries[j] = (field_key, authoritative_pos)
-                                    break
 
-                        # Zero-Token Pedagogical Enrichment (<GRAM>, Collocations, Grammar Boxes, Thesaurus)
+                        # Zero-Token Pedagogical Enrichment (<GRAM>, Collocations, Pattern Note, Thesaurus)
                         existing_keys = {k.lower() for k, _ in body_entries}
                         enrichment = LinguisticEngine.get_vocab_card_enrichment(
                             word=headword,
@@ -4457,9 +4547,32 @@ class WikiProcessor:
                             definition=str(raw_defn or ""),
                             quote=str(raw_quote or "")
                         )
-                        for e_key in ("collocations", "grammar_usage", "thesaurus_note"):
-                            if enrichment.get(e_key) and e_key not in existing_keys:
-                                body_entries.append((e_key, enrichment[e_key]))
+                        gram_tag_inline = str(enrichment.get("grammar_tag") or "").strip()
+                        if enrichment.get("collocations") and "collocations" not in existing_keys:
+                            body_entries.append(("collocations", enrichment["collocations"]))
+                        if enrichment.get("pattern_note") and "pattern" not in existing_keys and "grammar_usage" not in existing_keys:
+                            body_entries.append(("pattern", enrichment["pattern_note"]))
+                        if enrichment.get("thesaurus_note") and "thesaurus_note" not in existing_keys:
+                            body_entries.append(("thesaurus_note", enrichment["thesaurus_note"]))
+
+                    # Remove part_of_speech and word_cefr_level from bullet entries (moved to header line)
+                    body_entries = [
+                        (k, v) for k, v in body_entries
+                        if k.lower() not in ("part_of_speech", "word_cefr_level")
+                    ]
+
+                    if authoritative_pos:
+                        header_suffix_parts.append(authoritative_pos)
+                    if derived_cefr:
+                        header_suffix_parts.append(derived_cefr)
+                    if gram_tag_inline:
+                        fmt_gram = gram_tag_inline if gram_tag_inline.startswith("`") else f"`{gram_tag_inline}`"
+                        header_suffix_parts.append(fmt_gram)
+
+                header_line = f"## {header_val}"
+                if header_suffix_parts:
+                    header_line += " " + " ".join(header_suffix_parts)
+                lines.append(header_line)
 
                 # Iterate remaining fields as bullet points with canonical field ordering
                 CANONICAL_FIELD_ORDERS = {
@@ -4472,12 +4585,11 @@ class WikiProcessor:
                         "cefr_level"
                     ],
                     "vocabulary": [
-                        "part_of_speech",
-                        "word_cefr_level",
                         "definition",
                         "quoted_sentence",
                         "example_usage",
                         "collocations",
+                        "pattern",
                         "grammar_usage",
                         "thesaurus_note"
                     ],
@@ -4504,6 +4616,7 @@ class WikiProcessor:
                     "word_cefr_level": "Word CEFR Level",
                     "cefr_level": "CEFR Level",
                     "collocations": "Collocations",
+                    "pattern": "Pattern",
                     "grammar_usage": "Grammar & Usage",
                     "thesaurus_note": "Thesaurus Note",
                 }
@@ -4798,42 +4911,6 @@ class WikiProcessor:
                     core_name = child.name
                     break
 
-        # Check standard location: wiki/<core_name>/extractions/<core_name>_vocabulary.md
-        vocab_path = unit_dir / "extractions" / f"{core_name}_vocabulary.md"
-        if not vocab_path.exists():
-            vocab_paths = list(self.config.wiki_content_path.rglob(f"{core_name}_vocabulary.md"))
-            vocab_path = vocab_paths[0] if vocab_paths else (unit_dir / f"{core_name}_vocabulary.md")
-
-        cefr = None
-        vocab_content = ""
-        
-        if vocab_path.exists():
-            with open(vocab_path, "r", encoding="utf-8") as f:
-                vocab_content = f.read()
-                # Match both quoted and unquoted frontmatter: overall_cefr_level: "B2" or overall_cefr_level: B2
-                m = re.search(r'overall_cefr_level:\s*["\']?([A-C][1-2])["\']?', vocab_content, re.IGNORECASE)
-                if m:
-                    cefr = m.group(1).upper()
-
-        # Multi-source fallback: Check summary, grammar, or mindmap if vocabulary doesn't have it or isn't generated yet
-        if not cefr:
-            for ext_candidate in [f"{core_name}_summary.md", f"{core_name}_grammar.md", f"{core_name}_mindmap.json"]:
-                candidate_path = unit_dir / "extractions" / ext_candidate
-                if candidate_path.exists():
-                    try:
-                        cand_txt = candidate_path.read_text(encoding="utf-8")
-                        m = re.search(r'overall_cefr_level["\']?\s*[:=]\s*["\']?([A-C][1-2])["\']?', cand_txt, re.IGNORECASE)
-                        if m:
-                            cefr = m.group(1).upper()
-                            break
-                    except Exception:
-                        pass
-
-        if not cefr:
-            import logging
-            logging.getLogger("librarian").warning(f"Could not resolve overall_cefr_level for {core_name}; falling back to B2.")
-            cefr = "B2"
-
         # Resolve source path: wiki/<core_name>/sources/<core_name>.md or .txt
         source_path = unit_dir / "sources" / f"{core_name}.md"
         if not source_path.exists():
@@ -4845,8 +4922,19 @@ class WikiProcessor:
                 if candidates:
                     source_path = candidates[0]
 
-        def _extract_fresh_vocab_md(src_path: Path) -> Tuple[str, str, str]:
-            """Runs fresh deterministic vocabulary + expression extraction with F12 atom suppression/recovery."""
+        cefr = "B2"
+        if source_path and source_path.exists():
+            try:
+                raw_src_for_cefr = source_path.read_text(encoding="utf-8")
+                clean_p_cefr, _, _, _ = self.parse_syllabus_sections(raw_src_for_cefr)
+                det_c = LinguisticEngine.calculate_text_cefr(clean_p_cefr or raw_src_for_cefr)
+                if det_c:
+                    cefr = det_c
+            except Exception:
+                pass
+
+        def _extract_fresh_vocab_items(src_path: Path) -> Tuple[List[VocabularyItem], str, str]:
+            """Runs fresh deterministic vocabulary + expression extraction with F12 atom suppression/recovery, returning structured items."""
             with open(src_path, "r", encoding="utf-8") as f:
                 src_text = f.read()
             clean_p, syl_v, syl_g, syl_e = self.parse_syllabus_sections(src_text)
@@ -4956,31 +5044,17 @@ class WikiProcessor:
                                 )
 
             all_v_items = v_items + e_items
-            fresh_md = ""
-            if all_v_items:
-                v_ext = VocabularyExtraction(
-                    title=f"{core_name} Vocabulary",
-                    vocabulary=all_v_items
-                )
-                fresh_md = self._format_as_markdown(v_ext, "vocabulary", src_path.name)
-            return fresh_md, resolved_cefr, clean_p
+            return all_v_items, resolved_cefr, clean_p
 
         if quiz_type in ("vocabulary", "vocabulary_quiz"):
-            # Per Rule 1.9: Assessment truth must be grounded directly on authentic source text,
-            # not downstream editable extraction notes. Perform fresh deterministic extraction if source exists.
-            if source_path and source_path.exists():
-                try:
-                    fresh_vocab_md, cefr, _ = _extract_fresh_vocab_md(source_path)
-                    if fresh_vocab_md:
-                        return {"content": fresh_vocab_md, "cefr_level": cefr}
-                except Exception as e:
-                    import logging
-                    logging.getLogger("librarian").warning(
-                        f"Fresh deterministic vocabulary extraction failed for {core_name}: {e}. Falling back to extraction markdown."
-                    )
-
-            if not vocab_path.exists(): return None
-            return {"content": vocab_content, "cefr_level": cefr}
+            # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items,
+            # never downstream markdown extraction files.
+            if not source_path or not source_path.exists():
+                return None
+            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            if not fresh_v_items:
+                return None
+            return {"content": fresh_v_items, "cefr_level": cefr}
 
         elif quiz_type == "reading":
             if not source_path or not source_path.exists(): return None
@@ -4994,97 +5068,50 @@ class WikiProcessor:
             return {"passage": clean_passage.strip() if clean_passage else passage, "cefr_level": cefr}
 
         elif quiz_type == "translation":
-            # Per Rule 1.9: Assessment truth must be grounded directly on authentic source text.
-            fresh_vocab = vocab_content
-            fresh_grammar = ""
-            if source_path and source_path.exists():
-                try:
-                    with open(source_path, "r", encoding="utf-8") as f:
-                        source_text = f.read()
-                    clean_passage, syl_v, syl_g, syl_e = self.parse_syllabus_sections(source_text)
-                    fresh_v_md, cefr, _ = _extract_fresh_vocab_md(source_path)
-                    if fresh_v_md:
-                        fresh_vocab = fresh_v_md
-
-                    indexed_text, pool = LinguisticEngine.tokenize_and_index_sentences(clean_passage)
-                    compile_defaults = self.config.get("compile_defaults") or {}
-                    target_k_g = compile_defaults.get("grammar", 5)
-                    det_g = LinguisticEngine.extract_deterministic_grammar(
-                        clean_passage,
-                        sentence_pool=pool,
-                        target_count=target_k_g,
-                        syllabus_grammar=syl_g
-                    )
-                    if det_g:
-                        g_items = [
-                            GrammarItem(
-                                quote=it['quote'],
-                                pattern_formula=it['pattern_formula'],
-                                pedagogical_function=it['pedagogical_function'],
-                                design_audit=it.get('design_audit', ''),
-                                imitation_example=it['imitation_example'],
-                                common_mistakes=it['common_mistakes']
-                            )
-                            for it in det_g
-                        ]
-                        g_ext = GrammarExtraction(
-                            title=f"{core_name} Grammar",
-                            grammar_patterns=g_items
-                        )
-                        fresh_grammar = self._format_as_markdown(g_ext, "grammar", source_path.name)
-                except Exception as e:
-                    import logging
-                    logging.getLogger("librarian").warning(
-                        f"Fresh deterministic extraction for translation quiz failed for {core_name}: {e}. Falling back to extraction markdown."
-                    )
-
-            if not fresh_vocab and not vocab_path.exists():
+            # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items.
+            if not source_path or not source_path.exists():
                 return None
-            if not fresh_grammar:
-                grammar_path = unit_dir / "extractions" / f"{core_name}_grammar.md"
-                if not grammar_path.exists():
-                    grammar_paths = list(self.config.wiki_content_path.rglob(f"{core_name}_grammar.md"))
-                    grammar_path = grammar_paths[0] if grammar_paths else (unit_dir / f"{core_name}_grammar.md")
-                if grammar_path.exists():
-                    with open(grammar_path, "r", encoding="utf-8") as f:
-                        fresh_grammar = f.read()
+            with open(source_path, "r", encoding="utf-8") as f:
+                source_text = f.read()
+            clean_passage, syl_v, syl_g, syl_e = self.parse_syllabus_sections(source_text)
+            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            if not fresh_v_items:
+                return None
 
-            return {"vocab_list": fresh_vocab, "grammar_list": fresh_grammar, "cefr_level": cefr}
+            indexed_text, pool = LinguisticEngine.tokenize_and_index_sentences(clean_passage)
+            compile_defaults = self.config.get("compile_defaults") or {}
+            target_k_g = compile_defaults.get("grammar", 5)
+            det_g = LinguisticEngine.extract_deterministic_grammar(
+                clean_passage,
+                sentence_pool=pool,
+                target_count=target_k_g,
+                syllabus_grammar=syl_g
+            )
+            g_items = [
+                GrammarItem(
+                    quote=it['quote'],
+                    pattern_formula=it['pattern_formula'],
+                    pedagogical_function=it['pedagogical_function'],
+                    design_audit=it.get('design_audit', ''),
+                    imitation_example=it['imitation_example'],
+                    common_mistakes=it['common_mistakes']
+                )
+                for it in (det_g or [])
+            ]
+            return {"vocab_list": fresh_v_items, "grammar_list": g_items, "cefr_level": cefr}
 
         elif quiz_type == "listening":
-            fresh_listening_vocab = vocab_content
-            if source_path and source_path.exists():
-                try:
-                    fresh_v_md, cefr, _ = _extract_fresh_vocab_md(source_path)
-                    if fresh_v_md:
-                        fresh_listening_vocab = fresh_v_md
-                except Exception:
-                    pass
-            if not fresh_listening_vocab and not vocab_path.exists():
+            if not source_path or not source_path.exists():
                 return None
-            # Retrieve unit summary to anchor dialogue topic to Core Concepts
-            summary_content = ""
-            summary_path = unit_dir / "extractions" / f"{core_name}_summary.md"
-            if not summary_path.exists():
-                summary_candidates = list(self.config.wiki_content_path.rglob(f"{core_name}_summary.md"))
-                if summary_candidates:
-                    summary_path = summary_candidates[0]
-            if summary_path and summary_path.exists():
-                try:
-                    summary_content = summary_path.read_text(encoding="utf-8")
-                except Exception:
-                    pass
-            # Fallback to source article if summary does not exist
-            source_content = ""
-            if not summary_content and source_path and source_path.exists():
-                try:
-                    source_content = source_path.read_text(encoding="utf-8")
-                except Exception:
-                    pass
+            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            if not fresh_v_items:
+                return None
+            source_content = source_path.read_text(encoding="utf-8")
+            clean_source, _, _, _ = self.parse_syllabus_sections(source_content)
             return {
-                "vocab_list": fresh_listening_vocab,
-                "summary_content": summary_content,
-                "source_content": source_content,
+                "vocab_list": fresh_v_items,
+                "summary_content": "",
+                "source_content": clean_source or source_content,
                 "unit_core_name": core_name,
                 "cefr_level": cefr
             }

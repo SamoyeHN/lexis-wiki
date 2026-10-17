@@ -249,7 +249,7 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         "category": "Information Packaging",
         "priority": 85,
         "name": "Evaluative Dummy-It Extraposition",
-        "formula": "It is + [Adj/Noun] + that/to-inf [Clause]",
+        "formula": "It + [be] + [Adj/NP] + [to-V] / that + [Clause]",
         "tree_patterns": [
             [
                 {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
@@ -553,6 +553,17 @@ class GrammarPatternEngine:
                 else:
                     continue
 
+            # Semantic validation for concession_clausal:
+            # Subjectless 'while + V-ing/V-ed' (e.g. 'While working in Shilidian, he...') is a temporal participial adjunct,
+            # not a finite concessive clause.
+            if string_id == "concession_clausal":
+                tokens = [doc[i] for i in token_indices]
+                mark_tok = next((t for t in tokens if t.dep_ == "mark"), None)
+                sub_v = next((t for t in tokens if t != mark_tok and t.dep_ == "advcl"), None)
+                if mark_tok and mark_tok.lemma_.lower() == "while" and sub_v and sub_v.tag_ in ("VBG", "VBN"):
+                    if not any(c.dep_ in ("nsubj", "nsubjpass", "expl") for c in sub_v.children):
+                        continue
+
             # Semantic validation for nonfinite participial adjunct:
             # Must NOT be introduced by interrogative/subordinating adverbs/marks like 'why', 'how', 'when', 'if', 'because'
             # Must NOT have finite auxiliary verbs (e.g. 'was presented' -> finite passive, not nonfinite participle;
@@ -571,6 +582,21 @@ class GrammarPatternEngine:
                         continue
                     # Also check if it's introduced by a 'why/how' attached to its head
                     if part_v.head and any(c.lemma_.lower() in ("why", "how", "that") and c.i < part_v.i for c in part_v.head.children):
+                        continue
+                    # Post-positioned participial adjuncts ('[S] + [VP], [V-ing/V-ed Phrase]') require a comma boundary
+                    # separating them from the matrix clause (preventing uncommaed V-ing complements like 'have trouble sleeping',
+                    # 'go shopping', or 'spend time reading' from being misparsed as clausal adjuncts).
+                    if part_v.head and part_v.i > part_v.head.i:
+                        if not any(t.text == "," for t in doc[part_v.head.i : part_v.i]):
+                            continue
+                    # Reject attributive adjectives misparsed as advcl (e.g. 'their sweet, loving Zoey back')
+                    if part_v.i + 1 < len(doc) and doc[part_v.i + 1].pos_ in ("NOUN", "PROPN") and doc[part_v.i + 1].dep_ in ("dobj", "pobj", "nsubj", "attr"):
+                        continue
+                    has_verbal_dep = any(
+                        c.dep_ in ("dobj", "prep", "advmod", "acomp", "xcomp", "ccomp", "prt", "agent", "npadvmod", "oprd")
+                        for c in part_v.children
+                    )
+                    if not has_verbal_dep:
                         continue
 
             # Topological validation for shell_noun_complement:
@@ -618,17 +644,26 @@ class GrammarPatternEngine:
                 tokens = [doc[i] for i in token_indices]
                 cop_tok = next((t for t in tokens if t.lemma_ == "be"), None)
                 eval_tok = next((t for t in tokens if t != cop_tok and t.dep_ in ("acomp", "attr", "oprd") and t.pos_ in ("ADJ", "NOUN")), None)
-                ext_tok = next((t for t in tokens if t != cop_tok and t != eval_tok and t.dep_ in ("ccomp", "csubj", "xcomp", "advcl")), None)
-                if not eval_tok or not ext_tok or ext_tok.i <= eval_tok.i:
+                ext_tok = next((t for t in tokens if t != cop_tok and t != eval_tok and t.dep_ in ("ccomp", "csubj", "xcomp")), None)
+                if not cop_tok or not eval_tok or not ext_tok or ext_tok.i <= eval_tok.i:
+                    continue
+                _AMBIENT_PREDS = {
+                    "daylight", "dark", "night", "morning", "afternoon", "evening", "noon", "midnight",
+                    "dawn", "dusk", "winter", "summer", "spring", "autumn", "fall", "cold", "hot", "warm",
+                    "cool", "sunny", "rainy", "snowy", "windy", "cloudy", "late", "early", "o'clock"
+                }
+                if eval_tok.lemma_.lower() in _AMBIENT_PREDS:
+                    continue
+                if any(c.dep_ == "advmod" and c.lower_ in ("when", "where") for c in cop_tok.children):
                     continue
                 if ext_tok.tag_ in ("VBG", "VBN"):
                     continue
                 has_to_or_comp = any(
                     (c.lower_ == "to" and c.dep_ in ("aux", "mark"))
-                    or c.lower_ in ("that", "whether", "if", "how", "why", "what", "when", "where", "who")
+                    or (c.lower_ in ("that", "whether", "if", "how", "why", "what", "who") and c.dep_ in ("mark", "advmod", "nsubj", "dobj"))
                     for c in ext_tok.children
                 ) or any(
-                    t.lower_ in ("that", "to", "whether", "if")
+                    t.lower_ in ("that", "to", "whether")
                     for t in doc[eval_tok.i + 1 : ext_tok.i + 1]
                 )
                 if not has_to_or_comp:
@@ -752,10 +787,14 @@ class GrammarPatternEngine:
                 return "It + [be] + [Focal Element] + that/who + [Clause]"
             elif pattern_id == "antithesis_not_but":
                 return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
+            elif pattern_id == "evaluative_dummy_it_subject":
+                return "It is + [Adj/Noun] + that/to-inf [Clause]"
             elif pattern_id == "correlative_not_only_but_also":
                 if re.search(r"(?:^|[,;—–-]\s*)not\s+only\s+(?:can|could|will|would|shall|should|may|might|must|do|does|did|have|has|had|am|is|are|was|were)\b", doc.text.lower()):
                     return "Not only + [Aux] + [Subject] + [VP], but + [Subject] + [also] + [VP]"
-                return "[Subject] + not only + [VP], but also + [VP]"
+                if re.search(r"\balso\b", doc.text.lower()):
+                    return "[Subject] + not only + [VP], but also + [VP]"
+                return "[Subject] + not only + [VP], but (also) + [VP]"
             elif pattern_id == "inverted_conditional_subjunctive":
                 inv_tok = next((t for t in tokens if t.lower_ in ("had", "were", "should")), None)
                 first_w = inv_tok.text.capitalize() if inv_tok else "Had"

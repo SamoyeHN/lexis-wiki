@@ -605,7 +605,28 @@
                     if (trimmed.startsWith('# ')) {
                         return `<h1 class="h4 fw-bold border-bottom pb-2 mb-3 mt-2">${trimmed.substring(2)}</h1>`;
                     } else if (trimmed.startsWith('## ')) {
-                        return `<h2 class="h5 fw-bold text-info mt-3 mb-2">${trimmed.substring(3)}</h2>`;
+                        let h2Body = trimmed.substring(3);
+                        let hwMatch = h2Body.match(/^\[\[(.*?)\]\](.*)$/);
+                        if (hwMatch) {
+                            let hw = hwMatch[1];
+                            let tail = hwMatch[2].trim();
+                            if (tail) {
+                                let gramTags = [];
+                                let tailNoGram = tail.replace(/`\[([^\]]+)\]`/g, (m) => {
+                                    gramTags.push(m);
+                                    return '';
+                                }).trim();
+                                let cefrBadge = '';
+                                let tailNoCefr = tailNoGram.replace(/\b(A1|A2|B1|B2|C1|C2)\b/g, (m) => {
+                                    cefrBadge = `<span class="lex-pill lex-pill-cefr">${m}</span>`;
+                                    return '';
+                                }).trim();
+                                let posBadge = tailNoCefr ? `<span class="lex-pill lex-pill-pos">${tailNoCefr}</span>` : '';
+                                let attrParts = [posBadge, cefrBadge, ...gramTags].filter(Boolean);
+                                return `<h2 class="h5 fw-bold text-info mt-3 mb-2 d-flex align-items-center flex-wrap" style="gap: 0.5rem;"><span class="me-1">[[${hw}]]</span> ${attrParts.join(' ')}</h2>`;
+                            }
+                        }
+                        return `<h2 class="h5 fw-bold text-info mt-3 mb-2">${h2Body}</h2>`;
                     } else if (trimmed.startsWith('### ')) {
                         return `<h3 class="h6 fw-bold text-success mt-2 mb-2">${trimmed.substring(4)}</h3>`;
                     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
@@ -618,14 +639,25 @@
                     } else if (trimmed.startsWith('✓')) {
                         return `<div class="mb-1 small" style="line-height: 1.55; ${indentStyle}"><span class="text-success fw-bold me-1">✓</span><span class="text-on-surface-variant">${trimmed.substring(1).trim()}</span></div>`;
                     } else {
-                        return `<p class="mb-2 text-on-surface-variant small" style="line-height: 1.55; ${indentStyle}">${trimmed}</p>`;
+                        let mbClass = indentRem > 0 ? 'mb-1' : 'mb-2';
+                        return `<p class="${mbClass} text-on-surface-variant small" style="line-height: 1.55; ${indentStyle}">${trimmed}</p>`;
                     }
                 });
                 let html = processedLines.join('\n');
                 html = html
+                    // Convert backtick-wrapped bracket tags like `[countable, uncountable]` into soft grammar pills
+                    .replace(/`\[([^\]]+)\]`/g, (_, inner) => {
+                        return inner.split(/\s*,\s*/).map(tag => `<span class="lex-pill lex-pill-grammar">${tag.trim()}</span>`).join(' ');
+                    })
+                    // Convert single-bracket register tags like [formal], [spoken], [American English], [especially British English] into soft register pills (never match [[wikilinks]])
+                    .replace(/(?<!\[)\[((?:(?:especially\s+)?(?:British|American|Australian)\s+English|(?:formal|informal|spoken|written|literary|humorous|old-fashioned|technical|law|medical|business|computing)(?:\s+(?:formal|informal|spoken|written|literary|humorous))?))\](?!\])/gi, (match, inner) => {
+                        const clean = inner.trim();
+                        if (!clean) return match;
+                        return `<span class="lex-pill lex-pill-register">${clean}</span>`;
+                    })
                     .replace(/\*\*(.*?)\*\*/g, '<strong class="fw-bold text-on-surface">$1</strong>')
                     .replace(/\*(.*?)\*/g, '<em class="fst-italic">$1</em>')
-                    .replace(/`([^`]+)`/g, '<code class="font-monospace p-0.5 rounded text-danger bg-dark border" style="font-size: 0.75rem;">$1</code>')
+                    .replace(/`([^`]+)`/g, '<code class="lex-inline-code">$1</code>')
                     .replace(/\[\[(.*?)\]\]/g, '<span class="text-info text-decoration-underline fw-semibold" style="cursor: pointer;">$1</span>');
 
                 targetElement.innerHTML = `<div class="workspace-markdown-card">${frontmatterHtml}${html}</div>`;

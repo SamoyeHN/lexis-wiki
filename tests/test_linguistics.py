@@ -3876,9 +3876,15 @@ class TestMultiwordExpressionTypes:
         for path in Path("wiki").rglob("*_vocabulary.md"):
             headword = None
             for line in path.read_text(encoding="utf-8").splitlines():
-                head = re.match(r"^## \[\[(.+?)\]\]", line.strip())
+                head = re.match(r"^## \[\[(.+?)\]\](.*)$", line.strip())
                 if head:
                     headword = head.group(1)
+                    tail = head.group(2).strip()
+                    if tail and LinguisticEngine.is_multiword_expression(headword):
+                        ht_clean = re.sub(r"`[^`]*`", "", tail)
+                        ht_clean = re.sub(r"\b(?:A1|A2|B1|B2|C1|C2)\b", "", ht_clean).strip().lower()
+                        if ht_clean and ht_clean not in LinguisticEngine.EXPRESSION_TYPE_LABELS:
+                            bad.append(f"{path}: {headword} -> {ht_clean}")
                     continue
                 pos = re.match(r"^- \*\*Part of Speech\*\*:\s*(.+?)\s*$", line.strip(), re.I)
                 if pos and headword and LinguisticEngine.is_multiword_expression(headword):

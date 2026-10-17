@@ -143,6 +143,17 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
     assert "**slang**" in jargon_enr["thesaurus_note"]
     assert "**term**" in jargon_enr["thesaurus_note"]
 
+    # 2c. Card enrichment for 'prominence': 100% authentic dictionary collocations, zero '(a/the)' splices
+    prom_enr = LE.get_vocab_card_enrichment(
+        "prominence",
+        pos="noun",
+        definition="the fact of being important and well known",
+        quote="Cliff came to prominence again in 1997."
+    )
+    assert "(a/the)" not in prom_enr["collocations"]
+    assert "come to/rise to/achieve prominence (as something)" in prom_enr["collocations"]
+    assert "prominence of" in prom_enr["collocations"]
+
     # 3. _semantic_discriminator_note surfaces syntactic_slot_clash and Grammar Box warnings
     note_extra = LE._semantic_discriminator_note(
         "extra",
@@ -168,7 +179,7 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
     )
     assert "Grammar Box:" in note_sug
 
-    # 4. Markdown rendering and quiz sanitization
+    # 4. Markdown rendering and structured quiz sanitization
     md_out = proc._format_as_markdown(
         {
             "title": "Test Unit Vocabulary",
@@ -185,9 +196,19 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
         "vocabulary",
         source_filename="Test_Unit.md",
     )
-    assert "**Grammar & Usage**:" in md_out
-    sanitized = proc._sanitize_vocab_for_quiz(md_out)
-    assert "**Grammar & Usage**:" not in sanitized
+    assert "## [[suggest]] verb" in md_out
+    assert "**Pattern**:" in md_out
+    sanitized, _, _ = proc._sanitize_vocab_for_quiz([
+        {
+            "word": "suggest",
+            "part_of_speech": "verb",
+            "definition": "to tell someone your ideas about what they should do, where they should go etc",
+            "quote": "She suggested going out for a walk.",
+            "example": "I suggest trying the local seafood.",
+        }
+    ])
+    assert "**Pattern**:" not in sanitized
     assert "**Collocations**:" not in sanitized
     assert "**Thesaurus Note**:" not in sanitized
+    assert "## [[suggest]]" in sanitized
 

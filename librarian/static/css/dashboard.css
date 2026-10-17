@@ -730,6 +730,71 @@
             box-shadow: var(--card-shadow);
         }
 
+        /* Semantic Pill Badges for Grammar & Register Tags (Option B) */
+        .lex-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.1rem 0.5rem;
+            border-radius: var(--radius-full);
+            font-size: 0.72rem;
+            font-weight: 600;
+            line-height: 1.35;
+            letter-spacing: 0.01em;
+            white-space: nowrap;
+            vertical-align: baseline;
+        }
+        .lex-pill-pos {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--accent-info, #38bdf8);
+            border: 1px solid rgba(56, 189, 248, 0.28);
+            font-style: italic;
+            font-family: var(--font-body);
+        }
+        [data-bs-theme="light"] .lex-pill-pos {
+            background: rgba(2, 132, 199, 0.09);
+            color: #0284c7;
+            border-color: rgba(2, 132, 199, 0.25);
+        }
+        .lex-pill-cefr {
+            background: rgba(16, 185, 129, 0.13);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+        }
+        [data-bs-theme="light"] .lex-pill-cefr {
+            background: rgba(5, 150, 105, 0.09);
+            color: #059669;
+            border-color: rgba(5, 150, 105, 0.25);
+        }
+        .lex-pill-grammar {
+            background: rgba(139, 92, 246, 0.13);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            font-family: var(--font-body);
+        }
+        [data-bs-theme="light"] .lex-pill-grammar {
+            background: rgba(109, 40, 217, 0.09);
+            color: #6d28d9;
+            border-color: rgba(109, 40, 217, 0.25);
+        }
+        .lex-pill-register {
+            background: rgba(245, 158, 11, 0.14);
+            color: var(--accent-warning);
+            border: 1px solid rgba(245, 158, 11, 0.32);
+            font-size: 0.68rem;
+            margin-right: 0.3rem;
+        }
+        .lex-inline-code {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: var(--radius-sm);
+            background: var(--surface-dim);
+            color: var(--primary);
+            border: 1px solid var(--card-border);
+        }
+
         .progress {
             height: 6px !important;
             background-color: var(--outline-variant) !important;
