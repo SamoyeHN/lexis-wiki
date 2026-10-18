@@ -9,17 +9,17 @@
 The primary offline dictionary database resides at `librarian/data/pedlex.db`.
 An accompanying full-text search index resides at `librarian/data/pedlex_fts.db`.
 
-Both databases are purely local SQLite files queried synchronously by [`LinguisticEngine`](file:///librarian/linguistics.py) with zero external network requests and <1ms latency per lookup.
+Both databases are purely local SQLite files queried synchronously by [`LinguisticEngine`](../librarian/linguistics.py) with zero external network requests and <1ms latency per lookup.
 
 ---
 
 ## 2. Table Schemas (`pedlex.db`)
 
-### 2.1 Table: `pedlex`
-Main lexical entries table. Contains primary headwords, derived run-ons, and alias redirects.
+### 2.1 Table: `ldoce` (Primary Pedagogical Lexicon Table)
+Main lexical entries table. Contains primary headwords (`article`), derived run-ons (`derived`), and alias redirects (`alias`).
 
 ```sql
-CREATE TABLE pedlex (
+CREATE TABLE ldoce (
     word TEXT PRIMARY KEY,       -- Normalized lookup key (lowercase, stripped of punctuation)
     pos TEXT,                    -- Canonical primary part of speech ('noun', 'verb', 'adjective', etc.)
     pos_all TEXT,                -- Comma-separated list of all attested parts of speech across senses
@@ -62,7 +62,7 @@ CREATE TABLE pedlex_sense_cue_index (
 
 ---
 
-## 3. Data JSON Payload Structure (`pedlex.data_json`)
+## 3. Data JSON Payload Structure (`ldoce.data_json`)
 
 Every record's `data_json` contains a structured dictionary with the following core fields:
 
@@ -74,11 +74,13 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `base_word` | `str` \| `null` | Base lemma when derived from another headword. |
 | `payload_headword`| `str` | Exact headword text as rendered in PedLex source. |
 | `all_poses` | `list[str]` | All attested parts of speech across all senses. |
+| `entryhead_gram` | `str` \| `dict` | Entry-level grammatical constraint (`[only before noun]`, `[uncountable]`, etc.). |
+| `runon_gram` | `str` | Run-on grammatical constraint for `kind='derived'` entries. |
 | `homographs` | `list[dict]` | Information on distinct homograph numbers (e.g., *lead¹* vs *lead²*). |
-| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, gram patterns, and examples. |
-| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, common learner errors). |
+| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, `grammar` tags, `patterns`, `pattern_bundles`, and `examples`. |
+| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, `forbidden_frames`, `comparison_peers`). |
 | `language_activator` | `list[dict]` | Semantic concept networks, fine-grained synonym distinctions, and cluster nodes. |
-| `thesaurus` | `list[dict]` | Synonym and antonym discrimination notes. |
+| `thesaurus` | `list[dict]` | Synonym and antonym discrimination notes with per-exponent `grammar` constraints. |
 | `collocations` | `dict[str, list]` | Collocation boxes grouped by bucket (`nouns`, `verbs`, `adjectives`, `phrases`). |
 | `cross_collocations` | `list[dict]` | Collocations cross-referenced from other entries where this headword appears. |
 | `word_family` | `dict[str, list]` | Morphological family groupings (`noun`, `verb`, `adjective`, `adverb`). |
@@ -92,7 +94,7 @@ Every record's `data_json` contains a structured dictionary with the following c
   "definition": "to leave someone, especially someone you are responsible for",
   "pos": "verb",
   "signpost": "LEAVE SOMEBODY",
-  "gram": "[transitive]",
+  "grammar": "[transitive]",
   "sensenum": "1a)",
   "register": "formal",
   "variety": "British English",
@@ -106,7 +108,7 @@ Every record's `data_json` contains a structured dictionary with the following c
 ```
 
 ### 3.2 Subsense Structural Governance & Payload Deduplication
-1. **Subsense Hierarchy Flattening**: Sub-senses (`subsense`, `1a`, `1b`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, grammar traits, and semantic context from their parent sense elements.
+1. **Subsense Hierarchy Flattening**: Sub-senses (`subsense`, `1a`, `1b`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, `grammar` traits, and semantic context from their parent sense elements.
 2. **Explicit Register & Variety Fields**: Stylistic registers (`[spoken]`, `[formal]`, `[literary]`) and geographical dialect varieties (`British English`, `American English`) are stripped of styling noise and persisted as explicit queryable keys.
 3. **Language Activator Multi-POS Deduplication**: Employs a strict `seen_la_concepts` uniqueness gate across multi-POS popup entries (e.g. `control`), completely preventing duplicated concept blocks (e.g. shrinking redundant concept clusters from 31 down to 17 unique blocks).
 4. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
@@ -116,20 +118,21 @@ Every record's `data_json` contains a structured dictionary with the following c
 ## 4. Definition-Locked Word Sense Disambiguation (WSD) Engine
 
 ### 4.1 Multi-Feature Weighted Gating & Scoring (`LinguisticEngine._lock_sense`)
-When extracting vocabulary from source passages, `_lock_sense` grounds each headword to its authentic pedagogical sense at 0 token cost (<0.5ms):
+When extracting vocabulary from source passages, `_lock_sense` grounds each headword to its authentic pedagogical sense at 0 token cost (<0.5ms) for ~71% monosemous/unambiguous cases, escalating to 1-token Local LLM arbitration (`disambiguate_via_llm`) for the remaining ~29% polysemous cases:
 
-1. **POS Hard Gate**: Filters candidate senses to match the target part of speech from spaCy POS tagging.
-2. **Formulaic Locution & Register Gating**: Detects and enforces conversational/spoken locution markers (`[spoken]`, `[greeting]`, etc.). If the target context is an isolated utterance or greeting (e.g., *"Hello, stranger!"*), formulaic senses take precedence; otherwise, formulaic senses are strictly excluded in expository/academic prose.
-3. **Pattern & Syntactic Slot Intersection (+3.0 pts)**: Lemmatizes context sentences and checks for exact matches against PedLex `patterns` (e.g. `interest in`, `refrain from`, `abandon sb to sth`).
-4. **Collocation Box Intersection (+2.5 pts)**: Searches `collocations` and `cross_collocations` for lexical overlap with passage context tokens.
-5. **Contextual Lemmatized Overlap (+1.0 pt per content word)**: Compares open-class passage lemmas with definition content words and authentic example sentences, applying stopword and quoted dialogue filtering.
-6. **Signpost & Frequency Hierarchy (+0.5 pt)**: Respects PedLex canonical sense ordering when context features are evenly matched.
+1. **POS & Homograph Hard Gate**: Filters candidate senses to match the target part of speech and resolves cross-homograph entries (`word_1`..`word_6`).
+2. **Syntactic Slot & `<gram>` Alignment**: Checks positional adjective constraints (`[only before noun]` vs. `[not before noun]`), noun countability (`[uncountable]`/`[singular]`), and verb transitivity (`[intransitive]` vs. `[transitive]`) against the spaCy dependency parse of the quoted sentence.
+3. **Formulaic Locution & Register Gating**: Detects and enforces conversational/spoken locution markers (`[spoken]`, `[greeting]`, etc.). If the target context is an isolated utterance or greeting (e.g., *"Hello, stranger!"*), formulaic senses take precedence; otherwise, formulaic senses are strictly excluded in expository/academic prose.
+4. **Pattern & Syntactic Slot Intersection (+3.0 pts)**: Lemmatizes context sentences and checks for exact matches against PedLex `patterns` (e.g. `interest in`, `refrain from`, `abandon sb to sth`).
+5. **Collocation Box Intersection (+2.5 pts)**: Searches `collocations` and `cross_collocations` for lexical overlap with passage context tokens.
+6. **Contextual Lemmatized Overlap (+1.0 pt per content word)**: Compares open-class passage lemmas with definition content words and authentic example sentences, applying stopword and quoted dialogue filtering.
+7. **Signpost & Frequency Hierarchy (+0.5 pt)**: Respects PedLex canonical sense ordering when context features are evenly matched.
 
 ---
 
 ## 5. Authentic Multi-Word Phrase Distractor Generation
 
-[`LinguisticEngine.generate_phrase_distractors`](file:///librarian/linguistics.py) harnesses `pedlex_phrase_index` to synthesize strictly symmetric, authentic distractors across 4 structural families:
+[`LinguisticEngine.generate_phrase_distractors`](../librarian/linguistics.py) harnesses `pedlex_phrase_index` to synthesize strictly symmetric, authentic distractors across 4 structural families:
 
 1. **Tail-Sharing Head Noun / Preposition Cluster**:
    - Matches candidate phrases sharing the same terminal preposition or head noun.
@@ -146,25 +149,26 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
 
 ---
 
-## 6. Derived Forms & Ingestion Invariants
+## 6. Derived Forms & Ingestion Invariants (`_resolve_ldoce_kind`)
 
-1. **Run-on Derivation Tracking**:
-   - Words such as `abandonment`, `punctuality`, and `abductor` are filed in pedagogical lexicons as run-on derivations at the end of root entries (`abandon`, `punctual`, `abduct`).
-   - Database ingestion tags these entries as `kind='derived'` with `base_word` pointing to the root lemma.
-2. **Headword Example Alignment Gate**:
-   - A derived row must **never** inherit an example sentence from the base lemma that fails to contain the derived headword (e.g. *abandonment* must not ship with *"How could she abandon her own child?"*).
-   - If no headword-bearing example exists in the PedLex entry, [`LinguisticEngine`](file:///librarian/linguistics.py) drops the misaligned example and falls back to the authentic passage sentence.
+1. **Run-on Derivation Tracking & Recursive Resolution**:
+   - Words such as `abandonment`, `punctuality`, `attentively`, and `striving` are filed in pedagogical lexicons as run-on derivations (`kind='derived'`) with `base_word` pointing to the root lemma (including multi-hop `alias` chains such as `strip mining` $\rightarrow$ `strip mine` $\rightarrow$ `strip-mine`).
+   - When a derived row's own definition is empty or circular, [`_resolve_ldoce_kind`](../librarian/linguistics.py) and [`format_ldoce_definition`](../librarian/linguistics.py) synthesize a clear, self-contained definition from `base_word` and strip any trailing base-verb pattern fragments.
+2. **Headword-Bearing Example Harvesting & Strict Gate 2 Isolation**:
+   - A derived row **never** inherits a base-lemma example sentence unless that example physically contains the derived headword (`text_contains_form(ex, derived_word)`).
+   - `_resolve_ldoce_kind` automatically harvests authentic examples containing the derived form from the base entry's `language_activator`, `thesaurus`, `collocations`, `senses` (`pattern_bundles`/`examples`), and `corpus_examples`.
+   - If the entry still has no example, [`ensure_distinct_example`](../librarian/linguistics.py) searches `search_corpus_examples` and WordNet (`oewn:2025+`). If zero authentic distinct examples exist across all sources, the item is rejected at Gate 2 (`[DROP_INCOMPLETE_LEXICON]`) — never falling back to repeating the source passage quote.
 
 ---
 
 ## 7. Query Interfaces (`LinguisticEngine`)
 
-- `LinguisticEngine.get_pedlex_entry(word)`: Fetches parsed dictionary payload from SQLite.
-- `LinguisticEngine.get_pedlex_definition_and_example(word, target_pos, context_sentence)`: Retrieves sense-locked definition and headword-bearing example via `_lock_sense`.
-- `LinguisticEngine.find_pedlex_collocations(word, pos)`: Returns categorized collocation buckets.
-- `LinguisticEngine.find_pedlex_zero_collision_anchor(target_word, distractors, pos, quote)`: Deterministically selects an authentic collocation anchor matching only the target headword.
+- `LinguisticEngine.get_ldoce_entry(word)`: Fetches parsed and kind-resolved dictionary payload from `pedlex.db`.
+- `LinguisticEngine.get_ldoce_definition_and_example(word, target_pos, context_sentence)`: Retrieves sense-locked definition and headword-bearing example via `_lock_sense` and `ensure_distinct_example`.
+- `LinguisticEngine.get_word_gram_profile(word, pos, sense)`: Aggregates entry-level (`entryhead_gram`/`runon_gram`), sense-level (`grammar`), and `grammar_boxes` constraints.
+- `LinguisticEngine.evaluate_syntactic_slot_clash(target_word, candidate_word, ...)`: Checks whether a candidate distractor violates the grammatical slot of the stem (`[only before noun]`, `[not before noun]`, `[uncountable]`, or forbidden verb complement frames).
+- `LinguisticEngine.get_vocab_card_enrichment(word, pos, definition, quote)`: Generates zero-token `Pattern` / `Grammar Box`, `Collocations`, and `Thesaurus Note` callouts for Markdown vocabulary cards.
 - `LinguisticEngine.generate_phrase_distractors(target_phrase, pos, count)`: Generates 3 structurally symmetric distractors validated against `pedlex_phrase_index`.
-- `LinguisticEngine.get_pedlex_grammar_alert(word, quote)`: Returns targeted learner pitfall warnings.
 
 ---
 

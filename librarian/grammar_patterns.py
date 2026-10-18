@@ -509,6 +509,28 @@ class GrammarPatternEngine:
                     next_after_not = doc[not_tok.i + 1].lower_ if not_tok.i + 1 < len(doc) else ""
                     if next_after_not in ("only", "merely", "just", "simply"):
                         continue
+                    # Reject cross-clause scope mismatch (e.g., 'not' inside a subordinate/relative clause
+                    # while 'but' coordinates at the matrix level, or vice versa), unless 'not' directly
+                    # negates a preposition ('not on X') and 'but' is immediately followed by a parallel preposition ('but on Y').
+                    def _clause_verb(tok):
+                        cur = tok.head
+                        while cur != cur.head and cur.pos_ not in ("VERB", "AUX"):
+                            cur = cur.head
+                        return cur
+                    but_next_is_prep = (but_tok.i + 1 < len(doc) and doc[but_tok.i + 1].pos_ == "ADP")
+                    if _clause_verb(not_tok) != _clause_verb(but_tok) and not (not_tok.head.pos_ == "ADP" and but_next_is_prep):
+                        continue
+                    # Reject compound sentences where 'but' coordinates a finite clause with its own subject
+                    # or modal/tense auxiliary (e.g., "Students are not dumb, but they are being misled.")
+                    conj_Sibs = [c for c in but_tok.head.children if c.dep_ == "conj" and c.i > but_tok.i]
+                    if any(
+                        any(gc.dep_ in ("nsubj", "nsubjpass", "csubj", "expl", "aux", "auxpass") for gc in cs.children)
+                        for cs in conj_Sibs
+                    ):
+                        continue
+                    # Reject imperative or mismatched VP contrast ("You will not be able to..., but sample them!")
+                    if but_tok.head.pos_ == "AUX" and any(cs.pos_ == "VERB" for cs in conj_Sibs):
+                        continue
                 else:
                     continue
 
@@ -553,15 +575,23 @@ class GrammarPatternEngine:
                 else:
                     continue
 
-            # Semantic validation for concession_clausal:
-            # Subjectless 'while + V-ing/V-ed' (e.g. 'While working in Shilidian, he...') is a temporal participial adjunct,
-            # not a finite concessive clause.
-            if string_id == "concession_clausal":
+            # Semantic validation for concession_clausal and conditional_clausal:
+            # 1. Subjectless 'If/While/Though/Although + V-ing/V-ed/Adj' (e.g. 'If living in the U.S., ...',
+            #    'While working in Shilidian, ...', 'Though sometimes disguised, ...') is a reduced non-finite adjunct,
+            #    not a finite '[Subordinator] + [Subject] + [VP]' clause.
+            # 2. Unpunctuated post-posed 'while + Subject + be + V-ing' (e.g. '...while she was driving away') is a temporal
+            #    simultaneous background clause, not a concessive or contrastive clause.
+            if string_id in ("concession_clausal", "conditional_clausal"):
                 tokens = [doc[i] for i in token_indices]
-                mark_tok = next((t for t in tokens if t.dep_ == "mark"), None)
+                mark_tok = next((t for t in tokens if t.dep_ in ("mark", "advmod")), None)
                 sub_v = next((t for t in tokens if t != mark_tok and t.dep_ == "advcl"), None)
-                if mark_tok and mark_tok.lemma_.lower() == "while" and sub_v and sub_v.tag_ in ("VBG", "VBN"):
-                    if not any(c.dep_ in ("nsubj", "nsubjpass", "expl") for c in sub_v.children):
+                main_v = next((t for t in tokens if t != mark_tok and t != sub_v), None)
+                if sub_v and not any(c.dep_ in ("nsubj", "nsubjpass", "expl", "csubj", "csubjpass") for c in sub_v.children):
+                    continue
+                if string_id == "concession_clausal" and mark_tok and mark_tok.lemma_.lower() == "while" and sub_v and sub_v.tag_ in ("VBG", "VBN"):
+                    has_be_aux = any(c.dep_ == "aux" and c.lemma_ == "be" for c in sub_v.children)
+                    preceded_by_comma = (mark_tok.i > 0 and doc[mark_tok.i - 1].text in (",", ";", "—", "-"))
+                    if main_v and mark_tok.i > main_v.i and has_be_aux and not preceded_by_comma:
                         continue
 
             # Semantic validation for nonfinite participial adjunct:
@@ -710,6 +740,8 @@ class GrammarPatternEngine:
                 return "so + [Adj/Adv] + that + [Result Clause]"
             elif pattern_id == "concession_clausal":
                 marker = next((t for t in tokens if t.dep_ in ("mark", "advmod")), tokens[0])
+                sub_v = next((t for t in tokens if t != marker and t.dep_ == "advcl"), None)
+                main_v = next((t for t in tokens if t != marker and t != sub_v), None)
                 next_tok = doc[marker.i + 1].lower_ if marker.i + 1 < len(doc) else ""
                 prev_tok = doc[marker.i - 1].lower_ if marker.i > 0 else ""
                 if marker.lower_ == "even" and next_tok in ("if", "though"):
@@ -718,6 +750,8 @@ class GrammarPatternEngine:
                     m_str = f"Even {marker.lower_}"
                 else:
                     m_str = marker.text.capitalize()
+                if main_v and marker.i > main_v.i and marker.lemma_.lower() in ("while", "whereas"):
+                    return f"[Subject] + [VP], {marker.lower_} + [Clause]"
                 return f"{m_str} + [Clause], [Subject] + [VP]"
             elif pattern_id == "conditional_clausal":
                 doc_text_low = doc.text.lower()
@@ -786,6 +820,13 @@ class GrammarPatternEngine:
             elif pattern_id == "cleft_it_be_relcl":
                 return "It + [be] + [Focal Element] + that/who + [Clause]"
             elif pattern_id == "antithesis_not_but":
+                not_tok = next((t for t in tokens if t.lower_ == "not"), None)
+                if not_tok and not_tok.head.pos_ == "ADP":
+                    return "[Subject] + [VP], not + [PrepP], but + [PrepP]"
+                if not_tok and not_tok.head.lemma_ == "be":
+                    return "[Subject] + [be] + not + [NP/Adj], but + [NP/Adj]"
+                if not_tok and not_tok.head.pos_ == "VERB":
+                    return "[Subject] + [Aux] + not + [VP], but + [VP]"
                 return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
             elif pattern_id == "evaluative_dummy_it_subject":
                 return "It is + [Adj/Noun] + that/to-inf [Clause]"

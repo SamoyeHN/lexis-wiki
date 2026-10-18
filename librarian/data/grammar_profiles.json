@@ -132,7 +132,7 @@
       }
     },
     "relative_clause_restrictive": {
-      "name": "Adjective Clauses: Relative Pronoun Complementation",
+      "name": "Restrictive Relative Clauses (who / which / that)",
       "category": "Information Packaging",
       "pattern_formula": "[NP] + which/that + [VP]",
       "priority": { "A1_A2": 90, "B1_B2": 58, "C1_C2": 42 },
@@ -265,18 +265,69 @@
       "tiers": {
         "A1_A2": {
           "pedagogical_function": "Expresses making, letting, or having someone perform an action directly without using 'to'.",
-          "imitation_example": "The teacher had each student share a short volunteer story with the class.",
-          "common_mistakes": "Grammar Warning (Causative Structures): Learners frequently produce: \"The team leader made each volunteer [INCORRECT: to sign -> CORRECT: sign] the attendance sheet.\" (Note: Active causative 'make' governs an unmarked bare infinitive, not a 'to'-infinitive)."
+          "imitation_example": "Heavy debt can make students feel anxious and lose focus on their studies.",
+          "common_mistakes": "Grammar Warning (Causative Structures): Learners frequently produce: \"The team leader made each volunteer [INCORRECT: to sign -> CORRECT: sign] the attendance sheet.\" (Note: Active causative 'make' governs an unmarked bare infinitive, not a 'to'-infinitive).",
+          "variants": [
+            {
+              "keywords": ["make", "made", "makes", "making", "feel", "terrible", "focus"],
+              "imitation_example": "Heavy debt can make students feel anxious and lose focus on their studies.",
+              "common_mistakes": "Grammar Warning (Causative Structures): Learners frequently produce: \"The team leader made each volunteer [INCORRECT: to sign -> CORRECT: sign] the attendance sheet.\" (Note: Active causative 'make' governs an unmarked bare infinitive, not a 'to'-infinitive)."
+            },
+            {
+              "keywords": ["let", "lets", "letting", "allow"],
+              "imitation_example": "Good time management lets students balance part-time jobs with their daily coursework.",
+              "common_mistakes": "Grammar Warning (Causative 'Let + Object + Bare Infinitive'): Learners frequently insert 'to' after causative 'let': \"Never let temporary setbacks [INCORRECT: to discourage -> CORRECT: discourage] you from pursuing your degree.\" (Note: 'Let' governs a bare infinitive without 'to')."
+            },
+            {
+              "keywords": ["have", "had", "has", "having", "share", "teacher"],
+              "imitation_example": "The teacher had each student share a short volunteer story with the class.",
+              "common_mistakes": "Grammar Warning (Causative 'Have + Object + Bare Infinitive'): Learners frequently insert 'to' after causative 'have': \"The advisor had the freshmen [INCORRECT: to review -> CORRECT: review] their monthly budget plans.\" (Note: Active causative 'have sb. do sth.' requires a bare infinitive without 'to')."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Expresses direct causation or permission ('make/have/let + [Object] + [Bare Infinitive]') with high syntactic economy.",
-          "imitation_example": "Open-door mentorship policies let junior researchers challenge established assumptions without fear of reprisal.",
-          "common_mistakes": "Grammar Warning (Active vs. Passive Causative 'Make'): Learners frequently use a bare infinitive in the passive voice or a 'to'-infinitive in the active voice: \"The trainees were made [INCORRECT: repeat -> CORRECT: to repeat] the safety drill until every step was accurate.\" (Note: Active 'make sb. do' takes a bare infinitive, whereas passive 'be made to do' requires 'to')."
+          "imitation_example": "Unmanageable credit card bills can make young adults postpone vital educational goals.",
+          "common_mistakes": "Grammar Warning (Active vs. Passive Causative 'Make'): Learners frequently use a bare infinitive in the passive voice or a 'to'-infinitive in the active voice: \"The trainees were made [INCORRECT: repeat -> CORRECT: to repeat] the safety drill until every step was accurate.\" (Note: Active 'make sb. do' takes a bare infinitive, whereas passive 'be made to do' requires 'to').",
+          "variants": [
+            {
+              "keywords": ["make", "made", "makes", "making"],
+              "imitation_example": "Unmanageable credit card bills can make young adults postpone vital educational goals.",
+              "common_mistakes": "Grammar Warning (Active vs. Passive Causative 'Make'): Learners frequently use a bare infinitive in the passive voice or a 'to'-infinitive in the active voice: \"The trainees were made [INCORRECT: repeat -> CORRECT: to repeat] the safety drill until every step was accurate.\" (Note: Active 'make sb. do' takes a bare infinitive, whereas passive 'be made to do' requires 'to')."
+            },
+            {
+              "keywords": ["let", "lets", "letting"],
+              "imitation_example": "Open-door mentorship policies let junior researchers challenge established assumptions without fear of reprisal.",
+              "common_mistakes": "Grammar Warning (Causative 'Let' vs. 'Allow'): Learners frequently blend 'let sb. do' with 'allow sb. to do': \"Flexible lab schedules let graduate students [INCORRECT: to conduct -> CORRECT: conduct] experiments at their own pace.\" (Note: Use a bare infinitive after 'let', or switch the verb to 'allow/permit' with a 'to'-infinitive)."
+            },
+            {
+              "keywords": ["have", "had", "has", "having"],
+              "imitation_example": "The coordinator had each mentor review the applicants' financial literacy portfolios before the workshop.",
+              "common_mistakes": "Grammar Warning (Causative 'Have + Agent + Bare Infinitive'): Learners frequently insert 'to' when commissioning an action: \"The director had the research assistant [INCORRECT: to verify -> CORRECT: verify] all survey responses.\" (Note: Active causative 'have' takes a bare infinitive)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Captures interpersonal agency, compulsion, or commission via causative complementation ('make/have/let + [Agent] + [Bare Infinitive]' vs. 'have + [Patient] + [V-ed]').",
           "imitation_example": "Graphic investigative reports made consumers reconsider the hidden ethical costs of everyday household products.",
-          "common_mistakes": "Grammar Warning (Causative 'Have + Object + Bare Infinitive' vs. 'Past Participle'): Learners frequently confuse active commissioning ('have sb. do') with passive completion ('have sth. done'): \"The coalition had independent toxicologists [INCORRECT: audited -> CORRECT: audit] the laboratory's compliance records.\" (Note: Use the bare infinitive when the object performs the action, and the past participle when the object undergoes the action)."
+          "common_mistakes": "Grammar Warning (Causative 'Have + Object + Bare Infinitive' vs. 'Past Participle'): Learners frequently confuse active commissioning ('have sb. do') with passive completion ('have sth. done'): \"The coalition had independent toxicologists [INCORRECT: audited -> CORRECT: audit] the laboratory's compliance records.\" (Note: Use the bare infinitive when the object performs the action, and the past participle when the object undergoes the action).",
+          "variants": [
+            {
+              "keywords": ["make", "made", "makes", "making"],
+              "imitation_example": "Graphic investigative reports made consumers reconsider the hidden ethical costs of everyday household products.",
+              "common_mistakes": "Grammar Warning (Active vs. Passive Causative 'Make'): Learners frequently omit 'to' in passive causative constructions: \"Subsidiary branches were made [INCORRECT: disclose -> CORRECT: to disclose] their off-balance-sheet liabilities.\" (Note: While active 'make' requires a bare infinitive, passive 'be made' requires a 'to'-infinitive)."
+            },
+            {
+              "keywords": ["let", "lets", "letting"],
+              "imitation_example": "Decentralized governance frameworks let regional directors tailor compliance protocols to local regulatory realities.",
+              "common_mistakes": "Grammar Warning (Causative 'Let + Object + Bare Infinitive'): Learners frequently confuse the complementation of 'let' and 'enable': \"Regulatory sandboxes let emerging fintech firms [INCORRECT: to test -> CORRECT: test] novel payment architectures.\" (Note: 'Let' strictly requires a bare infinitive)."
+            },
+            {
+              "keywords": ["have", "had", "has", "having"],
+              "imitation_example": "The oversight committee had independent auditors examine the foundation's procurement records.",
+              "common_mistakes": "Grammar Warning (Causative 'Have + Object + Bare Infinitive' vs. 'Past Participle'): Learners frequently confuse active commissioning ('have sb. do') with passive completion ('have sth. done'): \"The coalition had independent toxicologists [INCORRECT: audited -> CORRECT: audit] the laboratory's compliance records.\" (Note: Use the bare infinitive when the object performs the action, and the past participle when the object undergoes the action)."
+            }
+          ]
         }
       }
     },
@@ -473,6 +524,29 @@
           "pedagogical_function": "Frames dialectical tension by subordinating an established orthodoxy or obstacle within a concessive clause ('Though / Whereas / While...'), sharpening the authoritative claim in the matrix clause.",
           "imitation_example": "Though early animal-rights campaigners were dismissed as idealistic fringes, their empirical critiques ultimately transformed corporate research ethics.",
           "common_mistakes": "Grammar Warning (Concessive Subordination vs. Double Marking): Learners frequently insert 'yet' or 'but' at the start of the matrix clause or confuse 'despite the fact that' with bare 'despite that': \"[INCORRECT: Despite that the reform faced lobbying resistance -> CORRECT: Despite the fact that the reform faced lobbying resistance / Although the reform faced lobbying resistance], regulators enacted the ban.\" (Note: 'Despite' is a preposition and cannot govern a 'that'-clause directly without 'the fact')."
+        }
+      }
+    },
+    "subordinate_contrastive_while": {
+      "name": "Subordinate Contrastive Clauses (while / whereas)",
+      "category": "Logic & Stance",
+      "pattern_formula": "[Subject] + [VP], while/whereas + [Clause]",
+      "priority": { "A1_A2": 85, "B1_B2": 88, "C1_C2": 90 },
+      "tiers": {
+        "A1_A2": {
+          "pedagogical_function": "Contrasts two different people, habits, or viewpoints side by side within a single sentence using 'while' or 'whereas'.",
+          "imitation_example": "Some students prefer studying in a quiet library, while others learn best through group discussions.",
+          "common_mistakes": "Grammar Warning (Contrastive 'While' vs. Double Conjunctions): Learners frequently add 'but' together with 'while' when comparing two clauses: \"My brother enjoys outdoor sports, [INCORRECT: while but I prefer -> CORRECT: while I prefer] reading at home.\" (Note: 'While' already links the two contrasting clauses, so 'but' must not be added)."
+        },
+        "B1_B2": {
+          "pedagogical_function": "Juxtaposes two contrasting perspectives, roles, or behaviors across balanced clauses ('[S1] + [VP], while/whereas + [S2] + [VP]').",
+          "imitation_example": "Outside observers attributed his long laboratory hours to sheer obligation, while he viewed every experiment as a thrilling quest for discovery.",
+          "common_mistakes": "Grammar Warning (Contrastive 'While / Whereas' Punctuation & Parallelism): Learners frequently confuse contrastive ', while' with temporal 'while' or omit the contrasting subject: \"Conventional managers focus on rigid schedules, [INCORRECT: while overlooking creative autonomy -> CORRECT: while visionary leaders prioritize creative autonomy].\" (Note: Contrastive ', while / whereas' requires two complete, parallel clauses comparing distinct subjects or states)."
+        },
+        "C1_C2": {
+          "pedagogical_function": "Establishes symmetrical antithetical contrast between two competing interpretations or paradigms using post-posed ', while / whereas + [Clause]'.",
+          "imitation_example": "Lay commentators often characterize relentless scientific inquiry as joyless compulsion, whereas dedicated researchers experience it as a deeply fulfilling vocation.",
+          "common_mistakes": "Grammar Warning (Contrastive 'Whereas / While' vs. Conjunctive Adverb 'Conversely'): Learners frequently use 'while / whereas' as a standalone sentence-initial adverb followed by a comma, or splice 'conversely' with a comma: \"[INCORRECT: Classical models assume static equilibrium, conversely modern simulations account -> CORRECT: Classical models assume static equilibrium, whereas / while modern simulations account] for dynamic feedback loops.\" (Note: Use subordinating ', while / whereas' to join two contrasting clauses directly after a comma)."
         }
       }
     },
@@ -789,18 +863,54 @@
       "tiers": {
         "A1_A2": {
           "pedagogical_function": "Highlights how strong a quality or feeling is ('so... that...' / 'such... that...') and shows the result that follows.",
-          "imitation_example": "The speaker told such an inspiring story that the whole class clapped warmly.",
-          "common_mistakes": "Grammar Warning (So vs. Such before Noun Phrases): Learners frequently confuse 'so + Adj' with 'such + (a/an) + Adj + Noun': \"It was [INCORRECT: so a helpful lesson -> CORRECT: such a helpful lesson] that every student remembered it.\" (Note: Use 'so' before an adjective or adverb alone, and 'such' before a noun phrase)."
+          "imitation_example": "The freshman practiced his speech so carefully that he answered every question with confidence.",
+          "common_mistakes": "Grammar Warning (So vs. Such before Adjectives/Adverbs vs. Noun Phrases): Learners frequently confuse 'so + Adj/Adv' with 'such + (a/an) + Adj + Noun': \"The course was [INCORRECT: such difficult -> CORRECT: so difficult] that many students asked for extra tutoring.\" (Note: Use 'so' before an adjective or adverb alone, and 'such' before a noun phrase).",
+          "variants": [
+            {
+              "keywords": ["so", "much", "many", "hard", "difficult", "struggle", "drop", "course"],
+              "imitation_example": "The freshman practiced his speech so carefully that he answered every question with confidence.",
+              "common_mistakes": "Grammar Warning (So vs. Such before Adjectives/Adverbs & Quantifiers): Learners frequently use 'such' instead of 'so' before an adjective, adverb, or 'much/many': \"He struggled [INCORRECT: such much -> CORRECT: so much] in the first-semester physics class that he visited the tutor every week.\" (Note: Always use 'so' before an adjective, adverb, or quantity word like 'much/many/little/few')."
+            },
+            {
+              "keywords": ["such", "story", "lesson", "day", "experience"],
+              "imitation_example": "The speaker told such an inspiring story that the whole class clapped warmly.",
+              "common_mistakes": "Grammar Warning (So vs. Such before Noun Phrases): Learners frequently confuse 'so + Adj' with 'such + (a/an) + Adj + Noun': \"It was [INCORRECT: so a helpful lesson -> CORRECT: such a helpful lesson] that every student remembered it.\" (Note: Use 'so' before an adjective or adverb alone, and 'such' before a noun phrase)."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Intensifies an attribute or situation ('so + [Adj/Adv] + that...' / 'such + [NP] + that...') to foreground its consequential impact.",
-          "imitation_example": "The documentary presented such compelling evidence of ocean plastic pollution that three coastal cities banned disposable foam containers.",
-          "common_mistakes": "Grammar Warning (So vs. Such with Quantifiers & Uncountable Nouns): Learners frequently use 'such' before 'many/much/few/little' or add 'a/an' before uncountable nouns after 'such': \"The platform generated [INCORRECT: such many user requests / such a rapid progress -> CORRECT: so many user requests / such rapid progress] that the servers had to be upgraded.\" (Note: Use 'so' before quantity determiners 'many/much/few/little', and omit 'a/an' when 'such' precedes an uncountable or plural noun)."
+          "imitation_example": "The introductory engineering course was so demanding that several freshmen reconsidered their academic major.",
+          "common_mistakes": "Grammar Warning (So vs. Such with Quantifiers & Uncountable Nouns): Learners frequently use 'such' before 'many/much/few/little' or add 'a/an' before uncountable nouns after 'such': \"The platform generated [INCORRECT: such many user requests / such a rapid progress -> CORRECT: so many user requests / such rapid progress] that the servers had to be upgraded.\" (Note: Use 'so' before quantity determiners 'many/much/few/little', and omit 'a/an' when 'such' precedes an uncountable or plural noun).",
+          "variants": [
+            {
+              "keywords": ["so", "much", "many", "demanding", "rapidly", "fast"],
+              "imitation_example": "The introductory engineering course was so demanding that several freshmen reconsidered their academic major.",
+              "common_mistakes": "Grammar Warning (So vs. Such with Quantifiers & Uncountable Nouns): Learners frequently use 'such' before 'many/much/few/little' or before standalone adjectives/adverbs: \"The platform generated [INCORRECT: such many user requests -> CORRECT: so many user requests] that the servers had to be upgraded.\" (Note: Use 'so' before adjectives, adverbs, and quantity determiners 'many/much/few/little')."
+            },
+            {
+              "keywords": ["such", "evidence", "impact", "challenge", "problem"],
+              "imitation_example": "The documentary presented such compelling evidence of ocean plastic pollution that three coastal cities banned disposable foam containers.",
+              "common_mistakes": "Grammar Warning (Such + Uncountable / Plural Noun Phrases): Learners frequently insert 'a/an' after 'such' before uncountable nouns or use 'so' before a full noun phrase: \"The research team made [INCORRECT: such a rapid progress / so rapid progress -> CORRECT: such rapid progress] that the clinical trial launched ahead of schedule.\" (Note: Use 'such' without 'a/an' before uncountable or plural noun phrases)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Builds rhetorical intensity by scaling an adjectival or nominal predicate ('so + [Adj/Adv] + that...' / 'So + [Adj] + [be] + [Subject] + that...') to underscore a transformative consequence.",
           "imitation_example": "His critique of institutional speciesism was so incisive and empirically grounded that it reshaped university ethics curricula worldwide.",
-          "common_mistakes": "Grammar Warning (Fronted 'So / Such' Degree Inversion & Article Placement): Learners frequently fail to invert the copula/auxiliary when 'So + [Adj]' or 'Such' is fronted for rhetorical emphasis, or misplace the article in 'so + [Adj] + a + [Singular Noun]': \"So decisive [INCORRECT: the consumer boycott was -> CORRECT: was the consumer boycott] that rival cosmetics conglomerates abandoned live testing within months.\" (Note: Fronting 'So + [Adj/Adv]' or 'Such + [be]' at the start of a clause requires subject-auxiliary inversion before the 'that'-result clause)."
+          "common_mistakes": "Grammar Warning (Fronted 'So / Such' Degree Inversion & Article Placement): Learners frequently fail to invert the copula/auxiliary when 'So + [Adj]' or 'Such' is fronted for rhetorical emphasis, or misplace the article in 'so + [Adj] + a + [Singular Noun]': \"So decisive [INCORRECT: the consumer boycott was -> CORRECT: was the consumer boycott] that rival cosmetics conglomerates abandoned live testing within months.\" (Note: Fronting 'So + [Adj/Adv]' or 'Such + [be]' at the start of a clause requires subject-auxiliary inversion before the 'that'-result clause).",
+          "variants": [
+            {
+              "keywords": ["so", "incisive", "deeply", "profoundly"],
+              "imitation_example": "His critique of institutional speciesism was so incisive and empirically grounded that it reshaped university ethics curricula worldwide.",
+              "common_mistakes": "Grammar Warning (Fronted 'So / Such' Degree Inversion & Article Placement): Learners frequently fail to invert the copula/auxiliary when 'So + [Adj]' or 'Such' is fronted for rhetorical emphasis, or misplace the article in 'so + [Adj] + a + [Singular Noun]': \"So decisive [INCORRECT: the consumer boycott was -> CORRECT: was the consumer boycott] that rival cosmetics conglomerates abandoned live testing within months.\" (Note: Fronting 'So + [Adj/Adv]' or 'Such + [be]' at the start of a clause requires subject-auxiliary inversion before the 'that'-result clause)."
+            },
+            {
+              "keywords": ["such", "backlash", "momentum", "pressure"],
+              "imitation_example": "The investigative expose triggered such widespread public backlash that multinational conglomerates overhauled their testing policies within months.",
+              "common_mistakes": "Grammar Warning ('Such' vs. 'So + Adj + a/an + Singular Noun'): Learners frequently misorder the article when converting 'such a/an + Adj + Noun' into the formal 'so + Adj + a/an + Noun' frame: \"The campaign posed [INCORRECT: so a formidable challenge / such formidable challenge -> CORRECT: such a formidable challenge / so formidable a challenge] that industry lobbyists conceded.\" (Note: Place 'a/an' after 'such' ['such a formidable challenge'] or after the adjective with 'so' ['so formidable a challenge'])."
+            }
+          ]
         }
       }
     },

@@ -87,12 +87,12 @@ Open any generated quiz in your browser (e.g., `Book_1_Unit_1_vocabulary_quiz.ht
   2. Inspect the flagged question. If the phrasing works well in your specific teaching context, proceed with confidence.
   3. If you agree that the item is ambiguous, re-generate the quiz from the dashboard or adjust the unit's vocabulary list.
 
-#### Scenario C: Quiz Moved to `_quarantine/` as `*_REJECTED.html`
-- **Verdict**: The number of passing questions dropped below the configured minimum (default: 3 items), triggering a hard gate to prevent flawed handouts from reaching students.
+#### Scenario C: Red Warning Badge (`qa_status: "failed"`, < 60% or Fatal Defects)
+- **Verdict**: The number of passing questions dropped below the configured threshold or suffered fatal structural/grounding flaws.
 - **Action**:
-  1. Check `wiki/<UnitName>/handouts/_quarantine/` for the `*_REJECTED.html` file and its diagnostic companion `*_REJECTED.json`.
-  2. This usually occurs when the source article is too short or lacks sufficient context for high-level question design.
-  3. Expand the source text with an extra paragraph or supplementary notes, then click compile again.
+  1. **Zero Quarantine Hiding**: In accordance with the Transparent Delivery Safeguard, the file is delivered directly to `wiki/<UnitName>/handouts/` (never hidden in an obscure `_quarantine/` folder) with a prominent red warning badge and `qa_status: "failed"`.
+  2. Inspect the diagnostic badge summary to see which items failed blind-solve or grounding checks.
+  3. Expand the source text if it is too short, or re-run the quiz compilation from the CLI/dashboard.
 
 ---
 
@@ -100,6 +100,6 @@ Open any generated quiz in your browser (e.g., `Book_1_Unit_1_vocabulary_quiz.ht
 
 The Two-Level Audit system is designed as your **tireless teaching assistant**, not a replacement for your professional judgment:
 
-1. **Complete Transparency**: No need to parse terminal logs. Frontmatter scores and visual web badges provide immediate quality visibility.
-2. **Informed Choice**: Materials above 80% can be trusted right away; materials below 80% give you actionable reasons so you can decide whether to accept, edit, or regenerate.
-3. **Zero Contamination**: Built-in quarantine stops hallucinated or scientifically flawed items from entering your active teaching materials automatically.
+1. **Complete Transparency**: No need to parse terminal logs or hunt through hidden quarantine directories. Frontmatter scores (`qa_score`, `qa_status`) and visual web badges provide immediate quality visibility right inside `extractions/` and `handouts/`.
+2. **Informed Choice**: Materials above 80% (`qa_status: "passed"`) can be trusted right away; materials below 80% (`"review_needed"` or `"failed"`) give you actionable reasons so you can decide whether to accept, edit, or regenerate.
+3. **Zero Contamination**: Defective extraction items are automatically blocked from polluting downstream quizzes while keeping full diagnostic transparency for the teacher.

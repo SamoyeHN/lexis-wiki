@@ -127,8 +127,9 @@ class WikiProcessor:
                 if not chunk:
                     continue
 
-                # Normalize curly apostrophes and ellipsis before splitting/cleaning
+                # Normalize curly apostrophes, spaced possessive apostrophes (' s -> 's), and ellipsis before splitting/cleaning
                 chunk = chunk.replace('\u2019', "'").replace('\u2018', "'").replace('…', '...')
+                chunk = re.sub(r"'\s+s\b", "'s", chunk)
 
                 # Normalize slash-separated word alternatives (e.g. 'get / feel / be lost' -> 'get/feel/be lost')
                 # so middle segments ('/ feel /') are never mistaken for IPA transcriptions

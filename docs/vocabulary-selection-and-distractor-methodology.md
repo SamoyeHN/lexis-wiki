@@ -37,10 +37,11 @@ Candidate words and multi-word expressions extracted from authentic lesson passa
 └───────────────────────────────────────────────────────────┘
 ```
 
-### 1.1 The Four Categories of Excluded / Re-Routed Items
+### 1.1 The Five Categories of Excluded / Re-Routed Items
 1. **Example-Less Domain Verbs & Run-On Derivatives (🗑️ Drop & Replace)**:
-   - Words that possess a sense definition in `pedlex.db` or WordNet but **0 authentic dictionary examples** (e.g., `hybridize`, `crossbreed`, `domesticate`, `adulation`, or unattested `-ly`/`-tion`/`-ness` run-on derivatives like `biologically`, `conscientiously`, `weightlessness`).
-   - Rather than fabricating examples in Python code—which forces downstream quizzes to test anchor-less words and invites synonym double-key collisions (`crossbreed` vs. `hybridize`)—these items are deterministically dropped (`[DROP_INCOMPLETE_LEXICON]`) and replaced by fully attested candidates from the passage.
+   - Words that possess a sense definition in `pedlex.db` or WordNet (`oewn:2025+`) but **0 authentic dictionary or corpus examples** (e.g., `hybridize`, `crossbreed`, `domesticate`, `adulation`, or unattested run-on derivatives like `carpooling`, `seamlessly`, `comradely`, `conscientiously`, `weightlessness`).
+   - Conversely, derived `-ly` adverbs and `-ing` participial adjectives/nouns that have authentic examples inside their base entry's `derived_forms` (`striving`, `enlightening`, `attentively`, `intensively`) or WordNet (`persevering`, `biologically`) are automatically resolved with full definitions and sense-verified examples.
+   - Rather than fabricating examples in Python code—which forces downstream quizzes to test anchor-less words and invites synonym double-key collisions (`crossbreed` vs. `hybridize`)—genuinely example-less items are deterministically dropped (`[DROP_INCOMPLETE_LEXICON]`) and replaced by fully attested candidates from the passage.
 2. **Transparent Free Word Combinations (🗑️ Drop & Replace)**:
    - Compositional phrases lacking a lexicalized multi-word entry in `pedlex.db` (e.g., `passenger plane`, `new generation`, `family member`, `put into the atmosphere`) are rejected at the expression gate.
 3. **Inflected Multi-Word & Cross-Entry Corpus Items (✅ Recovered via Algorithmic Retrieval)**:
@@ -127,16 +128,18 @@ Organized into discourse families (`concession`, `cause`, `condition`, `time`, `
 
 ## 4. Distractor Generation Architecture (`generate_vocab_distractors`)
 
-Distractors are generated deterministically at zero token cost (<1ms) via a four-tier pipeline:
+Distractors are generated deterministically at zero token cost (<1ms) via a five-tier pipeline:
 
 1. **PedLex Topic & Activator Lexicon**:
    - Harvests semantic neighbors and concept cluster members.
    - Applies **Cluster Throttling** (maximum 1 candidate per cluster/phrase) and word-family deduplication (`are_same_word_family`) to avoid near-identical variants (e.g. *businessman* vs *businessperson*).
 2. **PedLex Thesaurus Synonyms & Antonyms**:
-   - Secondary source for taxonomically related content words.
+   - Secondary source for taxonomically related content words, filtered against synonym collision.
 3. **WordNet Taxonomic Filtering**:
    - Bipolar cluster harvesting and coordinate sisters within the same POS and semantic field.
-4. **Physical Quality & Difficulty Gates**:
-   - **CEFR Difficulty Ceiling**: Intercepts words exceeding the text CEFR level using Zipf frequency ratings.
-   - **Morphological Symmetry**: Parallel inflection applied across all candidates (e.g., all past participles `VBN`, all plurals `NNS`).
-   - **Bucketed Collision Check**: Distractors are tested against the target's bound collocations to ensure zero unintended valid answers.
+4. **Orthographic / Paronym Look-Alike Tier (`get_orthographic_distractors`)**:
+   - Provides high-discrimination orthographic look-alikes (`形近词`, e.g., `adapt`/`adopt`/`adept`, `complement`/`compliment`, `simulate`/`stimulate`, `specimen`/`spectrum`/`spectacle`) when semantic clusters are sparse, strictly guarded by WordNet synset/hypernym disjointness and `is_cognate_near_synonym` so root-sharing near-synonyms (`historic`/`historical`, `classic`/`classical`, `economic`/`economical`, `continual`/`continuous`) never create ambiguous double keys.
+5. **Physical Quality, Syntactic `<gram>`, & Difficulty Gates**:
+   - **CEFR Difficulty Ceiling**: Intercepts words exceeding the text CEFR level using `cefrpy` and Zipf frequency ratings.
+   - **Syntactic Slot & `<gram>` Compatibility (`evaluate_syntactic_slot_clash`)**: Enforces `pedlex.db` grammatical constraints (`[only before noun]` vs. predicative copula slots, `[not before noun]` vs. attributive modifier slots, `[uncountable]` vs. `a/an` determiner frames, and strict `[intransitive]` vs. `[transitive]` direct-object compatibility).
+   - **Morphological Symmetry & Post-Inflection Collision Check**: Parallel inflection is applied across all 4 options (`VBD`/`VBN`/`VBG`/`VBZ`/`NNS`), followed by a post-inflection `double_key_collision` re-verification against the target's bound collocations and participial synsets (`0 DOUBLE_KEY_SURVIVED`).

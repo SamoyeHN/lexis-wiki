@@ -238,7 +238,7 @@ class TestLinguisticEngine:
 
         s2 = "Whether a job is designated as work depends, not on the job itself, but on the tastes."
         f2 = LinguisticEngine.generate_cobuild_formula(s2, "Rhetoric & Emphasis")
-        assert f2 == "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
+        assert f2 == "[Subject] + [VP], not + [PrepP], but + [PrepP]"
 
         s3 = "It is essential to consider the environmental impact."
         f3 = LinguisticEngine.generate_cobuild_formula(s3, "Information Packaging")

@@ -586,7 +586,6 @@ class ExpressionPatternEngine:
                     if (
                         LinguisticEngine.lookup_ldoce_phrase_candidates(cand_3w)
                         or LinguisticEngine.get_pedlex_entry(cand_3w)
-                        or LinguisticEngine.is_attested_phrase(cand_3w)
                     ):
                         return {
                             "pattern_id": pattern_id,
