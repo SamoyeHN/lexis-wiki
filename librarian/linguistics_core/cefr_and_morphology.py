@@ -43,6 +43,10 @@ class CefrAndMorphologyMixin:
     _wsd_session_local = threading.local()
     _orthographic_pos_index: Optional[Dict[str, Dict[str, Dict[str, List[str]]]]] = None
     _derivational_base_cache: Dict[str, Set[str]] = {}
+    _phrase_by_key_cache: Optional[Dict[str, List[Tuple[str, Optional[int], str, str]]]] = None
+    _phrase_by_raw_cache: Optional[Dict[str, List[Tuple[str, Optional[int], str, str]]]] = None
+    _oxford_thesaurus_cache: Dict[str, List[Dict[str, Any]]] = {}
+    _compound_nouns_cache: Optional[List[Tuple[str, bool]]] = None
 
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
@@ -674,6 +678,11 @@ class CefrAndMorphologyMixin:
         "outrun": ("outran", "outrun", "outrunning", "outruns"),
         "overcome": ("overcame", "overcome", "overcoming", "overcomes"),
         "undergo": ("underwent", "undergone", "undergoing", "undergoes"),
+        "undo": ("undid", "undone", "undoing", "undoes"),
+        "redo": ("redid", "redone", "redoing", "redoes"),
+        "outdo": ("outdid", "outdone", "outdoing", "outdoes"),
+        "overdo": ("overdid", "overdone", "overdoing", "overdoes"),
+        "forego": ("forewent", "foregone", "foregoing", "foregoes"),
         "undertake": ("undertook", "undertaken", "undertaking", "undertakes"),
         "withhold": ("withheld", "withheld", "withholding", "withholds"),
         "withstand": ("withstood", "withstood", "withstanding", "withstands"),
@@ -1056,7 +1065,7 @@ class CefrAndMorphologyMixin:
         "embed", "refer", "prefer", "transfer", "confer", "defer", "concur", "demur",
         "occur", "recur", "incur", "deter", "abhor", "control", "patrol", "regret", "offset", "upset",
         "submit", "admit", "omit", "commit", "permit", "transmit", "remit", "repel",
-        "expel", "compel", "dispel", "recap",
+        "expel", "compel", "dispel", "recap", "equip",
     })
 
     @classmethod
@@ -1619,13 +1628,19 @@ class CefrAndMorphologyMixin:
                                 return "verb"
                             return "adjective"
 
-                # Syntactic dependency repair for misparsed NOUN/PROPN (e.g. ROOT/predicate verbs like 'trap energy', 'swells'):
+                # Syntactic dependency repair for misparsed NOUN/PROPN (e.g. ROOT/predicate verbs like 'trap energy', 'swells', or 'to + V' infinitivals like 'income to deposit'):
                 if tok.pos_ in ("NOUN", "PROPN"):
                     has_verb_entry = ("verb" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="v") or wn.synsets(tok.lemma_.lower(), pos="v")))
                     if has_verb_entry:
+                        has_to_inf_child = any(
+                            (c.tag_ == "TO" or (c.lower_ == "to" and c.pos_ == "PART"))
+                            and c.dep_ in ("aux", "mark")
+                            and c.i < tok.i
+                            for c in tok.children
+                        )
                         has_dobj = any(c.dep_ in ("dobj", "obj") for c in tok.children)
                         has_nsubj_child = any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
-                        if has_dobj or has_nsubj_child:
+                        if has_to_inf_child or has_dobj or has_nsubj_child:
                             return "verb"
 
                         quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
@@ -1762,7 +1777,6 @@ class CefrAndMorphologyMixin:
             " " in w_clean
             or cls.is_multiword_expression(raw_word)
             or cls.is_multiword_expression(w_clean)
-            or m_pos_low in cls.EXPRESSION_TYPE_LABELS
         ):
             return cls.classify_expression_type(raw_word, quote or "") or (m_pos_low if m_pos_low in cls.EXPRESSION_TYPE_LABELS else "collocation")
 
@@ -2423,7 +2437,12 @@ class CefrAndMorphologyMixin:
             'crisis': 'crises', 'thesis': 'theses', 'basis': 'bases', 'focus': 'foci',
             'goods': 'goods', 'customs': 'customs', 'clothes': 'clothes',
             'belongings': 'belongings', 'surroundings': 'surroundings',
-            'fireworks': 'fireworks', 'premises': 'premises', 'congratulations': 'congratulations'
+            'fireworks': 'fireworks', 'premises': 'premises', 'congratulations': 'congratulations',
+            'species': 'species', 'subspecies': 'subspecies', 'series': 'series',
+            'means': 'means', 'offspring': 'offspring', 'aircraft': 'aircraft',
+            'spacecraft': 'spacecraft', 'headquarters': 'headquarters', 'crossroads': 'crossroads',
+            'corps': 'corps', 'sheep': 'sheep', 'deer': 'deer', 'fish': 'fish',
+            'salmon': 'salmon', 'trout': 'trout', 'swine': 'swine', 'bison': 'bison', 'moose': 'moose'
         }
         if w in irregulars:
             return irregulars[w]
@@ -2450,6 +2469,60 @@ class CefrAndMorphologyMixin:
             if w in ('life', 'knife', 'wife'):
                 return w[:-2] + 'ves'
         return w + 's'
+
+    @classmethod
+    def can_pluralize_noun_distractor(cls, word: str) -> bool:
+        """
+        Determines whether a singular noun candidate `word` can be naturally pluralized into
+        an attested plural form (`NNS`) for a plural-noun quiz slot.
+        Rejects:
+          1. Invariant nouns whose plural equals the singular (`subspecies`, `series`, `aircraft`),
+          2. Purely uncountable nouns (`pharma`, `subsistence`, `celibacy`),
+          3. Predominantly uncountable `[countable, uncountable]` nouns whose mechanical `-s` plural
+             (e.g. `subsidences` from `subsidence`) is completely unattested in WordNet, `cefrpy`,
+             and PedLex sense examples/collocations.
+        """
+        w = (word or "").strip().lower()
+        if not w or " " in w:
+            return False
+        pl = cls.pluralize_noun(w)
+        if not pl or pl == w:
+            return False
+        gram_prof = cls.get_word_gram_profile(w, pos="noun")
+        if gram_prof.get("pure_uncountable"):
+            return False
+        if not cls.is_attested_form(pl):
+            return False
+        # Check if the noun has any uncountable tag in PedLex; if so, require explicit plural attestation
+        entry = cls.get_ldoce_entry(w)
+        has_uncountable_tag = False
+        if entry:
+            for s in entry.get("senses", []):
+                g = str(s.get("grammar") or "").lower()
+                if "uncountable" in g:
+                    has_uncountable_tag = True
+                    break
+        if has_uncountable_tag:
+            wn = cls.get_wordnet()
+            if wn and wn.words(pl):
+                return True
+            try:
+                cefr = cls.get_cefr_analyzer()
+                if cefr and cefr.get_average_word_level_CEFR(pl) is not None:
+                    return True
+            except Exception:
+                pass
+            if entry:
+                for s in entry.get("senses", []):
+                    for ex in s.get("examples", []):
+                        if re.search(rf"\b{re.escape(pl)}\b", str(ex).lower()):
+                            return True
+                    for col in s.get("collocations", []):
+                        c_txt = col.get("pattern", "") if isinstance(col, dict) else str(col)
+                        if re.search(rf"\b{re.escape(pl)}\b", c_txt.lower()):
+                            return True
+            return False
+        return True
 
     @classmethod
     def analyze_verb_valency_pattern(cls, verb: str, prep: str) -> Tuple[bool, str, bool]:

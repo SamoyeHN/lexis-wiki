@@ -133,8 +133,8 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         "formula": "so + [Adj/Adv] + that + [Result Clause]",
         "tree_patterns": [
             [
-                {"RIGHT_ID": "head_pred", "RIGHT_ATTRS": {"POS": {"IN": ["ADJ", "ADV", "VERB", "AUX"]}}},
-                {"LEFT_ID": "head_pred", "REL_OP": ">>", "RIGHT_ID": "so_mod", "RIGHT_ATTRS": {"LOWER": "so", "DEP": "advmod"}},
+                {"RIGHT_ID": "head_pred", "RIGHT_ATTRS": {"POS": {"IN": ["ADJ", "ADV"]}}},
+                {"LEFT_ID": "head_pred", "REL_OP": ">", "RIGHT_ID": "so_mod", "RIGHT_ATTRS": {"LOWER": "so", "DEP": "advmod"}},
                 {"LEFT_ID": "head_pred", "REL_OP": ">>", "RIGHT_ID": "res_clause", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "advcl"]}}},
                 {"LEFT_ID": "res_clause", "REL_OP": ">", "RIGHT_ID": "that_mark", "RIGHT_ATTRS": {"LOWER": "that", "DEP": "mark"}},
             ],
@@ -542,6 +542,8 @@ class GrammarPatternEngine:
                     continue
                 if deg_tok.lower_ == "so" and that_tok.i == deg_tok.i + 1:
                     continue
+                if any(t.text == "," for t in doc[deg_tok.i : that_tok.i]):
+                    continue
 
             # Semantic/topological validation for it-cleft sentences:
             # The subordinate cleft clause must be introduced by a relative/subordinate marker (that, who, whom, etc.),
@@ -601,6 +603,7 @@ class GrammarPatternEngine:
             if string_id == "nonfinite_participial_adjunct":
                 tokens = [doc[i] for i in token_indices]
                 part_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
+                main_v = next((t for t in tokens if t != part_v and t.pos_ in ("VERB", "AUX")), None)
                 if part_v:
                     has_subordinator = any(child.dep_ in ("mark", "advmod") and child.lemma_.lower() in ("why", "how", "when", "where", "if", "because", "although", "while") for child in part_v.children)
                     has_finite_aux = any(
@@ -623,11 +626,27 @@ class GrammarPatternEngine:
                     if part_v.i + 1 < len(doc) and doc[part_v.i + 1].pos_ in ("NOUN", "PROPN") and doc[part_v.i + 1].dep_ in ("dobj", "pobj", "nsubj", "attr"):
                         continue
                     has_verbal_dep = any(
-                        c.dep_ in ("dobj", "prep", "advmod", "acomp", "xcomp", "ccomp", "prt", "agent", "npadvmod", "oprd")
+                        c.dep_ in ("dobj", "prep", "advmod", "acomp", "xcomp", "ccomp", "prt", "agent", "npadvmod", "oprd", "conj")
                         for c in part_v.children
                     )
                     if not has_verbal_dep:
                         continue
+                    # If the matrix verb has no genuine pre-verbal subject (or its only subject is inside the V-ing subtree),
+                    # a fronted VBG clause (e.g. "Having a child... or volunteering... is...") is a Gerundial Subject Nominalization!
+                    if main_v and part_v.tag_ == "VBG" and part_v.i < main_v.i:
+                        part_subtree = set(part_v.subtree)
+                        has_independent_subj = any(
+                            c.dep_ in ("nsubj", "nsubjpass", "expl") and c not in part_subtree
+                            for c in main_v.children
+                        )
+                        if not has_independent_subj:
+                            string_id = "gerund_subject_nominalization"
+                            pattern_meta = {
+                                "category": "Information Packaging",
+                                "priority": 82,
+                                "name": "Gerundial Subject Nominalization",
+                            }
+                            base_formula = "[V-ing / Gerund Phrase] + [Predicate Verb] + [Complement/Object]"
 
             # Topological validation for shell_noun_complement:
             # Verify that the complement clause is genuinely introduced by appositive 'that'/'whether' or 'of',
@@ -721,6 +740,18 @@ class GrammarPatternEngine:
                 "token_indices": token_indices,
                 "matched_tokens": [doc[i].text for i in token_indices]
             })
+
+        # Suppress subordinate relative_clause matches whose relcl verb or antecedent is part of
+        # an enclosing cleft_it_be_relcl or resultative_so_such_that construction
+        higher_order_tokens: Set[int] = set()
+        for r in matched_results:
+            if r["pattern_id"] in ("cleft_it_be_relcl", "resultative_so_such_that"):
+                higher_order_tokens.update(r["token_indices"])
+        if higher_order_tokens:
+            matched_results = [
+                r for r in matched_results
+                if not (r["pattern_id"] == "non_restrictive_relative_clause" and (set(r["token_indices"]) & higher_order_tokens))
+            ]
 
         # Sort by priority descending
         matched_results.sort(key=lambda x: x["priority"], reverse=True)
@@ -829,7 +860,7 @@ class GrammarPatternEngine:
                     return "[Subject] + [Aux] + not + [VP], but + [VP]"
                 return "[Subject] + [VP], not + [PrepP/NP], but + [PrepP/NP]"
             elif pattern_id == "evaluative_dummy_it_subject":
-                return "It is + [Adj/Noun] + that/to-inf [Clause]"
+                return "It + [be] + [Evaluative Adj] + to-V/that + [Clause]"
             elif pattern_id == "correlative_not_only_but_also":
                 if re.search(r"(?:^|[,;—–-]\s*)not\s+only\s+(?:can|could|will|would|shall|should|may|might|must|do|does|did|have|has|had|am|is|are|was|were)\b", doc.text.lower()):
                     return "Not only + [Aux] + [Subject] + [VP], but + [Subject] + [also] + [VP]"

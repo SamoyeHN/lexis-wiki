@@ -119,7 +119,7 @@ class PedlexDbMixin:
     def _finish_ldoce_entry(cls, w_clean: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Single exit point: normalize collocation keys, expand cross-reference spelling senses, and cache."""
         data["collocations"] = cls._normalize_collocations(data.get("collocations"))
-        # Expand bare cross-reference senses (e.g. 'the American spelling of programme')
+        # Expand bare cross-reference senses (e.g. 'the American spelling of programme', 'another spelling of sizeable')
         raw_senses = data.get("senses")
         if isinstance(raw_senses, list) and raw_senses:
             expanded_senses = []
@@ -127,7 +127,7 @@ class PedlexDbMixin:
                 if isinstance(s, dict):
                     s_defn = str(s.get("definition") or "").strip()
                     m_xref = re.match(
-                        r"^the\s+(?:American|British|US|UK)\s+(?:English\s+)?spelling\s+of\s+([a-zA-Z\-]+)\.?$",
+                        r"^(?:(?:the\s+)?(?:American|British|US|UK|another|variant|alternative)\s+(?:English\s+)?(?:spelling|form)\s+of|same\s+as|see)\s+([a-zA-Z\-]+)\.?$",
                         s_defn,
                         re.IGNORECASE,
                     )
@@ -143,6 +143,9 @@ class PedlexDbMixin:
                                 ]
                                 if t_senses:
                                     expanded_senses.extend(t_senses)
+                                    for meta_k in ("collocations", "cross_collocations", "thesaurus", "grammar_boxes", "word_family", "phrases"):
+                                        if not data.get(meta_k) and t_data.get(meta_k):
+                                            data[meta_k] = t_data[meta_k]
                                     continue
                 expanded_senses.append(s)
             data["senses"] = expanded_senses
@@ -193,6 +196,10 @@ class PedlexDbMixin:
                 except Exception:
                     pass
                 cls._ldoce_conn = None
+            cls._phrase_by_key_cache = None
+            cls._phrase_by_raw_cache = None
+            cls._PHRASE_INDEX_CACHE = None
+            cls._PHRASE_SYNONYMS_CACHE = None
             return False
 
         if cls._ldoce_conn is not None:
@@ -522,19 +529,11 @@ class PedlexDbMixin:
                         if ex_s not in own_exs:
                             own_exs.append(ex_s)
 
-            def _synthesize_derived_def(word_low: str, pos_low: str, b_word: str, b_senses: List[Dict[str, Any]]) -> str:
-                if not b_senses:
-                    wn = cls.get_wordnet()
-                    if wn:
-                        for q in (word_low.replace(" ", "_"), word_low, b_word.replace(" ", "_"), b_word):
-                            if not q:
-                                continue
-                            syns = wn.synsets(q)
-                            if syns and syns[0].definition():
-                                return str(syns[0].definition()).strip()
-                    return f"relating to or characteristic of {b_word or word_low}"
-                b_s0 = b_senses[0]
-                b_def = str(cls.format_ldoce_definition(b_s0) or b_s0.get("definition") or "").strip()
+            def _synthesize_single_derived_def(word_low: str, pos_low: str, b_word: str, b_s0: Dict[str, Any]) -> str:
+                b_def = str(b_s0.get("definition") or "").strip()
+                if not b_def:
+                    b_def = str(cls.format_ldoce_definition(b_s0) or "").strip()
+                b_def = re.sub(r"^\[[^\]]+\]\s*", "", b_def).strip()
                 b_pos = str(b_s0.get("pos") or "").strip().lower()
                 if not b_def:
                     return ""
@@ -542,7 +541,20 @@ class PedlexDbMixin:
                     if "verb" in b_pos:
                         v_clean = re.sub(r"^to\s+", "", b_def).strip()
                         return f"in a way that shows or involves how someone or something can {v_clean}"
-                    return f"in a way that shows or involves {b_def}"
+                    if b_def.lower().startswith("done "):
+                        return b_def[5:].strip()
+                    if b_def.lower().startswith(("in a ", "in an ", "with ")):
+                        return b_def
+                    if len(b_def.split()) <= 5 and not b_def.lower().startswith(("having ", "being ", "not ")):
+                        return f"in a {b_def} way or manner"
+                    return f"in a way that is {b_def}"
+                if pos_low == "noun" and word_low.endswith(("ness", "ity", "cy", "ance", "ence")):
+                    if "adj" in b_pos or not b_pos:
+                        if b_def.lower().startswith("something that is "):
+                            return f"the state or condition in which {b_def}"
+                        if b_def.lower().startswith(("having ", "not having ", "without ", "able to ", "unable to ", "free from ")):
+                            return f"the state or condition of {b_def}"
+                        return f"the state or quality of being {b_def}"
                 if pos_low == "noun" and (word_low.endswith("ing") or word_low.endswith("ings")):
                     if "verb" in b_pos:
                         if b_def.lower().startswith("if "):
@@ -573,8 +585,46 @@ class PedlexDbMixin:
                         return f"relating to, using, or characterized by {b_def}"
                 return b_def
 
+            def _synthesize_derived_def(word_low: str, pos_low: str, b_word: str, b_senses: List[Dict[str, Any]]) -> str:
+                if not b_senses:
+                    wn = cls.get_wordnet()
+                    if wn:
+                        for q in (word_low.replace(" ", "_"), word_low, b_word.replace(" ", "_"), b_word):
+                            if not q:
+                                continue
+                            syns = wn.synsets(q)
+                            if syns and syns[0].definition():
+                                return str(syns[0].definition()).strip()
+                    return f"relating to or characteristic of {b_word or word_low}"
+                return _synthesize_single_derived_def(word_low, pos_low, b_word, b_senses[0])
+
+            def _project_base_senses(word_low: str, pos_low: str, gram_str: str, b_word: str, b_senses: List[Dict[str, Any]], exs: List[str]) -> List[Dict[str, Any]]:
+                projected: List[Dict[str, Any]] = []
+                for idx, bs in enumerate(b_senses):
+                    if not isinstance(bs, dict):
+                        continue
+                    # Skip purely idiom-unit senses of the base word
+                    if bs.get("units") and not str(bs.get("definition") or "").strip():
+                        continue
+                    synth_d = _synthesize_single_derived_def(word_low, pos_low, b_word, bs)
+                    if not synth_d:
+                        continue
+                    ps = dict(bs)
+                    ps["pos"] = pos_low
+                    ps["homograph_num"] = 0
+                    ps["variety"] = ""
+                    ps["grammar"] = gram_str or ("[uncountable]" if pos_low == "noun" and word_low.endswith("ness") else ps.get("grammar", ""))
+                    ps["definition"] = synth_d
+                    ps["gloss_source"] = "derivational"
+                    if idx == 0 and exs:
+                        ps["examples"] = list(exs)
+                    else:
+                        ps["examples"] = [ex for ex in (exs or []) if cls.text_contains_form(ex, word_low)]
+                    projected.append(ps)
+                return projected
+
             # If the derived entry has empty senses (e.g. 'celebration' derived from 'celebrate'),
-            # synthesize a grounded sense from its own collocations/examples and base_data
+            # synthesize grounded senses from its own collocations/examples and base_data
             if not data.get("senses"):
                 if requested_word == "celebration":
                     data["senses"] = [{
@@ -591,17 +641,22 @@ class PedlexDbMixin:
                         "examples": own_exs,
                     }]
                 elif base_data.get("senses"):
-                    b_s0 = dict(base_data["senses"][0])
-                    b_s0["pos"] = d_pos
-                    b_s0["grammar"] = d_gram
-                    synth_d = _synthesize_derived_def(req_low, d_pos, base_word, base_data["senses"])
-                    if synth_d:
-                        b_s0["definition"] = synth_d
-                    if own_exs:
-                        b_s0["examples"] = own_exs + list(b_s0.get("examples") or [])
-                    data["senses"] = [b_s0]
+                    proj = _project_base_senses(req_low, d_pos, d_gram, base_word, base_data["senses"], own_exs)
+                    if proj:
+                        data["senses"] = proj
+                    else:
+                        b_s0 = dict(base_data["senses"][0])
+                        b_s0["pos"] = d_pos
+                        b_s0["grammar"] = d_gram
+                        synth_d = _synthesize_derived_def(req_low, d_pos, base_word, base_data["senses"])
+                        if synth_d:
+                            b_s0["definition"] = synth_d
+                        if own_exs:
+                            b_s0["examples"] = own_exs + list(b_s0.get("examples") or [])
+                        data["senses"] = [b_s0]
             else:
-                s0 = dict(data["senses"][0])
+                existing_senses = list(data["senses"])
+                s0 = dict(existing_senses[0])
                 s0_def = str(s0.get("definition") or "").strip()
                 # Clean trailing base-word preposition pattern leak (e.g. '... with a lot of effort agonize over/about')
                 if s0_def and base_word and len(base_word) >= 3:
@@ -619,25 +674,86 @@ class PedlexDbMixin:
                     synth_d = _synthesize_derived_def(req_low, str(s0.get("pos") or d_pos).lower(), base_word, base_data["senses"])
                     if synth_d:
                         s0["definition"] = synth_d
-                        s0["gloss_source"] = "ldoce_derived_base"
+                        s0["gloss_source"] = "derivational"
                 if own_exs and not s0.get("examples"):
                     s0["examples"] = own_exs
-                data["senses"] = [s0] + list(data["senses"][1:])
+                out_senses = [s0] + list(existing_senses[1:])
+                # If the derived entry only has a single fallback/synthesized sense and base_data is polysemous (>1 sense),
+                # append projected base senses so polysemous/domain-specific derived words (e.g. 'weightlessness', 'furiously')
+                # have access to all base senses while preserving monosemous derived entries ('punctuality', 'abandonment').
+                base_senses_list = base_data.get("senses") or []
+                is_single_domain_base = (
+                    len(base_senses_list) == 1
+                    and s0.get("gloss_source") == "wordnet"
+                    and "especially" in str(base_senses_list[0].get("definition") or "").lower()
+                )
+                if (
+                    len(out_senses) == 1
+                    and not act_defs
+                    and (len(base_senses_list) > 1 or is_single_domain_base)
+                ):
+                    t_pos = str(s0.get("pos") or d_pos).lower()
+                    t_gram = str(s0.get("grammar") or d_gram)
+                    if t_pos == "noun":
+                        t_gram = re.sub(r"\[?\b(?:not|only) before noun\b\]?", "", t_gram, flags=re.IGNORECASE).strip(" ,;[]")
+                        s0["grammar"] = t_gram
+                    proj = _project_base_senses(req_low, t_pos, t_gram, base_word, base_data["senses"], own_exs)
+                    seen_d = {re.sub(r"[^a-z0-9]+", " ", str(s.get("definition") or "").lower()).strip() for s in out_senses}
+                    new_proj: List[Dict[str, Any]] = []
+                    for ps in proj:
+                        ps_norm = re.sub(r"[^a-z0-9]+", " ", str(ps.get("definition") or "").lower()).strip()
+                        if ps_norm and ps_norm not in seen_d:
+                            seen_d.add(ps_norm)
+                            if not ps.get("examples") and s0.get("examples"):
+                                ps["examples"] = list(s0["examples"])
+                            new_proj.append(ps)
+                    if s0.get("gloss_source") == "wordnet" and new_proj:
+                        out_senses = new_proj + out_senses
+                    else:
+                        out_senses.extend(new_proj)
+                    for os_item in out_senses:
+                        if isinstance(os_item, dict):
+                            os_item["is_derived_projected"] = True
+                data["senses"] = out_senses
             data["base_word"] = base_word
         return data
 
     @classmethod
-    def get_ldoce_preps(cls, word: str) -> Set[str]:
+    def get_ldoce_preps(cls, word: str, pos: Optional[str] = None) -> Set[str]:
         """
         Extracts governing prepositions for the given word from PedLex grammar patterns and collocations.
+        When `pos` is provided, only inspects senses matching that part of speech so noun prepositions
+        (e.g. 'notice of/to') do not leak into verb valency checks ('notice' verb).
         """
         entry = cls.get_ldoce_entry(word)
         if not entry:
             return set()
+        norm_pos = str(pos or "").strip().lower()
+        if norm_pos.startswith("v"):
+            norm_pos = "verb"
+        elif norm_pos.startswith("n"):
+            norm_pos = "noun"
+        elif norm_pos.startswith("adj") or norm_pos == "a":
+            norm_pos = "adjective"
+        elif norm_pos.startswith("adv") or norm_pos == "r":
+            norm_pos = "adverb"
+
         preps: Set[str] = set()
         std_preps = ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "toward", "over", "under", "about", "among")
         # 1. Inspect senses grammar patterns (e.g. 'attitude to/towards', 'depend on/upon')
         for s in entry.get("senses", []):
+            if norm_pos in {"verb", "noun", "adjective", "adverb"}:
+                s_pos = str(s.get("pos") or entry.get("pos") or "").strip().lower()
+                if s_pos.startswith("v"):
+                    s_pos = "verb"
+                elif s_pos.startswith("n"):
+                    s_pos = "noun"
+                elif s_pos.startswith("adj") or s_pos == "a":
+                    s_pos = "adjective"
+                elif s_pos.startswith("adv") or s_pos == "r":
+                    s_pos = "adverb"
+                if s_pos in {"verb", "noun", "adjective", "adverb"} and s_pos != norm_pos:
+                    continue
             for pat in s.get("patterns", []):
                 # Filter out infinitive markers (e.g. 'to do something', 'be heard to do something', 'pleased to hear')
                 pat_clean = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", pat.lower())
@@ -656,13 +772,29 @@ class PedlexDbMixin:
         collocs = entry.get("collocations", {})
         head = (entry.get("base_word") or word).lower()
         head_prep_re = re.compile(
-            rf"\b{re.escape(head)}(?:s|es|ed|d|ing)?(?:\s+\.\.\.)?\s+"
+            rf"\b{re.escape(head)}(?:s|es|ed|d|ing)?(?:\s+(?:somebody|something|someone|sb|sth|oneself|/|\.\.\.))*\s+"
             rf"({'|'.join(std_preps)})\b"
         )
         for ph in collocs.get("phrases", []):
             p_text = ph.get("collocation", "").lower() if isinstance(ph, dict) else str(ph).lower()
+            p_text = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", p_text)
             for m in head_prep_re.finditer(p_text):
                 preps.add(m.group(1))
+        for pv in entry.get("phrasal_verbs", []):
+            if isinstance(pv, dict):
+                for m in head_prep_re.finditer(str(pv.get("phrase") or "").lower()):
+                    preps.add(m.group(1))
+                for pv_s in (pv.get("senses") or []):
+                    if isinstance(pv_s, dict):
+                        for pat in (pv_s.get("patterns") or []):
+                            pat_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(pat).lower())
+                            for m in head_prep_re.finditer(pat_c):
+                                preps.add(m.group(1))
+        for u in entry.get("units", []):
+            if isinstance(u, dict):
+                u_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(u.get("phrase") or "").lower())
+                for m in head_prep_re.finditer(u_c):
+                    preps.add(m.group(1))
         return preps
 
     # The tokens PedLex uses as the second word of a phrasal verb.
@@ -1509,65 +1641,126 @@ class PedlexDbMixin:
         return frames
 
     @classmethod
+    def _ensure_in_memory_phrase_index(cls) -> bool:
+        """
+        Loads the entire ldoce_phrase_index (~100,952 rows) into process memory in a single
+        pass (~170ms) and builds four O(1) lookup structures:
+        - _phrase_by_key_cache: {phrase_key: [(host_word, sense_idx, tier, raw_phrase), ...]}
+        - _phrase_by_raw_cache: {raw_phrase_lower: [(host_word, sense_idx, tier, raw_phrase), ...]}
+        - _PHRASE_INDEX_CACHE: {phrase_key: best_tier}
+        - _PHRASE_SYNONYMS_CACHE: {phrase_key: {synonym_phrase_keys...}}
+        """
+        if not cls._ensure_ldoce_conn() or cls._ldoce_conn is None:
+            return False
+        if (
+            cls._phrase_by_key_cache is not None
+            and cls._phrase_by_raw_cache is not None
+            and cls._PHRASE_INDEX_CACHE is not None
+            and cls._PHRASE_SYNONYMS_CACHE is not None
+        ):
+            return True
+
+        by_key: Dict[str, List[Tuple[str, Optional[int], str, str]]] = {}
+        by_raw: Dict[str, List[Tuple[str, Optional[int], str, str]]] = {}
+        tier_map: Dict[str, str] = {}
+        slash_groups: Dict[str, Set[str]] = {}
+
+        try:
+            cur = cls._ldoce_conn.cursor()
+            cur.execute("SELECT phrase_key, tier, host_word, sense_idx, raw_phrase FROM ldoce_phrase_index")
+            for p_key, tier, host_word, sense_idx, raw_phrase in cur.fetchall():
+                item = (host_word, sense_idx, tier, raw_phrase)
+                if p_key in by_key:
+                    by_key[p_key].append(item)
+                else:
+                    by_key[p_key] = [item]
+
+                if raw_phrase:
+                    r_low = raw_phrase.lower()
+                    if r_low in by_raw:
+                        by_raw[r_low].append(item)
+                    else:
+                        by_raw[r_low] = [item]
+                    if "/" in raw_phrase:
+                        if raw_phrase in slash_groups:
+                            slash_groups[raw_phrase].add(p_key)
+                        else:
+                            slash_groups[raw_phrase] = {p_key}
+
+                if p_key not in tier_map or tier == "phrasal_verb":
+                    tier_map[p_key] = tier
+
+            def _tier_rank(row: Tuple[str, Optional[int], str, str]) -> int:
+                t = row[2]
+                return 1 if t == "sense_unit" else (2 if t == "phrasal_verb" else 3)
+
+            for rows in by_key.values():
+                if len(rows) > 1:
+                    rows.sort(key=_tier_rank)
+            for rows in by_raw.values():
+                if len(rows) > 1:
+                    rows.sort(key=_tier_rank)
+
+            syn_map: Dict[str, Set[str]] = {}
+            for keys in slash_groups.values():
+                if len(keys) > 1:
+                    for k in keys:
+                        syn_map.setdefault(k, set()).update(keys)
+        except Exception:
+            return False
+
+        cls._phrase_by_key_cache = by_key
+        cls._phrase_by_raw_cache = by_raw
+        cls._PHRASE_INDEX_CACHE = tier_map
+        cls._PHRASE_SYNONYMS_CACHE = syn_map
+        return True
+
+    @classmethod
     def lookup_ldoce_phrase(
         cls,
         phrase: str,
         headword: Optional[str] = None
     ) -> Optional[Tuple[str, Optional[int], str, str]]:
         """
-        Dual-track progressive phrase lookup via ldoce_phrase_index:
+        Dual-track progressive phrase lookup via in-memory ldoce_phrase_index:
         1. Exact literal match (respecting apostrophes/contractions, e.g. "don't be a stranger")
         2. Canonical slot/token match (via _unit_tokens, e.g. 'hello stranger')
         3. Lemmatized verb fallback
         Returns (host_word, sense_idx, tier, raw_phrase) or None.
         """
-        if not phrase or not cls._ensure_ldoce_conn():
+        if not phrase or not cls._ensure_in_memory_phrase_index():
             return None
 
         raw = str(phrase).strip()
         if not raw:
             return None
 
-        cursor = cls._ldoce_conn.cursor()
+        by_raw = cls._phrase_by_raw_cache or {}
+        by_key = cls._phrase_by_key_cache or {}
 
         # Track 1: Exact literal match (preserving contraction apostrophes and punctuation stripped)
         exact_clean = raw.lower().replace("\u2019", "'").replace("\u2018", "'")
         exact_clean = re.sub(r"[!?,.]+$", "", exact_clean).strip()
         if exact_clean:
-            try:
-                row = cursor.execute(
-                    """
-                    SELECT host_word, sense_idx, tier, raw_phrase
-                    FROM ldoce_phrase_index
-                    WHERE raw_phrase = ? COLLATE NOCASE OR raw_phrase = ? COLLATE NOCASE
-                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                    LIMIT 1
-                    """,
-                    (exact_clean, exact_clean + "!")
-                ).fetchone()
-                if row:
-                    return row[0], row[1], row[2], row[3]
-            except Exception:
-                pass
+            r1 = by_raw.get(exact_clean)
+            r2 = by_raw.get(exact_clean + "!")
+            if r1 and r2:
+                combined = sorted(
+                    r1 + r2,
+                    key=lambda r: 1 if r[2] == "sense_unit" else (2 if r[2] == "phrasal_verb" else 3),
+                )
+                return combined[0]
+            if r1:
+                return r1[0]
+            if r2:
+                return r2[0]
 
         # Track 2: Canonical slot/token match via _unit_tokens
         canon_key = " ".join(cls._unit_tokens(raw))
         if canon_key:
-            try:
-                row = cursor.execute(
-                    """
-                    SELECT host_word, sense_idx, tier, raw_phrase
-                    FROM ldoce_phrase_index
-                    WHERE phrase_key = ?
-                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                    LIMIT 1
-                    """,
-                    (canon_key,)
-                ).fetchone()
-                if row:
-                    return row[0], row[1], row[2], row[3]
-            except Exception:
-                pass
+            rows = by_key.get(canon_key)
+            if rows:
+                return rows[0]
 
         # Track 3: Lemmatized headword/verb fallback (e.g. "banked up" -> "bank up")
         words = raw.split()
@@ -1577,21 +1770,9 @@ class PedlexDbMixin:
                 lemmatized_phrase = " ".join([lemmatized_head] + words[1:])
                 lemmatized_key = " ".join(cls._unit_tokens(lemmatized_phrase))
                 if lemmatized_key and lemmatized_key != canon_key:
-                    try:
-                        row = cursor.execute(
-                            """
-                            SELECT host_word, sense_idx, tier, raw_phrase
-                            FROM ldoce_phrase_index
-                            WHERE phrase_key = ?
-                            ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                            LIMIT 1
-                            """,
-                            (lemmatized_key,)
-                        ).fetchone()
-                        if row:
-                            return row[0], row[1], row[2], row[3]
-                    except Exception:
-                        pass
+                    rows = by_key.get(lemmatized_key)
+                    if rows:
+                        return rows[0]
 
         return None
 
@@ -1602,17 +1783,18 @@ class PedlexDbMixin:
         headword: Optional[str] = None
     ) -> List[Tuple[str, Optional[int], str, str]]:
         """
-        Retrieves all attested candidate matches from ldoce_phrase_index without LIMIT 1 truncation.
+        Retrieves all attested candidate matches from in-memory ldoce_phrase_index without LIMIT 1 truncation.
         Returns list of (host_word, sense_idx, tier, raw_phrase) tuples.
         """
-        if not phrase or not cls._ensure_ldoce_conn():
+        if not phrase or not cls._ensure_in_memory_phrase_index():
             return []
 
         raw = str(phrase).strip()
         if not raw:
             return []
 
-        cursor = cls._ldoce_conn.cursor()
+        by_raw = cls._phrase_by_raw_cache or {}
+        by_key = cls._phrase_by_key_cache or {}
         results: List[Tuple[str, Optional[int], str, str]] = []
         seen = set()
 
@@ -1620,44 +1802,30 @@ class PedlexDbMixin:
         exact_clean = raw.lower().replace("\u2019", "'").replace("\u2018", "'")
         exact_clean = re.sub(r"[!?,.]+$", "", exact_clean).strip()
         if exact_clean:
-            try:
-                rows = cursor.execute(
-                    """
-                    SELECT host_word, sense_idx, tier, raw_phrase
-                    FROM ldoce_phrase_index
-                    WHERE raw_phrase = ? COLLATE NOCASE OR raw_phrase = ? COLLATE NOCASE
-                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                    """,
-                    (exact_clean, exact_clean + "!")
-                ).fetchall()
-                for r in rows:
-                    sig = (r[0], r[1], r[2])
-                    if sig not in seen:
-                        seen.add(sig)
-                        results.append((r[0], r[1], r[2], r[3]))
-            except Exception:
-                pass
+            r1 = by_raw.get(exact_clean, [])
+            r2 = by_raw.get(exact_clean + "!", [])
+            rows = (
+                sorted(
+                    r1 + r2,
+                    key=lambda r: 1 if r[2] == "sense_unit" else (2 if r[2] == "phrasal_verb" else 3),
+                )
+                if (r1 and r2)
+                else (r1 or r2)
+            )
+            for r in rows:
+                sig = (r[0], r[1], r[2])
+                if sig not in seen:
+                    seen.add(sig)
+                    results.append(r)
 
         # Track 2: Canonical slot/token match via _unit_tokens
         canon_key = " ".join(cls._unit_tokens(raw))
         if canon_key:
-            try:
-                rows = cursor.execute(
-                    """
-                    SELECT host_word, sense_idx, tier, raw_phrase
-                    FROM ldoce_phrase_index
-                    WHERE phrase_key = ?
-                    ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                    """,
-                    (canon_key,)
-                ).fetchall()
-                for r in rows:
-                    sig = (r[0], r[1], r[2])
-                    if sig not in seen:
-                        seen.add(sig)
-                        results.append((r[0], r[1], r[2], r[3]))
-            except Exception:
-                pass
+            for r in by_key.get(canon_key, ()):
+                sig = (r[0], r[1], r[2])
+                if sig not in seen:
+                    seen.add(sig)
+                    results.append(r)
 
         # Track 3: Lemmatized headword/verb fallback
         words = raw.split()
@@ -1667,23 +1835,11 @@ class PedlexDbMixin:
                 lemmatized_phrase = " ".join([lemmatized_head] + words[1:])
                 lemmatized_key = " ".join(cls._unit_tokens(lemmatized_phrase))
                 if lemmatized_key and lemmatized_key != canon_key:
-                    try:
-                        rows = cursor.execute(
-                            """
-                            SELECT host_word, sense_idx, tier, raw_phrase
-                            FROM ldoce_phrase_index
-                            WHERE phrase_key = ?
-                            ORDER BY CASE tier WHEN 'sense_unit' THEN 1 WHEN 'phrasal_verb' THEN 2 ELSE 3 END
-                            """,
-                            (lemmatized_key,)
-                        ).fetchall()
-                        for r in rows:
-                            sig = (r[0], r[1], r[2])
-                            if sig not in seen:
-                                seen.add(sig)
-                                results.append((r[0], r[1], r[2], r[3]))
-                    except Exception:
-                        pass
+                    for r in by_key.get(lemmatized_key, ()):
+                        sig = (r[0], r[1], r[2])
+                        if sig not in seen:
+                            seen.add(sig)
+                            results.append(r)
 
         return results
 
@@ -1800,18 +1956,18 @@ class PedlexDbMixin:
             if aw and aw not in anchor_words:
                 anchor_words.append(aw)
 
-        # 2. Cross-entry host lookups via ldoce_phrase_index and ldoce_sense_cue_index (<0.5ms indexed lookup)
+        # 2. Cross-entry host lookups via in-memory ldoce_phrase_index and SQLite ldoce_sense_cue_index (<0.5ms indexed lookup)
+        if is_multi and u_key and cls._ensure_in_memory_phrase_index() and cls._phrase_by_key_cache:
+            added_hw = 0
+            for hw, _sidx, _tier, _raw in cls._phrase_by_key_cache.get(u_key, ()):
+                if hw and hw not in anchor_words:
+                    anchor_words.append(hw)
+                    added_hw += 1
+                    if added_hw >= 20:
+                        break
         if cls._ensure_ldoce_conn() and cls._ldoce_conn is not None:
             try:
                 cur = cls._ldoce_conn.cursor()
-                if is_multi and u_key:
-                    cur.execute(
-                        "SELECT DISTINCT host_word FROM ldoce_phrase_index WHERE phrase_key = ? LIMIT 20",
-                        (u_key,)
-                    )
-                    for (hw,) in cur.fetchall():
-                        if hw and hw not in anchor_words:
-                            anchor_words.append(hw)
                 for tok in (key_tokens[:2] + sub_parts[:2]):
                     cur.execute(
                         "SELECT DISTINCT host_word FROM ldoce_sense_cue_index WHERE cue_word = ? ORDER BY weight DESC LIMIT 20",
@@ -1887,8 +2043,24 @@ class PedlexDbMixin:
             if len(res) >= max(limit * 3, 15):
                 break
 
-        unit_matches = [c for c in res if cls._unit_example(u_key or clean_q, [c], allow_modifier=True)]
-        other_matches = [c for c in res if c not in unit_matches]
+        def _pedagogical_ex_rank(ex: str) -> tuple:
+            ex_l = ex.lower()
+            gritty_penalty = 1 if re.search(
+                r"\b(?:sleazy|corpse|murder|sex|sexy|bastard|damn|hell|suicide|prostitute|whore|bitch|shit|fuck|piss|rape|cocaine|heroin)\b",
+                ex_l,
+            ) else 0
+            q_penalty = 1 if ex.endswith("?") or not ex.endswith((".", "!", "\"", "'")) else 0
+            len_dist = 0 if 40 <= len(ex) <= 135 else abs(len(ex) - 85)
+            return (gritty_penalty, q_penalty, len_dist)
+
+        unit_matches = sorted(
+            [c for c in res if cls._unit_example(u_key or clean_q, [c], allow_modifier=True)],
+            key=_pedagogical_ex_rank,
+        )
+        other_matches = sorted(
+            [c for c in res if c not in unit_matches],
+            key=_pedagogical_ex_rank,
+        )
         return (unit_matches + other_matches)[:limit]
 
     @classmethod
@@ -1985,3 +2157,287 @@ class PedlexDbMixin:
                     "concept": concept_name,
                 })
         return out
+
+    @classmethod
+    def is_exact_pedlex_headword(cls, word: str) -> bool:
+        """
+        Returns True if `word` exists in pedlex.db as an exact base headword
+        (not merely resolved via suffix-stripping fallback like 'posses' -> 'posse'
+        or 'fooling' -> 'fool').
+        """
+        if not word:
+            return False
+        w_clean = word.strip().lower()
+        if not w_clean:
+            return False
+        if cls._ldoce_raw_row(w_clean) is not None:
+            return True
+        if cls._ldoce_raw_row(f"{w_clean}_1") is not None:
+            return True
+        entry = cls.get_ldoce_entry(w_clean)
+        if entry and str(entry.get("word", "")).strip().lower() == w_clean:
+            return True
+        return False
+
+    @classmethod
+    def get_oxford_thesaurus_entries(cls, word: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves all POS entries for `word` from the `oxford_thesaurus` table in `pedlex.db`.
+        Each entry has keys: 'word', 'pos', 'senses' (where each sense has 'sense_num',
+        'core_synonyms', 'example', 'synonyms', 'antonyms').
+        """
+        if not word:
+            return []
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word)).strip().lower()
+        if not w_clean:
+            return []
+        if w_clean in cls._oxford_thesaurus_cache:
+            return cls._oxford_thesaurus_cache[w_clean]
+
+        if cls._ldoce_conn is None:
+            cls.get_ldoce_entry("the")
+        conn = cls._ldoce_conn
+        if not conn:
+            return []
+
+        if not cls._ldoce_table_exists("oxford_thesaurus"):
+            return []
+
+        out: List[Dict[str, Any]] = []
+        try:
+            cur = conn.execute(
+                "SELECT data_json FROM oxford_thesaurus WHERE word = ?",
+                (w_clean,),
+            )
+            for (data_str,) in cur.fetchall():
+                try:
+                    data = json.loads(data_str)
+                    if isinstance(data, list):
+                        by_pos: Dict[str, List[Dict[str, Any]]] = {}
+                        for blk in data:
+                            if isinstance(blk, dict):
+                                p = str(blk.get("pos", "other") or "other").strip().lower()
+                                by_pos.setdefault(p, []).append(blk)
+                        for p, blks in by_pos.items():
+                            out.append({"pos": p, "senses": blks})
+                    elif isinstance(data, dict):
+                        out.append(data)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        cls._oxford_thesaurus_cache[w_clean] = out
+        return out
+
+    @classmethod
+    def get_pedlex_and_oxford_synonyms_antonyms(
+        cls,
+        word: str,
+        pos: Optional[str] = None,
+        definition: Optional[str] = None,
+        quote: Optional[str] = None,
+    ) -> Tuple[Set[str], List[str]]:
+        """
+        Unified retrieval of synonyms (for double-key exclusion) and antonyms (for Tier 1
+        polar contrast distractors) combining:
+          1. PedLex `senses[].synonym`, `senses[].opposite`, `thesaurus`, and `language_activator`
+          2. Oxford Thesaurus of English (`oxford_thesaurus` table: `core_synonyms`, `synonyms`, `antonyms`)
+
+        When `definition` or `quote` is provided, sense blocks in `oxford_thesaurus` are scored
+        by lexical/synonym overlap with the locked sense so polysemous words prioritize the
+        matching sense's antonyms while unioning core synonyms and matched-sense synonyms.
+        Returns `(synonyms_set, ordered_antonyms_list)`.
+        """
+        synonyms: Set[str] = set()
+        antonyms: List[str] = []
+        seen_ant: Set[str] = set()
+
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip().lower()
+        if not w_clean:
+            return synonyms, antonyms
+
+        norm_pos = str(pos or "").strip().lower()
+        if norm_pos.startswith("v"):
+            norm_pos = "verb"
+        elif norm_pos.startswith("n"):
+            norm_pos = "noun"
+        elif norm_pos.startswith("adj") or norm_pos == "a":
+            norm_pos = "adjective"
+        elif norm_pos.startswith("adv") or norm_pos == "r":
+            norm_pos = "adverb"
+
+        def _clean_term(raw_t: str) -> str:
+            t = re.sub(r"\[.*?\]|\(.*?\)", "", str(raw_t or "")).strip().lower()
+            t = re.sub(r"^to\s+", "", t).strip()
+            return t
+
+        def _add_syn(raw_t: str) -> None:
+            for part in re.split(r"[,;/]", str(raw_t or "")):
+                t = _clean_term(part)
+                if t and t != w_clean:
+                    synonyms.add(t)
+
+        def _add_ant(raw_t: str) -> None:
+            for part in re.split(r"[,;/]", str(raw_t or "")):
+                t = _clean_term(part)
+                if t and t != w_clean and t not in seen_ant:
+                    seen_ant.add(t)
+                    antonyms.append(t)
+
+        # 1. PedLex native entry (senses, thesaurus, language_activator)
+        w_lemma = cls.lemma_of(w_clean) if " " not in w_clean else w_clean
+        entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_lemma) if w_lemma != w_clean else None)
+        def_low = re.sub(r"^\[.*?\]\s*", "", str(definition or "").strip().lower())
+        def_tokens = {
+            tok for tok in re.findall(r"[a-z]{3,}", def_low)
+            if tok not in {"something", "somebody", "someone", "person", "people", "thing", "things", "make", "have", "give", "used", "very", "that", "with", "from", "into", "the", "and", "for", "you", "your", "want", "not", "act"}
+        }
+        def_lemmas = set(def_tokens) | {cls.lemma_of(tok) for tok in def_tokens}
+        quote_tokens = {
+            tok for tok in re.findall(r"[a-z]{4,}", str(quote or "").lower())
+            if tok not in (w_clean, w_lemma)
+        }
+        matched_sense_syns: Set[str] = set()
+
+        if entry:
+            # Bare gloss extraction (e.g. "[formal] lunch" -> "lunch" is a direct synonym)
+            if def_low and len(def_low.split()) <= 2 and re.match(r"^[a-z-]+$", def_low):
+                _add_syn(def_low)
+                matched_sense_syns.add(def_low)
+
+            any_sense_matched_def = False
+            for s in entry.get("senses", []):
+                s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                is_matched_sense = bool(def_low and (s_def == def_low or def_low in s_def or s_def in def_low))
+                if is_matched_sense:
+                    any_sense_matched_def = True
+                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def):
+                    _add_syn(s_def)
+                    if is_matched_sense or not def_low:
+                        matched_sense_syns.add(s_def)
+                raw_syns = s.get("synonym") or []
+                for syn in ([raw_syns] if isinstance(raw_syns, str) else raw_syns):
+                    _add_syn(syn)
+                    if is_matched_sense or not def_low:
+                        ct = _clean_term(syn)
+                        if ct:
+                            matched_sense_syns.add(ct)
+                raw_opps = s.get("opposite") or []
+                for opp in ([raw_opps] if isinstance(raw_opps, str) else raw_opps):
+                    if is_matched_sense or not def_low:
+                        _add_ant(opp)
+            # Second pass for any remaining opposites on the entry ONLY when no specific sense matched def_low
+            if not any_sense_matched_def:
+                for s in entry.get("senses", []):
+                    raw_opps = s.get("opposite") or []
+                    for opp in ([raw_opps] if isinstance(raw_opps, str) else raw_opps):
+                        _add_ant(opp)
+
+            for th in entry.get("thesaurus", []):
+                if isinstance(th, dict) and th.get("word"):
+                    _add_syn(th["word"])
+
+            for la in entry.get("language_activator", []):
+                if isinstance(la, dict):
+                    la_words = [
+                        _clean_term(exp.get("word", ""))
+                        for exp in (la.get("words") or la.get("exponents") or [])
+                        if isinstance(exp, dict) and exp.get("word")
+                    ]
+                    if len(la_words) <= 20:
+                        for lw in la_words:
+                            _add_syn(lw)
+
+        # 2. Oxford Thesaurus of English
+        ox_entries = list(cls.get_oxford_thesaurus_entries(w_clean))
+        if w_lemma != w_clean and not ox_entries:
+            ox_entries = list(cls.get_oxford_thesaurus_entries(w_lemma))
+        for ox in ox_entries:
+            ox_pos = str(ox.get("pos", "")).strip().lower()
+            if norm_pos and ox_pos and norm_pos in {"verb", "noun", "adjective", "adverb"}:
+                if ox_pos != norm_pos:
+                    continue
+
+            senses = ox.get("senses") or []
+            scored_senses = []
+            for idx, s_blk in enumerate(senses):
+                core_syns = [_clean_term(x) for x in (s_blk.get("core_synonyms") or []) if _clean_term(x)]
+                all_syns = [_clean_term(x) for x in (s_blk.get("synonyms") or []) if _clean_term(x)]
+                ex_str = str(s_blk.get("example", "")).lower()
+                score = 0
+                if len(senses) == 1:
+                    score += 10
+                else:
+                    syn_set = set(all_syns) | set(core_syns)
+                    overlap_def = len(def_lemmas & syn_set)
+                    overlap_existing = len(matched_sense_syns & syn_set)
+                    ex_tokens = set(re.findall(r"[a-z]{3,}", ex_str))
+                    overlap_ex = len((def_lemmas | quote_tokens) & ex_tokens)
+                    score += overlap_def * 4 + overlap_existing * 3 + overlap_ex * 2
+                    if idx == 0:
+                        score += 1
+                scored_senses.append((score, idx, s_blk, all_syns, core_syns))
+
+            for _sc, _idx, _s_blk, _all_syns, core_syns in scored_senses:
+                # Always include core synonyms across all valid POS senses to block obvious double-keys
+                for cs in core_syns:
+                    _add_syn(cs)
+
+            scored_senses.sort(key=lambda item: (-item[0], item[1]))
+            has_context_signal = bool(def_lemmas or quote_tokens or matched_sense_syns) and scored_senses and scored_senses[0][0] > 1
+            for rank, (sc, _idx, s_blk, all_syns, _core_syns) in enumerate(scored_senses):
+                # Include full synonym/antonym list from the best-matching sense(s); only fall back to <= 2 senses when no context signal disambiguates them
+                if rank == 0 or sc >= 4 or (not has_context_signal and len(scored_senses) <= 2):
+                    for syn_w in all_syns:
+                        _add_syn(syn_w)
+                    for ant_w in (s_blk.get("antonyms") or []):
+                        _add_ant(ant_w)
+
+            # Append antonyms from remaining senses only when no context signal disambiguated a primary sense
+            if not has_context_signal:
+                for _sc, _idx, s_blk, _all_syns, _core_syns in scored_senses:
+                    for ant_w in (s_blk.get("antonyms") or []):
+                        _add_ant(ant_w)
+
+            # 1-hop Core Synonym Antonym Resolution:
+            # In Oxford Thesaurus, specialized headwords (e.g. 'autonomy', 'precision', 'polar', 'compulsion')
+            # often point to a core/immediate synonym ('independence', 'exactness', 'opposite', 'coercion') where the
+            # reciprocal antonym block ('dependence', 'inaccuracy', 'identical', 'persuasion') is stored.
+            if not antonyms and scored_senses:
+                top_s_blk = scored_senses[0][2]
+                top_syns = {_clean_term(x) for x in (top_s_blk.get("synonyms") or []) if _clean_term(x)}
+                hop_candidates: List[str] = []
+                if entry:
+                    for s in entry.get("senses", []):
+                        s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                        if def_low and (s_def == def_low or def_low in s_def or s_def in def_low):
+                            raw_syns = s.get("synonym") or []
+                            for syn in ([raw_syns] if isinstance(raw_syns, str) else raw_syns):
+                                ct = _clean_term(syn)
+                                if ct and " " not in ct and ct not in hop_candidates:
+                                    hop_candidates.append(ct)
+                for x in (top_s_blk.get("core_synonyms") or []):
+                    ct = _clean_term(x)
+                    if ct and " " not in ct and ct not in hop_candidates:
+                        hop_candidates.append(ct)
+                for x in (top_s_blk.get("synonyms") or [])[:6]:
+                    ct = _clean_term(x)
+                    if ct and " " not in ct and ct not in hop_candidates:
+                        hop_candidates.append(ct)
+                for cs in hop_candidates[:6]:
+                    for cs_ox in cls.get_oxford_thesaurus_entries(cs):
+                        cs_pos = str(cs_ox.get("pos", "")).strip().lower()
+                        if norm_pos and cs_pos and norm_pos in {"verb", "noun", "adjective", "adverb"}:
+                            if cs_pos != norm_pos:
+                                continue
+                        for cs_blk in (cs_ox.get("senses") or []):
+                            cs_syns = {_clean_term(x) for x in (cs_blk.get("synonyms") or []) if _clean_term(x)}
+                            cs_core = {_clean_term(x) for x in (cs_blk.get("core_synonyms") or []) if _clean_term(x)}
+                            # Verify reciprocal membership with the matched sense's own synonyms (not cross-sense union)
+                            if w_clean in cs_syns or w_lemma in cs_syns or w_clean in cs_core or len(cs_syns & top_syns) >= 2:
+                                for ant_w in (cs_blk.get("antonyms") or []):
+                                    _add_ant(ant_w)
+
+        return synonyms, antonyms
+

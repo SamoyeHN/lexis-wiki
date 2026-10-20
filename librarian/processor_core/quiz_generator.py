@@ -29,9 +29,9 @@ from ..schemas import (
 
 class QuizGeneratorMixin:
 
-    def _shuffle_quiz_options(self, quiz_obj):
+    def _shuffle_quiz_options(self, quiz_obj, preserve_blueprint_order: bool = False):
         """Randomizes the order of options for each question and updates the correct index."""
-        return self.shuffle_quiz_options(quiz_obj)
+        return self.shuffle_quiz_options(quiz_obj, preserve_blueprint_order=preserve_blueprint_order)
 
     @staticmethod
     def _remap_explanation_labels(explanation: str, old_to_new: Dict[int, int]) -> str:
@@ -86,10 +86,10 @@ class QuizGeneratorMixin:
     @staticmethod
     def _sanitize_vocab_for_quiz(vocab_content: Any) -> Tuple[str, List[str], List[str]]:
         """
-        Physically isolates the quiz generator from example sentences:
+        Extracts authorized unit headwords and banned sentences for Level 1/Level 2 code gates:
         1. Accepts structured List[VocabularyItem | Dict] directly (or legacy markdown string for unit tests).
         2. Returns:
-           - sanitized_content: Clean prompt summary with only headword, part of speech, definition, and CEFR level.
+           - sanitized_content: Empty string for structured list inputs (blueprints format the prompt), or legacy markdown summary.
            - headwords: List of lowercase headword strings in this unit.
            - banned_sentences: List of the raw quoted and example sentences to audit stems against.
         """
@@ -99,18 +99,13 @@ class QuizGeneratorMixin:
         if isinstance(vocab_content, (list, tuple)):
             headwords: List[str] = []
             banned_sentences: List[str] = []
-            blocks: List[str] = []
             for item in vocab_content:
                 if isinstance(item, dict):
                     raw_w = str(item.get("word") or "").strip()
-                    pos = str(item.get("part_of_speech") or "noun").strip()
-                    defn = str(item.get("definition") or "").strip()
                     quote = str(item.get("quoted_sentence") or item.get("quote") or "").strip()
                     ex_usage = str(item.get("example_usage") or "").strip()
                 else:
                     raw_w = str(getattr(item, "word", "") or "").strip()
-                    pos = str(getattr(item, "part_of_speech", "noun") or "noun").strip()
-                    defn = str(getattr(item, "definition", "") or "").strip()
                     quote = str(getattr(item, "quoted_sentence", "") or "").strip()
                     ex_usage = str(getattr(item, "example_usage", "") or "").strip()
                 if not raw_w:
@@ -125,14 +120,7 @@ class QuizGeneratorMixin:
                     banned_sentences.append(quote)
                 if ex_usage:
                     banned_sentences.append(ex_usage)
-                w_cefr = LinguisticEngine.get_word_cefr(raw_w, default="B1")
-                blocks.append(
-                    f"## [[{raw_w}]]\n"
-                    f"- **Part of Speech**: {pos}\n"
-                    f"- **Word CEFR Level**: {w_cefr}\n"
-                    f"- **Definition**: {defn}"
-                )
-            return "\n\n".join(blocks).strip(), headwords, banned_sentences
+            return "", headwords, banned_sentences
 
         headwords = []
         for hw in re.findall(r'##\s*\[\[(.*?)\]\]', vocab_content):
@@ -257,12 +245,12 @@ class QuizGeneratorMixin:
         return "\n".join(clean_lines).strip(), pattern_summaries
 
     @classmethod
-    def shuffle_quiz_options(cls, quiz_obj: Any) -> Any:
+    def shuffle_quiz_options(cls, quiz_obj: Any, preserve_blueprint_order: bool = False) -> Any:
         """
         Sanitizes options and ensures robust answer key distribution.
-        If the LLM already naturally randomized the correct_answer_index across options (balanced spread),
-        the natural options order and explanations are preserved intact.
-        If answers are heavily biased (e.g. all 0s or >50% on a single index), options are shuffled
+        When preserve_blueprint_order=True (for blueprint-backed vocabulary quizzes), CRC32-balanced
+        option positions and indices are preserved intact without random re-shuffling or regex guessing.
+        Otherwise, if answers are heavily biased (e.g. all 0s or >50% on a single index), options are shuffled
         and any references like 'Option A/B/C/D' in explanations are atomically remapped to the new indices.
         """
         import dataclasses
@@ -338,18 +326,19 @@ class QuizGeneratorMixin:
         # For 4-option quizzes: biased if any answer accounts for > 50% or >= 2 choices unused.
         # For 2-option quizzes: biased if any single answer accounts for > 80% (extreme lopsidedness).
         is_biased = False
-        n_q = len(raw_indices)
-        if n_q >= 3:
-            counts = Counter(raw_indices)
-            most_common_freq = counts.most_common(1)[0][1]
-            unique_indices = set(raw_indices)
-            max_choices = max([len(getattr(q, "options", []) or (q.get("options", []) if isinstance(q, dict) else [])) for q in questions] or [4])
-            if max_choices <= 2:
-                if (most_common_freq / n_q) > 0.80:
-                    is_biased = True
-            else:
-                if (most_common_freq / n_q) > 0.50 or len(unique_indices) <= 2:
-                    is_biased = True
+        if not preserve_blueprint_order:
+            n_q = len(raw_indices)
+            if n_q >= 3:
+                counts = Counter(raw_indices)
+                most_common_freq = counts.most_common(1)[0][1]
+                unique_indices = set(raw_indices)
+                max_choices = max([len(getattr(q, "options", []) or (q.get("options", []) if isinstance(q, dict) else [])) for q in questions] or [4])
+                if max_choices <= 2:
+                    if (most_common_freq / n_q) > 0.80:
+                        is_biased = True
+                else:
+                    if (most_common_freq / n_q) > 0.50 or len(unique_indices) <= 2:
+                        is_biased = True
 
         for q in questions:
             # Handle dict, dataclass, and generic object
@@ -538,9 +527,9 @@ class QuizGeneratorMixin:
                             f"from {declared_idx} to {matching_idx} ('{options[matching_idx]}')."
                         )
 
-            # 3. Fallback heuristic: If expected answer did not resolve matching_idx,
-            # detect if the explanation/audit unambiguously declares a specific option letter as the correct one.
-            if matching_idx is None and options:
+            # 3. Fallback heuristic: For non-blueprint quizzes (reading/listening/video), if expected answer
+            # did not resolve matching_idx, detect if the explanation/audit declares a specific option letter.
+            if not preserve_blueprint_order and matching_idx is None and options:
                 cur_exp = q_dict.get("explanation", "")
                 cur_audit = q_dict.get("design_audit", "")
                 full_text = f"{cur_audit}\n{cur_exp}"
@@ -688,6 +677,8 @@ class QuizGeneratorMixin:
         unit_grammar_patterns: List[str] = []
         banned_quiz_sentences: List[str] = []
         vocab_sense_map: Dict[str, str] = {}
+        has_prescribed_options: bool = False
+        blueprint_specs: List[Dict[str, Any]] = []
 
         if template_name == "vocabulary":
             raw_vocab = data.get("content", "")
@@ -702,81 +693,74 @@ class QuizGeneratorMixin:
             if enable_cloze:
                 # Track 1: Authentic Passage Cloze (Achievement MCQ Mode)
                 raw_cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
-                if raw_cloze_items:
-                    # Dynamically cap quiz count to available items
-                    effective_count = min(count, len(raw_cloze_items))
-                    kwargs["count"] = effective_count
-                    logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode, count capped at {effective_count}).")
-                    cloze_bullets = []
-                    for idx, c in enumerate(raw_cloze_items[:effective_count], 1):
-                        tw_key = str(c.get("target_word") or "").strip().lower()
-                        if tw_key and c.get("definition"):
-                            vocab_sense_map[tw_key] = str(c["definition"]).strip()
-                        opts_str = ", ".join(c.get("precomputed_distractors", []) or c.get("precomputed_options", []))
-                        cloze_bullets.append(
-                            f"### Item {idx} ###\n"
-                            f"- Target Word: {c['target_word']}\n"
-                            f"- Part of Speech: {c['part_of_speech']}\n"
-                            f"- Authentic Question Stem: {c['question']}\n"
-                            f"- Candidate Distractors: [{opts_str}]\n"
-                            f"- Contextual Definition: {c['definition']}"
-                        )
-                    kwargs["vocabulary_content"] = (
-                        "### AUTHENTIC PASSAGE CLOZE TARGETS (ACHIEVEMENT MCQ MODE) ###\n"
-                        "For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the candidate distractors) and craft the pedagogical explanation and design audit:\n\n"
-                        + "\n\n".join(cloze_bullets)
+                effective_count = min(count, len(raw_cloze_items)) if raw_cloze_items else 0
+                kwargs["count"] = effective_count
+                logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode, count capped at {effective_count}).")
+                cloze_bullets = []
+                for idx, c in enumerate(raw_cloze_items[:effective_count], 1):
+                    tw_key = str(c.get("target_word") or "").strip().lower()
+                    if tw_key and c.get("definition"):
+                        vocab_sense_map[tw_key] = str(c["definition"]).strip()
+                    pre_opts = c.get("precomputed_options", [])
+                    if pre_opts:
+                        has_prescribed_options = True
+                    blueprint_specs.append({
+                        "target_word": c.get("target_word"),
+                        "definition": c.get("definition"),
+                        "options": list(pre_opts) if pre_opts else None,
+                        "correct_answer_index": c.get("correct_answer_index") if pre_opts else None,
+                    })
+                    opts_str = ", ".join(c.get("precomputed_distractors", []) or pre_opts)
+                    cloze_bullets.append(
+                        f"### Item {idx} ###\n"
+                        f"- Target Word: {c['target_word']}\n"
+                        f"- Part of Speech: {c['part_of_speech']}\n"
+                        f"- Authentic Question Stem: {c['question']}\n"
+                        f"- Candidate Distractors: [{opts_str}]\n"
+                        f"- Contextual Definition: {c['definition']}"
                     )
-                else:
-                    sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
-                    if unit_headwords:
-                        kwargs["count"] = min(count, len(unit_headwords))
-                    kwargs["vocabulary_content"] = sanitized_vocab
+                kwargs["vocabulary_content"] = (
+                    "### AUTHENTIC PASSAGE CLOZE TARGETS (ACHIEVEMENT MCQ MODE) ###\n"
+                    "For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the candidate distractors) and craft the pedagogical explanation and design audit:\n\n"
+                    + "\n\n".join(cloze_bullets)
+                )
             else:
                 # Track 2: Pre-Computed Generative Skeletons (Proficiency MCQ Mode)
                 skeletons = LinguisticEngine.build_precomputed_target_skeletons(raw_vocab, target_count=count)
-                if skeletons:
-                    effective_count = min(count, len(skeletons))
-                    kwargs["count"] = effective_count
-                    logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
-                    skeleton_bullets = []
-                    for idx, s in enumerate(skeletons[:effective_count], 1):
-                        tw_key = str(s.get("target_word") or "").strip().lower()
-                        if tw_key and s.get("definition"):
-                            vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
-                        opts_str = ", ".join(s.get("prescribed_options", []))
-                        micro_task_str = s.get("micro_task", "")
-                        pattern_line = f"- Pattern: {s['best_pattern']}\n" if s.get("best_pattern") else ""
-                        skeleton_bullets.append(
-                            f"### Item {idx} ###\n"
-                            f"- Target Word: {s['target_word']}\n"
-                            f"- Part of Speech: {s['part_of_speech']}\n"
-                            f"- Contextual Definition: {s['definition']}\n"
-                            + pattern_line
-                            + f"- Prescribed Options: [{opts_str}]\n"
-                            f"- Correct Answer Index: {s.get('correct_answer_index', 0)}\n"
-                            f"- 🎯 Micro-Task for LLM: {micro_task_str}"
-                        )
-
-                    batch_target_words = [s['target_word'] for s in skeletons[:effective_count]]
-                    leak_ban_sec = (
-                        f"### GLOBAL CROSS-ITEM LEAKAGE BAN ###\n"
-                        f"The following {len(batch_target_words)} words are target words across this quiz batch: {batch_target_words}.\n"
-                        f"You MUST NEVER use, mention, reveal, or leak any of these other target words (or their lemmas/inflections) "
-                        f"in the question stem, context sentences, explanation, or distractors of any item. "
-                        f"Each item must stand completely independently without providing clues to any other item.\n\n"
+                effective_count = min(count, len(skeletons)) if skeletons else 0
+                kwargs["count"] = effective_count
+                has_prescribed_options = True
+                logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
+                skeleton_bullets = []
+                for idx, s in enumerate(skeletons[:effective_count], 1):
+                    tw_key = str(s.get("target_word") or "").strip().lower()
+                    if tw_key and s.get("definition"):
+                        vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
+                    prescribed_opts = s.get("prescribed_options", [])
+                    blueprint_specs.append({
+                        "target_word": s.get("target_word"),
+                        "definition": s.get("definition"),
+                        "options": list(prescribed_opts) if prescribed_opts else None,
+                        "correct_answer_index": s.get("correct_answer_index", 0) if prescribed_opts else None,
+                    })
+                    opts_str = ", ".join(prescribed_opts)
+                    micro_task_str = s.get("micro_task", "")
+                    pattern_line = f"- Pattern: {s['best_pattern']}\n" if s.get("best_pattern") else ""
+                    skeleton_bullets.append(
+                        f"### Item {idx} ###\n"
+                        f"- Target Word: {s['target_word']}\n"
+                        f"- Part of Speech: {s['part_of_speech']}\n"
+                        f"- Contextual Definition: {s['definition']}\n"
+                        + pattern_line
+                        + f"- Prescribed Options: [{opts_str}]\n"
+                        f"- Correct Answer Index: {s.get('correct_answer_index', 0)}\n"
+                        f"- 🎯 Micro-Task for LLM: {micro_task_str}"
                     )
 
-                    kwargs["vocabulary_content"] = (
-                        leak_ban_sec
-                        + f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n"
-                        "Execute each item's '🎯 Micro-Task for LLM' to construct the sentence stem, preserve the prescribed options and answer index exactly, and provide distractor discrimination quoting each choice's exact wording:\n\n"
-                        + "\n\n".join(skeleton_bullets)
-                    )
-                else:
-                    sanitized_vocab, _, _ = self._sanitize_vocab_for_quiz(raw_vocab)
-                    if unit_headwords:
-                        kwargs["count"] = min(count, len(unit_headwords))
-                    kwargs["vocabulary_content"] = sanitized_vocab
+                kwargs["vocabulary_content"] = (
+                    f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n\n"
+                    + "\n\n".join(skeleton_bullets)
+                )
 
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
@@ -1052,9 +1036,37 @@ class QuizGeneratorMixin:
 
             if not quiz_obj:
                 return "Error: LLM returned empty quiz data."
-            
-            # 4.5. Randomize options
-            quiz_obj = self._shuffle_quiz_options(quiz_obj)
+
+            # 4.4. Deterministic Blueprint Hydration: bind blueprint-owned fields
+            # (target_word, definition, options, correct_answer_index) directly from code
+            if blueprint_specs:
+                q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
+                if isinstance(q_list, list):
+                    for q_i, q_item in enumerate(q_list):
+                        if q_i >= len(blueprint_specs):
+                            break
+                        spec = blueprint_specs[q_i]
+                        if isinstance(q_item, dict):
+                            if spec.get("target_word"):
+                                q_item["target_word"] = spec["target_word"]
+                            if spec.get("definition"):
+                                q_item["definition"] = spec["definition"]
+                            if spec.get("options"):
+                                q_item["options"] = list(spec["options"])
+                            if spec.get("correct_answer_index") is not None:
+                                q_item["correct_answer_index"] = spec["correct_answer_index"]
+                        else:
+                            if spec.get("target_word"):
+                                setattr(q_item, "target_word", spec["target_word"])
+                            if spec.get("definition"):
+                                setattr(q_item, "definition", spec["definition"])
+                            if spec.get("options"):
+                                setattr(q_item, "options", list(spec["options"]))
+                            if spec.get("correct_answer_index") is not None:
+                                setattr(q_item, "correct_answer_index", spec["correct_answer_index"])
+
+            # 4.5. Randomize options (skip when blueprint prescribes CRC32-balanced options)
+            quiz_obj = self._shuffle_quiz_options(quiz_obj, preserve_blueprint_order=has_prescribed_options)
 
             # Deterministically attach physical CEFR level to quiz_obj
             cefr_val = str(data.get("cefr_level") or kwargs.get("cefr_level") or "B2").upper()
@@ -1158,7 +1170,8 @@ class QuizGeneratorMixin:
                             quiz_dict_eval,
                             banned_sentences=banned_quiz_sentences,
                             unit_headwords=unit_headwords,
-                            allow_authentic_cloze=is_cloze_mode
+                            allow_authentic_cloze=is_cloze_mode,
+                            strict_distractor_recycling=not has_prescribed_options,
                         )
 
                     if l1_defects:
@@ -1228,8 +1241,18 @@ class QuizGeneratorMixin:
 
                             if triage in ("REPAIR", "REWRITE") and isinstance(candidate_cure, dict) and candidate_cure:
                                 # Modality-specific and defensive pre-normalization for candidate cure
-                                if "stem" in candidate_cure and "question" not in candidate_cure:
-                                    candidate_cure["question"] = candidate_cure.pop("stem")
+                                for q_alias in ("stem", "revised_question", "new_question", "cured_stem", "revised_stem"):
+                                    if q_alias in candidate_cure and not candidate_cure.get("question"):
+                                        candidate_cure["question"] = candidate_cure.pop(q_alias)
+                                for opt_alias in ("revised_options", "new_options", "cured_options"):
+                                    if opt_alias in candidate_cure and not candidate_cure.get("options"):
+                                        candidate_cure["options"] = candidate_cure.pop(opt_alias)
+                                for idx_alias in ("revised_correct_answer_index", "new_correct_answer_index"):
+                                    if idx_alias in candidate_cure and candidate_cure.get("correct_answer_index") is None:
+                                        candidate_cure["correct_answer_index"] = candidate_cure.pop(idx_alias)
+                                for exp_alias in ("revised_explanation", "new_explanation"):
+                                    if exp_alias in candidate_cure and not candidate_cure.get("explanation"):
+                                        candidate_cure["explanation"] = candidate_cure.pop(exp_alias)
 
                                 # Normalize options if LLM outputted list of dicts e.g. [{"letter": "A", "text": "..."}]
                                 raw_cand_opts = candidate_cure.get("options")
@@ -1271,8 +1294,12 @@ class QuizGeneratorMixin:
                                 orig_item = orig_questions[item_slot] if 0 <= item_slot < len(orig_questions) else {}
                                 orig_dict = orig_item if isinstance(orig_item, dict) else (dataclasses.asdict(orig_item) if dataclasses.is_dataclass(orig_item) else {})
 
-                                # Vocabulary fallback: inherit target_word / definition if omitted in cure
+                                # Vocabulary fallback: inherit question / target_word / definition / explanation if omitted in cure
                                 if template_name == "vocabulary":
+                                    if not candidate_cure.get("question") and orig_dict.get("question") and triage == "REPAIR":
+                                        candidate_cure["question"] = orig_dict["question"]
+                                    if not candidate_cure.get("explanation") and orig_dict.get("explanation"):
+                                        candidate_cure["explanation"] = orig_dict["explanation"]
                                     # For REPAIR, target word was valid, so inheritance is safe.
                                     # For REWRITE, only inherit if target_word was omitted AND original target belongs to authorized unit headwords.
                                     if not candidate_cure.get("target_word"):
@@ -1458,39 +1485,47 @@ class QuizGeneratorMixin:
                         # ---------------------------------------------------------
                         # Step 4: Deterministic Post-Cure Scoring
                         # ---------------------------------------------------------
+                        total_items_count = len(orig_questions) or len(audit_items) or 1
+                        missing_audit_items = max(0, len(orig_questions) - len(audit_items)) if orig_questions else 0
+                        audit_report["missing_audit_items"] = missing_audit_items
+
                         item_scores = [qa.get("pedagogical_score", 90) for qa in audit_items if isinstance(qa, dict)]
-                        final_avg = round(sum(item_scores) / len(item_scores)) if item_scores else 100
+                        score_denom = max(len(item_scores), total_items_count)
+                        final_avg = round(sum(item_scores) / score_denom) if item_scores else 100
                         audit_report["base_quality_score"] = final_avg
 
-                        # Preserve judge's cap and fail verdict if uncured defects remain
+                        # Preserve judge's cap and fail verdict if uncured defects or truncated items remain
                         has_fatal_residual = any(
                             qa.get("single_fit_valid") is False 
                             for qa in audit_items if isinstance(qa, dict)
-                        ) or (cure_stats["discard"] > 0)
+                        ) or (cure_stats["discard"] > 0) or (missing_audit_items > 0)
 
                         if has_fatal_residual:
                             audit_report["pass_audit"] = False
-                            audit_report["overall_quality_score"] = min(final_avg, 70)
+                            cap_limit = 59 if missing_audit_items > 0 else 70
+                            audit_report["overall_quality_score"] = min(final_avg, cap_limit)
                         else:
                             audit_report["pass_audit"] = (final_avg >= 80)
                             audit_report["overall_quality_score"] = final_avg
 
+                        final_overall_score = audit_report["overall_quality_score"]
                         audit_report["cure_stats"] = cure_stats
 
                         # Post-cure accuracy updates: successfully cured items now have a unique, verified key
-                        total_items_count = len(orig_questions) or 1
                         valid_items_count = cure_stats["pass"] + cure_stats["repair"] + cure_stats["rewrite"]
                         audit_report["post_cure_accuracy"] = round(valid_items_count / total_items_count, 2)
                         audit_report["blind_solve_accuracy"] = audit_report["post_cure_accuracy"]
 
-                        # Update summary verdict to disclose in-place surgical cure
-                        cure_summary = (
-                            f"[SURGICAL CURE APPLIED: Pre-Cure {raw_gen_score}% -> Post-Cure {audit_report['overall_quality_score']}%. "
-                            f"Pass: {cure_stats['pass']}, Repaired: {cure_stats['repair']}, "
-                            f"Rewritten: {cure_stats['rewrite']}, Discard/Flawed: {cure_stats['discard']}]."
-                        )
-                        orig_verdict = str(audit_report.get("summary_verdict", ""))
-                        audit_report["summary_verdict"] = f"{cure_summary} {orig_verdict}".strip()
+                        cured_count = cure_stats["repair"] + cure_stats["rewrite"]
+                        # Update summary verdict to disclose in-place surgical cure when actual cures occurred
+                        if cured_count > 0:
+                            cure_summary = (
+                                f"[SURGICAL CURE APPLIED: Pre-Cure {raw_gen_score}% -> Post-Cure {final_overall_score}%. "
+                                f"Pass: {cure_stats['pass']}, Repaired: {cure_stats['repair']}, "
+                                f"Rewritten: {cure_stats['rewrite']}, Discard/Flawed: {cure_stats['discard']}]."
+                            )
+                            orig_verdict = str(audit_report.get("summary_verdict", ""))
+                            audit_report["summary_verdict"] = f"{cure_summary} {orig_verdict}".strip()
 
                         # Synchronize Pre-Cure vs Post-Cure scores to the expert audit log file
                         try:
@@ -1501,11 +1536,12 @@ class QuizGeneratorMixin:
                             if matching_logs:
                                 latest_log = matching_logs[0]
                                 log_txt = latest_log.read_text(encoding="utf-8")
+                                cured_tag = " (CURED)" if cured_count > 0 else ""
                                 score_block = (
-                                    f"=== L2_QUALITY_SCORE: {final_avg}.0% (CURED) ===\n"
-                                    f"=== COMPOSITE_SCORE: {final_avg}.0% (CURED) ===\n"
+                                    f"=== L2_QUALITY_SCORE: {final_overall_score}.0%{cured_tag} ===\n"
+                                    f"=== COMPOSITE_SCORE: {final_overall_score}.0%{cured_tag} ===\n"
                                     f"=== PRE_CURE_SCORE: {raw_gen_score}.0% ===\n"
-                                    f"=== POST_CURE_SCORE: {final_avg}.0% ===\n"
+                                    f"=== POST_CURE_SCORE: {final_overall_score}.0% ===\n"
                                     f"=== SURGICAL_CURE: Repaired={cure_stats['repair']}, Rewritten={cure_stats['rewrite']}, Passed={cure_stats['pass']}, Flawed={cure_stats['discard']} ==="
                                 )
                                 if "=== COMPOSITE_SCORE:" in log_txt:

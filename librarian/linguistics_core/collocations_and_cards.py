@@ -81,15 +81,50 @@ class CollocationsAndCardsMixin:
             "examples": [],
         }
 
-        # 1. Prepositions from patterns & senses
+        # 1. Prepositions from patterns, senses, phrasal_verbs, and units
+        norm_pos = str(pos or "").strip().lower()
+        if norm_pos.startswith("v"):
+            norm_pos = "verb"
+        elif norm_pos.startswith("n"):
+            norm_pos = "noun"
+        elif norm_pos.startswith("adj") or norm_pos == "a":
+            norm_pos = "adjective"
+        elif norm_pos.startswith("adv") or norm_pos == "r":
+            norm_pos = "adverb"
+
+        raw_pats = []
         for s in d.get("senses", []):
-            for pat in s.get("patterns", []):
-                pat_clean = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", pat.lower())
-                pat_clean = re.sub(r"^(?:be\s+[a-z]+(?:ed|en)|be\s+pleased|be\s+likely)\s+to\b", "", pat_clean)
-                for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at", "into", "against", "over", "towards", "under", "upon"):
-                    if re.search(rf"\b{p}\b", pat_clean):
-                        if p not in res["prep"]:
-                            res["prep"].append(p)
+            if norm_pos in {"verb", "noun", "adjective", "adverb"}:
+                s_pos = str(s.get("pos") or d.get("pos") or "").strip().lower()
+                if s_pos.startswith("v"):
+                    s_pos = "verb"
+                elif s_pos.startswith("n"):
+                    s_pos = "noun"
+                elif s_pos.startswith("adj") or s_pos == "a":
+                    s_pos = "adjective"
+                elif s_pos.startswith("adv") or s_pos == "r":
+                    s_pos = "adverb"
+                if s_pos in {"verb", "noun", "adjective", "adverb"} and s_pos != norm_pos:
+                    continue
+            raw_pats.extend(s.get("patterns", []))
+        if norm_pos in ("", "verb"):
+            for pv in d.get("phrasal_verbs", []):
+                if isinstance(pv, dict) and pv.get("phrase"):
+                    raw_pats.append(pv["phrase"])
+                for pv_s in (pv.get("senses") or []) if isinstance(pv, dict) else []:
+                    if isinstance(pv_s, dict):
+                        raw_pats.extend(pv_s.get("patterns", []))
+        for u in d.get("units", []):
+            if isinstance(u, dict) and u.get("phrase"):
+                raw_pats.append(u["phrase"])
+
+        for pat in raw_pats:
+            pat_clean = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(pat).lower())
+            pat_clean = re.sub(r"^(?:be\s+[a-z]+(?:ed|en)|be\s+pleased|be\s+likely)\s+to\b", "", pat_clean)
+            for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at", "into", "against", "over", "towards", "under", "upon"):
+                if re.search(rf"\b{p}\b", pat_clean):
+                    if p not in res["prep"]:
+                        res["prep"].append(p)
 
         # 2. Collocation boxes in PedLex
         for it in colls.get("verbs", []):
@@ -1126,6 +1161,9 @@ class CollocationsAndCardsMixin:
                     m_emb = m_etc
             if m_emb:
                 s = m_emb.group(1).strip()
+            s = re.sub(r"\b(sth|sb|something|somebody)\s+[A-Z][a-z]+.*$", r"\1", s).strip()
+            s = re.sub(r"\bsth\b", "something", s)
+            s = re.sub(r"\bsb\b", "somebody", s)
             s = re.sub(
                 r"\s+(?:(?:especially|mainly|chiefly|mostly)\s+)?(?:British|American|Australian)\s+English$",
                 "",
@@ -1141,9 +1179,24 @@ class CollocationsAndCardsMixin:
             raw_gram = str(locked_sense.get("grammar") or "").strip()
             if raw_gram and raw_gram.strip("[]` ").lower() not in ("noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection"):
                 gram_tag_str = raw_gram.strip("`").strip()
+            if p_code == "a" and "not before noun" in gram_tag_str.lower():
+                att_texts = [quote] if quote else []
+                att_texts.extend(str(ex) for ex in (locked_sense.get("examples") or [])[:3] if ex)
+                has_attr_use = False
+                nlp_inst = cls.get_spacy()
+                for atxt in att_texts:
+                    adoc = nlp_inst(atxt)
+                    if any(t.lower_ == w_clean and t.dep_ == "amod" and t.head.pos_ in ("NOUN", "PROPN") for t in adoc):
+                        has_attr_use = True
+                        break
+                if has_attr_use:
+                    gram_tag_str = re.sub(r"\[?\bnot before noun\b\]?", "", gram_tag_str, flags=re.IGNORECASE).strip(" ,;[]")
             raw_pats_and_units = list(dict.fromkeys(
                 list(locked_sense.get("syntactic_patterns") or locked_sense.get("patterns") or [])
-                + list(locked_sense.get("units") or [])
+                + [
+                    u for u in (locked_sense.get("units") or [])
+                    if not (p_code == "v" and re.search(rf"\b(?:a|an|the|to a)\s+{re.escape(w_clean)}\b", str(u).lower()))
+                ]
             ))
             pats = [
                 _clean_pattern_text(p) for p in raw_pats_and_units
@@ -1188,6 +1241,18 @@ class CollocationsAndCardsMixin:
         # 2. Zero-Token Pedagogical Collocations (100% authentic dictionary collocations/patterns; zero fabricated splices)
         colloc_items: List[str] = []
         locked_homograph = locked_sense.get("homograph_num") if locked_sense else None
+        locked_def_kws: Set[str] = set()
+        other_sense_kws: Set[str] = set()
+        if locked_sense and len(senses) > 1:
+            l_def_str = str(definition or cls.format_ldoce_definition(locked_sense) or "").lower()
+            locked_def_kws = {w for w in re.findall(r"[a-z]{4,}", l_def_str) if w != w_clean}
+            for s_other in senses:
+                if s_other is locked_sense:
+                    continue
+                o_def_str = str(cls.format_ldoce_definition(s_other) or "").lower()
+                for ow in re.findall(r"[a-z]{4,}", o_def_str):
+                    if ow != w_clean and ow not in locked_def_kws:
+                        other_sense_kws.add(ow)
 
         def _sense_pos_matches(s_obj: Dict[str, Any]) -> bool:
             if not p_code:
@@ -1200,13 +1265,22 @@ class CollocationsAndCardsMixin:
                     return False
             return True
 
-        def _add_colloc(cand_str: str) -> None:
+        def _add_colloc(cand_str: str, check_cross_sense: bool = False) -> None:
             c_s = _clean_pattern_text(cand_str)
             if not c_s or " " not in c_s or "..." in c_s:
                 return
             c_low = c_s.lower()
             if c_low == w_clean or c_low in (f"the {w_clean}", f"a {w_clean}", f"an {w_clean}"):
                 return
+            if p_code == "v" and re.search(rf"\b(?:a|an|the|to a)\s+{re.escape(w_clean)}\b", c_low):
+                return
+            c_words = c_low.split()
+            if p_code == "n" and len(c_words) == 2 and c_words[1] == w_clean and re.match(r"^[a-z]+ing$", c_words[0]):
+                return
+            if check_cross_sense and other_sense_kws:
+                c_toks = {w for w in re.findall(r"[a-z]{4,}", c_low) if w != w_clean}
+                if c_toks & other_sense_kws and not (c_toks & locked_def_kws):
+                    return
             for idx_e, ex_item in enumerate(colloc_items):
                 ex_low = ex_item.lower()
                 if c_low == ex_low:
@@ -1248,23 +1322,23 @@ class CollocationsAndCardsMixin:
                         c_val = _clean_pattern_text(str(it_c.get("collocation") or ""))
                         if not c_val or " " not in c_val:
                             continue
-                        _add_colloc(c_val)
+                        _add_colloc(c_val, check_cross_sense=True)
                         if len(colloc_items) >= 5:
                             break
                     if len(colloc_items) >= 5:
                         break
 
-        # Tier C: Same-POS/same-homograph sibling senses' patterns and lexical units
-        if len(colloc_items) < 5:
+        # Tier C: Same-POS/same-homograph sibling senses' patterns and lexical units (only when not conflicting with locked sense)
+        if len(colloc_items) < 5 and len(senses) <= 1:
             for s_obj in senses:
                 if s_obj is locked_sense or not _sense_pos_matches(s_obj):
                     continue
                 for pb in s_obj.get("pattern_bundles") or []:
-                    _add_colloc(str(pb.get("pattern") or ""))
+                    _add_colloc(str(pb.get("pattern") or ""), check_cross_sense=True)
                 for pat in s_obj.get("patterns") or []:
-                    _add_colloc(str(pat))
+                    _add_colloc(str(pat), check_cross_sense=True)
                 for u in s_obj.get("units") or []:
-                    _add_colloc(str(u))
+                    _add_colloc(str(u), check_cross_sense=True)
                 if len(colloc_items) >= 5:
                     break
 
@@ -1272,13 +1346,13 @@ class CollocationsAndCardsMixin:
         if len(colloc_items) < 5 and colloc_box_pos_ok:
             for ph_obj in (entry.get("phrases") or []):
                 ph_str = ph_obj.get("phrase") or ph_obj.get("title") if isinstance(ph_obj, dict) else str(ph_obj or "")
-                _add_colloc(str(ph_str or ""))
+                _add_colloc(str(ph_str or ""), check_cross_sense=True)
                 if len(colloc_items) >= 5:
                     break
         if len(colloc_items) < 5 and len(set(all_poses)) <= 1:
             for cr_obj in (entry.get("cross_collocations") or []):
                 if isinstance(cr_obj, dict):
-                    _add_colloc(str(cr_obj.get("collocation") or ""))
+                    _add_colloc(str(cr_obj.get("collocation") or ""), check_cross_sense=True)
                     if len(colloc_items) >= 5:
                         break
 
@@ -1297,14 +1371,14 @@ class CollocationsAndCardsMixin:
             # Only surface THESAURUS box when its cluster aligns with the locked sense (or entry has 1 POS)
             box_matches_sense = True
             if self_exp and locked_def and len(senses) > 1:
-                self_dist = str(self_exp.get("distinction") or "").strip()
+                self_dist = re.sub(r"^[:\s]+", "", str(self_exp.get("distinction") or "")).strip()
                 if self_dist and cls._definition_overlap_ratio(self_dist, locked_def) < 0.25:
                     box_matches_sense = False
             if box_matches_sense:
                 # Reference text combines the locked definition and the target's own thesaurus distinction(s)
                 ref_texts = [locked_def] if locked_def else []
                 for s_idx in self_indices:
-                    s_dist = str(thes_list[s_idx].get("distinction") or "").strip()
+                    s_dist = re.sub(r"^[:\s]+", "", str(thes_list[s_idx].get("distinction") or "")).strip()
                     if s_dist:
                         ref_texts.append(s_dist)
                 ref_combined = " ".join(ref_texts)
@@ -1313,7 +1387,7 @@ class CollocationsAndCardsMixin:
                 seen_peer_words: Set[str] = set()
                 for idx_t, t in enumerate(thes_list):
                     ew = str(t.get("word") or "").strip()
-                    ed = str(t.get("distinction") or "").strip()
+                    ed = re.sub(r"^[:\s]+", "", str(t.get("distinction") or "")).strip()
                     eg = str(t.get("grammar") or "").strip()
                     er = str(t.get("register") or "").strip()
                     if not ew or not ed:
@@ -2050,7 +2124,7 @@ class CollocationsAndCardsMixin:
                         for tok in doc_ex:
                             if tok.lemma_.lower() == tw_clean and tok.pos_ in ("VERB", "AUX"):
                                 for child in tok.children:
-                                    if child.dep_ in ("dobj", "obj") and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS and child.pos_ in ("NOUN", "PROPN"):
+                                    if child.dep_ in ("dobj", "obj") and child.is_alpha and len(child.lemma_) >= 3 and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS and child.pos_ in ("NOUN", "PROPN"):
                                         cand_obj = child.lemma_.lower()
                                         if not any(cls.double_key_collision(tw_clean, d, anchor=cand_obj, anchor_type="object", pos="verb")[0] for d in dists):
                                             anchor = cand_obj
@@ -2095,7 +2169,14 @@ class CollocationsAndCardsMixin:
                                 t.pos_ in ("VERB", "AUX")
                                 for t in doc_ex if t.lemma_.lower() == tw_clean or t.text.lower().startswith(tw_clean)
                             )
-                            if is_noun_compound or not has_verb_usage:
+                            is_prep_obj = any(
+                                n_tok.dep_ == "pobj" and n_tok.head.dep_ == "prep" and (
+                                    n_tok.head.head.lemma_.lower() == tw_clean or n_tok.head.head.text.lower().startswith(tw_clean)
+                                )
+                                for n_tok in doc_ex
+                                if n_tok.lemma_.lower() == tok_clean or n_tok.text.lower() == tok_clean
+                            )
+                            if is_noun_compound or not has_verb_usage or is_prep_obj:
                                 continue
                         except Exception:
                             pass

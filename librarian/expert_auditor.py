@@ -229,7 +229,6 @@ class ExpertAuditor:
                 ],
                 schema=schema_cls,
                 task_name=f"expert_audit_{quiz_data.get('title', 'quiz')[:20]}",
-                use_default_params=True,
                 _disable_qa_retry=True # Avoid infinite recursive audits
             )
 
@@ -238,6 +237,8 @@ class ExpertAuditor:
                 return None
 
             report_dict = dataclasses.asdict(report_obj) if dataclasses.is_dataclass(report_obj) else report_obj
+            if isinstance(report_dict, dict):
+                report_dict.setdefault("quiz_title", quiz_data.get("title") or "Assessment Audit")
 
             # ------------------------------------------------------------------
             # Post-audit blind-solve cross-check.
@@ -354,8 +355,9 @@ class ExpertAuditor:
                     f"{'veto signal' if is_confident else 'evidence only'}."
                 )
 
-            # Accuracy is reported over the items with candidate answers we could actually compare.
-            blind_accuracy = round(confirmed / comparable, 3) if comparable > 0 else 1.0
+            # Accuracy is reported over all expected items so early truncation cannot claim 100% accuracy.
+            expected_comparable = max(comparable, len(questions))
+            blind_accuracy = round(confirmed / expected_comparable, 3) if expected_comparable > 0 else 1.0
             report_dict["blind_solve_accuracy"] = blind_accuracy
             report_dict["blind_solve_comparable"] = comparable
             report_dict["blind_solve_confident_divergences"] = confident_divergences
@@ -374,7 +376,11 @@ class ExpertAuditor:
                 logs_dir = Path(config.project_root).resolve() / "logs"
                 penalized_score = report_dict.get("overall_quality_score", 100)
                 base_avg = report_dict.get("base_quality_score", penalized_score)
-                flawed_count = len(report_dict.get("flawed_item_indices", [])) + confident_divergences
+                flawed_count = (
+                    len(report_dict.get("flawed_item_indices", []))
+                    + confident_divergences
+                    + int(report_dict.get("missing_audit_items", 0) or 0)
+                )
                 task_prefix = f"expert_audit_{quiz_data.get('title', 'quiz')[:20]}"
                 safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', task_prefix).strip('_')
                 matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -407,17 +413,21 @@ class ExpertAuditor:
     ) -> Dict[str, Any]:
         """Strict deterministic mathematical reconciliation of expert audit scores:
         1. Normalizes all boolean and string values.
-        2. Detects fatal defects (double-keys, ungrammatical keys, reversed distractors).
+        2. Detects fatal defects (double-keys, ungrammatical keys, reversed distractors, truncated items).
         3. Forces defective items to score 20.
-        4. Calculates base average.
-        5. Enforces hard cap at 70 if any fatal flaw exists, setting pass_audit = False.
+        4. Calculates base average across all expected items (missing items score 0).
+        5. Enforces hard cap at 70 (or 59 on truncation) if any fatal flaw exists, setting pass_audit = False.
         """
         if not report_dict or not isinstance(report_dict, dict):
             return report_dict
 
+        report_dict.setdefault("quiz_title", "Assessment Audit")
         audit_questions = report_dict.get("questions", [])
         if not total_items and audit_questions:
             total_items = len(audit_questions)
+
+        missing_items_count = max(0, total_items - len(audit_questions)) if total_items > 0 else 0
+        report_dict["missing_audit_items"] = missing_items_count
 
         # 1. Deterministic Item Score Reconciliation & Robust Type Normalization
         for idx, qa in enumerate(audit_questions):
@@ -471,9 +481,10 @@ class ExpertAuditor:
                     qa["pedagogical_score"] = 90
 
         # Calculate translation accuracy or blind accuracy
+        denom_items = max(len(audit_questions), total_items) if total_items else len(audit_questions)
         if quiz_type == "translation":
             raw_model_acc = report_dict.get("blind_solve_accuracy")
-            if isinstance(raw_model_acc, (int, float)) and 0 <= raw_model_acc <= 100:
+            if isinstance(raw_model_acc, (int, float)) and 0 <= raw_model_acc <= 100 and missing_items_count == 0:
                 acc_val = raw_model_acc / 100.0 if raw_model_acc > 1.0 else raw_model_acc
                 report_dict["blind_solve_accuracy"] = round(acc_val, 3)
             else:
@@ -481,15 +492,24 @@ class ExpertAuditor:
                     1 for qa in audit_questions
                     if isinstance(qa, dict) and qa.get("single_fit_valid") is not False and qa.get("confidence") == "Definite"
                 )
-                report_dict["blind_solve_accuracy"] = round(valid_items / total_items, 3) if total_items else 1.0
+                report_dict["blind_solve_accuracy"] = round(valid_items / denom_items, 3) if denom_items else 1.0
         else:
             blind_acc = report_dict.get("blind_solve_accuracy")
             if isinstance(blind_acc, (int, float)):
                 acc_val = blind_acc / 100.0 if blind_acc > 1.0 else blind_acc
+                if missing_items_count > 0 and denom_items > 0 and len(audit_questions) > 0:
+                    acc_val = min(acc_val, len(audit_questions) / denom_items)
                 report_dict["blind_solve_accuracy"] = round(acc_val, 3)
+            else:
+                valid_items = sum(
+                    1 for qa in audit_questions
+                    if isinstance(qa, dict) and qa.get("single_fit_valid") is not False
+                )
+                report_dict["blind_solve_accuracy"] = round(valid_items / denom_items, 3) if denom_items else 1.0
 
         item_scores = [qa["pedagogical_score"] for qa in audit_questions if isinstance(qa, dict)]
-        base_avg = round(sum(item_scores) / len(item_scores)) if item_scores else 100
+        score_denom = max(len(item_scores), total_items) if total_items else len(item_scores)
+        base_avg = round(sum(item_scores) / score_denom) if score_denom else 100
         report_dict["base_quality_score"] = base_avg
 
         flawed_items = [
@@ -498,11 +518,12 @@ class ExpertAuditor:
             if isinstance(qa, dict) and not qa.get("single_fit_valid")
         ]
         report_dict["flawed_item_indices"] = flawed_items
-        total_fatal_flaws = confident_divergences + len(flawed_items)
+        total_fatal_flaws = confident_divergences + len(flawed_items) + missing_items_count
 
         if total_fatal_flaws > 0:
             report_dict["pass_audit"] = False
-            penalized_score = min(int(base_avg), 70)
+            cap_limit = 59 if missing_items_count > 0 else 70
+            penalized_score = min(int(base_avg), cap_limit)
             report_dict["overall_quality_score"] = penalized_score
 
             # Reconcile summary verdict with transparent disclosure
@@ -519,6 +540,8 @@ class ExpertAuditor:
             ).strip()
 
             flaw_details = []
+            if missing_items_count > 0:
+                flaw_details.append(f"audit truncated ({len(audit_questions)}/{total_items} items evaluated)")
             if confident_divergences > 0:
                 flaw_details.append(f"{confident_divergences} blind-solve divergence(s)")
             if flawed_items:

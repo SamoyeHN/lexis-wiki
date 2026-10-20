@@ -94,17 +94,38 @@
         "A1_A2": {
           "pedagogical_function": "Moves a negative word like 'Never' or 'Seldom' to the start of the sentence to create strong emphasis.",
           "imitation_example": "Seldom do busy drivers realize how much fuel simple carpooling can save.",
-          "common_mistakes": "Grammar Warning (Negative Inversion): Learners frequently produce: \"Not only [INCORRECT: the bus saves -> CORRECT: does the bus save] fuel, but it also reduces city traffic.\" (Note: Fronted restrictive or negative adverbs strictly require Subject-Auxiliary Inversion)."
+          "common_mistakes": "Grammar Warning (Negative Inversion): Learners frequently produce: \"Not only [INCORRECT: the bus saves -> CORRECT: does the bus save] fuel, but it also reduces city traffic.\" (Note: Fronted restrictive or negative adverbs strictly require Subject-Auxiliary Inversion).",
+          "variants": [
+            {
+              "keywords": ["not", "only", "but", "also"],
+              "imitation_example": "Not only does regular exercise build physical strength, but it also helps students sleep better at night.",
+              "common_mistakes": "Grammar Warning (Negative Inversion): Learners frequently produce: \"Not only [INCORRECT: the bus saves -> CORRECT: does the bus save] fuel, but it also reduces city traffic.\" (Note: Fronted 'Not only' strictly requires Subject-Auxiliary Inversion in the first clause)."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Fronts a negative or restrictive adverbial ('Never', 'Seldom', 'Only then', 'Not only') and inverts subject and auxiliary to dramatize a turning point.",
           "imitation_example": "Rarely have urban planners witnessed such a rapid shift toward public transit within a single decade.",
-          "common_mistakes": "Grammar Warning (Negative Inversion): Learners frequently retain normal subject-verb order after fronting a negative or 'Only + adverbial' phrase: \"Only after the audit [INCORRECT: the managers realized -> CORRECT: did the managers realize] how much energy the old system wasted.\" (Note: Fronted negative and 'Only + time/condition' adverbials require auxiliary-subject inversion in the main clause)."
+          "common_mistakes": "Grammar Warning (Negative Inversion): Learners frequently retain normal subject-verb order after fronting a negative or 'Only + adverbial' phrase: \"Only after the audit [INCORRECT: the managers realized -> CORRECT: did the managers realize] how much energy the old system wasted.\" (Note: Fronted negative and 'Only + time/condition' adverbials require auxiliary-subject inversion in the main clause).",
+          "variants": [
+            {
+              "keywords": ["not", "only", "but", "also"],
+              "imitation_example": "Not only did the digital archive preserve fragile manuscripts, but it also opened historical records to schools worldwide.",
+              "common_mistakes": "Grammar Warning (Fronted 'Not only' Inversion): Learners frequently forget to invert the auxiliary and subject in the first clause or mistakenly invert the second clause: \"Not only [INCORRECT: the program reduced -> CORRECT: did the program reduce] energy costs, but it also improved classroom air quality.\" (Note: Invert the first clause after fronted 'Not only', while keeping normal Subject + Verb order after 'but')."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Forefronts a negative or restrictive operator ('Never before', 'Little did...', 'Under no circumstances', 'Only when...') with obligatory subject-operator inversion to signal rhetorical climax.",
           "imitation_example": "Seldom has a single consumer boycott compelled multinational corporations to abandon entrenched testing protocols so swiftly.",
-          "common_mistakes": "Grammar Warning (Scope of Inversion in Complex Clauses): Learners frequently invert the embedded subordinate clause instead of the matrix clause after 'Only when / Not until': \"Not until the longitudinal data were published [INCORRECT: did the hypothesis gained -> CORRECT: did the hypothesis gain] mainstream scientific acceptance.\" (Note: Invert the matrix auxiliary + subject, and keep the main lexical verb in its bare infinitive form after 'do/did/does')."
+          "common_mistakes": "Grammar Warning (Scope of Inversion in Complex Clauses): Learners frequently invert the embedded subordinate clause instead of the matrix clause after 'Only when / Not until': \"Not until the longitudinal data were published [INCORRECT: did the hypothesis gained -> CORRECT: did the hypothesis gain] mainstream scientific acceptance.\" (Note: Invert the matrix auxiliary + subject, and keep the main lexical verb in its bare infinitive form after 'do/did/does').",
+          "variants": [
+            {
+              "keywords": ["not", "only", "but", "also"],
+              "imitation_example": "Not only did the longitudinal audit expose systemic reporting biases, but it also catalyzed a comprehensive overhaul of regulatory standards.",
+              "common_mistakes": "Grammar Warning (Fronted 'Not only' Operator Inversion): Learners frequently retain canonical subject-verb order after clause-initial 'Not only' or inflect the lexical verb alongside 'did': \"Not only [INCORRECT: the ruling challenged -> CORRECT: did the ruling challenge] commercial precedent, but it also redefined institutional accountability.\" (Note: Clause-initial 'Not only' triggers obligatory auxiliary-subject inversion in the first clause)."
+            }
+          ]
         }
       }
     },
@@ -144,12 +165,12 @@
           "variants": [
             {
               "keywords": ["car", "train", "bus", "plane", "drive", "travel", "wheel"],
-              "imitation_example": "Many commuters now choose electric buses that produce zero smoke in the city.",
+              "imitation_example": "Many passengers now choose electric buses that produce no smoke in the city.",
               "common_mistakes": "Grammar Warning (Relative Clauses): Learners frequently use 'who' instead of 'which/that' for non-human antecedents: \"The high-speed train [INCORRECT: who -> CORRECT: that] connects the two cities runs every hour.\" (Note: Use 'which' or 'that' for things and vehicles, and reserve 'who' for people)."
             },
             {
-              "keywords": ["time", "early", "late", "appointment", "clock", "wait", "friend", "trust"],
-              "imitation_example": "People usually trust coworkers who arrive on time for every morning meeting.",
+              "keywords": ["who", "whom", "person", "people", "student", "author", "time", "early", "late", "appointment", "clock", "wait", "friend", "trust"],
+              "imitation_example": "People usually trust colleagues who arrive on time for every morning meeting.",
               "common_mistakes": "Grammar Warning (Relative Clauses): Learners frequently fail to match the verb in the relative clause with a plural noun antecedent: \"Friends who always [INCORRECT: keeps -> CORRECT: keep] their promises earn everyone's respect.\" (Note: The verb inside a relative clause must agree in number with the noun phrase it modifies)."
             },
             {
@@ -162,12 +183,41 @@
         "B1_B2": {
           "pedagogical_function": "Restricts and defines the reference of a head noun phrase by embedding a post-modifying relative clause.",
           "imitation_example": "Employers increasingly value candidates who can adapt quickly to cross-cultural work environments.",
-          "common_mistakes": "Grammar Warning (Relative Clause Agreement & Prepositions): Learners frequently mismatch verb agreement across intervening prepositional phrases: \"One of the challenges that [INCORRECT: affects -> CORRECT: affect] remote teams is asynchronous communication.\" (Note: When 'that/who' refers to the plural noun after 'one of the...', the relative clause verb must be plural)."
+          "common_mistakes": "Grammar Warning (Relative Clause Agreement & Prepositions): Learners frequently mismatch verb agreement across intervening prepositional phrases: \"One of the challenges that [INCORRECT: affects -> CORRECT: affect] remote teams is asynchronous communication.\" (Note: When 'that/who' refers to the plural noun after 'one of the...', the relative clause verb must be plural).",
+          "variants": [
+            {
+              "keywords": ["who", "whom", "person", "people", "student", "worker", "candidate", "man", "woman"],
+              "imitation_example": "Employers increasingly value candidates who can adapt quickly to cross-cultural work environments.",
+              "common_mistakes": "Grammar Warning (Subject vs. Object Relative Pronouns): Learners frequently use 'whom' as a subject or retain a resumptive subject pronoun after 'who': \"Organizations need leaders [INCORRECT: who they can inspire -> CORRECT: who can inspire] diverse teams during a crisis.\" (Note: When 'who' is the subject of the relative clause, do not add a redundant pronoun like 'they/he/she')."
+            },
+            {
+              "keywords": ["which", "that", "system", "device", "place", "thing", "way", "factor"],
+              "imitation_example": "Researchers developed a portable sensor that monitors air quality in real time.",
+              "common_mistakes": "Grammar Warning (Relative Clause Agreement & Prepositions): Learners frequently mismatch verb agreement across intervening prepositional phrases: \"One of the challenges that [INCORRECT: affects -> CORRECT: affect] remote teams is asynchronous communication.\" (Note: When 'that/which' refers to the plural noun after 'one of the...', the relative clause verb must be plural)."
+            },
+            {
+              "keywords": ["in", "on", "to", "from", "with", "for", "of", "through", "where"],
+              "imitation_example": "The community center provides a safe space in which teenagers can practice music and art.",
+              "common_mistakes": "Grammar Warning (Preposition Placement in Relative Clauses): Learners frequently use 'that' immediately after a preposition or repeat the preposition twice: \"The project [INCORRECT: on that we worked / on which we worked on -> CORRECT: on which we worked] won the regional innovation award.\" (Note: After a fronted preposition, use 'which' or 'whom'—never 'that'—and do not repeat the preposition at the end)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Integrates dense qualifying propositions into complex noun phrases via restrictive relative modification (including pied-piped prepositions 'in which / through which').",
           "imitation_example": "Ethicists have scrutinized the utilitarian framework on which commercial laboratories historically relied to justify invasive animal testing.",
-          "common_mistakes": "Grammar Warning (Pied-Piping Preposition + Relative Pronoun): Learners frequently use 'that' or 'who' immediately after a fronted preposition, or duplicate the preposition at the end of the clause: \"The regulatory framework [INCORRECT: under that the agency operates -> CORRECT: under which the agency operates] requires independent peer review.\" (Note: After a fronted preposition, use 'which' for things and 'whom' for people, never 'that')."
+          "common_mistakes": "Grammar Warning (Pied-Piping Preposition + Relative Pronoun): Learners frequently use 'that' or 'who' immediately after a fronted preposition, or duplicate the preposition at the end of the clause: \"The regulatory framework [INCORRECT: under that the agency operates -> CORRECT: under which the agency operates] requires independent peer review.\" (Note: After a fronted preposition, use 'which' for things and 'whom' for people, never 'that').",
+          "variants": [
+            {
+              "keywords": ["who", "whom", "scholar", "citizen", "researcher", "individual", "those"],
+              "imitation_example": "Policy analysts interviewed frontline clinicians who rely on algorithmic triage tools in their daily decisions.",
+              "common_mistakes": "Grammar Warning (Case Selection in Embedded Relative Clauses): Learners frequently hypercorrect 'who' to 'whom' when an parenthetical reporting clause ('we believe / historians argue') intervenes before the verb: \"The reformers [INCORRECT: whom historians argue laid -> CORRECT: who historians argue laid] the foundations of modern public health faced fierce opposition.\" (Note: Use subject-case 'who' when it functions as the subject of the embedded verb 'laid')."
+            },
+            {
+              "keywords": ["which", "that", "framework", "mechanism", "hypothesis", "paradigm", "policy"],
+              "imitation_example": "Ethicists have scrutinized the utilitarian framework on which commercial laboratories historically relied to justify invasive animal testing.",
+              "common_mistakes": "Grammar Warning (Pied-Piping Preposition + Relative Pronoun): Learners frequently use 'that' or 'who' immediately after a fronted preposition, or duplicate the preposition at the end of the clause: \"The regulatory framework [INCORRECT: under that the agency operates -> CORRECT: under which the agency operates] requires independent peer review.\" (Note: After a fronted preposition, use 'which' for things and 'whom' for people, never 'that')."
+            }
+          ]
         }
       }
     },
@@ -180,17 +230,53 @@
         "A1_A2": {
           "pedagogical_function": "Comments directly on the preceding idea after a comma to explain what it means or causes.",
           "imitation_example": "The city added shared bike stations, which encouraged more residents to cycle to work.",
-          "common_mistakes": "Grammar Warning (Sentential Relative Clauses): Learners frequently produce: \"The weather turned very cold, [INCORRECT: that -> CORRECT: which] made everyone stay indoors.\" (Note: 'that' cannot head a non-restrictive sentential relative clause after a comma)."
+          "common_mistakes": "Grammar Warning (Sentential Relative Clauses): Learners frequently produce: \"The weather turned very cold, [INCORRECT: that -> CORRECT: which] made everyone stay indoors.\" (Note: 'that' cannot head a non-restrictive sentential relative clause after a comma).",
+          "variants": [
+            {
+              "keywords": ["who", "whom", "whose", "teacher", "friend", "mother", "father", "neighbor"],
+              "imitation_example": "Our team captain, who practices every morning, helped everyone improve their skills.",
+              "common_mistakes": "Grammar Warning (Non-Restrictive Relative Clauses with People): Learners frequently use 'that' after a comma when adding extra information about a specific person: \"My elder sister, [INCORRECT: that lives in Shanghai -> CORRECT: who lives in Shanghai], visits us every holiday.\" (Note: After a comma in a non-restrictive relative clause referring to a person, always use 'who' or 'whom', never 'that')."
+            },
+            {
+              "keywords": ["which", "mean", "make", "help", "cause", "lead"],
+              "imitation_example": "The city added shared bike stations, which encouraged more residents to cycle to work.",
+              "common_mistakes": "Grammar Warning (Sentential Relative Clauses): Learners frequently produce: \"The weather turned very cold, [INCORRECT: that -> CORRECT: which] made everyone stay indoors.\" (Note: 'that' cannot head a non-restrictive sentential relative clause after a comma)."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Encapsulates the entire preceding clause via ', which...' to evaluate its consequence, significance, or implication.",
-          "imitation_example": "Several major retailers phased out single-use plastics within six months, which demonstrated that consumer pressure can reshape supply chains.",
-          "common_mistakes": "Grammar Warning (Sentential Relative Agreement & Pronoun Choice): Learners frequently use 'what' or a plural verb when ', which' refers back to a whole clause: \"The company shortened its working week, [INCORRECT: what have improved -> CORRECT: which has improved] employee retention.\" (Note: Use ', which'—never ', what' or ', that'—with a singular verb when referring to an entire preceding clause)."
+          "imitation_example": "Several major retailers phased out single-use plastics within six months, which demonstrated that consumer pressure can transform supply chains.",
+          "common_mistakes": "Grammar Warning (Sentential Relative Agreement & Pronoun Choice): Learners frequently use 'what' or a plural verb when ', which' refers back to a whole clause: \"The company shortened its working week, [INCORRECT: what have improved -> CORRECT: which has improved] employee retention.\" (Note: Use ', which'—never ', what' or ', that'—with a singular verb when referring to an entire preceding clause).",
+          "variants": [
+            {
+              "keywords": ["who", "whom", "whose", "author", "scientist", "resident", "director", "founder"],
+              "imitation_example": "The lead architect, who had spent a decade studying sustainable timber, designed the new library.",
+              "common_mistakes": "Grammar Warning (Non-Restrictive 'who' vs. 'that' & Comma Pairing): Learners frequently use 'that' after a comma or omit the closing comma around an embedded non-restrictive clause: \"Dr. Lin, [INCORRECT: that led the clinical study -> CORRECT: who led the clinical study], presented the findings in Geneva.\" (Note: Non-restrictive clauses modifying a named person require 'who/whom/whose' and must be enclosed by commas on both sides)."
+            },
+            {
+              "keywords": ["which", "mean", "suggest", "show", "make", "allow", "enable", "lead"],
+              "imitation_example": "Several major retailers phased out single-use plastics within six months, which demonstrated that consumer pressure can transform supply chains.",
+              "common_mistakes": "Grammar Warning (Sentential Relative Agreement & Pronoun Choice): Learners frequently use 'what' or a plural verb when ', which' refers back to a whole clause: \"The company shortened its working week, [INCORRECT: what have improved -> CORRECT: which has improved] employee retention.\" (Note: Use ', which'—never ', what' or ', that'—with a singular verb when referring to an entire preceding clause)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Achieves high-cohesion propositional encapsulation (', which suggests/underscores/means that...'), condensing a complex prior claim into the grammatical subject of an interpretive commentary.",
           "imitation_example": "Major pharmaceutical firms voluntarily redirected funding toward cell-culture simulations, which underscored a broader paradigm shift in biomedical ethics.",
-          "common_mistakes": "Grammar Warning (Anaphoric Sentential ', which' vs. Free Relative 'what'): Learners frequently substitute 'what' for ', which' in sentential relative clauses or create ambiguous noun-vs-clause antecedents: \"The longitudinal trial yielded reproducible results across three continents, [INCORRECT: what confirms -> CORRECT: which confirms] the robustness of the protocol.\" (Note: 'What' means 'the thing(s) that' and cannot function as an anaphoric relative pronoun after a comma)."
+          "common_mistakes": "Grammar Warning (Anaphoric Sentential ', which' vs. Free Relative 'what'): Learners frequently substitute 'what' for ', which' in sentential relative clauses or create ambiguous noun-vs-clause antecedents: \"The longitudinal trial yielded reproducible results across three continents, [INCORRECT: what confirms -> CORRECT: which confirms] the robustness of the protocol.\" (Note: 'What' means 'the thing(s) that' and cannot function as an anaphoric relative pronoun after a comma).",
+          "variants": [
+            {
+              "keywords": ["who", "whom", "whose", "critic", "philosopher", "proponent", "advocate"],
+              "imitation_example": "Early conservationists, many of whom were trained as field naturalists, laid the empirical groundwork for modern ecology.",
+              "common_mistakes": "Grammar Warning (Quantifier + 'of whom / of which' in Non-Restrictive Clauses): Learners frequently write a comma splice with a personal pronoun ('many of them') instead of a relative pronoun ('many of whom/which'): \"The panel surveyed eighty toxicologists, [INCORRECT: most of them endorsed -> CORRECT: most of whom endorsed] the transition to computational screening.\" (Note: Without a coordinating conjunction like 'and', use 'of whom' or 'of which' to join a quantifying clause after a comma)."
+            },
+            {
+              "keywords": ["which", "mean", "suggest", "indicate", "imply", "underscore", "demonstrate"],
+              "imitation_example": "Major pharmaceutical firms voluntarily redirected funding toward cell-culture simulations, which underscored a broader paradigm shift in biomedical ethics.",
+              "common_mistakes": "Grammar Warning (Anaphoric Sentential ', which' vs. Free Relative 'what'): Learners frequently substitute 'what' for ', which' in sentential relative clauses or create ambiguous noun-vs-clause antecedents: \"The longitudinal trial yielded reproducible results across three continents, [INCORRECT: what confirms -> CORRECT: which confirms] the robustness of the protocol.\" (Note: 'What' means 'the thing(s) that' and cannot function as an anaphoric relative pronoun after a comma)."
+            }
+          ]
         }
       }
     },
@@ -297,7 +383,7 @@
             },
             {
               "keywords": ["let", "lets", "letting"],
-              "imitation_example": "Open-door mentorship policies let junior researchers challenge established assumptions without fear of reprisal.",
+              "imitation_example": "Open-door mentorship policies let junior researchers challenge established assumptions without fear of punishment.",
               "common_mistakes": "Grammar Warning (Causative 'Let' vs. 'Allow'): Learners frequently blend 'let sb. do' with 'allow sb. to do': \"Flexible lab schedules let graduate students [INCORRECT: to conduct -> CORRECT: conduct] experiments at their own pace.\" (Note: Use a bare infinitive after 'let', or switch the verb to 'allow/permit' with a 'to'-infinitive)."
             },
             {
@@ -363,17 +449,53 @@
         "A1_A2": {
           "pedagogical_function": "Combines two related actions into one sentence using an -ing or -ed phrase, making writing tighter and smoother.",
           "imitation_example": "Arriving at the station early, the visitors met the friendly student volunteers.",
-          "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently produce dangling modifiers: \"[INCORRECT: Walking into the room, the noise surprised everyone -> CORRECT: Walking into the room, the teacher noticed the noise].\""
+          "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently produce dangling modifiers: \"[INCORRECT: Walking into the room, the noise surprised everyone -> CORRECT: Walking into the room, the teacher noticed the noise].\"",
+          "variants": [
+            {
+              "keywords": ["v-ing", "having", "walking", "looking", "working", "using"],
+              "imitation_example": "Arriving at the station early, the visitors met the friendly student volunteers.",
+              "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently produce dangling modifiers: \"[INCORRECT: Walking into the room, the noise surprised everyone -> CORRECT: Walking into the room, the teacher noticed the noise].\""
+            },
+            {
+              "keywords": ["v-ed", "inspired", "guided", "built", "encouraged"],
+              "imitation_example": "Inspired by the teacher's story, the students decided to plant trees around the school.",
+              "common_mistakes": "Grammar Warning (Active vs. Passive Participial Clauses): Learners frequently use an active '-ing' form when the subject receives the action: \"[INCORRECT: Encouraging by her friends -> CORRECT: Encouraged by her friends], she joined the speech contest.\""
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Compresses a background cause, time sequence, or condition into a fronted non-finite participle phrase ('V-ing' / 'V-ed' / 'Having V-ed') sharing the main clause's subject.",
-          "imitation_example": "Faced with rising commuter demand, the transit authority expanded evening metro services across three districts.",
-          "common_mistakes": "Grammar Warning (Dangling & Misaligned Participles): Learners frequently mismatch the implicit subject of the fronted participle with the grammatical subject of the main clause: \"[INCORRECT: Encouraged by the initial survey results, a larger pilot program was launched -> CORRECT: Encouraged by the initial survey results, the research team launched a larger pilot program].\" (Note: The subject immediately following the comma must be the semantic agent/experiencer of the fronted participle)."
+          "imitation_example": "Faced with rising passenger demand, the transit authority expanded evening metro services across three districts.",
+          "common_mistakes": "Grammar Warning (Dangling & Misaligned Participles): Learners frequently mismatch the implicit subject of the fronted participle with the grammatical subject of the main clause: \"[INCORRECT: Encouraged by the initial survey results, a larger pilot program was launched -> CORRECT: Encouraged by the initial survey results, the research team launched a larger pilot program].\" (Note: The subject immediately following the comma must be the semantic agent/experiencer of the fronted participle).",
+          "variants": [
+            {
+              "keywords": ["v-ing", "having", "facing", "recognizing", "working", "drawing"],
+              "imitation_example": "Recognizing the shift toward digital services, the regional bank redesigned its mobile training program.",
+              "common_mistakes": "Grammar Warning (Dangling Active Participles): Learners frequently pair a fronted '-ing' phrase with an inanimate main-clause subject: \"[INCORRECT: Hoping to reduce energy costs, solar panels were installed -> CORRECT: Hoping to reduce energy costs, the school board installed solar panels].\" (Note: An active fronted '-ing' phrase requires its human or institutional agent as the subject right after the comma)."
+            },
+            {
+              "keywords": ["v-ed", "faced", "encouraged", "equipped", "convinced", "driven"],
+              "imitation_example": "Faced with rising passenger demand, the transit authority expanded evening metro services across three districts.",
+              "common_mistakes": "Grammar Warning (Dangling & Misaligned Participles): Learners frequently mismatch the implicit subject of the fronted participle with the grammatical subject of the main clause: \"[INCORRECT: Encouraged by the initial survey results, a larger pilot program was launched -> CORRECT: Encouraged by the initial survey results, the research team launched a larger pilot program].\" (Note: The subject immediately following the comma must be the semantic agent/experiencer of the fronted participle)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Integrates anterior causal or circumstantial propositions into non-finite participial adjuncts ('Having + V-ed', 'Being + Adj/V-ed'), achieving high syntactic density without subordinate clause clutter.",
           "imitation_example": "Having witnessed the reputational fallout of the consumer boycott, competing conglomerates swiftly overhauled their procurement standards.",
-          "common_mistakes": "Grammar Warning (Anterior Perfect Participle 'Having + V-ed' vs. Simple 'V-ing/V-ed'): Learners frequently use a passive 'V-ed' for an active prior action or fail to anchor the participle to the matrix subject: \"[INCORRECT: Seen the public backlash against live testing, the board -> CORRECT: Having seen the public backlash against live testing, the board] allocated millions to in-vitro research.\" (Note: For an active action completed prior to the main verb, use the perfect participle 'Having + V-ed', never a bare past participle)."
+          "common_mistakes": "Grammar Warning (Anterior Perfect Participle 'Having + V-ed' vs. Simple 'V-ing/V-ed'): Learners frequently use a passive 'V-ed' for an active prior action or fail to anchor the participle to the matrix subject: \"[INCORRECT: Seen the public backlash against live testing, the board -> CORRECT: Having seen the public backlash against live testing, the board] allocated millions to in-vitro research.\" (Note: For an active action completed prior to the main verb, use the perfect participle 'Having + V-ed', never a bare past participle).",
+          "variants": [
+            {
+              "keywords": ["v-ing", "having", "recognizing", "combining", "drawing"],
+              "imitation_example": "Having witnessed the reputational fallout of the consumer boycott, competing conglomerates swiftly overhauled their procurement standards.",
+              "common_mistakes": "Grammar Warning (Anterior Perfect Participle 'Having + V-ed' vs. Simple 'V-ing/V-ed'): Learners frequently use a passive 'V-ed' for an active prior action or fail to anchor the participle to the matrix subject: \"[INCORRECT: Seen the public backlash against live testing, the board -> CORRECT: Having seen the public backlash against live testing, the board] allocated millions to in-vitro research.\" (Note: For an active action completed prior to the main verb, use the perfect participle 'Having + V-ed', never a bare past participle)."
+            },
+            {
+              "keywords": ["v-ed", "confronted", "backed", "compelled", "stripped"],
+              "imitation_example": "Confronted with incontrovertible toxicological evidence, regulatory agencies phased out legacy animal bioassays.",
+              "common_mistakes": "Grammar Warning (Voice Alignment in Fronted Past Participial Adjuncts): Learners frequently use an active '-ing' participle where a passive state or external compulsion is intended: \"[INCORRECT: Confronting with mounting empirical critiques, the committee -> CORRECT: Confronted with mounting empirical critiques, the committee] revised its testing mandate.\" (Note: Use the past participle 'Confronted/Faced with' when the matrix subject experiences external pressure)."
+            }
+          ]
         }
       }
     },
@@ -409,17 +531,53 @@
         "A1_A2": {
           "pedagogical_function": "Adds an accompanying action, remark, or immediate result right after the main clause using an -ing phrase.",
           "imitation_example": "The judges praised the student's poster design, calling it a wonderful symbol of friendship.",
-          "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently use a finite verb after a comma without a conjunction (comma splice) instead of a present participle: \"The visitors admired the Olympic emblem, [INCORRECT: said -> CORRECT: saying] it looked lively and modern.\" (Note: When attaching an accompanying remark after a comma without 'and', use the '-ing' participle 'saying')."
+          "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently use a finite verb after a comma without a conjunction (comma splice) instead of a present participle: \"The visitors admired the Olympic emblem, [INCORRECT: said -> CORRECT: saying] it looked lively and modern.\" (Note: When attaching an accompanying remark after a comma without 'and', use the '-ing' participle 'saying').",
+          "variants": [
+            {
+              "keywords": ["say", "call", "add", "smile", "wave", "thank", "praise", "ask"],
+              "imitation_example": "The judges praised the student's poster design, calling it a wonderful symbol of friendship.",
+              "common_mistakes": "Grammar Warning (Participial Clauses): Learners frequently use a finite verb after a comma without a conjunction (comma splice) instead of a present participle: \"The visitors admired the Olympic emblem, [INCORRECT: said -> CORRECT: saying] it looked lively and modern.\" (Note: When attaching an accompanying remark after a comma without 'and', use the '-ing' participle 'saying')."
+            },
+            {
+              "keywords": ["make", "leave", "bring", "create", "help", "give", "turn", "fill"],
+              "imitation_example": "Warm sunlight streamed through the classroom windows, making everyone feel cheerful and relaxed.",
+              "common_mistakes": "Grammar Warning (Resultative Participial Clauses): Learners frequently use a base verb or past-tense verb after a comma to express an immediate result: \"Heavy snow fell all night, [INCORRECT: cover -> CORRECT: covering] the playground in a thick white blanket.\" (Note: Use a present participle '-ing' after a comma to show the natural result of the main clause)."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Extends the main clause with a resultative or elaborative '-ing' phrase (', creating...', ', prompting...', ', making...'), avoiding choppy coordinate clauses.",
-          "imitation_example": "The university digitized its entire historical archive, allowing scholars worldwide to examine rare manuscripts remotely.",
-          "common_mistakes": "Grammar Warning (Resultative Participial Adjuncts vs. Comma Splices): Learners frequently attach a second finite verb after a comma without a conjunction: \"The storm knocked out the regional power grid, [INCORRECT: left -> CORRECT: leaving] thousands of households without electricity.\" (Note: Convert the second verb into a present participle 'V-ing' or add 'and' before the finite verb)."
+          "imitation_example": "The university digitized its entire historical archive, allowing scholars worldwide to examine rare manuscripts online.",
+          "common_mistakes": "Grammar Warning (Resultative Participial Adjuncts vs. Comma Splices): Learners frequently attach a second finite verb after a comma without a conjunction: \"The storm knocked out the regional power grid, [INCORRECT: left -> CORRECT: leaving] thousands of households without electricity.\" (Note: Convert the second verb into a present participle 'V-ing' or add 'and' before the finite verb).",
+          "variants": [
+            {
+              "keywords": ["allow", "enable", "create", "make", "leave", "prompt", "cause", "force"],
+              "imitation_example": "The university digitized its entire historical archive, allowing scholars worldwide to examine rare manuscripts online.",
+              "common_mistakes": "Grammar Warning (Resultative Participial Adjuncts vs. Comma Splices): Learners frequently attach a second finite verb after a comma without a conjunction: \"The storm knocked out the regional power grid, [INCORRECT: left -> CORRECT: leaving] thousands of households without electricity.\" (Note: Convert the second verb into a present participle 'V-ing' or add 'and' before the finite verb)."
+            },
+            {
+              "keywords": ["reflect", "highlight", "reveal", "demonstrate", "signal", "show", "use", "draw"],
+              "imitation_example": "The architect redesigned the museum courtyard with local stone, reflecting the coastal town's maritime heritage.",
+              "common_mistakes": "Grammar Warning (Active vs. Passive Participial Adjuncts): Learners frequently confuse active '-ing' and passive '-ed' participles at the end of a clause: \"The new transit line opened ahead of schedule, [INCORRECT: reduced -> CORRECT: reducing] morning commute times by thirty percent.\" (Note: When the preceding clause or subject actively produces the outcome, use the active participle 'V-ing')."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Deploy clause-final present participial adjuncts to encode cascading systemic consequences or simultaneous analytical acts in academic prose.",
           "imitation_example": "The campaign publicized internal laboratory audits across national newspapers, sparking a decisive shift in regulatory policy.",
-          "common_mistakes": "Grammar Warning (Resultative 'V-ing' vs. Infinitive of Unintended Consequence): Learners frequently use 'to + V' (without 'only') instead of ', V-ing' to express the natural consequence of an entire clause: \"The agency tightened emissions thresholds by forty percent, [INCORRECT: to accelerate -> CORRECT: accelerating / thereby accelerating] industry investment in clean-fuel catalysts.\" (Note: Use a clause-final ', V-ing' participle—not a bare 'to'-infinitive—to express the direct consequence of the preceding clause)."
+          "common_mistakes": "Grammar Warning (Resultative 'V-ing' vs. Infinitive of Unintended Consequence): Learners frequently use 'to + V' (without 'only') instead of ', V-ing' to express the natural consequence of an entire clause: \"The agency tightened emissions thresholds by forty percent, [INCORRECT: to accelerate -> CORRECT: accelerating / thereby accelerating] industry investment in clean-fuel catalysts.\" (Note: Use a clause-final ', V-ing' participle—not a bare 'to'-infinitive—to express the direct consequence of the preceding clause).",
+          "variants": [
+            {
+              "keywords": ["spark", "trigger", "prompt", "accelerate", "transform", "reshape", "generate", "undermine"],
+              "imitation_example": "The campaign publicized internal laboratory audits across national newspapers, sparking a decisive shift in regulatory policy.",
+              "common_mistakes": "Grammar Warning (Resultative 'V-ing' vs. Infinitive of Unintended Consequence): Learners frequently use 'to + V' (without 'only') instead of ', V-ing' to express the natural consequence of an entire clause: \"The agency tightened emissions thresholds by forty percent, [INCORRECT: to accelerate -> CORRECT: accelerating / thereby accelerating] industry investment in clean-fuel catalysts.\" (Note: Use a clause-final ', V-ing' participle—not a bare 'to'-infinitive—to express the direct consequence of the preceding clause)."
+            },
+            {
+              "keywords": ["underscore", "illuminate", "expose", "challenge", "reinforce", "draw", "combine", "blend"],
+              "imitation_example": "Longitudinal census records trace demographic shifts across three decades, underscoring the link between housing density and transit equity.",
+              "common_mistakes": "Grammar Warning (Sentential Resultative Participles vs. Restrictive Modification): Learners frequently omit the comma before a clause-final participial adjunct that modifies the entire preceding proposition: \"The central bank raised benchmark interest rates twice in one quarter [INCORRECT: triggering -> CORRECT: , triggering] a sharp contraction in speculative lending.\" (Note: A comma is mandatory before a non-restrictive '-ing' adjunct that expresses the consequence of the whole clause)."
+            }
+          ]
         }
       }
     },
@@ -448,7 +606,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Nominalizes an entire activity or process as a gerundial subject phrase ('[V-ing + NP] + [Singular Verb]') to formulate general principles.",
-          "imitation_example": "Balancing academic coursework with part-time internships requires disciplined time management.",
+          "imitation_example": "Balancing academic coursework with part-time training requires disciplined time management.",
           "common_mistakes": "Grammar Warning (Agreement with Complex Gerund Subjects): Learners frequently let a plural noun inside the gerund phrase trigger a plural main verb: \"Analyzing customer complaints from multiple branches [INCORRECT: help -> CORRECT: helps] the company identify service gaps.\" (Note: The grammatical head of the subject is the gerund 'Analyzing', which is singular and requires 'helps')."
         },
         "C1_C2": {
@@ -471,7 +629,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Balances an initial limitation or challenge against a compensating advantage across two coordinated clauses.",
-          "imitation_example": "Remote work can reduce spontaneous hallway conversations, but it also gives employees uninterrupted blocks for deep focus.",
+          "imitation_example": "Remote work can reduce spontaneous office conversations, but it also gives employees uninterrupted blocks for deep focus.",
           "common_mistakes": "Grammar Warning (Adversative Coordination & Pronoun Reference): Learners frequently omit the subject pronoun after ', but also' when the verb tense or modal changes: \"The workshop is intensive, [INCORRECT: but also provides -> CORRECT: but it also provides] hands-on certification for every participant.\""
         },
         "C1_C2": {
@@ -513,17 +671,38 @@
         "A1_A2": {
           "pedagogical_function": "Acknowledges an opposing point with 'although' or 'while' before making the main point stand out clearly.",
           "imitation_example": "Although sorting trash takes a few extra minutes, it keeps our neighborhood clean.",
-          "common_mistakes": "Grammar Warning (Concessive Clauses): Learners frequently add a redundant 'but' after 'although' or 'while': \"Although the design looks simple, [INCORRECT: but it carries -> CORRECT: it carries] a deep cultural meaning.\""
+          "common_mistakes": "Grammar Warning (Concessive Clauses): Learners frequently add a redundant 'but' after 'although' or 'while': \"Although the design looks simple, [INCORRECT: but it carries -> CORRECT: it carries] a deep cultural meaning.\"",
+          "variants": [
+            {
+              "keywords": ["even", "if", "though"],
+              "imitation_example": "Even if the morning rain is heavy, the school volunteers still greet every student with a smile.",
+              "common_mistakes": "Grammar Warning (Concessive 'Even if' Clauses): Learners frequently add 'but' in the main clause or use 'will' inside the 'even if' condition: \"Even if the task [INCORRECT: will be hard, but we -> CORRECT: is hard, we] will finish it together.\" (Note: Use present simple tense after 'even if' for future situations and never pair it with 'but')."
+            }
+          ]
         },
         "B1_B2": {
           "pedagogical_function": "Subordinates a counter-fact or concession ('Although / Even though / While + [Clause]') so the main clause carries the primary argumentative weight.",
-          "imitation_example": "While automated translation tools handle routine correspondence efficiently, they often miss subtle cultural nuances.",
-          "common_mistakes": "Grammar Warning (Concessive 'Although/While' vs. Prepositional 'Despite/In spite of'): Learners frequently follow 'despite' with a finite clause or 'although' with a noun phrase: \"[INCORRECT: Despite the budget was tight -> CORRECT: Although the budget was tight / Despite the tight budget], the engineering team delivered the prototype on schedule.\" (Note: Use 'although/even though/while' before a Subject + Verb clause, and 'despite/in spite of' before a noun phrase or gerund)."
+          "imitation_example": "While digital translation tools handle routine messages efficiently, they often miss subtle cultural meanings.",
+          "common_mistakes": "Grammar Warning (Concessive 'Although/While' vs. Prepositional 'Despite/In spite of'): Learners frequently follow 'despite' with a finite clause or 'although' with a noun phrase: \"[INCORRECT: Despite the budget was tight -> CORRECT: Although the budget was tight / Despite the tight budget], the engineering team delivered the prototype on schedule.\" (Note: Use 'although/even though/while' before a Subject + Verb clause, and 'despite/in spite of' before a noun phrase or gerund).",
+          "variants": [
+            {
+              "keywords": ["even", "if", "though"],
+              "imitation_example": "Even if renewable battery storage remains expensive initially, municipal microgrids significantly improve long-term energy security.",
+              "common_mistakes": "Grammar Warning ('Even if' vs. 'Even though' & Redundant 'But'): Learners frequently confuse hypothetical 'even if' with factual 'even though', or insert 'but' before the main clause: \"Even if a company secures generous seed funding, [INCORRECT: but it can still fail -> CORRECT: it can still fail] without disciplined cash-flow management.\" (Note: Never combine 'even if / even though' with 'but' in the same sentence)."
+            }
+          ]
         },
         "C1_C2": {
           "pedagogical_function": "Frames dialectical tension by subordinating an established orthodoxy or obstacle within a concessive clause ('Though / Whereas / While...'), sharpening the authoritative claim in the matrix clause.",
           "imitation_example": "Though early animal-rights campaigners were dismissed as idealistic fringes, their empirical critiques ultimately transformed corporate research ethics.",
-          "common_mistakes": "Grammar Warning (Concessive Subordination vs. Double Marking): Learners frequently insert 'yet' or 'but' at the start of the matrix clause or confuse 'despite the fact that' with bare 'despite that': \"[INCORRECT: Despite that the reform faced lobbying resistance -> CORRECT: Despite the fact that the reform faced lobbying resistance / Although the reform faced lobbying resistance], regulators enacted the ban.\" (Note: 'Despite' is a preposition and cannot govern a 'that'-clause directly without 'the fact')."
+          "common_mistakes": "Grammar Warning (Concessive Subordination vs. Double Marking): Learners frequently insert 'yet' or 'but' at the start of the matrix clause or confuse 'despite the fact that' with bare 'despite that': \"[INCORRECT: Despite that the reform faced lobbying resistance -> CORRECT: Despite the fact that the reform faced lobbying resistance / Although the reform faced lobbying resistance], regulators enacted the ban.\" (Note: 'Despite' is a preposition and cannot govern a 'that'-clause directly without 'the fact').",
+          "variants": [
+            {
+              "keywords": ["even", "if", "though"],
+              "imitation_example": "Even if synthetic organoid models cannot replicate every systemic endocrine interaction, they provide far more reliable human toxicity profiles than archaic rodent bioassays.",
+              "common_mistakes": "Grammar Warning (Hypothetical 'Even if' vs. Factual 'Even though' in Academic Concession): Learners frequently use bare 'even' as a conjunction without 'if/though' or retain 'but' in the matrix clause: \"[INCORRECT: Even the initial clinical parameters appear favorable, but researchers -> CORRECT: Even if the initial clinical parameters appear favorable, researchers] must verify longitudinal reproducibility.\" (Note: 'Even' is an adverb; attach 'if' or 'though' to form a subordinating conjunction, and omit 'but' from the matrix clause)."
+            }
+          ]
         }
       }
     },
@@ -586,7 +765,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Expresses a proportional correlation between two variables ('The + [comparative]..., the + [comparative]...'), showing how a change in one drives a corresponding change in the other.",
-          "imitation_example": "The earlier a startup validates its assumptions with real users, the less capital it wastes on unneeded features.",
+          "imitation_example": "The earlier a company validates its assumptions with real users, the less capital it wastes on unneeded features.",
           "common_mistakes": "Grammar Warning (Word Order & Tense in Proportional Comparatives): Learners frequently invert subject and verb in the first clause or use 'will' in the condition arm: \"The more transparent a company [INCORRECT: will be -> CORRECT: is] about its supply chain, the stronger consumer trust becomes.\" (Note: Use present simple tense—not 'will'—in the first 'The + comparative' clause, and keep normal Subject + Verb order)."
         },
         "C1_C2": {
@@ -661,7 +840,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Frames predictive or hypothetical contingencies ('If / Unless + [Clause]') to evaluate policy outcomes and practical trade-offs.",
-          "imitation_example": "If municipal governments subsidize off-peak transit fares, rush-hour congestion on central highways will drop noticeably.",
+          "imitation_example": "If municipal governments lower off-peak transit fares, rush-hour traffic on central highways will drop noticeably.",
           "common_mistakes": "Grammar Warning (Second Conditional Subjunctive & 'Unless' Polarity): Learners frequently use 'would' inside the 'if'-clause or pair 'unless' with a negative verb: \"If researchers [INCORRECT: would have -> CORRECT: had] access to shared datasets, they could verify the findings much faster.\" (Note: In hypothetical second conditionals, use the past tense in the 'if'-clause and 'would/could + base verb' in the main clause)."
         },
         "C1_C2": {
@@ -730,7 +909,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Grounds a claim, decision, or observation by subordinating its underlying cause or known rationale ('because / since / as / now that').",
-          "imitation_example": "Since remote collaboration tools have matured, distributed engineering teams can coordinate across time zones seamlessly.",
+          "imitation_example": "Since remote collaboration tools have matured, distributed engineering teams can coordinate across time zones smoothly.",
           "common_mistakes": "Grammar Warning (Causal Conjunctions vs. Prepositional Phrases): Learners frequently use 'because' before a complex noun phrase or 'due to' before a finite clause: \"The flight was rescheduled [INCORRECT: because severe turbulence -> CORRECT: because of / due to severe turbulence] along the coastal route.\" (Note: Use 'because/since/as' before a Subject + Verb clause, and 'because of/due to/owing to' before a noun phrase)."
         },
         "C1_C2": {
@@ -776,7 +955,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Foregrounds an intentional objective ('To / In order to / So as to + [VP]') in thematic position to frame the strategic action in the main clause.",
-          "imitation_example": "In order to curb peak-hour emissions, the municipality introduced congestion pricing in the central business district.",
+          "imitation_example": "In order to reduce peak-hour emissions, the city introduced special pricing in the central business district.",
           "common_mistakes": "Grammar Warning (Negative Purpose 'In order not to / So as not to' & Subject Control): Learners frequently misplace 'not' after 'to' or mismatch the main clause subject: \"To avoid biasing the participants, [INCORRECT: the questionnaire was anonymized -> CORRECT: the researchers anonymized the questionnaire / In order not to bias the participants, the researchers anonymized the questionnaire].\" (Note: The subject of the main clause must be the intentional agent of the fronted purpose infinitive, and 'not' precedes 'to': 'in order not to + V')."
         },
         "C1_C2": {
@@ -880,17 +1059,17 @@
         },
         "B1_B2": {
           "pedagogical_function": "Intensifies an attribute or situation ('so + [Adj/Adv] + that...' / 'such + [NP] + that...') to foreground its consequential impact.",
-          "imitation_example": "The introductory engineering course was so demanding that several freshmen reconsidered their academic major.",
+          "imitation_example": "The first-year engineering course was so demanding that several freshmen reconsidered their academic major.",
           "common_mistakes": "Grammar Warning (So vs. Such with Quantifiers & Uncountable Nouns): Learners frequently use 'such' before 'many/much/few/little' or add 'a/an' before uncountable nouns after 'such': \"The platform generated [INCORRECT: such many user requests / such a rapid progress -> CORRECT: so many user requests / such rapid progress] that the servers had to be upgraded.\" (Note: Use 'so' before quantity determiners 'many/much/few/little', and omit 'a/an' when 'such' precedes an uncountable or plural noun).",
           "variants": [
             {
               "keywords": ["so", "much", "many", "demanding", "rapidly", "fast"],
-              "imitation_example": "The introductory engineering course was so demanding that several freshmen reconsidered their academic major.",
+              "imitation_example": "The first-year engineering course was so demanding that several freshmen reconsidered their academic major.",
               "common_mistakes": "Grammar Warning (So vs. Such with Quantifiers & Uncountable Nouns): Learners frequently use 'such' before 'many/much/few/little' or before standalone adjectives/adverbs: \"The platform generated [INCORRECT: such many user requests -> CORRECT: so many user requests] that the servers had to be upgraded.\" (Note: Use 'so' before adjectives, adverbs, and quantity determiners 'many/much/few/little')."
             },
             {
               "keywords": ["such", "evidence", "impact", "challenge", "problem"],
-              "imitation_example": "The documentary presented such compelling evidence of ocean plastic pollution that three coastal cities banned disposable foam containers.",
+              "imitation_example": "The documentary presented such compelling evidence of ocean plastic pollution that three coastal cities banned single-use foam containers.",
               "common_mistakes": "Grammar Warning (Such + Uncountable / Plural Noun Phrases): Learners frequently insert 'a/an' after 'such' before uncountable nouns or use 'so' before a full noun phrase: \"The research team made [INCORRECT: such a rapid progress / so rapid progress -> CORRECT: such rapid progress] that the clinical trial launched ahead of schedule.\" (Note: Use 'such' without 'a/an' before uncountable or plural noun phrases)."
             }
           ]
@@ -927,7 +1106,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Attaches a non-finite clause with its own explicit subject ('[NP] + [V-ing/V-ed/Adj], [Main Clause]') to depict an accompanying detail or causal circumstance.",
-          "imitation_example": "All safety inspections completed ahead of schedule, the engineering crew opened the bridge to commuter traffic.",
+          "imitation_example": "All safety inspections completed ahead of schedule, the engineering crew opened the bridge to public traffic.",
           "common_mistakes": "Grammar Warning (Nominative Absolute vs. Comma Splice): Learners frequently insert a finite verb ('was/were/had') inside an absolute phrase that lacks a conjunction: \"[INCORRECT: The funding was approved, the lab ordered -> CORRECT: The funding having been approved / With the funding approved, the lab ordered] the new testing equipment.\" (Note: Without a conjunction like 'because/after/and', the secondary clause must use a non-finite participle, not a finite verb)."
         },
         "C1_C2": {
@@ -950,7 +1129,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Uses structural symmetry, fronting, or contrastive pairing to highlight the decisive claim in a paragraph.",
-          "imitation_example": "Effective leadership relies not on unilateral authority, but on transparent communication and shared accountability.",
+          "imitation_example": "Effective leadership relies not on individual authority, but on transparent communication and shared accountability.",
           "common_mistakes": "Grammar Warning (Rhetorical Parallelism): Learners frequently mix clause and phrase categories across contrastive coordinators: \"The initiative aims not at [INCORRECT: cutting short-term costs, but to build -> CORRECT: cutting short-term costs, but at building] long-term resilience.\" (Note: Maintain identical prepositional and non-finite structures across contrastive pairs)."
         },
         "C1_C2": {
@@ -992,7 +1171,7 @@
         },
         "B1_B2": {
           "pedagogical_function": "Links propositions across clause boundaries using shell nouns ('the fact/idea that...') or sentential relative clauses (', which...').",
-          "imitation_example": "The realization that urban heat islands intensify summer energy demand prompted cities to expand tree canopies.",
+          "imitation_example": "The realization that urban heat islands increase summer energy demand prompted cities to expand tree canopies.",
           "common_mistakes": "Grammar Warning (Propositional Framing & Anaphoric Reference): Learners frequently use ', that' or ', what' instead of ', which' to comment on a whole preceding clause: \"The district expanded bike lanes by forty kilometers, [INCORRECT: what reduced -> CORRECT: which reduced] morning traffic congestion.\" (Note: Only ', which' can encapsulate an entire preceding clause as its antecedent)."
         },
         "C1_C2": {

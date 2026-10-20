@@ -1,36 +1,23 @@
 {
   "type": "object",
   "properties": {
-    "quiz_title": {
-      "type": "string",
-      "minLength": 1
-    },
-    "overall_quality_score": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 100
-    },
-    "pass_audit": {
-      "type": "boolean"
-    },
-    "blind_solve_accuracy": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 100
-    },
     "questions": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
           "item_index": {
-            "type": "integer",
-            "minimum": 1
+            "type": "integer"
           },
           "blind_solved_index": {
             "type": "integer",
-            "minimum": -1,
-            "maximum": 3
+            "enum": [
+              -1,
+              0,
+              1,
+              2,
+              3
+            ]
           },
           "confidence": {
             "type": "string",
@@ -45,21 +32,20 @@
           },
           "distractors": {
             "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
             "items": {
               "type": "object",
               "properties": {
-                "option_letter": {
-                  "type": "string",
-                  "enum": [
-                    "A",
-                    "B",
-                    "C",
-                    "D"
-                  ]
-                },
                 "option_text": {
                   "type": "string",
                   "minLength": 1
+                },
+                "is_plausible": {
+                  "type": "boolean"
+                },
+                "is_double_key": {
+                  "type": "boolean"
                 },
                 "trap_type": {
                   "type": "string",
@@ -71,26 +57,13 @@
                     "Plausible Out-of-Scope Intrusion",
                     "Flawed / Trivial Giveaway"
                   ]
-                },
-                "plausibility_rating": {
-                  "type": "string",
-                  "enum": [
-                    "High",
-                    "Medium",
-                    "Low (Flawed)"
-                  ]
-                },
-                "elimination_rationale": {
-                  "type": "string",
-                  "minLength": 1
                 }
               },
               "required": [
-                "option_letter",
                 "option_text",
-                "trap_type",
-                "plausibility_rating",
-                "elimination_rationale"
+                "is_plausible",
+                "is_double_key",
+                "trap_type"
               ],
               "additionalProperties": false
             }
@@ -113,7 +86,10 @@
             ]
           },
           "cured_question": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "properties": {
               "question": {
                 "type": "string",
@@ -130,7 +106,8 @@
               },
               "correct_answer_index": {
                 "type": "integer",
-                "enum": [0, 1, 2, 3]
+                "minimum": 0,
+                "maximum": 3
               },
               "category": {
                 "type": "string",
@@ -163,7 +140,8 @@
           "distractors",
           "pedagogical_score",
           "diagnostic_feedback",
-          "triage_action"
+          "triage_action",
+          "cured_question"
         ],
         "additionalProperties": false
       }
@@ -174,10 +152,6 @@
     }
   },
   "required": [
-    "quiz_title",
-    "overall_quality_score",
-    "pass_audit",
-    "blind_solve_accuracy",
     "questions",
     "summary_verdict"
   ],

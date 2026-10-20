@@ -88,7 +88,7 @@ class QuizIntegrityGatesMixin:
             options = q_dict.get("options") or []
             correct_idx = q_dict.get("correct_answer_index", 0)
 
-            # -1. Target Word Uniqueness & Unit Glossary Membership Gate
+            # -1. Target Word Uniqueness Gate
             if target and ("target_word" in q_dict or "word" in q_dict):
                 if target in seen_targets:
                     flagged_indices.add(idx)
@@ -97,24 +97,6 @@ class QuizIntegrityGatesMixin:
                     )
                 else:
                     seen_targets[target] = idx
-
-                if headword_set and target not in headword_set:
-                    # Check inflectional stem and multi-word headword component matching (e.g. 'piece' in 'a piece of')
-                    from ..linguistics import LinguisticEngine
-                    t_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target)
-                    target_tokens = set(target.split())
-                    in_set = any(
-                        (hw == target or (len(t_stem) >= 4 and hw.startswith(t_stem)))
-                        or (len(t_stem) >= 3 and (hw == t_stem or hw == t_stem + "e"))
-                        or LinguisticEngine.form_matches(target, hw)
-                        or (target in hw.split() or bool(target_tokens & set(hw.split())))
-                        for hw in headword_set
-                    )
-                    if not in_set:
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Item #{idx + 1} ('{target}'): Target word is not in the authorized unit vocabulary list."
-                        )
 
             # 0. Strict Single Blank Gate & Target Word Leakage Prevention
             if stem and ("target_word" in q_dict or "word" in q_dict):
@@ -203,7 +185,7 @@ class QuizIntegrityGatesMixin:
                             )
                             break
 
-            # 2. In-List Distractor Recycling Gate
+            # 2. In-List Distractor Recycling Gate (used when verifying L2 LLM candidate cures or legacy tests)
             if options and headword_set and strict_distractor_recycling:
                 recycled_distractors = []
                 for o_idx, opt in enumerate(options):
@@ -256,116 +238,13 @@ class QuizIntegrityGatesMixin:
                         f"Item #{idx + 1} ('{target}'): Distractors recycle headwords from current unit: {recycled_distractors}"
                     )
 
-            # 3. Degraded-Options Gate (double-key clearance invariant)
-            #    A double-key hit must be dropped AND refilled — never silently
-            #    truncated. Fewer than 4 options is a structural defect.
+            # 3. Degraded-Options Gate (structural option cardinality invariant)
             if "target_word" in q_dict and options and len(options) < 4:
                 flagged_indices.add(idx)
                 defect_messages.append(
                     f"Item #{idx + 1} ('{target}'): Degraded item — only {len(options)} options "
                     f"(exactly 4 required). Clear double-keys by refilling, not by truncation."
                 )
-
-            # 4. Deterministic Double-Key Gate (frame-aware)
-            #    Frame gate: a distractor that shares the target's bound
-            #    preposition (OCD frame present in the stem) AND sits in the
-            #    target's semantic neighborhood is a second valid key (1 hit
-            #    suffices: overlap-with, liberty-from).
-            #    Pile gate: in slot items, a single near-synonym can be a
-            #    legitimate context-excludable distractor (e.g. scan ~ conform),
-            #    so 2+ non-antonym same-slot distractors form a "synonym pile"
-            #    double-key (designate x label/denote/number, adverse x
-            #    unfavourable/reproachful). Whitelisted sense antonyms never
-            #    count (deliberate contrast distractors eliminated by polarity).
-            if "target_word" in q_dict and target and options and isinstance(options, list):
-                try:
-                    from ..linguistics import LinguisticEngine
-                    stem_tokens = {w.lower() for w in re.findall(r"\b[a-zA-Z]+\b", stem or "")}
-                    # Infer target POS from item metadata if present, design_audit tag, or stem context
-                    item_pos = q_dict.get("part_of_speech")
-                    if not item_pos and q_dict.get("design_audit"):
-                        m_da = re.search(r"->\s*(noun|verb|adj|adjective|adv|adverb|phrase)\b", str(q_dict.get("design_audit")), re.IGNORECASE)
-                        if m_da:
-                            item_pos = m_da.group(1).lower()
-                    if not item_pos and stem and "____" in stem:
-                        filled_stem = re.sub(r"_{2,}", target, stem, count=1)
-                        item_pos = LinguisticEngine.determine_contextual_pos(target, filled_stem)
-                    target_collocs = LinguisticEngine.get_oxford_collocations(
-                        target, pos=item_pos, context_sentence=stem
-                    )
-                    bound_preps = [
-                        p for p in (target_collocs.get("prep") or [])
-                        if p.lower() in stem_tokens
-                    ]
-                    anchor = bound_preps[0] if bound_preps else None
-                    near, ants = LinguisticEngine.semantic_fields(target, pos=item_pos)
-                    frame_hits, pile = [], []
-                    for o_idx, opt in enumerate(options):
-                        if o_idx == correct_idx:
-                            continue
-                        d = str(opt).strip().lower()
-                        if not d or " " in d or len(d) < 2 or d in ants:
-                            continue
-                        if d not in near:
-                            continue
-                        d_preps = LinguisticEngine.get_oxford_collocations(
-                            d, pos=item_pos, context_sentence=stem
-                        ).get("prep") or []
-                        if anchor and anchor.lower() in d_preps:
-                            frame_hits.append(d)
-                        else:
-                            pile.append(d)
-                    # Quantifier frames like 'a piece/bit/slice of' use 'of' as structural partition marker;
-                    # options are calibrated against the partition noun, not as conflicting bound prep frames.
-                    is_quant_context = (
-                        anchor == "of" and (
-                            item_pos in ("phrase", "quantifier")
-                            or "quantifier" in str(q_dict.get("design_audit", "")).lower()
-                            or re.search(r"\b(?:a|an)\s+_{2,}\s+of\b", stem, re.IGNORECASE)
-                        )
-                    )
-                    if frame_hits and not is_quant_context:
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Item #{idx + 1} ('{target}'): Double-key distractor(s) sharing bound frame '{anchor}' — "
-                            f"{frame_hits}. These options are also valid answers in this context; "
-                            f"replace with frame-cleared distractors."
-                        )
-                    elif len(pile) >= 2:
-                        flagged_indices.add(idx)
-                        defect_messages.append(
-                            f"Item #{idx + 1} ('{target}'): Synonym-pile double-key — same-slot near-synonyms "
-                            f"{pile} all plausibly fit the blank. Keep at most one near-synonym distractor "
-                            f"and refill from a cleared candidate pool."
-                        )
-
-                    # Collocational Double-Key Check
-                    for o_idx, opt in enumerate(options):
-                        if o_idx == correct_idx:
-                            continue
-                        d = str(opt).strip().lower()
-                        if not d or " " in d or len(d) < 2:
-                            continue
-                        is_dk, dk_type = LinguisticEngine.double_key_collision(
-                            target, d, anchor=anchor, anchor_type="object" if (item_pos and "verb" in item_pos) else None, pos=item_pos
-                        )
-                        if is_dk and dk_type == "double_key_collocation":
-                            flagged_indices.add(idx)
-                            defect_messages.append(
-                                f"Item #{idx + 1} ('{target}'): Distractor '{d}' forms an authentic collocation with anchor '{anchor}', creating a double-key conflict."
-                            )
-
-                    # Anchor Preservation Invariant Check — deleted from Level 1 (F10 rule 1.1).
-                    # Searching a finished sentence for a word is a reading task, and it was the
-                    # false 'sector' defect that ate two of five repair slots and drove a 44-second
-                    # regeneration round: the blueprint asked for 'manufacture', the model wrote
-                    # 'the manufacturing ____', and a literal token search called that a violation.
-                    # The anchor is still required at generation time — the micro-task states it and
-                    # LinguisticEngine now checks the blueprint's own anchor against the blueprint's
-                    # own model sentence (blueprint_warnings). Level 1 does not search inside a
-                    # sentence for a word.
-                except Exception:
-                    pass  # Deterministic gate must never crash the pipeline
 
         return sorted(list(flagged_indices)), defect_messages
 

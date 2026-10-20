@@ -340,4 +340,88 @@ class TestVocabularyWSD:
         assert len(skels) == 1
         assert skels[0].get("anchor_source") != "quote"
 
+    def test_symbolic_hard_pruning_in_candidate_pool(self):
+        """Symbolic Hard Pruning eliminates grammatically incompatible senses from Top-K candidate pools,
+        converting unambiguous polysemous words directly to the 0-token single-candidate fast path
+        and resolving near-tie traps (e.g. a/an vs [uncountable], predicative vs [only before noun],
+        direct object vs [intransitive], and [always + adverb/preposition] without locative complement)."""
+        # 1. Indefinite article 'a/an' vs [uncountable]: 'sentiment' and 'innovation'
+        cands_sentiment = LinguisticEngine.build_top_k_vocab_candidates(
+            "sentiment",
+            pos="noun",
+            quote="It's a sentiment shared by many college students.",
+            k=4,
+        )
+        assert len(cands_sentiment) == 1
+        assert "[uncountable]" not in cands_sentiment[0]["definition"].lower()
+
+        cands_innovation = LinguisticEngine.build_top_k_vocab_candidates(
+            "innovation",
+            pos="noun",
+            quote="Wait and Shake, an innovation not from its famous survival training course, has become popular.",
+            k=4,
+        )
+        assert len(cands_innovation) == 1
+        assert "[uncountable]" not in cands_innovation[0]["definition"].lower()
+
+        # 2. Singular noun with 'a' vs [plural]: 'ethic'
+        cands_ethic = LinguisticEngine.build_top_k_vocab_candidates(
+            "ethic",
+            pos="noun",
+            quote="They are known as loyal employees with a strong work ethic.",
+            k=4,
+        )
+        assert len(cands_ethic) == 1
+        assert "[plural]" not in (cands_ethic[0]["raw_sense"].get("grammar") or "").lower()
+
+        # 3. Predicative slot vs [only before noun]: 'accustomed' & 'conventional'
+        cands_accustomed = LinguisticEngine.build_top_k_vocab_candidates(
+            "accustomed",
+            pos="adjective",
+            quote="Today's young people are accustomed to using smartphones.",
+            k=4,
+        )
+        assert len(cands_accustomed) == 1
+
+        cands_conventional = LinguisticEngine.build_top_k_vocab_candidates(
+            "conventional",
+            pos="adjective",
+            quote="Their work style is not conventional either.",
+            k=4,
+        )
+        assert len(cands_conventional) == 1
+        assert "[only before noun]" not in (cands_conventional[0]["raw_sense"].get("grammar") or "").lower()
+
+        # 4. Transitive direct object vs [intransitive] & missing phrasal particle: 'endure' & 'shrug'
+        cands_endure = LinguisticEngine.build_top_k_vocab_candidates(
+            "endure",
+            pos="verb",
+            quote="They are willing to endure hardship for the future.",
+            k=4,
+        )
+        assert len(cands_endure) == 1
+        assert "[intransitive]" not in (cands_endure[0]["raw_sense"].get("grammar") or "").lower()
+
+        cands_shrug = LinguisticEngine.build_top_k_vocab_candidates(
+            "shrug",
+            pos="verb",
+            quote="You may shrug your shoulders and ignore the comment.",
+            k=4,
+        )
+        assert len(cands_shrug) == 1
+        assert "shoulders" in cands_shrug[0]["definition"].lower()
+
+        # 5. Mandatory locative/prepositional complement '[always + adverb/preposition]': 'conduct'
+        cands_conduct = LinguisticEngine.build_top_k_vocab_candidates(
+            "conduct",
+            pos="verb",
+            quote="They are more likely to use instant messaging than email to conduct their daily activities.",
+            k=4,
+        )
+        assert len(cands_conduct) >= 1
+        assert "carry out a particular activity" in cands_conduct[0]["definition"].lower()
+        for c in cands_conduct:
+            assert "always + adverb/preposition" not in (c["raw_sense"].get("grammar") or "").lower()
+
+
 

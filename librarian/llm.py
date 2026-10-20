@@ -896,8 +896,32 @@ class LLMClient:
                                         flattened_questions.append(nq)
                             else:
                                 flattened_questions.append(q_item)
+                    # Parse precomputed blueprint blocks (Target Word, Contextual Definition, Prescribed Options, Correct Answer Index)
+                    # so options, answer index, and definition are deterministically owned by the code blueprint before L1 evaluation.
+                    bp_by_target = {}
+                    bp_ordered = []
+                    if user_prompt and "### Item " in user_prompt:
+                        for raw_bp in re.split(r"(?=###\s*Item\s+\d+\s*###)", user_prompt):
+                            if not raw_bp.strip().startswith("###"):
+                                continue
+                            m_tw = re.search(r"-\s*Target Word:\s*(.+)", raw_bp)
+                            if not m_tw:
+                                continue
+                            bp_tw = m_tw.group(1).strip()
+                            m_def = re.search(r"-\s*Contextual Definition:\s*(.+)", raw_bp)
+                            m_opts = re.search(r"-\s*Prescribed Options:\s*\[([^\]]+)\]", raw_bp)
+                            m_idx = re.search(r"-\s*Correct Answer Index:\s*(\d+)", raw_bp)
+                            bp_entry = {
+                                "target_word": bp_tw,
+                                "definition": m_def.group(1).strip() if m_def else None,
+                                "prescribed_options": [o.strip() for o in m_opts.group(1).split(",") if o.strip()] if m_opts else None,
+                                "prescribed_index": int(m_idx.group(1)) if m_idx else None,
+                            }
+                            bp_by_target[bp_tw.lower()] = bp_entry
+                            bp_ordered.append(bp_entry)
+
                     # Clean accidental target leakage and auto-mask missing blank slots (Level 1 deterministic code gate)
-                    for q_item in flattened_questions:
+                    for q_idx, q_item in enumerate(flattened_questions):
                         if isinstance(q_item, dict):
                             # Canonicalize comparative translation items (Version A vs Version B) before L1 validation
                             idiom_t = str(q_item.get("idiomatic_translation") or "").strip()
@@ -909,6 +933,20 @@ class LLMClient:
                                     q_item["explanation"] = str(q_item["diagnostic_critique"]).strip()
 
                             target = str(q_item.get("target_word") or q_item.get("word") or "").strip()
+                            bp_match = bp_by_target.get(target.lower()) if target else None
+                            if bp_match is None and q_idx < len(bp_ordered) and ("target_word" in q_item or "word" in q_item):
+                                bp_match = bp_ordered[q_idx]
+                            if bp_match:
+                                if not target and bp_match.get("target_word"):
+                                    target = bp_match["target_word"]
+                                    q_item["target_word"] = target
+                                if bp_match.get("definition") and "definition" in q_item:
+                                    q_item["definition"] = bp_match["definition"]
+                                if bp_match.get("prescribed_options"):
+                                    q_item["options"] = list(bp_match["prescribed_options"])
+                                if isinstance(bp_match.get("prescribed_index"), int):
+                                    q_item["correct_answer_index"] = bp_match["prescribed_index"]
+
                             stem = q_item.get("question") or q_item.get("translated_sentence") or ""
                             if target and stem:
                                 esc_target = re.escape(target)

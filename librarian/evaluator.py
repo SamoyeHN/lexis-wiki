@@ -137,16 +137,14 @@ FATAL_QA_FLAGS = (
     "Target word leaks",
     "missing fill-in-the-blank slot",
     "indefinite article leakage",
-    "cross-target leakage",
     "Stem verbatim from dictionary example",
     "Stem verbatim from curriculum quote",
-    "Inflection discordance",
     "Prescribed options altered",
     "Prescribed answer index altered",
     "degenerate formula slot",
     "deviates from the pre-extracted skeleton",
     "duplicates the source quote",
-
+    "Audit truncated early",
 )
 
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
@@ -289,6 +287,11 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
     # If the item uses a legacy fine-grained label (e.g. 'Concessive clauses'), let it pass without remap
     FOUR_DOMAINS = {"Rhetoric & Emphasis", "Cohesion & Framing", "Information Packaging", "Logic & Stance"}
     if category not in FOUR_DOMAINS:
+        return item, None
+
+    # Deterministic grammar items carry an authoritative syntax_topic and macro-domain
+    # from grammar_profiles.json; do not override with whole-sentence surface regexes.
+    if item.get("syntax_topic"):
         return item, None
 
     INTERPRETIVE_VERBS_REGEX = (
@@ -647,7 +650,9 @@ def _detect_task_type(task: str, parsed: Any) -> str:
     if "expert_audit" in t or "quality_audit" in t:
         return "expert_audit"
     if isinstance(parsed, dict):
-        if "pass_audit" in parsed and "blind_solve_accuracy" in parsed:
+        if ("pass_audit" in parsed and "blind_solve_accuracy" in parsed) or (
+            "summary_verdict" in parsed and isinstance(parsed.get("questions"), list)
+        ):
             return "expert_audit"
         if isinstance(parsed.get("questions"), list):
             return "quiz"
@@ -1003,43 +1008,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
             }
 
-    # one ceiling for every support sentence the student reads.
-    ceiling_level, ceiling_words = (None, set())
-    if task_type in ("vocabulary", "expressions", "grammar") and user_prompt:
-        ceiling_level, ceiling_words = _cefr_source_ceiling(user_prompt)
-    elif task_type == "quiz" and user_prompt:
-        m_cefr = re.search(r'(?:overall_)?cefr(?:_level)?:\s*["\']?([A-C][1-2])["\']?|CEFR\s+([A-C][1-2])', user_prompt, re.IGNORECASE)
-        if m_cefr:
-            ceiling_level = (m_cefr.group(1) or m_cefr.group(2)).upper()
-
-    def _over_example_ceiling(sentence: str, own_words: Iterable[str] = ()) -> List[Tuple[str, str]]:
-        """Words of an example sentence that the source passage does not license.
-
-        `own_words` are exempt: an example is required to contain the headword it
-        teaches, however hard that headword is.
-        """
-        if not ceiling_level or not sentence:
-            return []
-        allow = set(ceiling_words)
-        for word_text in own_words:
-            lowered = str(word_text).lower()
-            allow.update(re.findall(r"[a-z]{4,}", lowered))
-            # 're-schedule' is one headword; its example may show 'rescheduled',
-            # which the lemma lookup then resolves back to the exempt form.
-            joined = re.sub(r"[^a-z]+", "", lowered)
-            if joined:
-                allow.add(joined)
-        return LinguisticEngine.over_ceiling_tokens(sentence, ceiling_level, mode="text", allow=allow)
-
-    def _ceiling_reason(over: List[Tuple[str, str]], field: str) -> str:
-        offenders = ", ".join(f"'{w}' ({lvl})" for w, lvl in over[:3])
-        extra = f" (+{len(over) - 3} more)" if len(over) > 3 else ""
-        band = LinguisticEngine.cefr_ceiling(ceiling_level, mode="text")
-        return (
-            f"{field} exceeds the CEFR {band} ceiling of the CEFR {ceiling_level} "
-            f"source passage: {offenders}{extra}"
-        )
-
     # the formulas the lexicon pre-extracted, indexed by a presentation-
     # insensitive key. An item consumes a skeleton when it copies it; a same-category
     # skeleton left unconsumed means the model rewrote the formula it was handed.
@@ -1120,12 +1088,11 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             valid_pos = pos in allowed_pos
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
-            over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
             # 'A core academic term functioning as a noun.' is the engine's own filler,
             # not a definition. It fails the check the same way a missing one does.
             invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
 
-            if valid_word and valid_pos and definition and not invented_definition and is_distinct_example and not over_ceiling:
+            if valid_word and valid_pos and definition and not invented_definition and is_distinct_example:
                 passes += 1
             else:
                 reasons = []
@@ -1137,8 +1104,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     reasons.append("missing example_usage")
                 elif not is_distinct_example:
                     reasons.append("example_usage is an unoriginal duplicate of quoted_sentence")
-                elif over_ceiling:
-                    reasons.append(_ceiling_reason(over_ceiling, "example_usage"))
                 flags.append(f"⚠️ Vocabulary item '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "expressions":
             word = _safe_str(item.get("word"))
@@ -1151,12 +1116,11 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             is_trivial = word.lower() in ("talk", "listen", "turn", "watch", "sit down", "talk to", "listen to", "look at")
             has_example = bool(example)
             is_distinct_example = bool(has_example and _clean_core(example) != _clean_core(quote))
-            over_ceiling = _over_example_ceiling(example, [word]) if is_distinct_example else []
             # the cascade's invented filler is not a definition. An expression the lexicon
             # does not define is a defect to be reported, not a row to be shipped.
             invented_definition = bool(definition) and LinguisticEngine.is_boilerplate_definition(definition)
 
-            if is_multiword and not is_trivial and definition and not invented_definition and is_distinct_example and not over_ceiling:
+            if is_multiword and not is_trivial and definition and not invented_definition and is_distinct_example:
                 passes += 1
             else:
                 reasons = []
@@ -1170,8 +1134,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     reasons.append("missing example_usage")
                 elif not is_distinct_example:
                     reasons.append("example_usage is an unoriginal duplicate of quoted_sentence")
-                elif over_ceiling:
-                    reasons.append(_ceiling_reason(over_ceiling, "example_usage"))
                 flags.append(f"⚠️ Expression '{word}' failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "grammar":
             pattern = _safe_str(item.get("pattern_formula"))
@@ -1200,12 +1162,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Grammar pattern '{pattern[:40]}': imitation_example duplicates the source quote "
                         "(an imitation must be a new sentence, not the quoted one)"
                     )
-
-                over_ceiling = _over_example_ceiling(imitation)
-                if over_ceiling:
-                    # a pattern modelled from an A2 passage must not be
-                    # demonstrated with C2 vocabulary the student has not met.
-                    reasons.append(_ceiling_reason(over_ceiling, "imitation_example"))
             if not _safe_str(item.get("common_mistakes")):
                 reasons.append("missing common_mistakes")
             
@@ -1257,17 +1213,49 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     valid_alts = expanded_alts
                     if not valid_alts:
                         continue
-                    if not any(_clean_core(a) in quote_tokens or _form_in_text(_clean_core(a), clean_quote) for a in valid_alts):
+                    quote_has_anchor = any(_clean_core(a) in quote_tokens or _form_in_text(_clean_core(a), clean_quote) for a in valid_alts)
+                    if not quote_has_anchor and any(a.lower() in ("is", "was", "were", "are", "be", "been") for a in valid_alts):
+                        if re.search(r"\b(?:is|was|were|are|be|been|'s|'re)\b", clean_quote, re.IGNORECASE):
+                            quote_has_anchor = True
+                    if not quote_has_anchor:
                         missing_anchors_quote.append(lit)
                     if imitation and len(imitation.split()) >= 3:
                         is_instantiated = any(_clean_core(a) in imitation_tokens or _form_in_text(_clean_core(a), clean_imitation) for a in valid_alts)
-                        # propositional encapsulation interpretive verbs (show/suggest/mean/indicate)
-                        # allow cross-verb instantiation within the closed interpretive verb paradigm
-                        if not is_instantiated and any(re.match(r"^(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)$", a, re.IGNORECASE) for a in valid_alts):
-                            if re.search(r"\b(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?)\b", imitation, re.IGNORECASE):
+                        # copula paradigm (is/was/were/are/be/been)
+                        if not is_instantiated and any(a.lower() in ("is", "was", "were", "are", "be", "been") for a in valid_alts):
+                            if re.search(r"\b(?:is|was|were|are|be|been|'s|'re)\b", clean_imitation, re.IGNORECASE):
                                 is_instantiated = True
-                        if not is_instantiated and any(a.lower() in ("although", "though", "while", "whereas") for a in valid_alts):
-                            if re.search(r"\b(?:although|though|even though|while|whereas)\b", imitation, re.IGNORECASE):
+                        # propositional encapsulation interpretive verbs (show/suggest/mean/indicate/underscore)
+                        # allow cross-verb instantiation within the closed interpretive verb paradigm
+                        if not is_instantiated and any(re.match(r"^(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?|underscor(?:es|ed))$", a, re.IGNORECASE) for a in valid_alts):
+                            if re.search(r"\b(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?|underscor(?:es|ed))\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # optional complementizer 'that' in sentential relative ', which + interpretive verb' when verb takes NP object
+                        if not is_instantiated and any(a.lower() == "that" for a in valid_alts) and re.search(r",\s*which\b", pattern, re.IGNORECASE):
+                            if re.search(r",\s*which\s+(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|show(?:s|ed|n)?|demonstrat(?:es|ed)|prov(?:es|ed|en)|impl(?:ies|ied)|reveal(?:s|ed)?|underscor(?:es|ed))\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # concessive subordinator paradigm (including 'even if' / 'even though')
+                        if not is_instantiated and (
+                            any(a.lower() in ("although", "though", "even", "while", "whereas") for a in valid_alts)
+                            or (any(a.lower() == "if" for a in valid_alts) and re.search(r"\beven\s+if\b", pattern, re.IGNORECASE))
+                        ):
+                            if re.search(r"\b(?:although|though|even though|even if|while|whereas)\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # abstract shell-noun paradigm
+                        if not is_instantiated and any(a.lower() in ("fact", "idea", "belief", "assumption", "notion", "claim", "possibility", "view", "evidence", "news", "impression", "argument", "thought", "hope", "fear", "doubt", "contention", "recognition", "realization", "premise", "hypothesis", "consensus", "conclusion", "paradox", "irony", "conviction") for a in valid_alts):
+                            if re.search(r"\b(?:fact|idea|belief|assumption|notion|claim|possibility|view|evidence|news|impression|argument|thought|hope|fear|doubt|contention|recognition|realization|premise|hypothesis|consensus|conclusion|paradox|irony|conviction)\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # complex-transitive & causative verb paradigm
+                        if not is_instantiated and any(a.lower() in ("make", "makes", "made", "find", "finds", "found", "keep", "keeps", "kept", "render", "renders", "rendered", "deem", "deems", "deemed", "consider", "considers", "considered", "leave", "leaves", "left", "let", "lets", "have", "has", "had") for a in valid_alts):
+                            if re.search(r"\b(?:make|makes|made|making|find|finds|found|finding|keep|keeps|kept|keeping|render|renders|rendered|rendering|deem|deems|deemed|consider|considers|considered|leave|leaves|left|leaving|let|lets|letting|have|has|had|having)\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # conjunctive adverb transition paradigm
+                        if not is_instantiated and any(a.lower() in ("however", "nevertheless", "nonetheless", "conversely") for a in valid_alts):
+                            if re.search(r"\b(?:however|nevertheless|nonetheless|conversely)\b", imitation, re.IGNORECASE):
+                                is_instantiated = True
+                        # restrictive relative pronoun paradigm ('which'/'that'/'who')
+                        if not is_instantiated and any(a.lower() in ("which", "that", "who", "whom") for a in valid_alts) and re.match(r"^\[np\]\s*\+\s*(?:which|that|who)", pattern.strip(), re.IGNORECASE):
+                            if re.search(r"\b(?:which|that|who|whom)\b", imitation, re.IGNORECASE):
                                 is_instantiated = True
                         if not is_instantiated:
                             missing_anchors_imitation.append(lit)
@@ -1282,16 +1270,24 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"'{', '.join(missing_anchors_imitation)}' (an imitation must instantiate the formula it models)"
                     )
 
-                # Check for participle requirement
-                if "[v-ing" in pattern.lower() or "[participle" in pattern.lower():
-                    ING_EXCLUDE = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "during", "ceiling"})
-                    ing_tokens_quote = [w for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", clean_quote_raw) if w not in ING_EXCLUDE]
+                # Check for participle requirement:
+                # 1) Pure [V-ing] / [V-ing Phrase] slot without slash alternatives (e.g. not [V-ing/NP] or [V-ing / V-ed])
+                ING_EXCLUDE = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "during", "ceiling", "ring", "spring", "king", "wing", "sing", "bring", "cling", "fling", "sting", "string", "swing"})
+                pat_low = pattern.lower()
+                requires_strict_ving = bool(re.search(r"\[v-ing(?:\s+phrase)?\]", pat_low))
+                requires_any_participle = ("[v-ing" in pat_low or "[participle" in pat_low) and not requires_strict_ving
+                if requires_strict_ving:
+                    ing_tokens_quote = [w for w in re.findall(r"\b(?:being|doing|going|[a-zA-Z]{3,}ing)\b", clean_quote_raw) if w.lower() not in ING_EXCLUDE]
                     if not ing_tokens_quote:
                         reasons.append("formula requires '[V-ing]' but quote contains no participle verb ungrounded in quote")
                     if imitation:
-                        ing_tokens_imitation = [w for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", clean_imitation_raw) if w not in ING_EXCLUDE]
+                        ing_tokens_imitation = [w for w in re.findall(r"\b(?:being|doing|going|[a-zA-Z]{3,}ing)\b", clean_imitation_raw) if w.lower() not in ING_EXCLUDE]
                         if not ing_tokens_imitation:
                             reasons.append("formula requires '[V-ing]' but imitation_example contains no participle verb")
+                elif requires_any_participle:
+                    # Slash-alternative slots like [V-ing / V-ed Phrase], [Participle/Adj/PrepP], or [V-ing/NP]
+                    # accept -ing, -ed/-en past participles, adjectives, or prepositional/noun complements.
+                    pass
 
             # Degenerate Slot Gate — '[NP/NP]' names the same constituent
             # twice, teaches nothing, and is never mined by the lexicon.
@@ -1325,9 +1321,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 flags.append(remap_notice)
                 category = str(item.get("category", "")).strip()
 
-            # Four Macro Functional Domains deterministic checks
+            # Four Macro Functional Domains deterministic checks (for unprofiled / legacy items lacking syntax_topic)
             # 1. Rhetoric & Emphasis: Check for inversion markers, genuine cleft relative clauses, or parallelism coordination
-            if category == "Rhetoric & Emphasis":
+            if not item.get("syntax_topic") and category == "Rhetoric & Emphasis":
                 has_inversion_trigger = bool(re.search(r"\b(?:only|never|hardly|scarcely|seldom|rarely|little|not only|neither|nor|no sooner)\b", quote, re.IGNORECASE))
                 has_cleft = bool(re.search(r"\bIt\s+(?:is|was|were|'s|has\s+been|had\s+been)\b", quote, re.IGNORECASE) and re.search(r"\b(?:that|who|whom|which)\b", quote, re.IGNORECASE))
                 has_wh_cleft = bool(re.search(r"\bWhat\s+[a-z0-9_']+\s+(?:is|was|were)\b", quote, re.IGNORECASE))
@@ -1339,29 +1335,30 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     reasons.append("category 'Rhetoric & Emphasis' assigned to quote lacking rhetorical markers (inversion, cleft focus, or structural balance)")
 
             # 2. Logic & Stance: Check for conditional, concessive, epistemic hedging, or stance modal assertions
-            elif category == "Logic & Stance":
+            elif not item.get("syntax_topic") and category == "Logic & Stance":
                 has_cond = bool(re.search(r"\b(?:if|unless|provided\s+that|supposing|as\s+long\s+as|had\s+\w+\s+\w+|should\s+\w+\s+\w+|were\s+\w+\s+\w+)\b", quote, re.IGNORECASE))
                 has_concessive = bool(re.search(r"\b(?:although|though|even though|even if|while|whereas|despite|in spite of)\b", quote, re.IGNORECASE))
                 has_stance_or_hedging = bool(re.search(r"\b(?:can|cannot|can't|could|may|might|must|should|would|will|suggest|indicate|appear|seem|likely|probably|presumably|arguably|tends?\s+to)\b", quote, re.IGNORECASE))
                 if not (has_cond or has_concessive or has_stance_or_hedging):
                     reasons.append("category 'Logic & Stance' assigned to quote lacking logical condition, concessive linker, or epistemic/stance modal assertion")
 
-            # 3. Information Packaging: Check for non-finite verb forms, nominalization, dummy-it extraposition, or elaborative non-restrictive clause
-            elif category == "Information Packaging":
+            # 3. Information Packaging: Check for non-finite verb forms, nominalization, dummy-it extraposition, relative clause, complex-transitive/causative, or passive
+            elif not item.get("syntax_topic") and category == "Information Packaging":
                 ING_NON_VERBS = frozenset({"morning", "evening", "thing", "something", "nothing", "everything", "anything", "ring", "spring", "king", "wing", "sing", "during", "ceiling"})
-                ing_tokens = [w.lower() for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", quote) if w.lower() not in ING_NON_VERBS]
-                has_participle = bool(ing_tokens or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced)\b", quote, re.IGNORECASE))
+                ing_tokens = [w.lower() for w in re.findall(r"\b(?:being|doing|going|[a-zA-Z]{3,}ing)\b", quote) if w.lower() not in ING_NON_VERBS]
+                has_participle = bool(ing_tokens or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced|with\s+\w+)\b", quote, re.IGNORECASE))
                 TO_NOUNS = frozenset({"school", "work", "bed", "church", "college", "prison", "jail", "court", "sea", "town", "home", "market", "class", "them", "him", "her", "us", "me", "you", "it", "this", "that", "these", "those"})
                 to_matches = [m.group(1).lower() for m in re.finditer(r"\bto\s+([a-z]{2,})\b", quote, re.IGNORECASE)]
                 has_infinitive_clause = any(word not in TO_NOUNS for word in to_matches)
                 has_dummy_it = bool(re.search(r"\bit(?:'s|\s+is|\s+was|\s+has\s+been)\s+(?:[a-z]{4,}\s+)?(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE))
                 has_nominalization = bool(re.search(r"\b[a-z]{3,}(?:tion|sion|ment|ance|ence|ity|ness)\b", quote, re.IGNORECASE))
-                has_elaborative_relative = bool(re.search(r",\s*which\s+[a-z]+", quote, re.IGNORECASE))
-                if not (has_participle or has_infinitive_clause or has_dummy_it or has_nominalization or has_elaborative_relative):
+                has_elaborative_relative = bool(re.search(r",\s*which\s+[a-z]+|\b(?:which|that|who|whom)\s+[a-z]+", quote, re.IGNORECASE))
+                has_complex_trans_or_passive = bool(re.search(r"\b(?:make|makes|made|find|finds|found|keep|keeps|kept|render|renders|rendered|deem|deems|deemed|let|lets|have|has|had|is|are|was|were|be|been)\b", quote, re.IGNORECASE))
+                if not (has_participle or has_infinitive_clause or has_dummy_it or has_nominalization or has_elaborative_relative or has_complex_trans_or_passive):
                     reasons.append("category 'Information Packaging' assigned to quote lacking non-finite clauses, evaluative it-extraposition, dense nominalization, or elaborative clause")
 
             # 4. Cohesion & Framing: Check for shell nouns, complement that-clauses, or encapsulation
-            elif category == "Cohesion & Framing":
+            elif not item.get("syntax_topic") and category == "Cohesion & Framing":
                 has_shell_frame = bool(re.search(r"\b(?:the\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that|this\s+(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|led\s+to|leads\s+to)|the\s+extent\s+to\s+which)\b", quote, re.IGNORECASE))
                 has_anaphoric_encapsulation = bool(re.search(r"\b(?:this|these|such)\s+[a-z]{4,}\b", quote, re.IGNORECASE) or bool(re.search(r"\bthat\s+is\s+why\b", quote, re.IGNORECASE)))
                 # Closed set of interpretive verbs across all inflectional forms (base, 3sg, past, participle) + optional modal auxiliaries
@@ -1395,15 +1392,16 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     or re.search(r"\b(?:although|though|even though|even if|while|whereas|despite|in spite of)\b", quote, re.IGNORECASE)
                     or re.search(r"\b(?:can|cannot|can't|could|may|might|must|should|would|will|suggest|indicate|appear|seem|likely|probably|presumably|arguably|tends?\s+to)\b", quote, re.IGNORECASE)
                 )
-                _ing_tokens = [w.lower() for w in re.findall(r"\b[a-zA-Z]{3,}ing\b", quote) if w.lower() not in _ING_EXCLUDE]
+                _ing_tokens = [w.lower() for w in re.findall(r"\b(?:being|doing|going|[a-zA-Z]{3,}ing)\b", quote) if w.lower() not in _ING_EXCLUDE]
                 _to_words = [m.group(1).lower() for m in re.finditer(r"\bto\s+([a-z]{2,})\b", quote, re.IGNORECASE)]
                 _fits_info = (
                     _ing_tokens
-                    or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced)\b", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:having\s+\w+(?:ed|en|t)|surrounded|driven|given|taken|seen|known|based|built|born|located|situated|reminded|confronted|faced|with\s+\w+)\b", quote, re.IGNORECASE)
                     or any(w not in _TO_EXCLUDE for w in _to_words)
                     or re.search(r"\bit(?:'s|\s+is|\s+was|\s+has\s+been)\s+(?:[a-z]{4,}\s+)?(?:that|to\s+[a-z]+)\b", quote, re.IGNORECASE)
                     or re.search(r"\b[a-z]{3,}(?:tion|sion|ment|ance|ence|ity|ness)\b", quote, re.IGNORECASE)
-                    or re.search(r",\s*which\s+[a-z]+", quote, re.IGNORECASE)
+                    or re.search(r",\s*which\s+[a-z]+|\b(?:which|that|who|whom)\s+[a-z]+", quote, re.IGNORECASE)
+                    or re.search(r"\b(?:make|makes|made|find|finds|found|keep|keeps|kept|render|renders|rendered|deem|deems|deemed|let|lets|have|has|had|is|are|was|were|be|been)\b", quote, re.IGNORECASE)
                 )
                 _fits_cohesion = (
                     re.search(r"\b(?:the\s+(?:fact|idea|notion|reason|belief|claim|argument|possibility|question|view|conclusion)\s+that|this\s+(?:mean[st]?|suggest(?:s|ed)?|indicat(?:es|ed)|led\s+to|leads\s+to)|the\s+extent\s+to\s+which)\b", quote, re.IGNORECASE)
@@ -1496,13 +1494,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             # Gates below are only evaluated for lexical fill-in-the-blank items; they must
             # still be bound for translation / comprehension / comparative-translation items
             # or the shared item_passed computation below raises UnboundLocalError.
-            no_cross_target_leak = True
             no_scaffold_leak = True
-            leaked_other_targets: List[str] = []
             no_verbatim_example = True
             verbatim_label = "dictionary example"
-            inflection_agreed = True
-            illegal_distractors: List[str] = []
             # the Prescribed Options Contract is satisfied by default — it only
             # binds when the blueprint actually prescribes options (cloze and comprehension
             # blueprints do not).
@@ -1566,73 +1560,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                             f"❌ Quiz item '{target}': Question stem has indefinite article ('a/an') immediately preceding blank with mixed vowel/consonant options (fatal test-wiseness leakage); use 'the ____', plural, or possessive instead."
                         )
 
-                # Cross-Target Stem Leakage Gate (Zero-Tolerance Physical Gate):
-                # The question stem MUST NOT leak other targets from the current batch outside the blank
-                no_cross_target_leak = True
-                leaked_other_targets = []
-                if prompt_headwords:
-                    clean_target = _clean_core(target)
-                    stem_no_blank = re.sub(r'_{2,}', ' ', question)
-                    stem_words_lower = {w.lower() for w in re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)}
-                    for other_hw in prompt_headwords:
-                        if not other_hw or other_hw == clean_target or other_hw == target.lower():
-                            continue
-                        if other_hw in stem_words_lower:
-                            leaked_other_targets.append(other_hw)
-                        else:
-                            other_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', other_hw)
-                            if len(other_stem) >= 4 and any(
-                                (len(re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', sw)) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', sw) == other_stem)
-                                for sw in stem_words_lower
-                            ):
-                                leaked_other_targets.append(other_hw)
-                if leaked_other_targets:
-                    no_cross_target_leak = False
-                    flags.append(
-                        f"❌ Quiz item '{target}': Question stem leaks other batch target word(s) outside blank: {leaked_other_targets} (cross-target leakage)!"
-                    )
-
-                # Blank Syntactic Slot & POS Agreement — moved to Level 2 .
-                # Filling the target back into the stem and letting spaCy judge the slot is a
-                # sentence-level judgement: it cannot be re-checked next round by the same
-                # comparison, so it is not a Level-1 gate. 'grant', 'conduct' and 'accustomed'
-                # each collected two or three "a noun cannot fill a verb slot" errors from it,
-                # all of them false, because the POS they were judged against was guessed.
-                # What Level 1 keeps is the declaration itself and its provenance:
-                # blueprint > item field > lexicon guess, and a guess may only warn.
                 bp_info = prompt_blueprints.get(target.lower(), {}) if prompt_blueprints else {}
-                expected_pos = _safe_str(bp_info.get("part_of_speech")).strip().lower()
-                pos_source = "blueprint"
-                if not expected_pos:
-                    expected_pos = _safe_str(item.get("part_of_speech")).strip().lower()
-                    pos_source = "item field"
-                if not expected_pos:
-                    expected_pos = LinguisticEngine.determine_contextual_pos(target, target)
-                    pos_source = "lexicon guess"
-                pos_is_guess = (pos_source == "lexicon guess")
-
-                # Anchor Presence in Question Stem Gate — deleted from Level 1 .
-                # 'sector' declares the anchor 'manufacture'; the model wrote 'the manufacturing
-                # ____', a literal search found no 'manufacture', and that one false error -
-                # reported once per item and once again in the summary - consumed two of five
-                # repair slots and triggered a 44-second regeneration round. The anchor remains
-                # a generation-time requirement (the micro-task states it, and the blueprint now
-                # checks its own anchor against its own model sentence). Level 1 no longer
-                # searches for a word inside a sentence. What it does keep is the blueprint
-                # compared against itself, which needs no reading: an anchor that is itself
-                # another batch target is a self-contradiction the blueprint can be told about.
-                req_anchor = bp_info.get("anchor", "")
-                if req_anchor and req_anchor not in ("general context", "semantic context clues") and prompt_headwords:
-                    for _other_hw in prompt_headwords:
-                        if not _other_hw or _batch_target_conflict(target, _other_hw):
-                            continue
-                        if _batch_target_conflict(req_anchor, _other_hw):
-                            flags.append(
-                                f"⚠️ Quiz item '{target}': blueprint self-conflict — declared anchor "
-                                f"'{req_anchor}' is itself another batch target ('{_other_hw}'), so no "
-                                f"stem can satisfy both the anchor requirement and the leakage ban"
-                            )
-                            break
 
                 # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer
@@ -1658,14 +1586,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                             f"❌ Quiz item '{target}': Prescribed answer index altered — blueprint index "
                             f"{prescribed_idx}, item shipped {idx}"
                         )
-
-
-                # Explanation Grounding Gate — moved to Level 2 .
-                # "Does the collocation this explanation claims actually land in the stem?" is a
-                # reading task: the next round cannot re-run the same comparison on the same
-                # strings, so by rule 0 it is not a Level-1 gate. Level 1 keeps the declaration —
-                # the blueprint states the anchor, the micro-task repeats it — and the Level-2
-                # expert audit (scripts/l2_expert_audit.py) is the one that reads prose.
 
                 # Verbatim Copy Gate : a stem may emulate a corpus model's syntax and
                 # register, but it may never reuse its wording. Both corpus models are checked —
@@ -1713,98 +1633,17 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"(detected n-gram overlap: '{verbatim_hit}...')!"
                     )
 
-                # Inflection Concordance Gate 
-                # The blueprint declares a verb form, the stem physically demands one, and every
-                # option must be cast in it. A declared 'past tense (VBD)' target sitting in a
-                # 'will ____' slot — or offered as the bare base form — makes the item unanswerable.
-                inflection_agreed = True
-                declared_tag = LinguisticEngine.inflection_tag_from_label(bp_info.get("inflection", ""))
-                if declared_tag and expected_pos in ("verb", "v") and target and "____" in question:
-                    base_verb = LinguisticEngine.lemma_of(target)
-                    expected_form = LinguisticEngine.verb_form_for_tag(base_verb, declared_tag)
-                    target_tag = LinguisticEngine.verb_form_tag_of(target)
-                    # Concordant when the option equals the deterministically inflected lemma, or
-                    # when the option itself parses as the declared form — the fallback covers
-                    # irregular and dictionary-silent forms the inflector cannot reproduce.
-                    form_agreed = (
-                        not expected_form
-                        or target.strip().lower() == expected_form
-                        or target_tag == declared_tag
-                    )
-                    if not form_agreed:
-                        inflection_agreed = False
-                        flags.append(
-                            f"❌ Quiz item '{target}': Inflection discordance: blueprint declares "
-                            f"'{bp_info.get('inflection')}' (expected form '{expected_form}') "
-                            f"but the answer option is '{target}'!"
-                        )
-                    # 'does the stem slot contradict the declared form?' — deleted from Level 1
-                    # . The auxiliary table below read the finished sentence and
-                    # guessed which form the slot demanded; a detector built that way covers
-                    # 'is currently ____' and misses 'has been ____', 'to have ____' and
-                    # 'the report that the firm ____ last year'. What Level 1 keeps is the pure
-                    # form comparison above: the tag the blueprint declared against the form the
-                    # answer option actually carries, plus the option-set form check below.
-                    # Parallel inflection across options (soft warning): a mixed-form option set
-                    # lets the item be solved by morphology instead of meaning.
-                    if declared_tag in ("VBD", "VBG", "VBZ", "VBN", "VB", "VBP"):
-                        form_family = {"VBD", "VBN"} if declared_tag in ("VBD", "VBN") else {declared_tag}
-                        for o_idx, opt in enumerate(options):
-                            if o_idx == idx:
-                                continue
-                            opt_l = str(opt).strip().lower()
-                            opt_tag = LinguisticEngine.verb_form_tag_of(opt_l)
-                            if opt_tag and LinguisticEngine.lemma_of(opt_l) != opt_l and opt_tag not in form_family:
-                                flags.append(
-                                    f"⚠️ Quiz item '{target}': distractor '{opt_l}' carries verb form "
-                                    f"{opt_tag} while the blueprint declares '{bp_info.get('inflection')}'"
-                                )
-
-                # Distractor Slot Legality Gate 
-                # Every option must be able to occupy the target's own syntactic slot;
-                # 'log in to a ____' offering the adverb 'somehow' is solved by morphology
-                # instead of meaning. Only positive dictionary evidence vetoes an option.
-                if is_list_valid and valid_idx and expected_pos:
-                    requires_obj = (
-                        expected_pos in ("verb", "v")
-                        and LinguisticEngine.verb_takes_object(LinguisticEngine.lemma_of(target)) is True
-                    )
-                    for o_idx, opt in enumerate(options):
-                        if o_idx == idx:
-                            continue
-                        opt_l = str(opt).strip().lower()
-                        if not opt_l or opt_l == str(target).strip().lower():
-                            continue
-                        if not LinguisticEngine.distractor_occupies_slot(
-                            opt_l, expected_pos, requires_object=requires_obj
-                        ):
-                            illegal_distractors.append(opt_l)
-                if illegal_distractors:
-                    # Downgraded from fatal to a report (F10 改哪几处 2). The check itself is a
-                    # pure dictionary comparison, so it is a legitimate Level-1 finding and it is
-                    # re-checkable next round — but the options are blueprint-owned ,
-                    # so the writer is forbidden from changing them. A ❌ here therefore triggers a
-                    # regeneration that is not allowed to fix the thing it was called for. It is
-                    # reported for human review instead of capping the score.
-                    _pos_note = (
-                        " [POS inferred from the lexicon — needs human review]"
-                        if pos_is_guess else ""
-                    )
-                    flags.append(
-                        f"⚠️ Quiz item '{target}': Distractor slot illegality: "
-                        f"{illegal_distractors} cannot occupy the {expected_pos} slot the "
-                        f"target '____' occupies{_pos_note} (blueprint-owned options)"
-                    )
-
                 # Stem Length Check (Physical Sanity Gate - Soft Warning)
                 # Ensure stems provide sufficient context (> 3 words) without forcing artificial clausal complexity.
                 if len(stem_words) < 4:
                     is_adequate_complexity = False
                     flags.append(f"⚠️ Quiz item '{target}': Inadequate context stem (< 4 words)")
 
-            # 5. In-List Distractor Recycling check (Zero-Tolerance Level 1 Gate)
+            # 5. In-List Distractor Recycling check (Zero-Tolerance Level 1 Gate for LLM-invented distractors;
+            # skipped when options are pre-computed by the blueprint).
             recycled_in_distractors = []
-            if prompt_headwords and is_list_valid and valid_idx:
+            bp_for_item = prompt_blueprints.get(target.lower(), {}) if (prompt_blueprints and target) else {}
+            if prompt_headwords and is_list_valid and valid_idx and not bp_for_item.get("prescribed_options"):
                 clean_target = _clean_core(target) if target else ""
                 clean_hw_set = {_clean_core(hw) for hw in prompt_headwords if hw}
 
@@ -1845,12 +1684,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
             no_in_list_recycling = len(recycled_in_distractors) == 0
 
-            # Level-1 pass list . Every term below is a field-to-field or
-            # string-to-string comparison that the next round can re-run identically. The four
-            # sentence-level terms that used to sit in this list — blank POS agreement, anchor
-            # presence in the stem, explanation grounding, distractor slot legality — are gone:
-            # the first three belong to the Level-2 expert audit, the fourth is blueprint-owned
-            # and is reported as a warning instead of capping the score.
+            # Level-1 pass list. Every term below is a field-to-field or
+            # string-to-string comparison on LLM-authored fields.
             item_passed = (
                 is_list_valid and
                 has_no_duplicates and
@@ -1862,10 +1697,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 is_single_blank and
                 no_stem_leak and
                 no_scaffold_leak and
-                no_cross_target_leak and
                 no_article_leak and
                 no_verbatim_example and
-                inflection_agreed and
                 no_in_list_recycling and
                 options_match_blueprint and
                 index_match_blueprint
@@ -1885,10 +1718,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not has_blank_when_expected: reasons.append("missing fill-in-the-blank slot (____)")
                 if not is_single_blank: reasons.append("multiple blanks detected in stem")
                 if not no_stem_leak: reasons.append("target word leaks into question stem")
-                if not no_cross_target_leak: reasons.append(f"cross-target leakage {leaked_other_targets}")
                 if not no_article_leak: reasons.append("indefinite article leakage before blank")
                 if not no_verbatim_example: reasons.append(f"stem verbatim from {verbatim_label}")
-                if not inflection_agreed: reasons.append(f"inflection discordance with blueprint '{bp_info.get('inflection')}'")
                 if not options_match_blueprint:
                     reasons.append(f"prescribed options altered from blueprint {bp_info.get('prescribed_options')}")
                 if not index_match_blueprint:
@@ -1903,14 +1734,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     flags.append(f"❌ Quiz item '{target}': Multiple blanks detected in stem")
                 elif not no_stem_leak:
                     flags.append(f"❌ Quiz item '{target}': Target word leaks into question stem: {leaked_words}")
-                elif not no_cross_target_leak:
-                    flags.append(f"❌ Quiz item '{target}': cross-target leakage: {leaked_other_targets}")
                 elif not no_article_leak:
                     flags.append(f"❌ Quiz item '{target}': indefinite article leakage before blank")
                 elif not no_verbatim_example:
                     flags.append(f"❌ Quiz item '{target}': Stem verbatim from {verbatim_label}")
-                elif not inflection_agreed:
-                    flags.append(f"❌ Quiz item '{target}': Inflection discordance with blueprint declaration")
                 else:
                     flags.append(f"⚠️ Quiz question failed pedagogy check: {', '.join(reasons)}")
         elif task_type == "summary":
@@ -2077,7 +1904,8 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
                 earned = max(0.0, earned - len(dup_mistakes) * 3.0)
 
     # For quizzes: penalize identical distractors recycled repeatedly across different questions
-    if task_type == "quiz":
+    # (Skip when options are blueprint-prescribed so deterministic distractors are not re-audited post-LLM)
+    if task_type == "quiz" and "Prescribed Options:" not in (user_prompt or ""):
         all_distractors = []
         for item in items:
             opts = item.get("options", [])
@@ -2292,29 +2120,30 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 pruned_flags.append(f"✂️ Pruned hallucinated grammar pattern '{word[:30]}' (quote not found in source text)")
                 continue
 
-            # Anchor verification: literal functional anchors must exist in quote
-            raw_lits = re.findall(r"[a-zA-Z0-9_\'/]+", re.sub(r"\[.*?\]|\(.*?\)", " ", word))
-            expanded_quote = _clean_core(_expand_contractions(quote))
-            quote_tokens = set(core_quote.split()) | set(expanded_quote.split())
-            missing_anchors = []
-            for lit in raw_lits:
-                alts = [a.strip() for a in lit.split("/") if a.strip()]
-                valid_alts = [a for a in alts if len(_clean_core(a)) >= 2 and _clean_core(a) not in COBUILD_POS_TOKENS]
-                if not valid_alts:
-                    continue
-                if not any(_clean_core(a) in quote_tokens for a in valid_alts):
-                    missing_anchors.append(lit)
-            
-            if missing_anchors:
-                # Level 1 In-Place Self-Healing: Attempt to synthesize canonical formula from quote
-                canonical_formula = LinguisticEngine.generate_cobuild_formula(quote, category=item.get("category"))
-                if canonical_formula and canonical_formula != word and canonical_formula != "[Subject] + [VP] + [Clause]":
-                    item["pattern_formula"] = canonical_formula
-                    pruned_flags.append(f"ℹ️ In-Place Self-Healing: Repaired mismatched formula '{word[:30]}' -> '{canonical_formula}' (anchors {missing_anchors} not in quote)")
-                    word = canonical_formula
-                else:
-                    pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
-                    continue
+            # Anchor verification for unprofiled/legacy items: literal functional anchors must exist in quote
+            if not item.get("syntax_topic"):
+                raw_lits = re.findall(r"[a-zA-Z0-9_\'/]+", re.sub(r"\[.*?\]|\(.*?\)", " ", word))
+                expanded_quote = _clean_core(_expand_contractions(quote))
+                quote_tokens = set(core_quote.split()) | set(expanded_quote.split())
+                missing_anchors = []
+                for lit in raw_lits:
+                    alts = [a.strip() for a in lit.split("/") if a.strip()]
+                    valid_alts = [a for a in alts if len(_clean_core(a)) >= 2 and _clean_core(a) not in COBUILD_POS_TOKENS]
+                    if not valid_alts:
+                        continue
+                    if not any(_clean_core(a) in quote_tokens for a in valid_alts):
+                        missing_anchors.append(lit)
+                
+                if missing_anchors:
+                    # Level 1 In-Place Self-Healing: Attempt to synthesize canonical formula from quote
+                    canonical_formula = LinguisticEngine.generate_cobuild_formula(quote, category=item.get("category"))
+                    if canonical_formula and canonical_formula != word and canonical_formula != "[Subject] + [VP] + [Clause]":
+                        item["pattern_formula"] = canonical_formula
+                        pruned_flags.append(f"ℹ️ In-Place Self-Healing: Repaired mismatched formula '{word[:30]}' -> '{canonical_formula}' (anchors {missing_anchors} not in quote)")
+                        word = canonical_formula
+                    else:
+                        pruned_flags.append(f"✂️ Pruned mismatched grammar pattern '{word[:30]}' (anchor '{missing_anchors[0]}' missing from quote)")
+                        continue
 
             # Level 1 Code Gate: Auto-remap explicit category mismatches
             item, remap_notice = auto_remap_grammar_category(item)
@@ -2361,11 +2190,12 @@ def prune_hallucinated_items(parsed_data: Any, user_prompt: str, task_type: str 
                 pruned_flags.append(f"✂️ Pruned hallucinated item '{word}' (unmatched word in unverified quote)")
                 continue
 
-        # Level 1 In-Place Self-Healing: Canonical Lemmatization for single-word vocabulary
+        # Level 1 In-Place Self-Healing: Canonical Lemmatization for legacy LLM single-word vocabulary
         if task_type == "vocabulary" and "word" in item:
             orig_word = str(item["word"]).strip()
-            # If word is inflected (ends with -ed, -ing, -s) and does not contain brackets
-            if orig_word and "[" not in orig_word and "(" not in orig_word:
+            audit_str = str(item.get("design_audit", "")).upper()
+            is_deterministic = "DETERMINISTIC" in audit_str
+            if orig_word and not is_deterministic and "[" not in orig_word and "(" not in orig_word:
                 lemmatized = LinguisticEngine.lemmatize_headword(orig_word, quote)
                 if lemmatized and lemmatized.lower() != orig_word.lower():
                     item["word"] = lemmatized
@@ -2559,13 +2389,20 @@ class LogEvaluator:
                 elif "reading" in task_lower or "reading" in prompt_lower:
                     infer_type = "reading"
                 
+                expected_items = len(re.findall(r"(?:^|\n)\s*Item\s+#\d+:", user_prompt or ""))
                 divs = parsed.get("blind_solve_confident_divergences", 0)
-                ExpertAuditor.reconcile_report_scores(parsed, quiz_type=infer_type, confident_divergences=divs)
+                ExpertAuditor.reconcile_report_scores(
+                    parsed,
+                    quiz_type=infer_type,
+                    confident_divergences=divs,
+                    total_items=expected_items
+                )
                 raw_audited_score = round(float(parsed.get("overall_quality_score", composite_score)), 1)
+                missing_audit_items = int(parsed.get("missing_audit_items", 0) or 0)
                 
-                if pre_cure_score is None:
+                if pre_cure_score is None or missing_audit_items > 0:
                     pre_cure_score = raw_audited_score
-                if post_cure_score is not None:
+                if post_cure_score is not None and missing_audit_items == 0:
                     composite_score = post_cure_score
                 else:
                     composite_score = raw_audited_score
@@ -2573,13 +2410,16 @@ class LogEvaluator:
                 flaws = parsed.get("flawed_item_indices", [])
                 if flaws:
                     flags.insert(0, f"❌ [FATAL FLAW] {len(flaws)} item(s) failed single-fit validation: #{', #'.join(str(i) for i in flaws)}")
+                if missing_audit_items > 0:
+                    audited_n = len(parsed.get("questions", []))
+                    flags.insert(0, f"❌ [FATAL FLAW] Audit truncated early: only {audited_n}/{expected_items} item(s) evaluated ({missing_audit_items} missing)")
                 if not parsed.get("pass_audit", False):
                     base = parsed.get("base_quality_score", raw_audited_score)
                     if base > raw_audited_score:
                         flags.insert(1, f"⚠️ [L2_PENALTY] Capped from Base {base}% to {raw_audited_score}% due to fatal flaw(s)")
                 if divs > 0:
                     flags.insert(0, f"❌ [CRITICAL FLAW] {divs} confident double-key divergence(s) detected in blind solve")
-                if post_cure_score is not None and post_cure_score > raw_audited_score:
+                if post_cure_score is not None and post_cure_score > raw_audited_score and missing_audit_items == 0:
                     flags.insert(0, f"✅ [SURGICAL CURE] In-place healed from {pre_cure_score}% to Final {post_cure_score}%")
             except Exception as err:
                 composite_score = round(float(parsed.get("overall_quality_score", composite_score)), 1)

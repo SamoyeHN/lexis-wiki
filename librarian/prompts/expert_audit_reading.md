@@ -66,11 +66,11 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - A valid elimination rationale MUST cite passage facts, scope boundaries, or logical contradictions.
 
 5. **QUALITATIVE RIGOR & SUMMARY VERDICT (`summary_verdict`)**:
-   - 🧠 **QUALITATIVE AUDIT FOCUS (Zero Arithmetic Stress)**: Focus 100% of your cognitive reasoning on qualitative diagnostic auditing:
+   - 🧠 **QUALITATIVE AUDIT FOCUS (Zero Arithmetic Stress)**: Focus 100% of your cognitive reasoning on qualitative diagnostic auditing across **ALL** presented items in sequential order (never omit or truncate items):
      * Independent textual reasoning & evidence resolution (`blind_solved_index` & `confidence`)
      * Strict single-fit validation (`single_fit_valid: true/false`, ruthlessly vetoing scope shifts and alternative keys)
-     * Objective cognitive distractor plausibility (`High`, `Medium`, `Low (Flawed)`)
-   - ⚙️ **AUTOMATED CODE QUANTIFICATION**: The assessment system deterministically calculates numerical scores, pass thresholds, and arithmetic averages directly from your qualitative findings. You may supply nominal defaults for `pedagogical_score` and `overall_quality_score`.
+     * Objective cognitive distractor plausibility (`is_plausible`, `is_double_key`, `trap_type`)
+   - ⚙️ **AUTOMATED CODE QUANTIFICATION**: The assessment system deterministically calculates quiz-level pass/fail verdicts and arithmetic averages in code after your per-item audit.
    - 🎯 **SUMMARY VERDICT**: Deliver a concise, authoritative pedagogical summary in `summary_verdict` synthesizing the passage fidelity, distractor quality, and citing any flawed items.
 
 6. **SURGICAL CURE ACTION MAPPING SUMMARY (`triage_action` & `cured_question`)**:

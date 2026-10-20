@@ -91,6 +91,8 @@ def _type_to_schema(t: Any, field_name: str = None, metadata: Dict[str, Any] = N
         actual_types = [a for a in args if a is not type(None)]
         if len(actual_types) == 1:
             schema = _type_to_schema(actual_types[0], include_descriptions=include_descriptions)
+            if type(None) in args and metadata.get("nullable") and isinstance(schema.get("type"), str):
+                schema["type"] = [schema["type"], "null"]
         else:
             schema = {"type": "string"} # Fallback
     else:
@@ -460,7 +462,7 @@ class QuizQuestion:
     question: str = dataclasses.field(default="", metadata={"minLength": 1})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
-    definition: str = dataclasses.field(default="", metadata={"minLength": 1})
+    definition: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     explanation: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
@@ -613,14 +615,10 @@ class QuestionAuditItem:
     pedagogical_score: int = dataclasses.field(default=100, metadata={"minimum": 0, "maximum": 100})
     diagnostic_feedback: str = dataclasses.field(default="", metadata={"minLength": 1})
     triage_action: Literal["PASS", "REPAIR", "REWRITE"] = dataclasses.field(default="PASS")
-    cured_question: Optional[Dict[str, Any]] = dataclasses.field(default=None)
+    cured_question: Optional[Dict[str, Any]] = dataclasses.field(default=None, metadata={"nullable": True})
 
 @dataclasses.dataclass
 class QuizQualityAuditReport:
-    quiz_title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    overall_quality_score: int = dataclasses.field(default=100, metadata={"minimum": 0, "maximum": 100})
-    pass_audit: bool = dataclasses.field(default=True)
-    blind_solve_accuracy: float = dataclasses.field(default=1.0)
     questions: List[QuestionAuditItem] = dataclasses.field(default_factory=list)
     summary_verdict: str = dataclasses.field(default="", metadata={"minLength": 1})
 

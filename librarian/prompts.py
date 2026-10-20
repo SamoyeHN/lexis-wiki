@@ -98,10 +98,15 @@ class Prompts:
         
         files_updated = 0
         for name, dataclass_cls in cls.INTERNAL_SCHEMAS.items():
+            json_path = factory_dir / f"{name}.json"
+            if name in cls._HAND_MANAGED_TEMPLATES and json_path.exists():
+                # Hand-managed modality-specific audit prompt and schema: keep
+                # both existing .json (cured_question & trap_type) and .md untouched.
+                continue
+
             # 1. Generate JSON Schema
             schema_dict = get_json_schema(dataclass_cls, include_descriptions=False)
             schema_str = json.dumps(schema_dict, indent=2, ensure_ascii=False)
-            json_path = factory_dir / f"{name}.json"
             
             json_changed = True
             if json_path.exists():
@@ -119,8 +124,6 @@ class Prompts:
                 files_updated += 1
             
             if name in cls._HAND_MANAGED_TEMPLATES:
-                # Hand-managed audit prompt (no inline definition): keep the
-                # existing .md untouched so we never clobber it with the stub.
                 continue
             # 2. Generate Clean Markdown Template
             md_path = factory_dir / f"{name}.md"
@@ -224,42 +227,29 @@ class Prompts:
             ),
             "vocabulary_quiz": (
                 "### SYSTEM ###\n"
-                "You are an expert ESL Lexical Assessment Specialist who designs standardized, fair, and diagnostically rigorous CEFR-aligned vocabulary assessments.\n\n"
+                "You are an expert ESL Lexical Assessment Specialist who crafts natural, CEFR-aligned sentences and diagnostic item explanations for multiple-choice vocabulary assessments.\n\n"
                 "### USER ###\n"
-                "Create a high-quality multiple-choice vocabulary assessment from the supplied vocabulary list.\n\n"
-                "**PEDAGOGICAL ASSESSMENT MANDATES**\n\n"
-                "1. **Count & Coverage**:\n"
-                "   - Generate EXACTLY {count} questions testing {count} unique single-word vocabulary items exclusively from the supplied list. No duplicates, derivatives, or fabricated targets.\n"
-                "   - ⚠️ **ACTIVE TARGET USAGE MANDATE**: `target_word` MUST match `options[correct_answer_index]` character-for-character. The word placed into the blank `____` must perfectly agree with the declared target's part of speech and required inflectional form, and the stem must physically DEMAND that form: never place a declared past tense into a 'will ____' / 'to ____' / 'has ____' slot, and never offer a bare base form where the blueprint declares an inflected one.\n\n"
-                "2. **Question (Contextual & Structural Anchoring)**:\n"
-                "   - Write a brand-new compound/complex academic sentence at CEFR {cefr_level} containing a subordinate or coordinate clause (e.g., concession, condition, cause, or contrast).\n"
-                "   - 🔒 **STRICT SINGLE BLANK MANDATE**: Each question stem MUST contain EXACTLY ONE single continuous blank `____` (strictly four underscores, no quotation marks around question). ❌ MULTIPLE BLANKS ARE ABSOLUTELY PROHIBITED: NEVER include two or more blanks in a single sentence (e.g., no '____ ... ____').\n"
-                "   - 🚫 **NO COPYING INPUT EXAMPLES**: NEVER copy, adapt, or fill-in-the-blank mask any sentence from the input (neither 'Quoted Sentence' nor 'Example Usage'), and NEVER reuse the wording of a blueprint evidence line ('Authentic Corpus Blueprint', 'Curriculum Quote (licensed)' or 'Curriculum Quote (display-only)'). Model the SYNTAX and REGISTER of a licensed corpus model only — a 5-word stretch of its wording in your stem is a fatal defect, and a display-only quote may not be reused at all.\n"
-                "   - 🎯 **Strict Part-of-Speech Slot Matching**: The blank (____) MUST grammatically require the exact part of speech and syntactic role of the target word. If the target is a noun, the blank must strictly require a noun (e.g., 'The ____ of the...'). Do NOT place a noun into a verb or adjective slot. Every distractor must also be able to occupy that same slot, so no option may be solved by morphology alone.\n"
-                "   - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its morphological derivatives must NEVER appear anywhere in the stem outside the blank `____`.\n"
-                "   - ⚓ **MANDATORY CONTEXT CLUES & PSYCHOMETRIC GROUNDING**:\n"
-                "     * **Triangulated Context Clues**: Every sentence MUST embed at least two independent, mutually reinforcing clue dimensions (e.g. situational role + concrete setting/props, or observable action + affective/evaluative reaction) to form an airtight contextual triangle.\n"
-                "     * **Cognitive Polarity & Contrast Constraints**: Prefer compound/complex sentences with concessive, conditional, or cause-and-effect turns (e.g. *Although / Despite [obstacle]... [positive compensatory action: the blank]*). This logically and physically forces a unique semantic fit.\n"
-                "     * **Natural Scenarios over Stiff Collocations**: Stems should present authentic, idiomatic scenarios rather than forcing rare or stiff collocation formulas. Single-fit validity must rely on objective situational logic and definition alignment that naturally rules out all 3 distractors.\n\n"
-                "3. **Options (Target & 3 Structured Objective Distractors)**:\n"
-                "   - **Target**: `target_word` must strictly equal `options[correct_answer_index]`. Multi-word units must be tested as indivisible wholes.\n"
-                "   - **Grammatical Homogeneity & Authenticity**: All 4 options must be grammatically correct, authentic English words or established expressions sharing the identical grammatical category (part of speech) and the EXACT inflection required by the blank (e.g., all past participles `-ed`, all plurals `-s`, all `-ing`).\n"
-                "   - 🚫 **STRICT BANS (ZERO-TOLERANCE DEFECTS)**:\n"
-                "     * **NO DUPLICATE OPTIONS**: Every option across A, B, C, D must be 100% unique within each question. Having duplicate options (e.g. A, C, D all 'brochure') is a fatal flaw.\n"
-                "     * **NO IN-LIST RECYCLING**: NEVER recycle or pull other unrelated vocabulary items from the supplied input list to fill distractor slots. Do NOT use words like 'brochure', 'enclosure', or 'siege' repeatedly across unrelated questions. Distractors must be authentic, independently generated English words tailored strictly to the sentence context.\n"
-                "     * **NO SYNONYM PILES**: NEVER supply interchangeable synonyms. Distractors cannot merely differ by subtle tone or degree of formality.\n"
-                "   - 🎯 **MANDATORY 3-VECTOR DISTRACTOR TAXONOMY**:\n"
-                "     Each question's 3 distractors MUST consist of:\n"
-                "     1. *Trap 1 (Antonym / Logical Polarity Clash)*: directly contradicts the cause/contrast/concession logic established in the sentence clues.\n"
-                "     2. *Trap 2 (Collocation / Syntax Clash)*: plausible meaning in the general topic, but violates the blank's dependent preposition, verb valency, or conventional lexical pairing.\n"
-                "     3. *Trap 3 (Domain / Semantic Category Mismatch)*: shares the general educational/academic register, but denotes a completely distinct action, entity, or attribute unsuited to this specific functional role.\n\n"
-                "4. **Design Audit & Explanation**:\n"
-                "   - `design_audit`: Keep concise (under 20 words) using the tag chain format:\n"
-                "     `AUDIT: [Target Word] -> [Syntactic Slot Anchor / Clue] -> [Traps: Antonym / Collocation Clash / Domain Mismatch]`\n"
-                "     (e.g. `AUDIT: [comply] -> with [NP] -> Collocation Clash (to/for)`). DO NOT write paragraphs or quote full sentences here.\n"
-                "   - `explanation`: State contrastive, objective reasoning explaining why the target fits and explicitly why each distractor is objectively disqualified (grammatical clash, preposition failure, or logical contradiction). You may refer to choices using standard option labels ('Option A', 'Option B', 'Option C', 'Option D') and/or by quoting their specific wording.\n"
-                "   - 🎲 **RANDOMIZED ANSWER KEY BALANCE**: Distribute `correct_answer_index` evenly across 0 (A), 1 (B), 2 (C), and 3 (D) throughout the quiz. Never place all correct answers on the same index.\n"
-                "   - `definition`: Concise dictionary meaning of the target in this context.\n\n"
+                "Create a high-quality multiple-choice vocabulary assessment from the supplied target specifications.\n\n"
+                "**CORE EXECUTION MANDATES**\n\n"
+                "1. **Count & Specification Alignment**:\n"
+                "   - Generate EXACTLY {count} questions corresponding strictly to the {count} target items provided below.\n"
+                "   - Do NOT omit items, reorder items, or invent new target words.\n\n"
+                "2. **Immutable Input Contract (Prescribed Options & Index)**:\n"
+                "   - 🔒 **COPY PRESCRIBED OPTIONS VERBATIM**: For each item, copy `prescribed_options` directly into `options` character-for-character. Do NOT alter, substitute, add, or shuffle words.\n"
+                "   - 🔒 **PRESERVE CORRECT ANSWER INDEX**: Set `correct_answer_index` to match the exact index specified in the item blueprint. The target word `target_word` MUST match `options[correct_answer_index]` exactly.\n\n"
+                "3. **Question Stem Crafting (Natural Scenarios & Slot Precision)**:\n"
+                "   - **Target Blank**: Each question stem MUST contain EXACTLY ONE single blank written as `____` (strictly four underscores).\n"
+                "   - 🎯 **Execute the Item Micro-Task & Slot Agreement (Declared Inflection Is Binding)**: The blank `____` must grammatically function as the exact Part of Speech (`noun`, `verb`, `adj`, `adv`, `phrasal verb`, `collocation`, `set phrase`, `idiom`) declared in the item blueprint, and every prescribed option is already cast in the target's inflectional form to fit that slot. Strictly follow the syntactic frame, inflectional constraints, and lexical clues in `🎯 Micro-Task for LLM` — if a collocational anchor or `Pattern` frame is specified, faithfully retain those exact anchor words in the stem without dropping or replacing them.\n"
+                "   - **Authentic Scenarios at CEFR {cefr_level}**: Construct natural, communicative or academic sentences suitable for CEFR {cefr_level} learners. Do not write unnecessarily convoluted philosophical clauses for foundational A1–B1 levels.\n"
+                "   - 🚫 **NO STEM TARGET LEAKAGE**: The target word or its derivatives must NEVER appear anywhere in the stem outside the blank `____`.\n"
+                "   - 🚫 **NO ARTICLE LEAKAGE**: NEVER write `a ____` or `an ____` before the blank if the 4 options contain mixed initial vowels and consonants. Use `the ____`, possessive, or plural constructions instead.\n"
+                "   - 🚫 **NO COPYING INPUT EXAMPLES OR MODEL SENTENCES**: Every stem must be original. NEVER copy any sentence, clause, or run of 4 or more consecutive words from the blueprint's `Model: \"...\"` example or `Contextual Definition`. The `Model:` example illustrates syntax only — NEVER copy its wording or let its singular/plural morphology alter the declared target inflection.\n"
+                "   - 🚫 **NO SCAFFOLDING OR META-INSTRUCTION LEAKAGE**: NEVER output instruction strings (such as `\"Fit into frame...\"`, `\"Plural noun slot required...\"`, `\"Complete predicate required...\"`, `\"Write a natural sentence...\"`, or `\"Model:\"`) into the question stem. The stem MUST be a pure, natural context sentence containing exactly one `____`.\n\n"
+                "4. **Explanations & Design Audit**:\n"
+                "   - `explanation`: Provide a concise, objective pedagogical explanation stating why the correct target fits the sentence context, and explicitly distinguishing why each of the other 3 options is disqualified (syntactic clash, preposition mismatch, or semantic contradiction). Quote the exact wording of each option.\n"
+                "   - 🔒 **NO DISTRACTOR SELF-DEFINITION**: Never justify an option by simply stating what that option itself means. Each disqualification must contrast the distractor against the target's locked sense in this sentence, without copying the `Contrast: vs '...'` hint verbatim.\n"
+                "   - `design_audit`: Provide a compact audit tag chain (under 15 words):\n"
+                "     `AUDIT: [Target Word] -> [Part of Speech] -> [Syntactic Anchor/Clue]`\n\n"
                 "CONTENT:\n{vocabulary_content}\n"
             ),
             "reading_quiz": (
@@ -478,13 +468,14 @@ class Prompts:
                 "     * Ask: *'Does any NON-key option produce a MORE natural, more idiomatic, or more contextually precise sentence?'*\n"
                 "     * If YES → the key is SUBOPTIMAL or WRONG. Set `single_fit_valid: false` and explicitly flag in `diagnostic_feedback`: 'Key suboptimal: [option X] is a stronger/more natural collocation in this context.'\n"
                 "     * Only confirm the key if it is the UNIQUELY BEST fit, not merely 'acceptable' or 'present in the vocabulary list'.\n\n"
-                "6. **SCORE DIFFERENTIATION & VERDICT (`overall_quality_score` & `pass_audit`)**:\n"
+                "6. **SCORE DIFFERENTIATION & SUMMARY VERDICT (`pedagogical_score` & `summary_verdict`)**:\n"
+                "   - Evaluate **ALL** presented items in sequential order without omitting or truncating any item.\n"
                 "   - You MUST assign meaningfully differentiated `pedagogical_score` values across questions based on objective elimination rigor:\n"
                 "     - 90–100: All 3 distractors eliminated by HARD criteria (syntax, dependent prepositions, strict semantic contradiction).\n"
                 "     - 75–89: 1–2 distractors eliminated by hard criteria, 1 eliminated by softer criteria (register, collocational frequency gap).\n"
                 "     - 60–74: A distractor is defensible (potential double-key); item is usable but not ideal.\n"
                 "     - < 60: Clear double-key, triple-key, wrong/suboptimal key, or ungrammatical stem.\n"
-                "   - **PASS REQUIREMENT**: Set `pass_audit: true` ONLY IF `overall_quality_score >= 80` AND every question has `single_fit_valid == true` AND no question has grammatical/syntactic collapse or double-keys. If even ONE question has an invalid single fit or wrong key, `pass_audit` MUST be `false`.\n\n"
+                "   - Synthesize the audit findings in `summary_verdict`, explicitly citing any items where `single_fit_valid` is `false`.\n\n"
                 "CONTENT:\n{content}\n"
             ),
         }

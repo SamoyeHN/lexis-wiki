@@ -1,21 +1,6 @@
 {
   "type": "object",
   "properties": {
-    "quiz_title": {
-      "type": "string",
-      "minLength": 1
-    },
-    "overall_quality_score": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 100
-    },
-    "pass_audit": {
-      "type": "boolean"
-    },
-    "blind_solve_accuracy": {
-      "type": "number"
-    },
     "questions": {
       "type": "array",
       "items": {
@@ -121,7 +106,10 @@
             ]
           },
           "cured_question": {
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -143,10 +131,6 @@
     }
   },
   "required": [
-    "quiz_title",
-    "overall_quality_score",
-    "pass_audit",
-    "blind_solve_accuracy",
     "questions",
     "summary_verdict"
   ],

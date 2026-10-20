@@ -234,10 +234,7 @@ class ExtractionRunnerMixin:
         c_count = compile_defaults.get("concepts", 3)
         max_p = compile_defaults.get("max_parallel", 3)
 
-        # 1. Prepare Extraction Tasks
-        v_prompt_template, v_schema = Prompts.get("extract_vocabulary")
-        e_prompt_template, e_schema = Prompts.get("extract_expressions")
-        g_prompt_template, g_schema = Prompts.get("extract_grammar")
+        # 1. Prepare Extraction Tasks (Summary & MindMap use LLM; Vocabulary, Expressions & Grammar are 100% deterministic)
         s_prompt_template, s_schema = Prompts.get("extract_summary")
         m_prompt_template, m_schema = Prompts.get("extract_mindmap")
 
@@ -246,9 +243,10 @@ class ExtractionRunnerMixin:
         indexed_content, sentence_pool = LinguisticEngine.tokenize_and_index_sentences(raw_source_text)
         self._last_sentence_pool = sentence_pool
 
-        v_syllabus_sec = ""
-        v_target_num = v_count
+        target_vocab_count = v_count
+        target_expr_count = e_count
         f12_suppressed_atoms: List[Tuple[str, str]] = []
+        cleaned_syllabus_vocab: List[str] = []
         if syllabus_vocab:
             # Hold back syllabus words that are constituents of declared expressions (restored later if expression fails to ship)
             f12_parent: Dict[str, str] = {}
@@ -266,7 +264,6 @@ class ExtractionRunnerMixin:
                     continue
                 pending_vocab.append(w)
 
-            cleaned_syllabus_vocab = []
             for item in pending_vocab:
                 w_clean = item.strip().lower()
                 if not w_clean or w_clean in cleaned_syllabus_vocab:
@@ -281,146 +278,15 @@ class ExtractionRunnerMixin:
                     continue
                 cleaned_syllabus_vocab.append(w_clean)
 
-            # Extraction counts strictly respect compile_defaults (v_count) from wiki_config.json
-            v_target_num = v_count
             logger.info(f"📋 Detected {len(syllabus_vocab)} syllabus vocabulary item(s) (purified to {len(cleaned_syllabus_vocab)} items, target count: {v_count}).")
 
-            vocab_bullets = []
-            for w in cleaned_syllabus_vocab[:v_target_num]:
-                clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
-                target_tok = clean_w.replace('-', '')
-                matching_sent = ""
-                matching_sid = ""
-                if sentence_pool:
-                    for sid, s in sentence_pool.items():
-                        s_lower = s.lower()
-                        if (LinguisticEngine.text_contains_form(s, clean_w)
-                                or (target_tok and target_tok in s_lower.replace('-', ''))):
-                            matching_sent = s
-                            matching_sid = sid
-                            break
-                pos = LinguisticEngine.resolve_item_pos(clean_w, matching_sent) if matching_sent else "noun"
-                sid_tag = f" [{matching_sid}]" if matching_sid else ""
-                vocab_bullets.append(f"- {w} ({pos}){sid_tag}")
-
-            v_syllabus_sec = (
-                f"\n### TARGET VOCABULARY LIST ###\n"
-                f"The text has {len(vocab_bullets)} syllabus items:\n"
-                + "\n".join(vocab_bullets) + "\n\n"
-                f"Extract all {len(vocab_bullets)} syllabus items listed above. For each word, adopt the exact headword into 'word', copy its authentic sentence into 'quoted_sentence' (using its pre-located sentence anchor), and craft an academic definition and new example_usage.\n\n"
-            )
-
-        e_syllabus_sec = ""
         if syllabus_expressions:
             logger.info(f"📋 Detected {len(syllabus_expressions)} syllabus expression/phrase item(s) in source markdown (target count: {e_count}).")
-            expr_bullets = "\n".join([f"- {e}" for e in syllabus_expressions[:e_count]])
-            e_syllabus_sec = (
-                f"\n### TARGET EXPRESSIONS LIST ###\n"
-                f"The text has {len(syllabus_expressions[:e_count])} syllabus multi-word candidate items:\n"
-                f"{expr_bullets}\n\n"
-                f"Extract all designated syllabus expressions present in the passage below. For each expression, adopt its canonical headword into 'word', copy its authentic sentence into 'quoted_sentence', and craft an academic definition and new example_usage.\n\n"
-            )
-
-        g_syllabus_sec = ""
         if syllabus_grammar:
             logger.info(f"📋 Detected {len(syllabus_grammar)} syllabus grammar pattern(s) in source markdown.")
-            grammar_bullets = "\n".join([f"- {g}" for g in syllabus_grammar])
-            g_syllabus_sec = (
-                f"\n### TARGET GRAMMAR TOPICS ###\n"
-                f"The text has {len(syllabus_grammar)} syllabus grammar pattern candidates:\n"
-                f"{grammar_bullets}\n\n"
-                f"From these syllabus topics, prioritize and extract the most prominent advanced grammar patterns (up to {g_count} patterns total) from the text. For each pattern, find its exact verbatim quote in the passage and formulate its structural blueprint.\n\n"
-            )
 
-        # Deterministically mine genuine academic grammar skeletons from sentence pool via spaCy
-        g_cefr_band = LinguisticEngine.resolve_grammar_cefr_band(raw_source_text)
-        grammar_skeletons = LinguisticEngine.mine_grammar_skeletons(
-            sentence_pool, target_count=g_count, syllabus_grammar=syllabus_grammar, cefr_band=g_cefr_band
-        )
-        g_skeletons_sec = ""
-        if grammar_skeletons:
-            logger.info(f"🏛️ Mined {len(grammar_skeletons)} deterministic academic grammar skeletons from text.")
-            skeleton_bullets = []
-            for idx, s in enumerate(grammar_skeletons, 1):
-                cat = s.get("category") or "Academic Syntax"
-                skeleton_bullets.append(
-                    f"{idx}. [{s['sid']}] ({cat}) Formula: `{s['pattern_formula']}`"
-                )
-            g_skeletons_sec = (
-                f"\n### DETERMINISTIC TARGET PATTERNS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS) ###\n"
-                f"The following {len(grammar_skeletons)} academic structural patterns have been mathematically identified in the passage.\n"
-                f"For EACH pattern below, locate the sentence whose [S-ID] is indicated in brackets in the passage above, copy its authentic full sentence into 'quote', adopt its canonical formula into 'pattern_formula', and craft the pedagogical fields (pedagogical_function, imitation_example, common_mistakes):\n\n"
-                + "\n".join(skeleton_bullets) + "\n\n"
-            )
-
-        # Deterministically mine genuine academic expressions and collocations
-        target_expr_count = e_count
-        expression_skeletons = LinguisticEngine.mine_expression_skeletons(
-            raw_source_text,
-            target_count=target_expr_count,
-            syllabus_expressions=syllabus_expressions
-        )
-        e_skeletons_sec = ""
-        if expression_skeletons:
-            logger.info(f"💬 Mined {len(expression_skeletons)} deterministic academic expression/collocation skeletons from text.")
-            expr_skel_bullets = []
-            for idx, s in enumerate(expression_skeletons, 1):
-                pos_type = s.get("type") or s.get("pos") or "collocation"
-                expr_skel_bullets.append(
-                    f"{idx}. [{s['sid']}] ({pos_type}) Formula: `{s['pattern_formula']}`"
-                )
-            e_skeletons_sec = (
-                f"\n### DETERMINISTIC TARGET EXPRESSIONS (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & ACL) ###\n"
-                f"The following {len(expression_skeletons)} high-value academic expressions, collocations, and phrasal units have been mathematically verified in the passage.\n"
-                f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt its formula into 'word', and craft its pedagogical definition and example_usage:\n\n"
-                + "\n".join(expr_skel_bullets) + "\n\n"
-            )
-
-        # Deterministically mine genuine academic vocabulary targets
-        v_skeletons_sec = ""
-        vocab_skeletons = []
-        if not syllabus_vocab:
-            vocab_skeletons = LinguisticEngine.mine_vocabulary_skeletons(raw_source_text, target_count=v_count)
-            if vocab_skeletons:
-                logger.info(f"📚 Mined {len(vocab_skeletons)} deterministic academic vocabulary skeletons (AWL) from text.")
-                v_skel_bullets = []
-                for idx, s in enumerate(vocab_skeletons, 1):
-                    pos = s.get("part_of_speech") or "noun"
-                    awl_tag = " [AWL]" if s.get("is_awl") else ""
-                    v_skel_bullets.append(
-                        f"{idx}. [{s['sid']}] **{s['word']}** ({pos}){awl_tag}"
-                    )
-                v_skeletons_sec = (
-                    f"\n### DETERMINISTIC TARGET VOCABULARY (PRE-EXTRACTED BY COMPUTATIONAL LINGUISTICS & AWL) ###\n"
-                    f"The following {len(vocab_skeletons)} high-value academic headwords have been mathematically extracted and lemmatized from the passage.\n"
-                    f"For EACH target below, locate its sentence in the passage above, copy its authentic full sentence into 'quoted_sentence', adopt the base lemma headword into 'word', and craft its pedagogical definition and example_usage:\n\n"
-                    + "\n".join(v_skel_bullets) + "\n\n"
-                )
-
-        # Prepare kwargs with indexed content for extractions (with pristine fallback)
-        target_vocab_count = v_count
-        v_kwargs = {
-            "content": indexed_content or raw_source_text,
-            "count": target_vocab_count,
-            "syllabus_section": v_syllabus_sec or v_skeletons_sec
-        }
-        e_kwargs = {
-            "content": indexed_content or raw_source_text,
-            "count": len(expression_skeletons) if expression_skeletons else e_count,
-            "syllabus_section": e_skeletons_sec or e_syllabus_sec
-        }
-        g_kwargs = {
-            "content": indexed_content or raw_source_text,
-            "count": len(grammar_skeletons) if grammar_skeletons else g_count,
-            "syllabus_section": g_skeletons_sec or g_syllabus_sec
-        }
         s_kwargs = {"content": raw_source_text, "count": c_count}
         m_kwargs = {"content": raw_source_text}
-
-        # Format prompts directly via explicit placeholders
-        v_prompt_formatted = v_prompt_template.format(**v_kwargs)
-        e_prompt_formatted = e_prompt_template.format(**e_kwargs)
-        g_prompt_formatted = g_prompt_template.format(**g_kwargs)
 
         tasks = [
             ("summary", s_prompt_template.format(**s_kwargs), self._interpolate_schema(s_schema, s_kwargs)),
@@ -481,10 +347,22 @@ class ExtractionRunnerMixin:
             if run_expressions:
                 logger.info(f"⚡ Deterministic Expressions Extraction executing locally via ACL & Pedagogical Lexicon/WordNet (0 tokens)...")
                 from ..schemas import ExpressionsExtraction, ExpressionItem
+                vocab_excl_words = (
+                    {v.word.strip().lower() for v in det_vocab_data.vocabulary if v.word}
+                    if det_vocab_data and det_vocab_data.vocabulary
+                    else set()
+                )
+                vocab_excl_defs = (
+                    {v.definition.strip().lower() for v in det_vocab_data.vocabulary if v.definition}
+                    if det_vocab_data and det_vocab_data.vocabulary
+                    else set()
+                )
                 raw_e_items = LinguisticEngine.extract_deterministic_expressions(
                     raw_source_text,
                     target_count=target_expr_count,
-                    syllabus_expressions=syllabus_expressions
+                    syllabus_expressions=syllabus_expressions,
+                    exclude_words=vocab_excl_words,
+                    exclude_definitions=vocab_excl_defs,
                 )
                 e_items_list = []
                 for it in raw_e_items:
@@ -529,7 +407,9 @@ class ExtractionRunnerMixin:
                     supplementary_items = LinguisticEngine.extract_deterministic_expressions(
                         raw_source_text,
                         target_count=target_expr_count + 5,
-                        syllabus_expressions=None
+                        syllabus_expressions=None,
+                        exclude_words=vocab_excl_words,
+                        exclude_definitions=vocab_excl_defs,
                     )
                     for sup in supplementary_items:
                         if len(e_items_list) >= target_expr_count:
@@ -630,7 +510,7 @@ class ExtractionRunnerMixin:
         if run_grammar:
             logger.info(f"⚡ Deterministic Grammar Extraction executing locally via spaCy & COBUILD Grammar Profiles (0 tokens)...")
             from ..schemas import GrammarExtraction, GrammarItem
-            target_g_count = len(grammar_skeletons) if grammar_skeletons else g_count
+            target_g_count = g_count
             raw_g_items = LinguisticEngine.extract_deterministic_grammar(
                 raw_source_text,
                 sentence_pool=sentence_pool,
@@ -697,47 +577,6 @@ class ExtractionRunnerMixin:
 
             # Merge expressions into vocabulary if both exist
             if vocab_data:
-                # Level 1 Code Gate: Snap extracted vocabulary items to authentic syllabus items
-                # (Anti-hallucination & anti-truncation: like sentence snapping, truth comes from syllabus_vocab)
-                def snap_to_syllabus_word(raw_word: str, audit_str: str, quoted_sent: str, targets: List[str]) -> str:
-                    if not targets:
-                        return raw_word
-                    raw_clean = raw_word.strip().lower()
-                    # 1. Exact match
-                    for t in targets:
-                        if raw_clean == t.lower():
-                            return t
-                    # 2. Match declared target in design_audit (e.g. "AUDIT: [S-14] -> re-schedule -> VERBATIM_CONFIRMED")
-                    audit_lower = audit_str.lower()
-                    for t in targets:
-                        t_lower = t.lower()
-                        if f"-> {t_lower} ->" in audit_lower or f"-> {t_lower}" in audit_lower or f"[{t_lower}]" in audit_lower:
-                            return t
-                    # 3. Punctuation/hyphen-insensitive match (e.g. "reschedule" or "re" vs "re-schedule")
-                    raw_no_punct = re.sub(r'[^a-z0-9]', '', raw_clean)
-                    for t in targets:
-                        t_no_punct = re.sub(r'[^a-z0-9]', '', t.lower())
-                        if raw_no_punct and raw_no_punct == t_no_punct:
-                            return t
-                        # If raw_word is a prefix of a hyphenated target mentioned in audit or quote (e.g. 're' -> 're-schedule')
-                        if t.lower().startswith(raw_clean + "-") and (t.lower() in audit_lower or t.lower() in quoted_sent.lower()):
-                            return t
-                    return raw_word
-
-                raw_vocab_items = getattr(vocab_data, "vocabulary", []) if dataclasses.is_dataclass(vocab_data) else vocab_data.get("vocabulary", [])
-                if syllabus_vocab:
-                    for it in raw_vocab_items:
-                        cur_w = it.word if dataclasses.is_dataclass(it) else it.get("word", "")
-                        cur_aud = it.design_audit if dataclasses.is_dataclass(it) else it.get("design_audit", "")
-                        cur_quote = it.quoted_sentence if dataclasses.is_dataclass(it) else it.get("quoted_sentence", "")
-                        snapped_w = snap_to_syllabus_word(cur_w, cur_aud, cur_quote, syllabus_vocab)
-                        if snapped_w != cur_w:
-                            logger.info(f"🎯 Level 1 Code Gate: Snapped extracted word '{cur_w}' -> syllabus ground truth '{snapped_w}'")
-                            if dataclasses.is_dataclass(it):
-                                it.word = snapped_w
-                            else:
-                                it["word"] = snapped_w
-
                 merged_vocab = []
                 if dataclasses.is_dataclass(vocab_data):
                     merged_vocab.extend(getattr(vocab_data, "vocabulary", []))
@@ -745,92 +584,26 @@ class ExtractionRunnerMixin:
                     merged_vocab.extend(vocab_data.get("vocabulary", []))
 
                 if expressions_data:
-                    def _resolve_slotted_word(expr_obj):
-                        w = expr_obj.get("word", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "word", "")
-                        aud = expr_obj.get("design_audit", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "design_audit", "")
-                        quote = expr_obj.get("quoted_sentence", "") if isinstance(expr_obj, dict) else getattr(expr_obj, "quoted_sentence", "")
-
-                        # 1. Direct alignment with deterministic expression_skeletons
-                        if expression_skeletons:
-                            w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
-                            w_toks = set(re.findall(r'[a-zA-Z]+', w_clean))
-                            is_multi_or_slotted = len(w_toks) > 1 or bool(re.search(r"\[(?:one's|oneself|sth|sb|sth/sb|sb/sth)\]", w, re.IGNORECASE))
-                            # 1.1 Match by token similarity with skeleton phrase
-                            if w_toks and is_multi_or_slotted:
-                                for skel in expression_skeletons:
-                                    skel_toks = set(re.findall(r'[a-zA-Z]+', skel.get("phrase", "").lower()))
-                                    if w_toks and skel_toks and (w_toks == skel_toks or (len(skel_toks) > 1 and len(w_toks) > 1 and (w_toks.issubset(skel_toks) or skel_toks.issubset(w_toks)))):
-                                        return skel.get("pattern_formula", w), skel.get("type", "collocation")
-
-                            # 1.2 Match by sid only if the skeleton phrase matches the expression headword or audit
-                            sid_match = re.search(r'\bS-(\d+)\b', f"{aud} {quote}", re.IGNORECASE)
-                            if sid_match:
-                                target_sid = f"S-{sid_match.group(1)}"
-                                for skel in expression_skeletons:
-                                    if skel.get("sid", "").upper() == target_sid.upper():
-                                        skel_phrase = skel.get("phrase", "").lower()
-                                        skel_toks = set(re.findall(r'[a-zA-Z]+', skel_phrase))
-                                        if skel_phrase and (skel_phrase in f"{w} {aud}".lower() or (w_toks and skel_toks and w_toks.intersection(skel_toks))):
-                                            return skel.get("pattern_formula", w), skel.get("type", "collocation")
-
-                        valid_slot_pattern = r'\[(something|somebody|someone|one\'s|one|entity|domain|factor|doing something|clause|[a-z_]+)\]|\bone\'s\b'
-                        pos_type = expr_obj.get("part_of_speech", "collocation") if isinstance(expr_obj, dict) else getattr(expr_obj, "part_of_speech", "collocation")
-                        if ("[" not in w and "one's" not in w) and ("[" in aud or "one's" in aud):
-                            parts = [p.strip() for p in aud.replace("->", "➔").split("➔")]
-                            candidate_steps = parts[1:] if len(parts) > 1 else parts
-                            for p in candidate_steps:
-                                if ("[" in p or "one's" in p):
-                                    cand = re.sub(r'^(?:AUDIT|DRAFT|STEP\s*\d*)\s*:\s*', '', p, flags=re.IGNORECASE).strip()
-                                    candidate = cand.split(" -")[0].split(" (")[0].strip()
-                                    if candidate.startswith("[") and candidate.endswith("]"):
-                                        inner = candidate[1:-1].strip()
-                                        if not re.search(valid_slot_pattern, inner, re.IGNORECASE):
-                                            continue
-                                    if not re.search(valid_slot_pattern, candidate, re.IGNORECASE):
-                                        continue
-                                    cand_tokens = re.findall(r'[a-zA-Z]+', candidate.replace("[", "").replace("]", ""))
-                                    w_tokens = re.findall(r'[a-zA-Z]+', w)
-                                    if cand_tokens and w_tokens and cand_tokens[0].lower() == w_tokens[0].lower():
-                                        return candidate, pos_type
-                        return w, pos_type
-
+                    from ..schemas import VocabularyItem
                     expr_list = getattr(expressions_data, "expressions", []) if dataclasses.is_dataclass(expressions_data) else expressions_data.get("expressions", [])
                     for expr in expr_list:
-                        resolved_word, resolved_pos = _resolve_slotted_word(expr)
-                        while resolved_word.startswith("[") and resolved_word.endswith("]"):
-                            depth = 0
-                            matched_end = False
-                            for idx, char in enumerate(resolved_word):
-                                if char == "[": depth += 1
-                                elif char == "]":
-                                    depth -= 1
-                                    if depth == 0:
-                                        if idx == len(resolved_word) - 1: matched_end = True
-                                        break
-                            if matched_end:
-                                resolved_word = resolved_word[1:-1].strip()
-                            else:
-                                break
                         if isinstance(expr, dict):
                             mapped_item = {
                                 "design_audit": expr.get("design_audit", ""),
-                                "word": resolved_word,
-                                "part_of_speech": resolved_pos,
+                                "word": expr.get("word", ""),
+                                "part_of_speech": expr.get("part_of_speech", "collocation"),
                                 "definition": expr.get("definition", ""),
                                 "quoted_sentence": expr.get("quoted_sentence", ""),
                                 "example_usage": expr.get("example_usage", ""),
                             }
                         else:
-                            from ..schemas import VocabularyItem
                             mapped_item = VocabularyItem(
                                 design_audit=getattr(expr, "design_audit", ""),
-                                word=resolved_word,
+                                word=getattr(expr, "word", ""),
                                 definition=getattr(expr, "definition", ""),
                                 quoted_sentence=getattr(expr, "quoted_sentence", ""),
                                 example_usage=getattr(expr, "example_usage", ""),
-                                # The expression type mined from the skeleton is the label
-                                # this row carries; it is not re-derived from the headword.
-                                part_of_speech=resolved_pos
+                                part_of_speech=getattr(expr, "part_of_speech", "collocation")
                             )
                         merged_vocab.append(mapped_item)
 
@@ -947,77 +720,6 @@ class ExtractionRunnerMixin:
 
             # Save other results (grammar, summary)
             for category, data in other_results:
-                if category == "grammar" and grammar_skeletons:
-                    from ..schemas import GrammarExtraction, GrammarItem
-                    patterns = getattr(data, "grammar_patterns", []) if dataclasses.is_dataclass(data) else data.get("grammar_patterns", [])
-                    # Match existing patterns to skeletons
-                    returned_quotes = [getattr(p, "quote", "") if dataclasses.is_dataclass(p) else p.get("quote", "") for p in patterns]
-                    clean_ret = [re.sub(r'[^a-zA-Z0-9]', '', q).lower() for q in returned_quotes]
-                    
-                    # Align returned patterns with skeletons (auto-hydrate category and normalize formula)
-                    for p in patterns:
-                        p_quote = getattr(p, "quote", "") if dataclasses.is_dataclass(p) else p.get("quote", "")
-                        p_audit = getattr(p, "design_audit", "") if dataclasses.is_dataclass(p) else p.get("design_audit", "")
-                        p_formula = getattr(p, "pattern_formula", "") if dataclasses.is_dataclass(p) else p.get("pattern_formula", "")
-
-                        matched_skel = None
-                        # 1. Match by [S-ID] in design_audit or quote
-                        sid_m = re.search(r'\[(S-\d+)\]', f"{p_audit} {p_quote}")
-                        if sid_m:
-                            target_sid = sid_m.group(1).upper()
-                            matched_skel = next((s for s in grammar_skeletons if s.get("sid", "").upper() == target_sid), None)
-
-                        # 2. Match by clean quote similarity
-                        if not matched_skel and p_quote:
-                            clean_pq = re.sub(r'[^a-zA-Z0-9]', '', p_quote).lower()
-                            matched_skel = next((s for s in grammar_skeletons if re.sub(r'[^a-zA-Z0-9]', '', s.get("quote", "")).lower() in clean_pq or clean_pq in re.sub(r'[^a-zA-Z0-9]', '', s.get("quote", "")).lower()), None)
-
-                        # 3. Match by formula similarity
-                        if not matched_skel and p_formula:
-                            clean_pf = re.sub(r'[^a-zA-Z0-9]', '', p_formula).lower()
-                            matched_skel = next((s for s in grammar_skeletons if re.sub(r'[^a-zA-Z0-9]', '', s.get("pattern_formula", "")).lower() == clean_pf), None)
-
-                        if matched_skel:
-                            # Auto-hydrate authoritative category and pattern_formula
-                            resolved_cat = matched_skel.get("category", "Information Packaging")
-                            resolved_formula = matched_skel.get("pattern_formula", p_formula)
-                            if dataclasses.is_dataclass(p):
-                                setattr(p, "category", resolved_cat)
-                                if resolved_formula:
-                                    setattr(p, "pattern_formula", resolved_formula)
-                            elif isinstance(p, dict):
-                                p["category"] = resolved_cat
-                                if resolved_formula:
-                                    p["pattern_formula"] = resolved_formula
-                        else:
-                            # Fallback default category
-                            if dataclasses.is_dataclass(p) and not hasattr(p, "category"):
-                                setattr(p, "category", "Information Packaging")
-                            elif isinstance(p, dict) and "category" not in p:
-                                p["category"] = "Information Packaging"
-
-                    # If model truncated and missed skeletons, auto-complete the missing skeletons
-                    for skel in grammar_skeletons:
-                        skel_clean = re.sub(r'[^a-zA-Z0-9]', '', skel["quote"]).lower()
-                        is_present = any(skel_clean in cr or cr in skel_clean for cr in clean_ret if len(cr) > 10)
-                        if not is_present:
-                            logger.info(f"🩹 Auto-completing omitted grammar skeleton [{skel['sid']}] ({skel['category']}): {skel['pattern_formula']}")
-                            completed_item = GrammarItem(
-                                quote=skel["quote"],
-                                pattern_formula=skel["pattern_formula"],
-                                pedagogical_function=f"Constructs advanced academic discourse via {skel['category'].lower()} syntax.",
-                                design_audit=f"AUDIT: [{skel['sid']}] -> {skel['pattern_formula']} -> [VERBATIM_CONFIRMED]",
-                                imitation_example=f"The study demonstrates that {skel['pattern_formula']}, establishing empirical validity.",
-                                common_mistakes="ESL learners frequently misapply slot boundary constraints or omit required subordinators.",
-                            )
-                            setattr(completed_item, "category", skel["category"])
-                            if dataclasses.is_dataclass(data):
-                                data.grammar_patterns.append(completed_item)
-                            elif isinstance(data, dict):
-                                d_item = dataclasses.asdict(completed_item)
-                                d_item["category"] = skel["category"]
-                                data.setdefault("grammar_patterns", []).append(d_item)
-
                 all_saved.extend(self._save_extraction_results(data, source_path.name, category_override=category))
 
             if failed_tasks:

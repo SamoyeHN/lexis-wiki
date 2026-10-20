@@ -565,10 +565,16 @@ Your task is to:
         print(f"Explanation: {response.explanation}")
 
         # Level 1 Deterministic Code Gate for Option Completeness
+        if len(response.options) < 4:
+            pool_distractors = [o for o in net.get("opposites", []) if o != word and o not in response.options]
+            response.options = ([word] if word not in response.options else list(response.options)) + pool_distractors
+            response.options = response.options[:4]
         if word not in response.options:
             # If model forgot to put the target word in options, replace the first one
             response.options[0] = word
             response.correct_answer_index = 0
+        else:
+            response.correct_answer_index = response.options.index(word)
 
         assert "____" in response.question
         assert len(response.options) == 4

@@ -656,7 +656,7 @@ class WsdEngineMixin:
                                             d_lem = cls._surface_lemma(dt)
                                             if d_lem and len(d_lem) >= 3 and d_lem not in meta_stopwords and d_lem not in generic_signpost_stopwords:
                                                 second_order_domain_tokens.add(d_lem)
-                                for bio_m in re.findall(r"\b(plant|plants|animal|animals|crop|crops|disease|diseases|organism|organisms|bacteria|virus)\b", cdef):
+                                for bio_m in re.findall(r"\b(plant|plants|animal|animals|crop|crops|disease|diseases|organism|organisms|bacteria|virus|computer|computers|electronic|screen|screens|device|devices|phone|telephone|mobile|digital|internet|software|wireless)\b", cdef):
                                     second_order_domain_tokens.add(bio_m)
                                     b_lem = cls._surface_lemma(bio_m)
                                     if b_lem:
@@ -704,11 +704,16 @@ class WsdEngineMixin:
             s_gram = (s.get("grammar") or "").lower()
             if target_tok_morph_number and "Plur" in target_tok_morph_number:
                 if "[uncountable]" in s_gram and "[countable]" not in s_gram:
-                    score -= 50
+                    score -= 60
+                if "[singular]" in s_gram and "[countable]" not in s_gram and "[plural]" not in s_gram:
+                    score -= 60
+            elif target_tok_morph_number and "Sing" in target_tok_morph_number:
+                if "[plural]" in s_gram and "[singular]" not in s_gram and "[countable]" not in s_gram:
+                    score -= 60
             if target_tok_is_predicative and "[only before noun]" in s_gram:
-                score -= 50
+                score -= 60
             elif target_tok_is_attributive and "[not before noun]" in s_gram:
-                score -= 50
+                score -= 60
 
             # 0c. Spoken Register Invariant Gate:
             # If sense is marked as [spoken] / conversational formula, penalize in standard narrative or exposition
@@ -817,6 +822,25 @@ class WsdEngineMixin:
                 genus_toks = set(re.findall(r"\b[a-z]{3,}\b", m_genus.group(1))) - meta_stopwords - generic_signpost_stopwords - {"or", "and", "something", "someone", "person", "thing", "things", "people"}
                 if genus_toks and (genus_toks & convergent_domain_tokens):
                     score += 12
+            if (
+                second_order_domain_tokens
+                and s_def_tokens
+                and (target_p == "n" or s.get("gloss_source") == "derivational")
+                and (
+                    bool(m_genus)
+                    or (sp and sp not in ("controlled by a computer", "computer", "machine"))
+                    or bool(convergent_domain_tokens)
+                    or s.get("gloss_source") == "derivational"
+                )
+            ):
+                _tech_bio_dom = second_order_domain_tokens & {
+                    "computer", "computers", "electronic", "screen", "screens", "device", "devices",
+                    "phone", "telephone", "mobile", "digital", "internet", "software", "wireless",
+                    "plant", "plants", "animal", "animals", "crop", "crops", "disease", "diseases",
+                    "space", "astronaut", "astronauts", "float", "floating", "gravity", "orbit", "spacecraft",
+                }
+                if _tech_bio_dom & s_def_tokens:
+                    score += 14 * len(_tech_bio_dom & s_def_tokens)
 
             # 5. Pattern / Preposition / Collocation match directly from Quote
             # A pattern states a frame, so it is tested as one. As a bag of words it accepts
@@ -1095,7 +1119,7 @@ class WsdEngineMixin:
                 # Only penalize when the sense's unit frame was NOT matched in the quote (so attested predicative frames like
                 # 'people are accustomed to' matching 'be accustomed to (doing) something' are never penalized).
                 if " " not in target_w_clean and target_p != "v" and not any_unit_matched:
-                    if re.match(r"^(?:\[.*?\]\s*)*to\s+[a-z]+\b", s_defn):
+                    if re.match(r"^(?:\[.*?\]\s*)*to\s+[a-z]+\b", s_defn) or s_defn.startswith("used to say that"):
                         score -= 80
                 if any_unit_matched:
                     score += best_unit_bonus
@@ -1411,9 +1435,12 @@ class WsdEngineMixin:
                             )
                             if tok.tag_ == "NNS" or has_count_det:
                                 if ("[uncountable]" in gram_l or (tok.tag_ == "NNS" and "[singular]" in gram_l)) and "countable" not in gram_l:
-                                    score -= 45 if has_count_det else 30
+                                    score -= 60 if has_count_det else 50
                                 elif "countable" in gram_l or (has_count_det and "[singular]" in gram_l):
                                     score += 25
+                            if tok.tag_ == "NN" or (target_tok_morph_number and "Sing" in target_tok_morph_number):
+                                if "[plural]" in gram_l and "[singular]" not in gram_l and "countable" not in gram_l:
+                                    score -= 60
 
                             # Specific semantic differentiation for 'teen':
                             # 'teen' sense 1 is the period of life ("your teens"), which has examples and units ['teens'].
@@ -1706,6 +1733,18 @@ class WsdEngineMixin:
                                     score += 35
                                 elif has_strictly_intrans_prep_pat and not has_trans_pat:
                                     score -= 30
+
+                            # Mandatory Locative / Prepositional Complement Gate:
+                            # Senses marked '[... always + adverb/preposition]' (e.g. 'conduct sb to/into sth': 'to take or lead someone somewhere')
+                            # require a prepositional or directional adverbial complement governed by the verb.
+                            if "always + adverb/preposition" in gram_l:
+                                has_adv_or_prep_comp = any(
+                                    c.dep_ in ("prep", "prt", "npadvmod")
+                                    or (c.dep_ == "advmod" and c.i > tok.i)
+                                    for c in tok.children
+                                )
+                                if not has_adv_or_prep_comp:
+                                    score -= 70
 
                             # Direct object argument matching (governs deep_dobj_tokens, supporting passive projection)
                             for ch in deep_dobj_tokens:
@@ -2056,6 +2095,35 @@ class WsdEngineMixin:
                                 if has_num_time:
                                     if "before a certain period" in s_defn or any("24 hours" in ex or "an hour" in ex for ex in s.get("examples", [])):
                                         score += 25
+                except Exception:
+                    pass
+
+            # 6b. Adverbial Governing Verb Valency & Selectional Alignment
+            if quote and target_p in ("adv", "r"):
+                if s_defn.startswith("(of the elements)") and not any(
+                    w in q_low_all for w in ("wind", "storm", "rain", "sea", "wave", "waves", "weather", "gale", "snow", "tempest", "thunder", "lightning")
+                ):
+                    score -= 45
+                try:
+                    nlp_r = cls.get_spacy()
+                    doc_r = nlp_r(quote) if nlp_r else None
+                    if doc_r is not None:
+                        for tok_r in doc_r:
+                            if cls.form_matches(tok_r.text.lower(), target_w_clean) or cls.form_matches(tok_r.lemma_.lower(), target_w_clean):
+                                if tok_r.head and tok_r.head.pos_ == "VERB":
+                                    gov_v = tok_r.head.lemma_.lower()
+                                    if gov_v in s_def_tokens or any(re.search(rf"\b{re.escape(gov_v)}\b", ex.lower()) for ex in s.get("examples", [])):
+                                        score += 35
+                                    v_supers = cls.get_wordnet_supersenses(gov_v, pos="v")
+                                    is_effort_motion_v = (
+                                        gov_v in ("work", "type", "write", "run", "row", "pedal", "scrub", "dig", "fight", "struggle", "think", "kick", "swim", "drive", "ride", "climb", "dance", "spin", "beat", "scribble", "search")
+                                        or bool(v_supers & {"verb.motion", "verb.creation", "verb.competition", "verb.contact"})
+                                    ) and gov_v not in ("shout", "yell", "scream", "argue", "complain", "protest", "react", "glare", "stare")
+                                    if is_effort_motion_v:
+                                        if any(k in s_defn for k in ("energy", "effort", "speed", "fast", "hard", "rapidly", "quickly")):
+                                            score += 35
+                                        elif any(k in s_defn for k in ("angry", "anger", "annoyed", "upset", "sad")):
+                                            score -= 20
                 except Exception:
                     pass
 
@@ -2905,12 +2973,27 @@ class WsdEngineMixin:
                 continue
             senses = [s for s in (entry.get("senses") or [])
                       if isinstance(s, dict) and str(s.get("definition") or "").strip()]
+            pat_matches: List[Dict[str, Any]] = []
             for sense in senses:
+                matched_this = False
                 for pattern in sense.get("patterns") or []:
                     for unit in cls._slash_variants(pattern):
                         frame = cls._phrase_tokens(unit)
                         if len(frame) > 1 and frame[1:] == tail:
-                            return (host, sense, "phrase_row")
+                            pat_matches.append(sense)
+                            matched_this = True
+                            break
+                    if matched_this:
+                        break
+            if len(pat_matches) == 1:
+                return (host, pat_matches[0], "phrase_row")
+            elif len(pat_matches) > 1:
+                if context_sentence:
+                    mock_entry = {"word": key, "senses": pat_matches}
+                    u_idx = cls._lock_sense(mock_entry, quote=context_sentence, target_pos="verb" if host == tokens[0] else None)
+                    if u_idx is not None and 0 <= u_idx < len(pat_matches):
+                        return (host, pat_matches[u_idx], "phrase_row")
+                return (host, pat_matches[0], "phrase_row")
             for sense in senses:
                 if cls._unit_example(key, list(sense.get("examples") or [])):
                     return (host, sense, "phrase_row")
@@ -2957,6 +3040,7 @@ class WsdEngineMixin:
             if senses:
                 return (host, senses[0], "phrase_row")
         return None
+
 
     @classmethod
     def _quote_overridden_unit_sense(cls, host: str,
@@ -3163,6 +3247,11 @@ class WsdEngineMixin:
         if defn_body and not re.match(r"^(?:to|if|used)\s+", defn_body, flags=re.IGNORECASE):
             if k_low.startswith(("come to ", "rise to ", "achieve ")) and defn_body.lower().startswith("the fact of being "):
                 return "to become " + defn_body[len("the fact of being "):]
+            if k_low.startswith(("make ", "leave ", "find ", "clear ", "create ")) and (
+                host in ("room", "space", "way", "place")
+                or defn_body.lower().startswith(("space ", "empty space ", "an area "))
+            ):
+                return "to provide or create " + defn_body
             if k_low.startswith(("fall ", "keep ", "remain ", "stay ", "feel ", "get ")) and "adj" in s_pos:
                 v_head = k_low.split()[0]
                 if v_head in ("keep", "remain", "stay"):
@@ -3229,6 +3318,14 @@ class WsdEngineMixin:
                     _chem_words = {"chemical", "substance", "acid", "metal", "gas", "oxygen", "water", "element", "compound", "solution", "calcium", "sulphur", "hydrogen", "carbon", "alkali", "molecule", "atom", "chlorine", "iron"}
                     has_chem_ctx = bool(set(re.findall(r"[a-z]{3,}", ctx_low)) & _chem_words)
 
+                    # Detect separable direct object between verb and particle (e.g. 'take the giraffe's body back to their village')
+                    has_sep_dobj_or_dest = False
+                    if len(other_tokens) == 1 and context_sentence:
+                        v_forms_re = "|".join(re.escape(f) for f in (cls.inflected_forms(base_verb) | {base_verb}))
+                        pt_re = re.escape(other_tokens[0])
+                        if re.search(rf"\b(?:{v_forms_re})\s+(?:the|a|an|his|her|their|our|my|your|its|this|that|these|those|[a-z]+'s)\s+[^.,;!?]{{1,35}}\b{pt_re}\b", ctx_low) or re.search(rf"\b{pt_re}\s+to\s+(?:the|a|an|his|her|their|our|my|your|its)\b", ctx_low):
+                            has_sep_dobj_or_dest = True
+
                     prepared_b_senses = []
                     for s in b_senses:
                         s_def_l = str(s.get("definition") or "").lower()
@@ -3236,12 +3333,16 @@ class WsdEngineMixin:
                             continue
                         if "if a chemical substance reacts" in s_def_l and not has_chem_ctx:
                             continue
+                        if has_sep_dobj_or_dest and any(k in s_def_l for k in ("admit that you were wrong", "something that you said")):
+                            continue
                         s_copy = dict(s)
                         s_pats = list(s_copy.get("patterns") or [])
                         if key not in s_pats:
                             s_pats.append(key)
                         s_copy["patterns"] = s_pats
                         prepared_b_senses.append(s_copy)
+                    if not prepared_b_senses and b_senses:
+                        prepared_b_senses = [dict(s) for s in b_senses]
 
                     candidates = []
                     for s in cand_base_senses:
@@ -3259,11 +3360,12 @@ class WsdEngineMixin:
                     idx = None
                     if res:
                         _idx, _best_score, _margin, _conf, score_trace = res
-                        sorted_scores = sorted(score_trace, key=lambda x: -x[1])
+                        pos_trace = [(s_i, sc) for s_i, sc in score_trace if sc >= 0] or score_trace
+                        sorted_scores = sorted(pos_trace, key=lambda x: -x[1])
                         top_indices = [s_i for s_i, _ in sorted_scores[:4]]
-                        if _idx is not None and _idx not in top_indices:
+                        if _idx is not None and _idx in {s_i for s_i, _ in pos_trace} and _idx not in top_indices:
                             top_indices = [_idx] + top_indices[:3]
-                        if len(top_indices) > 1 and context_sentence and enable_llm_disambiguation:
+                        if len(top_indices) > 1 and _conf != "high" and context_sentence and enable_llm_disambiguation:
                             locked_et = expr_type if (expr_type in cls.EXPRESSION_TYPE_LABELS) else "phrasal verb"
                             top_cand_dicts = [
                                 {"definition": candidates[s_i][0].get("definition", ""), "pos": locked_et}
@@ -3293,8 +3395,9 @@ class WsdEngineMixin:
         # Tier 1: the unit is a headword row of its own ('climate change').
         # Do not collapse a multi-word/slot expression (e.g. 'reverse (oneself)') into a single-word headword lookup with invalid POS 'collocation'.
         if is_multiword or len(clean_phrase.split()) >= 2:
+            t_pos_lookup = "verb" if is_phrasal_v else expr_type
             defn, ex = cls.get_ldoce_definition_and_example(
-                clean_phrase, target_pos=expr_type, context_sentence=context_sentence)
+                clean_phrase, target_pos=t_pos_lookup, context_sentence=context_sentence)
             if defn and not cls.is_boilerplate_definition(defn):
                 defn = cls._compose_collocation_definition(key, expr_type, key.split()[0], {}, defn, context_sentence)
                 return (defn, ex, "ldoce_entry")

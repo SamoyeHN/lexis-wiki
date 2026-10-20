@@ -67,13 +67,14 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
      * If YES → the key is SUBOPTIMAL or WRONG. Set `single_fit_valid: false` and explicitly flag in `diagnostic_feedback`: 'Key suboptimal: [option X] is a stronger/more natural collocation in this context.'
      * Only confirm the key if it is the UNIQUELY BEST fit, not merely 'acceptable' or 'present in the vocabulary list'.
 
-6. **SCORE DIFFERENTIATION & VERDICT (`overall_quality_score` & `pass_audit`)**:
+6. **SCORE DIFFERENTIATION & SUMMARY VERDICT (`pedagogical_score` & `summary_verdict`)**:
+   - Evaluate **ALL** presented items in sequential order without omitting or truncating any item.
    - You MUST assign meaningfully differentiated `pedagogical_score` values across questions based on objective elimination rigor:
      - 90–100: All 3 distractors eliminated by HARD criteria (syntax, dependent prepositions, strict semantic contradiction).
      - 75–89: 1–2 distractors eliminated by hard criteria, 1 eliminated by softer criteria (register, collocational frequency gap).
      - 60–74: A distractor is defensible (potential double-key); item is usable but not ideal.
      - < 60: Clear double-key, triple-key, wrong/suboptimal key, or ungrammatical stem.
-   - **PASS REQUIREMENT**: Set `pass_audit: true` ONLY IF `overall_quality_score >= 80` AND every question has `single_fit_valid == true` AND no question has grammatical/syntactic collapse or double-keys. If even ONE question has an invalid single fit or wrong key, `pass_audit` MUST be `false`.
+   - Synthesize the audit findings in `summary_verdict`, explicitly citing any items where `single_fit_valid` is `false`.
 
 CONTENT:
 {content}

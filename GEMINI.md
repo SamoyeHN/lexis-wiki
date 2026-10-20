@@ -142,4 +142,32 @@ wiki/<UnitName>/
 - [x] **Zero-Token Vocabulary Card Enrichment & Syntactic Slot Grammar Gating**: Enrich Markdown vocabulary cards with `get_vocab_card_enrichment` (`Pattern` / `Grammar Box`, `Collocations`, `Thesaurus Note`), enforce entryhead/sense `<gram>` constraints (`[only before noun]`, `[not before noun]`, `[uncountable]`, `[intransitive]`/`[transitive]`) across `_lock_sense` and `evaluate_syntactic_slot_clash`, and resolve definitions/examples across all 5,678 `derived` (`-ly`/`-ing`) entries.
 - [x] **Orthographic / Paronym Distractor Tier (with Cognate Near-Synonym Guard)**: Introduce an orthographic look-alike (`形近词`) fallback/blending tier in `generate_vocab_distractors` for sparse synsets, strictly guarded by WordNet synset/hypernym disjointness and `double_key_collision` checks so root-sharing near-synonyms (e.g., `historic`/`historical`, `classic`/`classical`, `economic`/`economical`, `continual`/`continuous`) never create ambiguous double keys. But Paronyms like adapt / adopt / adept、complement / compliment、simulate / stimulate、thorough / through. 同根但语义域完全正交：如 specimen（标本/怪人） vs.  spectrum（光谱/范围） vs. spectacle（壮观场面/奇观） vs.
       speculation（推测/投机）
+- [ ] **Pending — Symbolic Discourse Micro-Task Blueprints (`reading_quiz` & `listening_quiz`)**:
+  - **Rhetorical & Span Anchoring (`spaCy` Discourse Markers)**: Pre-scan passage paragraphs and rhetorical transitions (causality, contrast/concession, stance/attribution, thesis) to deterministically assign each question an immutable `Anchor Span` (Paragraph + Sentence) and `Target Skill` (`Detail`, `Inference`, `Author's Stance/Purpose`, `Main Idea`), eliminating question clustering and full-text blind spots.
+  - **Symbolic Distractor Fallacy Operators & Cross-Paragraph Lexical Bait**: Pre-assign propositional truth/fallacy operators to each option slot alongside a CRC32-locked `Prescribed Correct Answer Index`:
+    - *Correct Slot (`Paraphrase Operator`)*: Enforce syntactic/lexical paraphrasing of the anchor span with a deterministic `Forbidden Verbatim Copy` list of core content words to prevent `Ctrl+F` surface matching.
+    - *Distractor Slot 1 (`Cross-Paragraph Scrambling`)*: Inject authentic noun phrases extracted from non-anchor paragraphs as `Cross-Paragraph Bait Terms` to construct high-discrimination false associations.
+    - *Distractor Slot 2 (`Polarity / Causal Reversal`)*: Invert the causal direction or affirmative/negative polarity of the anchor proposition.
+    - *Distractor Slot 3 (`Modality / Scope Overgeneralization`)*: Escalate hedged modality (`may`, `tend to`, `some`) into absolute claims (`exclusively`, `inevitably`, `never`).
+  - **Listening Turn-Taking Pragmatic State Machine**: Pre-compile a turn-by-turn pragmatic blueprint (`Turns 1–2` dilemma + target vocab $W_1$ $\rightarrow$ `Turns 3–4` stance shift/clarification + $W_2$ $\rightarrow$ `Turns 5–6` causal mechanism + $W_3$ $\rightarrow$ `Turns 7–8` resolution/next action) so dialogue generation and question anchoring are deterministically coupled.
+- [ ] **Pending — Symbolic Translation Micro-Task Blueprint (`translation_quiz`)**:
+  - **Step 1 — Register-Aligned Lexical & Syntactic Pairing (`Symbolic Pair Matching`)**: Deterministically pair each `Target Keyword` with a register-compatible `Target Grammar Pattern` (e.g., matching `[spoken]`/`[informal]` phrasal verbs like `wind up`/`pack up` with conversational clauses, and `[formal]` items like `originate`/`regulatory` with academic participial adjuncts, concessive clauses, or inversions) to prevent awkward "forced marriages".
+  - **Step 2 — Single-Point Minimal-Pair Corruption Operator (`Targeted Error-Injection Spec`)**: Pre-assign a single deterministic flaw operator derived from `pedlex.db` (`Pattern` valency / `<gram>` property / `Grammar Box` pitfall) or `Grammar Warning (<TOPIC>)`:
+    - *Lexical Valency / Property Trap*: e.g., preposition substitution (`originate in` $\rightarrow$ `*originate from/at*`) or `<gram>` violation (`[uncountable]` pluralization, `[only before noun]` predicative misuse `*is regulatory*`).
+    - *Syntactic L1 Negative-Transfer Trap*: e.g., conjunction redundancy (`Although ... *but* ...`), clause-preposition confusion (`Despite + *finite clause*`), or dangling participle / comma splice.
+    - Enforce a strict **Minimal Pair** contract: `idiomatic_translation` and `flawed_translation` must share $\ge 85\%$ identical non-target wording and differ **exclusively** at the prescribed trap locus (100% blind-solver discrimination, zero unfocused random typos).
+  - **Step 3 — Zero-Redundancy Schema Pruning (~40% Token Reduction)**: Strip duplicate/blueprint-owned fields (`target_keyword`, `target_grammar`, `flaw_type`, `options`, `correct_answer_index`, `explanation`) from [`translation_quiz.json`](librarian/prompts/translation_quiz.json); have the LLM output only `design_audit`, `translated_sentence`, `idiomatic_translation`, `flawed_translation`, and `diagnostic_critique`, and hydrate `options` (CRC32-ordered `[idiomatic, flawed]`) and `explanation` deterministically in code.
+  - **Canonical `🎯 Micro-Task` Blueprint Example**:
+    ```markdown
+    ### Item 2 Specification ###
+    - Target Keyword: originate (verb) — "to come from a particular place or start in a particular situation"
+    - Required Lexical Frame: originate in [place/situation] (Model: "Many Christmas traditions originated in Germany.")
+    - Target Grammar Pattern: Concessive Clause (`Although / Even though + Subject + Verb, Main Clause`)
+    - Prescribed Flaw Type: L1 Conjunction Redundancy (`Although ... but ...` double conjunction)
+    - 🎯 Micro-Task for LLM:
+      1. `translated_sentence`: Write a natural Chinese sentence meaning "虽然...（含 originate 词义：起源于某地/某种情况），但...".
+      2. `idiomatic_translation`: Translate into natural CEFR B1 English integrating BOTH `originate in` and `Although + Clause, Main Clause` (NO 'but' in main clause).
+      3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair, ONLY introducing the prescribed flaw (adding redundant `but` before the main clause, or misusing `originate`).
+      4. `diagnostic_critique`: Contrast the two versions by pointing out the exact `Although ... but ...` redundancy and confirming the `originate in` collocation.
+    ```
 - [ ] **Ongoing**: Expand discourse-level grammar pattern coverage and multi-word construction blanking families.

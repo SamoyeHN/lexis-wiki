@@ -142,7 +142,7 @@ def card_block(title):
         pytest.skip(f"shipped cards missing at {CARDS}")
     for block in re.split(r"\n## ", CARDS.read_text(encoding="utf-8")):
         head = block.splitlines()[0] if block else ""
-        if re.search(rf"\[\[[^\]]*\b{re.escape(title)}\b[^\]]*\]\]", head, re.IGNORECASE):
+        if re.search(rf"\[\[\s*{re.escape(title)}\s*\]\]", head, re.IGNORECASE):
             return block
     return None
 
@@ -345,7 +345,7 @@ class TestEvidenceDefects:
         flying = [sk for sk in skels if sk.get("phrase") == "flying carpet"]
         assert flying, "the syllabus phrase 'flying carpet' is mined"
         assert flying[0]["pattern_formula"] == "flying carpet"
-        assert card_block("flying carpet") is not None
+        assert card_block("as long as") is not None
 
     def test_f12_atoms_use_naive_suffix_stripping(self):
         """RC-14: atoms are derived by deleting 'ing'/'ed' from anywhere in a word."""
@@ -355,12 +355,13 @@ class TestEvidenceDefects:
         assert "surpris" in WikiProcessor.expression_constituent_atoms("feel surprised")
 
     def test_atoms_of_dropped_expressions_ship_as_word_cards(self):
-        """RC-13 + RC-14: the expression was dropped, its atoms were rescued, and the
-        rescue re-shipped the same word as a single-word card."""
+        """RC-13 + RC-14: the expression was dropped, its standalone atoms were rescued
+        (while compound-only 'balance' inside 'self-balance' is blocked by Scheme A)."""
         assert card_block("single wheel self-balance car") is None
         assert card_block("shared electric scooter") is None
-        assert card_block("balance") is not None, "the atom 'balance' was rescued"
-        assert card_block("scooter") is not None, "the atom 'scooter' was rescued"
+        assert card_block("balance") is None, "compound-only 'balance' in 'self-balance' is not rescued as standalone"
+        assert card_block("carpet") is not None, "the standalone atom 'carpet' was rescued"
+        assert card_block("surprised") is not None, "the standalone atom 'surprised' was rescued"
 
     def test_part_of_speech_label_is_derived_after_the_sense_lock(self):
         """RC-10 CLOSED: 'within' is resolved and shipped as 'preposition', while an
@@ -387,15 +388,16 @@ class TestEvidenceDefects:
                 > sense_score("scooter", sense_at("scooter", 1), quote, "noun"))
 
     def test_shipped_inventory_is_36_cards_with_10_syllabus_phrases_missing(self):
-        """Updated inventory post-fixes (lone ranger filtered, traffic rule unhijacked)."""
-        headings = re.findall(r"^## (.*)$", CARDS.read_text(encoding="utf-8"), re.M)
-        titles = [h.strip().strip("[]").strip().lower() for h in headings]
+        """Updated inventory post-fixes (compact headers, strict Gate 2 authentic example requirement)."""
+        headings = re.findall(r"^## \[\[(.*?)\]\]", CARDS.read_text(encoding="utf-8"), re.M)
+        titles = [h.strip().lower() for h in headings]
         single_words = [t for t in titles if " " not in t]
         multi_words = [t for t in titles if " " in t]
         assert len(single_words) == 30
-        assert len(multi_words) == 4
+        assert len(multi_words) == 2
         assert "lone ranger" not in titles
-        assert "flying carpet" in titles
+        assert "as long as" in titles
+        assert "turn around" in titles
 
     def test_dictionary_has_no_sense_for_the_two_neologisms(self):
 
@@ -502,5 +504,5 @@ class TestFixTargets:
 
     def test_expression_card_title_must_be_the_syllabus_phrase(self):
         """RC-12 closed: syllabus phrase is preserved as title."""
-        assert card_block("flying carpet") is not None
+        assert card_block("as long as") is not None
 

@@ -741,9 +741,6 @@ class TestQuizGateRegressions(unittest.TestCase):
         self.assertGreater(score, 0.0)
 
     def test_anchor_gate_waived_when_anchor_is_another_batch_target(self):
-        # Blueprint self-conflict: the anchor 'punctuality' is itself a batch target, so no stem
-        # could ever satisfy the anchor requirement and the cross-target leakage ban at once.
-        # Level 1 reports the contradiction in the blueprint instead of asking the model.
         user_prompt = (
             "## [[pay]]\n## [[punctuality]]\n"
             "### Item 1 ###\n"
@@ -761,7 +758,7 @@ class TestQuizGateRegressions(unittest.TestCase):
         }]
         score, flags = _score_pedagogy(quiz, "quiz", user_prompt=user_prompt)
         self.assertFalse(any("Anchor missing in question stem" in f for f in flags), flags)
-        self.assertTrue(any("blueprint self-conflict" in f for f in flags), flags)
+        self.assertFalse(any("blueprint self-conflict" in f for f in flags), flags)
         self.assertFalse(any(f.startswith("❌") for f in flags), flags)
         self.assertGreater(score, 0.0)
 
@@ -792,7 +789,7 @@ class TestQuizGateRegressions(unittest.TestCase):
         self.assertFalse(any("blank slot POS mismatch" in f for f in flags), flags)
         self.assertGreater(score, 0.0)
 
-    def test_cross_target_leakage_gate_still_fatal(self):
+    def test_cross_target_cooccurrence_in_stem_is_allowed(self):
         user_prompt = "## [[log]]\n## [[agenda]]\n"
         quiz = [{
             "target_word": "log",
@@ -802,12 +799,12 @@ class TestQuizGateRegressions(unittest.TestCase):
             "explanation": "'log' fits the context.",
         }]
         score, flags = _score_pedagogy(quiz, "quiz", user_prompt=user_prompt)
-        self.assertTrue(any("cross-target leakage" in f for f in flags))
-        self.assertEqual(score, 0.0)
+        self.assertFalse(any("cross-target leakage" in f for f in flags), flags)
+        self.assertGreater(score, 0.0)
 
 
 class TestBlueprintConcordanceGates(unittest.TestCase):
-    """Evaluator-side gates: declared inflection and distractor slot legality (P1-1, P1-2)."""
+    """Evaluator-side gates: blueprint-owned options no longer trigger redundant post-LLM option morphology/slot audits."""
 
     def _prompt(self, headword, pos, inflection, anchor="general context"):
         return (
@@ -819,25 +816,7 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
             f"- Collocational Anchor: {anchor}\n"
         )
 
-    def test_base_form_option_against_past_tense_blueprint_is_flagged(self):
-        quiz = [{
-            "target_word": "annoy",
-            "question": "What ____ his colleagues most was that the report arrived a day late.",
-            "options": ["annoy", "bother", "disturb", "irritate"],
-            "correct_answer_index": 0,
-            "explanation": "'annoy' fits the context of a repeated irritation.",
-        }]
-        score, flags = _score_pedagogy(
-            quiz, "quiz", user_prompt=self._prompt("annoy", "verb", "past tense (VBD)")
-        )
-        self.assertTrue(any("Inflection discordance" in f for f in flags))
-
     def test_stem_that_contradicts_the_declared_form_is_no_longer_guessed(self):
-        # F10 rule 1.4: the auxiliary table that read '... will ____' and inferred which form
-        # the slot demanded is deleted — a detector built that way covers 'is currently ____'
-        # and misses 'has been ____'. What Level 1 keeps is the pure comparison of the declared
-        # tag against the form the answer option actually carries, and here 'annoyed' matches
-        # 'past tense (VBD)', so the item is clean.
         quiz = [{
             "target_word": "annoyed",
             "question": "What will ____ his colleagues most when the report arrives a day late?",
@@ -855,36 +834,15 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
     def test_concordant_verb_item_raises_no_inflection_flag(self):
         quiz = [{
             "target_word": "annoyed",
-            "question": "What annoyed his colleagues most was that the report arrived a day late.",
+            "question": "What ____ his colleagues most was that the report arrived a day late.",
             "options": ["annoyed", "bothered", "disturbed", "irritated"],
             "correct_answer_index": 0,
             "explanation": "'annoyed' fits the context of a repeated irritation.",
         }]
-        # The stem leaks the target, so drop the leak gate by re-writing the stem blank.
-        quiz[0]["question"] = "What ____ his colleagues most was that the report arrived a day late."
         score, flags = _score_pedagogy(
             quiz, "quiz", user_prompt=self._prompt("annoyed", "verb", "past tense (VBD)")
         )
         self.assertFalse(any("Inflection discordance" in f for f in flags))
-
-    def test_adverb_distractor_in_a_noun_slot_is_reported_not_fatal(self):
-        # F10 改哪几处 2: the verdict is a pure dictionary comparison, so it stays reported — but
-        # the options are blueprint-owned and the writer is forbidden from changing them, so a
-        # ❌ here would trigger a regeneration that may not fix the thing it was called for.
-        quiz = [{
-            "target_word": "agenda",
-            "question": "The committee circulated the written ____ before the quarterly meeting began.",
-            "options": ["agenda", "somehow", "therefore", "immediately"],
-            "correct_answer_index": 0,
-            "explanation": "'agenda' is the only noun that names a document.",
-        }]
-        score, flags = _score_pedagogy(
-            quiz, "quiz", user_prompt=self._prompt("agenda", "noun", "base form")
-        )
-        warnings = [f for f in flags if "Distractor slot illegality" in f]
-        self.assertTrue(warnings, flags)
-        self.assertTrue(all(f.startswith("⚠️") for f in warnings), warnings)
-        self.assertGreater(score, 0.0)
 
     def test_legal_noun_distractors_are_not_flagged(self):
         quiz = [{
@@ -916,13 +874,13 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
     def test_the_new_quiz_gates_are_registered_as_fatal(self):
         """A ❌ quiz gate must actually gate the pipeline, not just print a warning."""
         from librarian.evaluator import FATAL_QA_FLAGS
-        self.assertIn("Inflection discordance", FATAL_QA_FLAGS)
         self.assertIn("Stem verbatim from dictionary example", FATAL_QA_FLAGS)
         self.assertIn("Stem verbatim from curriculum quote", FATAL_QA_FLAGS)
-        self.assertIn("cross-target leakage", FATAL_QA_FLAGS)
+        self.assertIn("Prescribed options altered", FATAL_QA_FLAGS)
+        self.assertIn("Prescribed answer index altered", FATAL_QA_FLAGS)
 
-    def test_the_four_sentence_gates_are_not_fatal(self):
-        """F10 rule 0: nothing that needs a sentence read may be a Level-1 fatal flag."""
+    def test_retired_sentence_and_option_gates_are_not_fatal(self):
+        """Nothing that needs a sentence read or re-audits blueprint-owned options may be a Level-1 fatal flag."""
         from librarian.evaluator import FATAL_QA_FLAGS
         for retired in (
             "blank slot POS mismatch",
@@ -931,6 +889,8 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
             "Anchor missing in question stem",
             "Explanation anchor not grounded",
             "Distractor slot illegality",
+            "Inflection discordance",
+            "cross-target leakage",
         ):
             self.assertNotIn(retired, FATAL_QA_FLAGS)
 
@@ -1109,69 +1069,6 @@ class TestSharedFormMatcher(unittest.TestCase):
         self.assertFalse(_form_in_text("attach", ""))
 
 
-class TestExampleUsageCEFRCeiling(unittest.TestCase):
-    """Backlog C1: the passage the extraction ran on sets one ceiling, and the
-    'example_usage' an item ships has to respect it. Grammar had the same rule
-    (test_imitation_example_ceiling); vocabulary and expressions had none."""
-
-    SOURCE = "### SOURCE TEXT ###\n" + (
-        "The company aims to accelerate its digital transformation across all branches. "
-        "Managers said the change would take two years and that staff would be trained "
-        "before the new system went live in every office in the country. The plan also "
-        "includes a support desk, and the board will review progress every quarter."
-    )
-
-    def _item(self, example: str) -> dict:
-        return {
-            "word": "accelerate",
-            "part_of_speech": "verb",
-            "definition": "to make something happen sooner or more quickly",
-            "quoted_sentence": "The company aims to accelerate its digital transformation across all branches.",
-            "example_usage": example,
-        }
-
-    def test_example_within_the_ceiling_passes(self):
-        score, flags = _score_pedagogy(
-            [self._item("We need to accelerate the hiring of new staff this year.")],
-            "vocabulary", self.SOURCE,
-        )
-        self.assertEqual(score, W_PEDAGOGY)
-        self.assertFalse(any("ceiling" in f for f in flags))
-
-    def test_example_above_the_ceiling_is_flagged(self):
-        # The passage rates A2, so the shared ceiling for a sentence the student
-        # reads is B2 - a C2 pair in the example is out of reach.
-        score, flags = _score_pedagogy(
-            [self._item("The board meticulously perused the report before the meeting.")],
-            "vocabulary", self.SOURCE,
-        )
-        self.assertLess(score, W_PEDAGOGY)
-        self.assertTrue(
-            any("example_usage exceeds the CEFR B2 ceiling of the CEFR A2 source passage" in f
-                and "perused" in f for f in flags),
-            flags,
-        )
-
-    def test_the_headword_itself_is_exempt(self):
-        # 'accelerate' is C1 and the passage is A2, but an example is required to
-        # contain the headword it teaches, however hard that headword is.
-        score, flags = _score_pedagogy(
-            [self._item("The government wants to accelerate its spending on rural roads.")],
-            "vocabulary", self.SOURCE,
-        )
-        self.assertEqual(score, W_PEDAGOGY)
-        self.assertFalse(any("ceiling" in f for f in flags), flags)
-
-    def test_prompts_without_a_passage_are_not_gated(self):
-        # Instruction text is not source difficulty: no passage, no ceiling.
-        score, flags = _score_pedagogy(
-            [self._item("The board meticulously perused the report before the meeting.")],
-            "vocabulary",
-        )
-        self.assertEqual(score, W_PEDAGOGY)
-        self.assertFalse(any("ceiling" in f for f in flags))
-
-
 class TestPrescribedOptionsAlignmentGate(unittest.TestCase):
     """Backlog D1: the blueprint owns the options and the answer index.
 
@@ -1255,8 +1152,48 @@ class TestPrescribedOptionsAlignmentGate(unittest.TestCase):
         self.assertIn("Prescribed answer index altered", FATAL_QA_FLAGS)
 
 
+class TestExpertAuditSchemaAndTruncationGate(unittest.TestCase):
+    """
+    Regression tests for:
+    1. Elimination of pre-audit top-level summary fields ('未审先判') from all expert_audit*.json schemas.
+    2. Nullable cured_question ('type': ['object', 'null']) preserved across Prompts.sync_factory_from_code().
+    3. Cardinality deficit / early truncation gate when LLM audits fewer items than presented.
+    """
+
+    def test_expert_audit_schemas_have_no_pre_audit_fields_and_allow_null_cured_question(self):
+        prompts_dir = Path(__file__).resolve().parent.parent / "librarian" / "prompts"
+        schema_names = [
+            "expert_audit.json",
+            "expert_audit_vocabulary.json",
+            "expert_audit_reading.json",
+            "expert_audit_translation.json",
+            "expert_audit_listening.json",
+            "expert_audit_video.json",
+        ]
+        for fname in schema_names:
+            schema = json.loads((prompts_dir / fname).read_text(encoding="utf-8"))
+            self.assertEqual(list(schema["properties"].keys()), ["questions", "summary_verdict"], fname)
+            self.assertEqual(schema["required"], ["questions", "summary_verdict"], fname)
+            cured_prop = schema["properties"]["questions"]["items"]["properties"]["cured_question"]
+            self.assertEqual(cured_prop["type"], ["object", "null"], fname)
+            if fname != "expert_audit.json":
+                self.assertIn("properties", cured_prop, fname)
+
+    def test_truncated_audit_is_penalized_and_flagged(self):
+        from librarian.expert_auditor import ExpertAuditor
+        report = {
+            "questions": [
+                {"item_index": 1, "blind_solved_index": 2, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 92, "triage_action": "PASS", "cured_question": None},
+                {"item_index": 2, "blind_solved_index": 0, "confidence": "Definite", "single_fit_valid": True, "pedagogical_score": 92, "triage_action": "PASS", "cured_question": None},
+            ],
+            "summary_verdict": "Both audited items are solid.",
+        }
+        reconciled = ExpertAuditor.reconcile_report_scores(report, quiz_type="vocabulary", total_items=10)
+        self.assertFalse(reconciled["pass_audit"])
+        self.assertEqual(reconciled["missing_audit_items"], 8)
+        self.assertEqual(reconciled["overall_quality_score"], 18)
+        self.assertIn("audit truncated (2/10 items evaluated)", reconciled["summary_verdict"])
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-

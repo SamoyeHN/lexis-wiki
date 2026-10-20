@@ -82,8 +82,9 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
 
 5. **QUALITATIVE RIGOR & SYSTEM CODE CONSISTENCY (`summary_verdict`)**:
    - 🧠 **SYSTEM GATING CONSISTENCY MANDATE**:
+     - You MUST evaluate **ALL** presented items in sequential order (`item_index: 1, 2, ...`) without omitting or truncating any item.
      - The assessment engine strictly enforces: **Any item with `single_fit_valid: false` is a FATAL FLAW (scored at 20-59), which automatically caps the total quiz score at 70% and triggers RETRY / REVIEW.**
-     - **NEVER CONTRADICT YOURSELF**: If you mark `single_fit_valid: false` for ANY item, you MUST set `pass_audit: false`, keep `overall_quality_score <= 70`, and NEVER write "No fatal flaws detected" in `summary_verdict`!
+     - **NEVER CONTRADICT YOURSELF**: If you mark `single_fit_valid: false` for ANY item, NEVER write "No fatal flaws detected" in `summary_verdict`!
      - In `summary_verdict`, explicitly cite the flawed item numbers and state the exact defect (e.g. "Item #2 exhibits an invalid double-key between although and even though").
    - 🎯 **SUMMARY VERDICT**: Deliver an authoritative pedagogical summary in `summary_verdict` synthesizing translation fidelity, distractor trap quality, and item flaws.
 

@@ -32,12 +32,12 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
      * **Grammatical Collapse / Missing Predicate**: The sentence lacks a finite verb or options create ungrammatical fragments.
      * **Target Word Leakage**: The target word appears verbatim in the stem outside the blank.
      * **Unlisted/Fabricated Target**: Target word is not in the Unit Vocabulary List. (MUST synthesize a replacement question in `cured_question` using an unassessed word from the list).
-     * *Mandatory Diagnostic & Cure*: Explicitly describe the fatal flaw in `diagnostic_feedback`. Discard the broken item and write a completely pristine replacement item in `cured_question` (with fields: `target_word`, `question` [using '____'], `options` [array of 4 strings], `correct_answer_index` [0-3], `definition`, `explanation`).
+      * *Mandatory Diagnostic & Cure*: Explicitly describe the fatal flaw in `diagnostic_feedback`. Discard the broken item and write a completely pristine replacement item in `cured_question` using ONLY the exact keys: `target_word`, `question` [using '____', NEVER `revised_question`], `options` [array of 4 strings, NEVER `revised_options`], `correct_answer_index` [0-3], `definition`, `explanation`.
    - **TIER 2: LOCAL DISTRACTOR & CRAFT DEFECTS (Action: REPAIR, single_fit_valid = true, pedagogical_score 60-75)**:
      * **Recycled Distractors / In-List Bleed**: Distractors are repeatedly reused across the quiz (e.g. same word in 3+ items) or pulled from the Unit Vocabulary List.
      * **Duplicate Options Within Item**: Two options in the same question are identical.
      * **Misaligned Option Index**: Correct answer index does not match the intended key.
-     * *Mandatory Surgical Cure*: Explicitly describe the distractor flaw in `diagnostic_feedback`. **KEEP THE ORIGINAL STEM AND TARGET WORD COMPLETELY INTACT!** Do NOT rewrite the stem. Only replace the flawed distractors in `cured_question` with authentic academic words of the same part of speech (fields: `target_word`, `question`, `options`, `correct_answer_index`, `definition`, `explanation`).
+     * *Mandatory Surgical Cure*: Explicitly describe the distractor flaw in `diagnostic_feedback`. **KEEP THE ORIGINAL STEM AND TARGET WORD COMPLETELY INTACT!** Do NOT rewrite the stem. Only replace the flawed distractors in `cured_question` with authentic academic words of the same part of speech using ONLY the exact keys: `target_word`, `question` (NOT `revised_question`), `options` (NOT `revised_options`), `correct_answer_index`, `definition`, `explanation`.
    - **TIER 3: HIGH-QUALITY VALID ITEMS (Action: PASS, single_fit_valid = true, pedagogical_score 80-100)**:
      * The item has an unambiguous, contextually grounded single key and authentic distractors. `diagnostic_feedback` should state why the item is well-formed. `cured_question` MUST be null.
 
@@ -62,8 +62,13 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - 🌟 **DISTINGUISH TRUE DOUBLE-KEYS FROM HIGH-LEVEL NEAR-SYNONYM DISCRIMINATION**:
      * **True Invalid Double-Key (Fatal Flaw)**: The stem is generic (e.g., *"The ____ instructor taught at universities"*) and lacks ANY contextual contrast or dependent collocation to distinguish between options like *"veteran"* vs *"senior"*. Both are equally valid without distinction -> Set `single_fit_valid: false`.
      * **Legitimate Advanced Near-Synonym Trap (High Pedagogical Value)**: The stem intentionally sets up deep contrastive or pragmatic constraints (e.g., contrasting *"complex/unclear empirical data"* against an unyielding personal belief, where *"conviction"* is superior to *"certainty"*, or matching a specific dependent preposition). When sentence context actively favors the target word over a near-synonym distractor through pragmatic contrast or lexical collocations, **this is an elite assessment item, NOT a double-key!** Do not disqualify subtle, high-level vocabulary discrimination items.
-    - 🌟 **RECOGNIZE SLA NARRATIVE CONTEXT CLUES & DEFINITION GROUNDING**:
-      * In addition to explicit bound prepositions, recognize valid single-fit items grounded in **triangulated narrative context clues** (roles, props/settings, characteristic actions) and **cognitive polarity/contrast** (e.g. concessive/causal turns that logically rule out near-synonyms). If situational clues unambiguously pinpoint the target definition over the distractors, rate single_fit_valid: true. Do NOT penalize items for using authentic situational logic rather than stiff collocation verbs!
+   - 🌟 **LEXICAL PRECISION & ANTI-CONFLATION MANDATE (DO NOT INVENT FALSE SYNONYMS)**:
+     * Never stretch or hallucinate dictionary senses to manufacture a false double-key! Respect strict lexicographical boundaries:
+       - Manner-of-sound/speech verbs have distinct acoustic and emotional profiles (e.g. *groan* = a low deep sound of pain/despair/burden, NEVER "yelling loudly in anger" like *bellow*/*roar*; *whisper*/*mutter* $\neq$ *shout*).
+       - Domain-specific collocations pinpoint exact senses (e.g. in a medical/diagnosis stem with *"diagnosis"* or *"illness"*, *terminal* means fatal/incurable, which strictly eliminates temporal/legal adjectives like *expired* or *extinct*).
+       - When an `Intended Contextual Sense` is supplied for the item, verify whether the stem's situational and collocational clues instantiate that sense and rule out the distractors.
+   - 🌟 **RECOGNIZE SLA NARRATIVE CONTEXT CLUES & DEFINITION GROUNDING**:
+     * In addition to explicit bound prepositions, recognize valid single-fit items grounded in **triangulated narrative context clues** (roles, props/settings, characteristic actions) and **cognitive polarity/contrast** (e.g. concessive/causal turns that logically rule out near-synonyms). If situational clues unambiguously pinpoint the target definition over the distractors, rate single_fit_valid: true. Do NOT penalize items for using authentic situational logic rather than stiff collocation verbs!
    - 🌟 **RECOGNIZE AUTHENTIC METAPHOR & RHETORICAL EXTENSION**:
      * In advanced English (CEFR B2-C2), metaphorical extensions (e.g., treating an institution as a "custodian" or describing an economy as "reaping benefits") are legitimate, authentic English. Do not disqualify a valid key merely because it is used figuratively when context clues support it.
 
@@ -97,11 +102,11 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
      * Only confirm the key if it is the uniquely superior choice.
 
 6. **QUALITATIVE RIGOR & EXPERT VERDICT (`summary_verdict`)**:
-   - 🧠 **QUALITATIVE AUDIT FOCUS (Zero Arithmetic Stress)**: Focus 100% of your cognitive reasoning on qualitative diagnostic auditing:
+   - 🧠 **QUALITATIVE AUDIT FOCUS (Zero Arithmetic Stress)**: Focus 100% of your cognitive reasoning on qualitative diagnostic auditing across **ALL** presented items in sequential order (never omit or truncate items):
      * Blind-solve resolution (`blind_solved_index` & `confidence`)
      * Strict single-fit validation (`single_fit_valid: true/false`, ruthlessly vetoing any double-keys)
-     * Objective cognitive distractor plausibility (`High`, `Medium`, `Low (Flawed)`)
-   - ⚙️ **AUTOMATED CODE QUANTIFICATION**: The assessment system deterministically calculates numerical scores, pass thresholds, and arithmetic averages directly from your qualitative findings. You may supply nominal defaults for `pedagogical_score` and `overall_quality_score`.
+     * Objective cognitive distractor plausibility (`is_plausible`, `is_double_key`, `trap_type`)
+   - ⚙️ **AUTOMATED CODE QUANTIFICATION**: The assessment system deterministically calculates quiz-level pass/fail verdicts and arithmetic averages in code after your per-item audit.
     - 🎯 **BENCHMARK SCORE RANGE (SLA Triangulation & Context Grounding)**:
       * Items that successfully establish **triangulated context clues** (roles, props, actions) and **cognitive polarity/contrast** to unambiguously eliminate near-synonyms MUST receive **pedagogical_score >= 90** (typically 90–98). Such items represent elite SLA psychometric design, NOT merely baseline pass items!
       * Flawless items with absolute single-fit and authentic distractor plausibility should be awarded 90–100, allowing high-quality units to comfortably achieve a 90+ overall audit score.

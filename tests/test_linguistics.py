@@ -242,7 +242,7 @@ class TestLinguisticEngine:
 
         s3 = "It is essential to consider the environmental impact."
         f3 = LinguisticEngine.generate_cobuild_formula(s3, "Information Packaging")
-        assert f3 == "It is + [Adj/Noun] + that/to-inf [Clause]"
+        assert f3 == "It + [be] + [Evaluative Adj] + to-V/that + [Clause]"
 
     def test_grammar_formula_auto_healing(self):
         """Level 1 Code Gate must auto-heal missing or trivial LLM formulas using LinguisticEngine."""
@@ -4882,8 +4882,57 @@ def test_section_7_12_ambitransitive_valency_and_prepositional_supersenses():
     assert any(k in defn_profit.lower() for k in ("profit", "business", "shop"))
 
 
+class TestGrammarProfilesStaticHygiene:
+    """Static hygiene tests for curated grammar_profiles.json templates."""
 
+    def test_all_grammar_profiles_schema_and_hygiene(self):
+        import json
+        from pathlib import Path
 
+        profiles_path = Path(__file__).resolve().parent.parent / "librarian" / "data" / "grammar_profiles.json"
+        assert profiles_path.exists(), f"Missing {profiles_path}"
+        with open(profiles_path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
 
+        profiles = raw_data.get("profiles") or {}
+        valid_domains = {
+            "Rhetoric & Emphasis",
+            "Cohesion & Framing",
+            "Information Packaging",
+            "Logic & Stance",
+        }
+        required_bands = ("A1_A2", "B1_B2", "C1_C2")
+
+        assert len(profiles) >= 20, f"Expected at least 20 grammar profiles, got {len(profiles)}"
+        for topic, prof in profiles.items():
+            assert prof.get("category") in valid_domains, (
+                f"Profile '{topic}' has invalid category '{prof.get('category')}'"
+            )
+            assert str(prof.get("pattern_formula", "")).strip(), (
+                f"Profile '{topic}' is missing pattern_formula"
+            )
+            tiers = prof.get("tiers") or {}
+            for band in required_bands:
+                tier = tiers.get(band) or {}
+                assert str(tier.get("pedagogical_function", "")).strip(), (
+                    f"Profile '{topic}' band '{band}' is missing pedagogical_function"
+                )
+                pitfalls = str(tier.get("common_mistakes", "")).strip()
+                assert pitfalls.startswith("Grammar Warning ("), (
+                    f"Profile '{topic}' band '{band}' common_mistakes must start with 'Grammar Warning ('"
+                )
+                ex = str(tier.get("imitation_example", "")).strip()
+                assert len(ex.split()) >= 5, (
+                    f"Profile '{topic}' band '{band}' imitation_example is missing or too short: '{ex}'"
+                )
+                for v_idx, variant in enumerate(tier.get("variants") or []):
+                    v_ex = str(variant.get("imitation_example", "")).strip()
+                    assert len(v_ex.split()) >= 5, (
+                        f"Profile '{topic}' band '{band}' variant #{v_idx} imitation_example too short: '{v_ex}'"
+                    )
+                    v_pit = str(variant.get("common_mistakes", "")).strip()
+                    assert v_pit.startswith("Grammar Warning ("), (
+                        f"Profile '{topic}' band '{band}' variant #{v_idx} common_mistakes must start with 'Grammar Warning ('"
+                    )
 
 
