@@ -1986,11 +1986,11 @@ class ExtractionPipelineMixin:
         target_pos = pos or (entry.get("pos") if entry else None)
         target_p = cls._pos_code(target_pos)
         q_low = (quote or "").lower()
-        has_pos_match = bool(target_p and any(cls._pos_code(s.get("pos")) == target_p for s in senses))
+        has_pos_match = bool(target_p and any(cls._sense_matches_pos(s, target_p) for s in senses))
 
         if not senses:
             candidates = []
-        elif len(senses) == 1 and (not target_p or not senses[0].get("pos") or cls._pos_code(senses[0].get("pos")) == target_p):
+        elif len(senses) == 1 and (not target_p or not senses[0].get("pos") or cls._sense_matches_pos(senses[0], target_p)):
             s0 = senses[0]
             candidates = [{
                 "definition": cls.format_ldoce_definition(s0) or s0.get("definition", ""),
@@ -2079,9 +2079,9 @@ class ExtractionPipelineMixin:
             if not res or len(res) < 5:
                 matched = [
                     s for s in senses
-                    if (not has_pos_match or cls._pos_code(s.get("pos")) == target_p)
+                    if (not has_pos_match or cls._sense_matches_pos(s, target_p))
                     and not _is_unattested_phrase_unit_sense(s)
-                ] or [s for s in senses if not has_pos_match or cls._pos_code(s.get("pos")) == target_p] or senses
+                ] or [s for s in senses if not has_pos_match or cls._sense_matches_pos(s, target_p)] or senses
                 candidates = [{
                     "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
                     "pos": (pos if has_pos_match else (s.get("pos") or pos)) or s.get("pos", target_pos),
@@ -2096,7 +2096,7 @@ class ExtractionPipelineMixin:
                 # Enforce POS hard gate and filter unattested multi-word idiom senses when standalone senses exist
                 pos_filtered_trace = [
                     (s_i, sc) for s_i, sc in score_trace
-                    if (not has_pos_match or cls._pos_code(senses[s_i].get("pos")) == target_p)
+                    if (not has_pos_match or cls._sense_matches_pos(senses[s_i], target_p))
                 ] or score_trace
                 non_idiom_trace = [
                     (s_i, sc) for s_i, sc in pos_filtered_trace
@@ -2223,13 +2223,16 @@ class ExtractionPipelineMixin:
                     )):
                         return True
                     is_tech = (
-                        s_reg_c in ("technical", "chemistry", "physics", "biology", "computing")
-                        or any(tag in s_gram_c for tag in ("[technical]", "[chemistry]", "[physics]", "[computing]"))
+                        s_reg_c in ("chemistry", "physics", "biology", "computing")
+                        or (s_reg_c == "technical" and s_idx_c > 0)
+                        or any(tag in s_gram_c for tag in ("[chemistry]", "[physics]", "[computing]"))
+                        or ("[technical]" in s_gram_c and s_idx_c > 0)
                         or s_sp_c in ("chemistry", "physics", "technical", "chemical")
                     )
                     if is_tech and not any(w in q_low for w in (
                         "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
-                        "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound"
+                        "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound",
+                        "technology", "technological", "scientific", "science", "engineering"
                     )):
                         return True
 
@@ -2282,12 +2285,28 @@ class ExtractionPipelineMixin:
                         "margin": float(margin or 0.0),
                     })
 
-        # Fallback with WordNet (oewn:2025+) synsets ONLY when PedLex has NO senses matching the target POS.
-        # This preserves the 0-token single-sense fast path for monosemous PedLex entries and prevents
-        # duplicate/unattested WordNet glosses from polluting pure PedLex candidate pools.
+        # Cross-Lexicon Pool Fusion (WordNet oewn:2025+):
+        # 1. Trigger when PedLex has NO senses matching the target POS.
+        # 2. Also trigger when PedLex has only 1 sense for the target POS AND that sole sense is pragmatically
+        #    restricted ([disapproving], [spoken], [informal], [humorous], [old-fashioned]) or a narrow physical
+        #    conditional subject ('if a piece of ...'), so neutral/academic senses attested in WordNet with
+        #    authentic examples can enter the pool for Stage 2 1-token LLM arbitration.
+        sole_pedlex_restricted = False
+        if len(candidates) == 1 and has_pos_match:
+            c0_def = str(candidates[0].get("definition") or "").lower()
+            c0_raw = candidates[0].get("raw_sense") if isinstance(candidates[0].get("raw_sense"), dict) else {}
+            c0_reg = str(c0_raw.get("register") or "").lower()
+            c0_gram = str(c0_raw.get("grammar") or "").lower()
+            if (
+                any(tag in c0_def or tag in c0_reg or tag in c0_gram for tag in ("disapproving", "spoken", "informal", "humorous", "old-fashioned"))
+                or c0_def.startswith(("if a piece of ", "if a chemical substance "))
+            ):
+                sole_pedlex_restricted = True
+
         needs_wn_fallback = (
             not candidates
             or not has_pos_match
+            or sole_pedlex_restricted
         )
         if needs_wn_fallback:
             try:
@@ -2592,7 +2611,7 @@ class ExtractionPipelineMixin:
             return False, []
 
         head_candidates = {tokens[0], lem_0} if tokens else set()
-        if len(tokens) >= 2 and tokens[0] in ("be", "feel", "get"):
+        if len(tokens) >= 2 and tokens[0] in ("be", "feel", "get", "make", "keep", "find", "leave", "hold", "remain", "stay", "become", "turn", "fall"):
             head_candidates.add(tokens[1])
             for v_stem_1 in ([cls._surface_lemma(tokens[1])] + cls._headword_candidates(tokens[1])):
                 if v_stem_1:
@@ -2605,7 +2624,7 @@ class ExtractionPipelineMixin:
                 if is_passive_frame and cls._pos_code(s_obj.get("pos")) == "n":
                     return False
                 excl_toks = {c_tok, "be", "feel", "get"}
-                if tokens[0] in ("be", "feel", "get") and len(tokens) >= 2:
+                if tokens[0] in ("be", "feel", "get") and len(tokens) >= 2 and c_tok != tokens[1]:
                     excl_toks.add(tokens[1])
                     excl_toks.update(cls._headword_candidates(tokens[1]))
                     excl_toks.add(cls._surface_lemma(tokens[1]))
@@ -2623,7 +2642,7 @@ class ExtractionPipelineMixin:
                         if "hospital" in pat_str and quote and not any(hw in q_low for hw in ("hospital", "patient", "ward", "doctor", "ill", "sick", "injured", "emergency")):
                             continue
                         pat_words = re.findall(r"[a-z]+", pat_str)
-                        pat_word_set = set(pat_words)
+                        pat_word_set = set(pat_words) | {cls._surface_lemma(w) for w in pat_words}
                         if all(ot in pat_word_set for ot in other_tok_set):
                             if is_passive_frame and len(other_tok_set) == 1:
                                 p_prep = next(iter(other_tok_set))
@@ -2702,6 +2721,8 @@ class ExtractionPipelineMixin:
                             rank_prio = 2
                         elif any(re.search(rf"\b{re.escape(v_stem_1)}\s+(?:somebody|something|sb|sth)\b.*\b{re.escape(p_word)}\b", ps) for ps in all_p_strs):
                             rank_prio = 1
+                    elif len(tokens) == 2 and tokens[0] in ("make", "keep", "find", "leave", "remain", "stay", "fall") and c_tok == tokens[1]:
+                        rank_prio = 2
                     elif any(cls._unit_key(ps) in unit_keys for ps in all_p_strs):
                         rank_prio = 1
                     pat_matched_senses.append((rank_prio, c_tok, s_i, s, raw_df))
@@ -2935,7 +2956,7 @@ class ExtractionPipelineMixin:
         entry = cls.get_ldoce_entry(clean_target)
         target_p = cls._pos_code(pos_low)
         entry_senses = (entry.get("senses") or []) if entry else []
-        pos_senses = [s for s in entry_senses if not target_p or cls._pos_code(s.get("pos")) == target_p]
+        pos_senses = [s for s in entry_senses if not target_p or cls._sense_matches_pos(s, target_p)]
         is_derived_projected = bool(
             entry and entry.get("kind") == "derived"
             and pos_senses
@@ -3102,7 +3123,8 @@ class ExtractionPipelineMixin:
         text: str,
         syllabus_vocab: Optional[List[str]] = None,
         target_count: int = 20,
-        enable_llm_disambiguation: bool = True
+        enable_llm_disambiguation: bool = True,
+        exclude_words: Optional[Set[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Pure Computational Linguistic & Lexicographic Extractor (0 Tokens, 100% Deterministic).
@@ -3115,11 +3137,18 @@ class ExtractionPipelineMixin:
             if not pool:
                 return []
 
+            excl_set: Set[str] = {
+                re.sub(r'\[.*?\]|\(.*?\)', '', str(ew)).strip().lower()
+                for ew in (exclude_words or set())
+                if ew
+            }
+            excl_set.discard("")
+
             # 1. Determine target words (Syllabus primary + Passage reserve pool for Gate 2 backfill)
             target_candidates: List[Dict[str, Any]] = []
             if syllabus_vocab:
                 cleaned_syllabus: List[str] = []
-                seen_clean = set()
+                seen_clean = set(excl_set)
                 for w in syllabus_vocab:
                     w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', str(w)).strip().lower()
                     if w_clean and w_clean not in seen_clean:
@@ -3165,7 +3194,7 @@ class ExtractionPipelineMixin:
                                 seen_resolved.add(resolved_w)
                                 resolved_syllabus.append(resolved_w)
                         cleaned_syllabus = resolved_syllabus
-                        seen_clean = set(cleaned_syllabus)
+                        seen_clean = set(cleaned_syllabus) | excl_set
 
                 # Pre-filter same-word-family syllabus pairs (e.g. 'intrigue' + 'intrigued', 'predominant' + 'predominantly'):
                 # If a syllabus word has a same-family sibling in the syllabus, drop any member that:
@@ -3247,7 +3276,7 @@ class ExtractionPipelineMixin:
                 if len(results) >= target_count:
                     break
                 w = cand["word"].strip().lower()
-                if not w or w in seen_words:
+                if not w or w in seen_words or w in excl_set:
                     continue
                 if not cls.is_pedagogical_target(w):
                     continue
@@ -3335,7 +3364,7 @@ class ExtractionPipelineMixin:
                 # for that POS, promote `w` to the verbatim passage word so Gate 1 & Gate 2 evaluate the true passage form.
                 if matching_sent and " " not in w and not re.search(rf"\b{re.escape(w)}\b", matching_sent, flags=re.IGNORECASE):
                     w_ent = cls.get_ldoce_entry(w)
-                    w_poses = {cls._pos_code(s.get("pos")) for s in (w_ent.get("senses") or []) if s.get("pos")} if w_ent else set()
+                    w_poses = {pc for s in (w_ent.get("senses") or []) for pc in cls._sense_pos_codes(s)} if w_ent else set()
                     for surf_m in re.finditer(r"\b([a-zA-Z]{4,})\b", matching_sent):
                         surf_low = surf_m.group(1).lower()
                         if surf_low != w and cls.form_matches(surf_low, w):
@@ -3343,7 +3372,7 @@ class ExtractionPipelineMixin:
                             surf_p_code = cls._pos_code(surf_ctx_pos)
                             if surf_p_code and surf_p_code not in w_poses:
                                 surf_ent = cls.get_ldoce_entry(surf_low)
-                                surf_poses = {cls._pos_code(s.get("pos")) for s in (surf_ent.get("senses") or []) if s.get("pos")} if surf_ent else set()
+                                surf_poses = {pc for s in (surf_ent.get("senses") or []) for pc in cls._sense_pos_codes(s)} if surf_ent else set()
                                 if surf_p_code in surf_poses and surf_low not in seen_words:
                                     w = surf_low
                                     cand["part_of_speech"] = surf_ctx_pos

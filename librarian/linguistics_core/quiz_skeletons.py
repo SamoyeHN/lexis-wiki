@@ -669,6 +669,8 @@ class QuizSkeletonsMixin:
             # fill a single blank in English ('*reminds of me'). Decompose into head verb ('remind') + bound
             # preposition anchor ('of') so the blank tests the head verb in '... ____ [sb/sth] of ...'.
             discontinuous_prep = None
+            causative_extraposition_pat = None
+            causative_extraposition_ex = None
             m_disc = re.match(
                 r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\))\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
                 raw_w_item.strip(),
@@ -683,6 +685,45 @@ class QuizSkeletonsMixin:
                     w_lower = head_v
                     discontinuous_prep = disc_p
                     raw_pos = "verb"
+
+            # Discontinuous Causative Verb + [sth] + Adjective Extraposition Frame Resolution (e.g. "make [sth] possible"):
+            # Stripping '[sth]' into bare 2-word 'make possible' produces an ungrammatical contiguous string ('*make possible it').
+            # Transform into the single-blank preparatory-object extraposition construction 'make it <adj>' with frame
+            # 'make it <adj> ... to do [sth]'.
+            m_caus_adj = re.match(
+                r'^(make|find|keep|leave)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+([a-z]+)$',
+                raw_w_item.strip(),
+                re.IGNORECASE
+            )
+            if not m_caus_adj and re.match(r'^(make|find)\s+(possible|impossible|clear|easy|difficult|hard|certain|plain)$', w_lower):
+                m_caus_adj = re.match(r'^(make|find)\s+([a-z]+)$', w_lower)
+            if m_caus_adj:
+                caus_v = m_caus_adj.group(1).lower()
+                adj_w = m_caus_adj.group(2).lower()
+                adj_entry = cls.get_ldoce_entry(adj_w)
+                if adj_entry and adj_entry.get("senses"):
+                    for s_cand in adj_entry["senses"]:
+                        if not isinstance(s_cand, dict):
+                            continue
+                        for pb in (s_cand.get("pattern_bundles") or []):
+                            if not isinstance(pb, dict):
+                                continue
+                            pb_pat = str(pb.get("pattern") or "").lower()
+                            if re.search(rf"\b{re.escape(caus_v)}s?\s+it\s+{re.escape(adj_w)}\b.*\bto\b", pb_pat):
+                                w = f"{caus_v} it {adj_w}"
+                                w_lower = w
+                                raw_pos = "collocation"
+                                raw_s_def = cls.format_ldoce_definition(s_cand)
+                                comp_def = cls._compose_collocation_definition(
+                                    f"{caus_v} {adj_w}", "collocation", adj_w, s_cand, raw_s_def, it.get("quote")
+                                )
+                                if comp_def:
+                                    it["definition"] = comp_def
+                                causative_extraposition_pat = f"{caus_v} it {adj_w} ... to do [sth]"
+                                causative_extraposition_ex = str(pb.get("example") or "").strip() or None
+                                break
+                        if causative_extraposition_pat:
+                            break
 
             # Map POS category
             # Idiomatic Slot Gate: If single word is embedded in a fixed idiomatic construction in authentic quote
@@ -1491,6 +1532,10 @@ class QuizSkeletonsMixin:
                         anchor = pat_prep
                         anchor_type = "prep"
                         pattern_anchor = pat_prep
+            if causative_extraposition_pat:
+                best_pattern = causative_extraposition_pat
+                if causative_extraposition_ex:
+                    ldoce_pattern_example = causative_extraposition_ex
 
             quote_shown_prep = bool(anchor) and anchor_type == "prep" and bool(
                 quote_governed_prep and str(anchor).lower() == quote_governed_prep.lower()
@@ -1642,7 +1687,7 @@ class QuizSkeletonsMixin:
             # Ensure best_pattern never claims a preposition that clashes with final anchor or is absent from ldoce_pattern_example.
             if best_pattern:
                 p_clean_sync = re.sub(r"\[.*?\]|\(.*?\)", "", best_pattern).strip().lower()
-                p_for_prep_sync = re.sub(r"\bto\s+(?:do\s+something|\w+ing)\b", "", p_clean_sync)
+                p_for_prep_sync = re.sub(r"\bto\s+(?:do(?:\s+something)?|\w+ing)\b", "", p_clean_sync)
                 pat_preps_sync = re.findall(
                     r"\b(on|in|at|for|with|about|under|from|to|by|into|of|between|over|against|towards|upon)\b",
                     p_for_prep_sync
@@ -1908,7 +1953,7 @@ class QuizSkeletonsMixin:
                 elif m_adj_noun and m_adj_noun.group(1).lower() not in {"to", "in", "on", "at", "for", "with", "of", "from", "by", "about", "that"}:
                     stem_core += f" (You MUST include the modified noun '{m_adj_noun.group(1)}' immediately after '____' as in '____ {m_adj_noun.group(1)}')."
                 elif is_base_verb_slot:
-                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
             elif best_pattern:
                 stem_core = "Fit into the Pattern above."
                 if is_plural_noun:
@@ -1918,7 +1963,7 @@ class QuizSkeletonsMixin:
                 elif is_attributive_only_adj:
                     stem_core += " (Attributive pre-noun slot required: place '____' directly before a modified noun; NEVER use after a linking verb)."
                 elif is_base_verb_slot:
-                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
             else:
                 stem_core = "Write a natural sentence matching the Definition above."
                 if is_plural_noun:
@@ -1928,7 +1973,7 @@ class QuizSkeletonsMixin:
                 elif is_attributive_only_adj:
                     stem_core += " (Attributive pre-noun slot required: place '____' directly before a modified noun; NEVER use after a linking verb)."
                 elif is_base_verb_slot:
-                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' without a modal)."
+                    stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
 
             task_parts = [stem_core]
 

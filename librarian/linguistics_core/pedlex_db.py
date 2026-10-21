@@ -460,6 +460,20 @@ class PedlexDbMixin:
             return merged
 
         if kind == "derived":
+            req_low = (requested_word or found_word or "").strip().lower()
+            b_low = (base_word or "").strip().lower()
+            d_pos = str(data.get("pos") or "noun").strip().lower()
+            b_pos_top = str(base_data.get("pos") or "").strip().lower()
+            same_pos_family = bool(d_pos and b_pos_top and (d_pos == b_pos_top or d_pos[:3] == b_pos_top[:3]))
+
+            def _attests_derived(t_str: Any) -> bool:
+                s = str(t_str or "").lower()
+                if not s or not req_low:
+                    return False
+                if b_low and b_low != req_low:
+                    s = re.sub(rf"\b{re.escape(b_low)}\b", "", s)
+                return cls.text_contains_form(s, req_low)
+
             # Own sense, own gloss - only the borrowable assets come from the base.
             for key in cls._DERIVED_BORROW_KEYS:
                 theirs = base_data.get(key)
@@ -471,14 +485,49 @@ class PedlexDbMixin:
                     for section, items in theirs.items():
                         bucket = merged_cols.setdefault(section, [])
                         for item in items or []:
-                            if item and item not in bucket:
+                            if not item:
+                                continue
+                            # Do not borrow cross-POS base collocations (e.g. 'heavily urbanized' onto noun 'urbanization')
+                            # unless the collocation or its example explicitly attests the derived headword (and does not
+                            # merely print a phrase headed by the base word).
+                            if not same_pos_family and isinstance(item, dict) and req_low:
+                                col_txt = str(item.get("collocation") or "")
+                                ex_txt = str(item.get("example") or "")
+                                has_col_req = _attests_derived(col_txt)
+                                has_ex_req = _attests_derived(ex_txt)
+                                has_col_base = bool(base_word and cls.text_contains_form(col_txt, base_word))
+                                if not (has_col_req or (has_ex_req and not has_col_base)):
+                                    continue
+                            if item not in bucket:
                                 bucket.append(item)
                     data["collocations"] = merged_cols
                 elif not data.get(key):
+                    if key == "thesaurus" and not same_pos_family:
+                        continue
+                    if key == "cross_collocations" and not same_pos_family and isinstance(theirs, list):
+                        filtered_cc = [
+                            it for it in theirs
+                            if isinstance(it, dict) and _attests_derived(it.get("collocation"))
+                        ]
+                        if filtered_cc:
+                            data[key] = filtered_cc
+                        continue
+                    if key == "grammar_boxes" and not same_pos_family and isinstance(theirs, list):
+                        filtered_gb = []
+                        for gb in theirs:
+                            if not isinstance(gb, dict) or not req_low:
+                                continue
+                            gb_texts = [str(gb.get("content") or "")]
+                            gb_texts.extend(str(r.get("text") if isinstance(r, dict) else r or "") for r in (gb.get("rules") or []))
+                            gb_texts.extend(str(ex or "") for ex in (gb.get("examples") or []))
+                            if any(_attests_derived(t_str) for t_str in gb_texts if t_str):
+                                filtered_gb.append(gb)
+                        if filtered_gb:
+                            data[key] = filtered_gb
+                        continue
                     data[key] = theirs
             # Enrich derived entries from base_data's Language Activator / Thesaurus when they explicitly
             # define or exemplify the derived headword (e.g. 'enlightening' inside 'enlighten' Activator).
-            req_low = (requested_word or found_word or "").strip().lower()
             act_defs: List[str] = []
             act_exs: List[str] = []
             if req_low:
@@ -502,11 +551,16 @@ class PedlexDbMixin:
                                 act_exs.append(str(ex).strip())
                         if th.get("example") and str(th["example"]).strip() not in act_exs:
                             act_exs.append(str(th["example"]).strip())
-            d_pos = str(data.get("pos") or "noun").strip().lower()
             d_gram = str(data.get("runon_gram") or "").strip()
             own_exs: List[str] = list(act_exs)
             if req_low:
                 for _sec, items in (data.get("collocations") or {}).items():
+                    for it in items or []:
+                        if isinstance(it, dict) and it.get("example") and cls.text_contains_form(str(it["example"]), req_low):
+                            ex_s = str(it["example"]).strip()
+                            if ex_s not in own_exs:
+                                own_exs.append(ex_s)
+                for _sec, items in (base_data.get("collocations") or {}).items():
                     for it in items or []:
                         if isinstance(it, dict) and it.get("example") and cls.text_contains_form(str(it["example"]), req_low):
                             ex_s = str(it["example"]).strip()
@@ -555,6 +609,17 @@ class PedlexDbMixin:
                         if b_def.lower().startswith(("having ", "not having ", "without ", "able to ", "unable to ", "free from ")):
                             return f"the state or condition of {b_def}"
                         return f"the state or quality of being {b_def}"
+                if pos_low == "noun" and word_low.endswith(("ization", "isation", "ation", "tion", "sion", "ment")):
+                    if "verb" in b_pos:
+                        if b_def.lower().startswith("if "):
+                            return f"the action, process, or result when {b_def[3:].strip()}"
+                        v_clean = re.sub(r"^to\s+", "", b_def).strip()
+                        return f"the action, process, or result of doing something to {v_clean}"
+                    if "adj" in b_pos:
+                        if b_word and re.match(rf"^(?:an?\s+)?{re.escape(b_word)}\s+", b_def, re.I):
+                            subj_pred = re.sub(rf"^(?:an?\s+)?{re.escape(b_word)}\s+", "", b_def, flags=re.I).strip()
+                            return f"the process or state in which a {subj_pred}" if not subj_pred.lower().startswith(("people ", "things ", "areas ", "countries ")) else f"the process or state in which {subj_pred}"
+                        return f"the process or state of becoming or making something {b_def}"
                 if pos_low == "noun" and (word_low.endswith("ing") or word_low.endswith("ings")):
                     if "verb" in b_pos:
                         if b_def.lower().startswith("if "):
@@ -583,6 +648,8 @@ class PedlexDbMixin:
                         return b_def
                     if "noun" in b_pos:
                         return f"relating to, using, or characterized by {b_def}"
+                if b_pos and pos_low and b_pos[:3] != pos_low[:3]:
+                    return ""
                 return b_def
 
             def _synthesize_derived_def(word_low: str, pos_low: str, b_word: str, b_senses: List[Dict[str, Any]]) -> str:
@@ -616,10 +683,36 @@ class PedlexDbMixin:
                     ps["grammar"] = gram_str or ("[uncountable]" if pos_low == "noun" and word_low.endswith("ness") else ps.get("grammar", ""))
                     ps["definition"] = synth_d
                     ps["gloss_source"] = "derivational"
+                    if word_low:
+                        if "patterns" in ps:
+                            ps["patterns"] = [
+                                p for p in (bs.get("patterns") or [])
+                                if _attests_derived(p)
+                            ]
+                        if "syntactic_patterns" in ps:
+                            ps["syntactic_patterns"] = [
+                                p for p in (bs.get("syntactic_patterns") or [])
+                                if _attests_derived(p)
+                            ]
+                        if "pattern_bundles" in ps:
+                            ps["pattern_bundles"] = [
+                                pb for pb in (bs.get("pattern_bundles") or [])
+                                if isinstance(pb, dict) and _attests_derived(pb.get("pattern"))
+                            ]
+                        if "collocations" in ps:
+                            ps["collocations"] = [
+                                c for c in (bs.get("collocations") or [])
+                                if _attests_derived(c)
+                            ]
+                        if "units" in ps:
+                            ps["units"] = [
+                                u for u in (bs.get("units") or [])
+                                if _attests_derived(u.get("phrase") if isinstance(u, dict) else u)
+                            ]
                     if idx == 0 and exs:
                         ps["examples"] = list(exs)
                     else:
-                        ps["examples"] = [ex for ex in (exs or []) if cls.text_contains_form(ex, word_low)]
+                        ps["examples"] = [ex for ex in (exs or []) if _attests_derived(ex)]
                     projected.append(ps)
                 return projected
 
@@ -648,6 +741,23 @@ class PedlexDbMixin:
                         b_s0 = dict(base_data["senses"][0])
                         b_s0["pos"] = d_pos
                         b_s0["grammar"] = d_gram
+                        if req_low:
+                            for p_key in ("patterns", "syntactic_patterns", "collocations"):
+                                if p_key in b_s0:
+                                    b_s0[p_key] = [
+                                        p for p in (b_s0.get(p_key) or [])
+                                        if _attests_derived(p)
+                                    ]
+                            if "pattern_bundles" in b_s0:
+                                b_s0["pattern_bundles"] = [
+                                    pb for pb in (b_s0.get("pattern_bundles") or [])
+                                    if isinstance(pb, dict) and _attests_derived(pb.get("pattern"))
+                                ]
+                            if "units" in b_s0:
+                                b_s0["units"] = [
+                                    u for u in (b_s0.get("units") or [])
+                                    if _attests_derived(u.get("phrase") if isinstance(u, dict) else u)
+                                ]
                         synth_d = _synthesize_derived_def(req_low, d_pos, base_word, base_data["senses"])
                         if synth_d:
                             b_s0["definition"] = synth_d
@@ -670,6 +780,11 @@ class PedlexDbMixin:
                 if act_defs and (s0.get("gloss_source") == "wordnet" or not s0.get("definition")):
                     s0["definition"] = act_defs[0]
                     s0["gloss_source"] = "ldoce_activator"
+                elif s0_def:
+                    fmt_s0 = str(cls.format_ldoce_definition(s0) or "").strip()
+                    if fmt_s0 and fmt_s0 != s0_def:
+                        s0["definition"] = fmt_s0
+                        s0["gloss_source"] = "ldoce_upgraded"
                 elif not s0.get("definition") and base_data.get("senses"):
                     synth_d = _synthesize_derived_def(req_low, str(s0.get("pos") or d_pos).lower(), base_word, base_data["senses"])
                     if synth_d:
@@ -690,6 +805,7 @@ class PedlexDbMixin:
                 if (
                     len(out_senses) == 1
                     and not act_defs
+                    and s0.get("gloss_source") != "ldoce_upgraded"
                     and (len(base_senses_list) > 1 or is_single_domain_base)
                 ):
                     t_pos = str(s0.get("pos") or d_pos).lower()
@@ -707,7 +823,12 @@ class PedlexDbMixin:
                             if not ps.get("examples") and s0.get("examples"):
                                 ps["examples"] = list(s0["examples"])
                             new_proj.append(ps)
-                    if s0.get("gloss_source") == "wordnet" and new_proj:
+                    is_participial_adj_base = (
+                        t_pos == "noun"
+                        and req_low.endswith(("ization", "isation", "ation", "tion", "sion", "ment"))
+                        and base_word.endswith(("ed", "ing"))
+                    )
+                    if s0.get("gloss_source") == "wordnet" and new_proj and not is_participial_adj_base:
                         out_senses = new_proj + out_senses
                     else:
                         out_senses.extend(new_proj)
@@ -769,32 +890,41 @@ class PedlexDbMixin:
         # infinitive 'to' - or a preposition belonging to some other word in the phrase -
         # leaks into the headword's valency set, and double_key_collision then rejects the
         # headword's genuine bound preposition against a semantic neighbour.
+        sense_poses = {
+            cls._pos_code(s.get("pos") or entry.get("pos"))
+            for s in (entry.get("senses") or [])
+            if cls._pos_code(s.get("pos") or entry.get("pos"))
+        }
+        is_multi_pos_entry = len(sense_poses) > 1
         collocs = entry.get("collocations", {})
         head = (entry.get("base_word") or word).lower()
         head_prep_re = re.compile(
             rf"\b{re.escape(head)}(?:s|es|ed|d|ing)?(?:\s+(?:somebody|something|someone|sb|sth|oneself|/|\.\.\.))*\s+"
             rf"({'|'.join(std_preps)})\b"
         )
-        for ph in collocs.get("phrases", []):
-            p_text = ph.get("collocation", "").lower() if isinstance(ph, dict) else str(ph).lower()
-            p_text = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", p_text)
-            for m in head_prep_re.finditer(p_text):
-                preps.add(m.group(1))
-        for pv in entry.get("phrasal_verbs", []):
-            if isinstance(pv, dict):
-                for m in head_prep_re.finditer(str(pv.get("phrase") or "").lower()):
+        if not (norm_pos and is_multi_pos_entry):
+            for ph in collocs.get("phrases", []):
+                p_text = ph.get("collocation", "").lower() if isinstance(ph, dict) else str(ph).lower()
+                p_text = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", p_text)
+                for m in head_prep_re.finditer(p_text):
                     preps.add(m.group(1))
-                for pv_s in (pv.get("senses") or []):
-                    if isinstance(pv_s, dict):
-                        for pat in (pv_s.get("patterns") or []):
-                            pat_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(pat).lower())
-                            for m in head_prep_re.finditer(pat_c):
-                                preps.add(m.group(1))
-        for u in entry.get("units", []):
-            if isinstance(u, dict):
-                u_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(u.get("phrase") or "").lower())
-                for m in head_prep_re.finditer(u_c):
-                    preps.add(m.group(1))
+        if not norm_pos or norm_pos == "verb":
+            for pv in entry.get("phrasal_verbs", []):
+                if isinstance(pv, dict):
+                    for m in head_prep_re.finditer(str(pv.get("phrase") or "").lower()):
+                        preps.add(m.group(1))
+                    for pv_s in (pv.get("senses") or []):
+                        if isinstance(pv_s, dict):
+                            for pat in (pv_s.get("patterns") or []):
+                                pat_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(pat).lower())
+                                for m in head_prep_re.finditer(pat_c):
+                                    preps.add(m.group(1))
+        if not (norm_pos and is_multi_pos_entry):
+            for u in entry.get("units", []):
+                if isinstance(u, dict):
+                    u_c = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(u.get("phrase") or "").lower())
+                    for m in head_prep_re.finditer(u_c):
+                        preps.add(m.group(1))
         return preps
 
     # The tokens PedLex uses as the second word of a phrasal verb.
@@ -2068,11 +2198,12 @@ class PedlexDbMixin:
         cls,
         word: str,
         quote: str = "",
-        sense_index: Optional[int] = None
+        sense_index: Optional[int] = None,
+        pos: str = "",
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieves authentic grammar error diagnostics (Don't say / ✗) directly from PedLex Grammar Boxes in data_json.
-        When `sense_index` is provided, filters out boxes explicitly restricted to other senses (`sense_indices`).
+        When `sense_index` or `pos` is provided, filters out boxes explicitly restricted to other senses or POS categories.
         Returns dict with keys: 'word', 'title', 'content', 'rules', 'comparison_peers', 'syntactic_constraints', etc. or None.
         """
         if not word:
@@ -2086,6 +2217,16 @@ class PedlexDbMixin:
         if not boxes:
             return None
 
+        p_norm = (pos or "").strip().lower()
+        if p_norm.startswith("n"):
+            p_norm = "noun"
+        elif p_norm.startswith("v"):
+            p_norm = "verb"
+        elif p_norm.startswith("adj") or p_norm == "a":
+            p_norm = "adjective"
+        elif p_norm.startswith("adv") or p_norm == "r":
+            p_norm = "adverb"
+
         best_box = None
         for b in boxes:
             gb_senses = b.get("sense_indices")
@@ -2096,24 +2237,41 @@ class PedlexDbMixin:
             bad_exs = b.get("bad_examples", [])
             rules = b.get("rules", [])
             has_alert = bool(bad_exs) or bool(rules) or "Don't say" in content or "✗" in content or "grammar" in title.lower()
+            if not has_alert:
+                continue
 
-            if has_alert:
-                box_res = {
-                    "word": w_clean,
-                    "title": title or "GRAMMAR ALERT",
-                    "content": content,
-                    "bad_examples": bad_exs,
-                    "examples": b.get("examples", []),
-                    "rules": rules,
-                    "comparison_peers": b.get("comparison_peers", []),
-                    "peer_details": b.get("peer_details", []),
-                    "syntactic_constraints": b.get("syntactic_constraints", {}),
-                    "sense_indices": gb_senses or [],
-                }
-                if quote and any(tok in content.lower() for tok in quote.lower().split() if len(tok) > 4):
-                    return box_res
-                if not best_box:
-                    best_box = box_res
+            if p_norm in ("noun", "verb") and len(boxes) > 1:
+                c_low = content.lower()
+                forb = (b.get("syntactic_constraints") or {}).get("forbidden_frames") or []
+                is_noun_box = bool(
+                    "countable_use" in forb
+                    or re.search(rf"\b{re.escape(w_clean)}\s+is\s+(?:always\s+)?an?\s+(?:uncountable|countable|singular|plural)\s+noun\b", c_low)
+                )
+                is_verb_box = bool(
+                    not is_noun_box
+                    and re.search(rf"\b(?:you|he|she|we|they)\s+{re.escape(w_clean)}(?:s|es|ed)?\s+(?:in|at|for|on|as|with|to)\b", c_low)
+                )
+                if p_norm == "noun" and is_verb_box:
+                    continue
+                if p_norm == "verb" and is_noun_box:
+                    continue
+
+            box_res = {
+                "word": w_clean,
+                "title": title or "GRAMMAR ALERT",
+                "content": content,
+                "bad_examples": bad_exs,
+                "examples": b.get("examples", []),
+                "rules": rules,
+                "comparison_peers": b.get("comparison_peers", []),
+                "peer_details": b.get("peer_details", []),
+                "syntactic_constraints": b.get("syntactic_constraints", {}),
+                "sense_indices": gb_senses or [],
+            }
+            if quote and any(tok in content.lower() for tok in quote.lower().split() if len(tok) > 4):
+                return box_res
+            if not best_box:
+                best_box = box_res
         return best_box
 
     @classmethod
@@ -2273,13 +2431,26 @@ class PedlexDbMixin:
             return t
 
         def _add_syn(raw_t: str) -> None:
-            for part in re.split(r"[,;/]", str(raw_t or "")):
+            raw_s = str(raw_t or "")
+            if "/" in raw_s and any(" " in seg.strip() for seg in raw_s.split("/")):
+                t = _clean_term(raw_s)
+                if t and t != w_clean and "/" not in t:
+                    synonyms.add(t)
+                return
+            for part in re.split(r"[,;/]", raw_s):
                 t = _clean_term(part)
                 if t and t != w_clean:
                     synonyms.add(t)
 
         def _add_ant(raw_t: str) -> None:
-            for part in re.split(r"[,;/]", str(raw_t or "")):
+            raw_s = str(raw_t or "")
+            if "/" in raw_s and any(" " in seg.strip() for seg in raw_s.split("/")):
+                t = _clean_term(raw_s)
+                if t and t != w_clean and "/" not in t and t not in seen_ant:
+                    seen_ant.add(t)
+                    antonyms.append(t)
+                return
+            for part in re.split(r"[,;/]", raw_s):
                 t = _clean_term(part)
                 if t and t != w_clean and t not in seen_ant:
                     seen_ant.add(t)
@@ -2340,12 +2511,17 @@ class PedlexDbMixin:
 
             for la in entry.get("language_activator", []):
                 if isinstance(la, dict):
+                    la_concept = str(la.get("concept") or "").strip().lower()
+                    # Skip negated/opposite activator concepts (e.g. 'not intelligent' attached to 'smart')
+                    if la_concept.startswith(("not ", "no ", "without ")) and not w_clean.startswith(("un", "in", "im", "ir", "il", "non", "dis")):
+                        continue
                     la_words = [
                         _clean_term(exp.get("word", ""))
                         for exp in (la.get("words") or la.get("exponents") or [])
                         if isinstance(exp, dict) and exp.get("word")
                     ]
-                    if len(la_words) <= 20:
+                    # Only include cluster if target headword/lemma is an actual standalone exponent in the cluster
+                    if (w_clean in la_words or w_lemma in la_words) and len(la_words) <= 20:
                         for lw in la_words:
                             _add_syn(lw)
 
@@ -2425,6 +2601,7 @@ class PedlexDbMixin:
                     ct = _clean_term(x)
                     if ct and " " not in ct and ct not in hop_candidates:
                         hop_candidates.append(ct)
+                # Pass 1: Strict reciprocal membership (target appears in hop candidate's synonym/core_synonym list)
                 for cs in hop_candidates[:6]:
                     for cs_ox in cls.get_oxford_thesaurus_entries(cs):
                         cs_pos = str(cs_ox.get("pos", "")).strip().lower()
@@ -2434,10 +2611,287 @@ class PedlexDbMixin:
                         for cs_blk in (cs_ox.get("senses") or []):
                             cs_syns = {_clean_term(x) for x in (cs_blk.get("synonyms") or []) if _clean_term(x)}
                             cs_core = {_clean_term(x) for x in (cs_blk.get("core_synonyms") or []) if _clean_term(x)}
-                            # Verify reciprocal membership with the matched sense's own synonyms (not cross-sense union)
-                            if w_clean in cs_syns or w_lemma in cs_syns or w_clean in cs_core or len(cs_syns & top_syns) >= 2:
+                            if w_clean in cs_syns or w_lemma in cs_syns or w_clean in cs_core:
                                 for ant_w in (cs_blk.get("antonyms") or []):
                                     _add_ant(ant_w)
+                # Pass 2: Fallback shared-synonym overlap only if strict reciprocal hop found no antonyms
+                if not antonyms:
+                    for cs in hop_candidates[:6]:
+                        for cs_ox in cls.get_oxford_thesaurus_entries(cs):
+                            cs_pos = str(cs_ox.get("pos", "")).strip().lower()
+                            if norm_pos and cs_pos and norm_pos in {"verb", "noun", "adjective", "adverb"}:
+                                if cs_pos != norm_pos:
+                                    continue
+                            for cs_blk in (cs_ox.get("senses") or []):
+                                cs_syns = {_clean_term(x) for x in (cs_blk.get("synonyms") or []) if _clean_term(x)}
+                                if len(cs_syns & top_syns) >= 2:
+                                    for ant_w in (cs_blk.get("antonyms") or []):
+                                        _add_ant(ant_w)
 
+        # Antonyms take precedence: never classify an attested antonym as a synonym
+        synonyms -= seen_ant
         return synonyms, antonyms
+
+    # ------------------------------------------------------------------
+    # Section 8: Two-Tier Construction Tagging (`pedlex_cxn_index`)
+    # & Single-Point Minimal-Pair Error Traps (`pedlex_error_traps`)
+    # ------------------------------------------------------------------
+    @classmethod
+    def get_word_cxn_specs(
+        cls,
+        word: str,
+        sense_idx: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve construction specifications (`cxn_spec`) from `pedlex_cxn_index` (or entry JSON fallback).
+        When `sense_idx` is provided:
+          - returns entry-level (`sense_idx = -1`) specs plus sense-specific (`sense_idx == sense_idx`) specs.
+        When `sense_idx` is None:
+          - returns all construction rows registered for `word`."""
+        w_clean = (word or "").strip().lower()
+        if not w_clean or not cls._ensure_ldoce_conn():
+            return []
+        # Also resolve multi-word preparatory-object idioms like 'make it possible' -> 'make'
+        q_words = [w_clean]
+        m_it = re.match(r"^(make|find|keep|leave|consider|think|deem|regard)\s+it\s+[a-z]+\b", w_clean)
+        if m_it and m_it.group(1) not in q_words:
+            q_words.append(m_it.group(1))
+
+        out: List[Dict[str, Any]] = []
+        if cls._ldoce_table_exists("pedlex_cxn_index"):
+            try:
+                for qw in q_words:
+                    if sense_idx is not None:
+                        rows = cls._ldoce_conn.execute(
+                            "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
+                            "canonical_pattern, canonical_blank, cloze_frame, contrast_groups, ban_groups "
+                            "FROM pedlex_cxn_index WHERE word = ? AND (sense_idx = -1 OR sense_idx = ?)",
+                            (qw, int(sense_idx)),
+                        ).fetchall()
+                    else:
+                        rows = cls._ldoce_conn.execute(
+                            "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
+                            "canonical_pattern, canonical_blank, cloze_frame, contrast_groups, ban_groups "
+                            "FROM pedlex_cxn_index WHERE word = ?",
+                            (qw,),
+                        ).fetchall()
+                    for (
+                        r_subcat, r_fam, r_word, r_pos, r_sidx, r_cefr, r_zipf,
+                        r_pat, r_blank, r_cloze, r_contrasts, r_bans
+                    ) in rows:
+                        c_list = [g.strip() for g in (r_contrasts or "").split(",") if g.strip()]
+                        b_list = [g.strip() for g in (r_bans or "").split(",") if g.strip()]
+                        out.append({
+                            "word": r_word,
+                            "sense_idx": r_sidx,
+                            "pos": r_pos,
+                            "subcat_group": r_subcat,
+                            "cxn_family": r_fam,
+                            "family_id": r_fam,
+                            "cefr_int": r_cefr,
+                            "zipf_score": r_zipf,
+                            "canonical_pattern": r_pat,
+                            "canonical_blank": r_blank,
+                            "cloze_frame": r_cloze,
+                            "contrast_groups": c_list,
+                            "ban_groups": b_list,
+                        })
+                    if out:
+                        break
+            except Exception:
+                pass
+        if not out:
+            entry = cls.get_ldoce_entry(w_clean)
+            if entry:
+                for sp in (entry.get("cxn_specs") or []):
+                    if isinstance(sp, dict):
+                        spec = dict(sp)
+                        spec.setdefault("word", w_clean)
+                        spec.setdefault("sense_idx", -1)
+                        spec.setdefault("cxn_family", spec.get("family_id", ""))
+                        if isinstance(spec.get("contrast_groups"), str):
+                            spec["contrast_groups"] = [g.strip() for g in spec["contrast_groups"].split(",") if g.strip()]
+                        if isinstance(spec.get("ban_groups"), str):
+                            spec["ban_groups"] = [g.strip() for g in spec["ban_groups"].split(",") if g.strip()]
+                        out.append(spec)
+                for idx, s in enumerate(entry.get("senses") or []):
+                    if sense_idx is not None and idx != sense_idx:
+                        continue
+                    for sp in (s.get("cxn_specs") or []):
+                        if isinstance(sp, dict):
+                            spec = dict(sp)
+                            spec.setdefault("word", w_clean)
+                            spec.setdefault("sense_idx", idx)
+                            spec.setdefault("cxn_family", spec.get("family_id", ""))
+                            if isinstance(spec.get("contrast_groups"), str):
+                                spec["contrast_groups"] = [g.strip() for g in spec["contrast_groups"].split(",") if g.strip()]
+                            if isinstance(spec.get("ban_groups"), str):
+                                spec["ban_groups"] = [g.strip() for g in spec["ban_groups"].split(",") if g.strip()]
+                            out.append(spec)
+        return out
+
+    @classmethod
+    def query_cxn_contrast_distractors(
+        cls,
+        contrast_groups: List[str],
+        ban_groups: Optional[List[str]] = None,
+        pos: Optional[str] = None,
+        exclude_words: Optional[Set[str]] = None,
+        limit: int = 12,
+    ) -> List[str]:
+        """Execute <0.2ms set-difference SQL query on `pedlex_cxn_index`:
+        Selects headwords/phrases in `contrast_groups` that NEVER appear in `ban_groups` across any sense."""
+        if not contrast_groups or not cls._ensure_ldoce_conn() or not cls._ldoce_table_exists("pedlex_cxn_index"):
+            return []
+        bans = [g for g in (ban_groups or []) if g]
+        contrasts = [g for g in contrast_groups if g]
+        if not contrasts:
+            return []
+        excl = {w.strip().lower() for w in (exclude_words or set()) if w}
+        try:
+            c_placeholders = ",".join("?" for _ in contrasts)
+            params: List[Any] = list(contrasts)
+            pos_clause = ""
+            if pos and pos.strip().lower() not in ("phrase", "other"):
+                pos_clause = " AND pos = ?"
+                params.append(pos.strip().lower())
+            ban_clause = ""
+            if bans:
+                b_placeholders = ",".join("?" for _ in bans)
+                ban_clause = f" AND word NOT IN (SELECT word FROM pedlex_cxn_index WHERE subcat_group IN ({b_placeholders}))"
+                params.extend(bans)
+            sql = (
+                f"SELECT DISTINCT word FROM pedlex_cxn_index "
+                f"WHERE subcat_group IN ({c_placeholders}){pos_clause}{ban_clause} "
+                f"ORDER BY zipf_score DESC"
+            )
+            rows = cls._ldoce_conn.execute(sql, params).fetchall()
+            cands = [r[0] for r in rows if r and r[0] and r[0].lower() not in excl]
+            return cands[:limit]
+        except Exception:
+            return []
+
+    @classmethod
+    def get_word_error_traps(
+        cls,
+        word: str,
+        pos: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve pre-mined lexical/syntactic minimal-pair error traps from `pedlex_error_traps`
+        for `translation_quiz` and `vocabulary_quiz` distractor/error-injection specs."""
+        w_clean = (word or "").strip().lower()
+        if not w_clean or not cls._ensure_ldoce_conn():
+            return []
+        out: List[Dict[str, Any]] = []
+        if cls._ldoce_table_exists("pedlex_error_traps"):
+            try:
+                if pos:
+                    p_low = pos.strip().lower()
+                    rows = cls._ldoce_conn.execute(
+                        "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
+                        "FROM pedlex_error_traps WHERE word = ? AND (pos = ? OR pos = '' OR pos = 'other')",
+                        (w_clean, p_low),
+                    ).fetchall()
+                else:
+                    rows = cls._ldoce_conn.execute(
+                        "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
+                        "FROM pedlex_error_traps WHERE word = ?",
+                        (w_clean,),
+                    ).fetchall()
+                for r in rows:
+                    out.append({
+                        "word": r[0],
+                        "pos": r[1],
+                        "sense_idx": r[2],
+                        "trap_type": r[3],
+                        "forbidden_frame": r[4],
+                        "bad_example": r[5],
+                        "good_example": r[6],
+                        "rule_note": r[7],
+                        "correct_frame": r[6] or w_clean,
+                        "wrong_frame": r[5] or r[4],
+                        "warning_note": r[7],
+                        "authentic_example": r[6],
+                    })
+            except Exception:
+                pass
+        # Supplement with deterministic <gram>, valency, and L1 negative-transfer traps when not in grambox table
+        if not out:
+            entry = cls.get_ldoce_entry(w_clean)
+            if entry:
+                for s_idx, s in enumerate(entry.get("senses") or []):
+                    s_pos = str(s.get("pos") or entry.get("pos") or "other").lower()
+                    gram = str(s.get("grammar") or "").lower()
+                    pats = s.get("patterns") or []
+                    exs = s.get("examples") or []
+                    ex0 = exs[0] if exs else ""
+                    if "only before noun" in gram:
+                        out.append({
+                            "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
+                            "trap_type": "GRAM_ATTRIBUTIVE_ONLY",
+                            "forbidden_frame": f"*be {w_clean}*",
+                            "bad_example": f"*The system is {w_clean}.*",
+                            "good_example": ex0 or f"a {w_clean} requirement",
+                            "rule_note": f"'{w_clean}' is [only before noun] and cannot be used predicatively after 'be'.",
+                            "correct_frame": f"{w_clean} + noun",
+                            "wrong_frame": f"*be + {w_clean}*",
+                            "warning_note": f"'{w_clean}' is [only before noun].",
+                            "authentic_example": ex0,
+                        })
+                    elif "uncountable" in gram and "countable" not in gram.replace("uncountable", ""):
+                        out.append({
+                            "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
+                            "trap_type": "GRAM_UNCOUNTABLE",
+                            "forbidden_frame": f"*a/an {w_clean}*, *{w_clean}s*",
+                            "bad_example": f"*a good {w_clean}*",
+                            "good_example": ex0 or f"some {w_clean}",
+                            "rule_note": f"'{w_clean}' is [uncountable] and never takes 'a/an' or a plural '-s'.",
+                            "correct_frame": f"{w_clean} [uncountable]",
+                            "wrong_frame": f"*a {w_clean} / {w_clean}s*",
+                            "warning_note": f"'{w_clean}' is [uncountable].",
+                            "authentic_example": ex0,
+                        })
+                    elif w_clean in ("although", "though", "even though", "whereas", "while"):
+                        out.append({
+                            "word": w_clean, "pos": "conjunction", "sense_idx": s_idx,
+                            "trap_type": "L1_CONJUNCTION_REDUNDANCY",
+                            "forbidden_frame": f"*{w_clean.capitalize()} ..., but ...*",
+                            "bad_example": f"*{w_clean.capitalize()} it was raining, but we went out.*",
+                            "good_example": ex0 or f"{w_clean.capitalize()} it was raining, we went out.",
+                            "rule_note": f"Never combine subordinating conjunction '{w_clean}' with coordinating conjunction 'but' in the same sentence.",
+                            "correct_frame": f"{w_clean.capitalize()} + Clause, Main Clause",
+                            "wrong_frame": f"*{w_clean.capitalize()} + Clause, but Main Clause*",
+                            "warning_note": f"Do not use 'but' in a sentence introduced by '{w_clean}'.",
+                            "authentic_example": ex0,
+                        })
+                    elif w_clean in ("despite", "in spite of"):
+                        out.append({
+                            "word": w_clean, "pos": "preposition", "sense_idx": s_idx,
+                            "trap_type": "CLAUSE_PREP_CONFUSION",
+                            "forbidden_frame": f"*{w_clean} + finite clause (Subj + V)*",
+                            "bad_example": f"*{w_clean.capitalize()} he was tired, he kept working.*",
+                            "good_example": ex0 or f"{w_clean.capitalize()} being tired, he kept working.",
+                            "rule_note": f"'{w_clean}' is a preposition and must be followed by a noun phrase, gerund (-ing), or 'the fact that', never a bare finite clause.",
+                            "correct_frame": f"{w_clean} + NP / V-ing / the fact that",
+                            "wrong_frame": f"*{w_clean} + Subject + finite Verb*",
+                            "warning_note": f"'{w_clean}' takes a noun phrase or V-ing, not a finite clause.",
+                            "authentic_example": ex0,
+                        })
+                    elif pats:
+                        p0 = str(pats[0])
+                        out.append({
+                            "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
+                            "trap_type": "LEXICAL_VALENCY_FRAME",
+                            "forbidden_frame": f"*{w_clean} + wrong complement/preposition*",
+                            "bad_example": f"*{w_clean} (violating '{p0}')*",
+                            "good_example": ex0 or p0,
+                            "rule_note": f"Use the required pattern '{p0}'.",
+                            "correct_frame": p0,
+                            "wrong_frame": f"*{w_clean} (wrong preposition/complement)*",
+                            "warning_note": f"Required frame: {p0}",
+                            "authentic_example": ex0,
+                        })
+                    if out:
+                        break
+        return out
+
 

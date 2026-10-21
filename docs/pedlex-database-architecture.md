@@ -16,7 +16,7 @@ Both databases are purely local SQLite files queried synchronously by [`Linguist
 ## 2. Table Schemas (`pedlex.db`)
 
 ### 2.1 Table: `ldoce` (Primary Pedagogical Lexicon Table)
-Main lexical entries table. Contains primary headwords (`article`), derived run-ons (`derived`), and alias redirects (`alias`).
+Main lexical entries table (59,368 total rows). Contains primary headwords (`article`, 46,989 rows), derived run-ons (`derived`, 5,678 rows), alias redirects (`alias`, 2,846 rows), and encyclopedic/named entities (`entity`, 3,855 rows).
 
 ```sql
 CREATE TABLE ldoce (
@@ -30,7 +30,7 @@ CREATE TABLE ldoce (
 ```
 
 ### 2.2 Table: `pedlex_phrase_index` (Active Pedagogical Phrase & Distractor Index)
-Contains 106,738 authentic multi-word phrase patterns catalogued across Pedagogical Lexicon entries (covering 26,538 unique normalized phrase units in `_PHRASE_INDEX_CACHE`).
+Contains 106,738 authentic multi-word phrase patterns catalogued across Pedagogical Lexicon entries (covering 26,538 unique normalized phrase units in `_PHRASE_INDEX_CACHE`; also aliased as `ldoce_phrase_index` for backward compatibility).
 
 ```sql
 CREATE TABLE pedlex_phrase_index (
@@ -44,7 +44,7 @@ CREATE TABLE pedlex_phrase_index (
 ```
 
 ### 2.3 Table: `pedlex_sense_cue_index` (Sense-Collocation Reversing Lookup Index)
-Contains 813,805 cue-to-sense inverted mappings across all 48,960 PedLex headwords. Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
+Contains inverted cue-to-sense mappings across PedLex headwords (also aliased as `ldoce_sense_cue_index`). Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
 
 ```sql
 CREATE TABLE pedlex_sense_cue_index (
@@ -59,6 +59,61 @@ CREATE TABLE pedlex_sense_cue_index (
 > [!TIP]
 > **Active Role in Sub-Millisecond WSD & Reversing Lookup**:
 > Allows instant retrieval of sense candidates matching contextual tokens from the passage. Queries `SELECT host_word, sense_idx, weight FROM pedlex_sense_cue_index WHERE cue_word = ? AND host_word = ?` in sub-millisecond offline lookup without parsing full entries.
+
+### 2.4 Table: `oxford_thesaurus` (Sense-Grouped Synonym & Antonym Companion Table)
+Stores fine-grained sense-grouped synonyms and antonyms (16,234 rows) used alongside `ldoce.thesaurus` and `ldoce.language_activator` for distractor generation and double-key collision screening:
+
+```sql
+CREATE TABLE oxford_thesaurus (
+    word TEXT PRIMARY KEY,       -- Normalized headword key
+    pos TEXT,                    -- Primary part of speech
+    pos_all TEXT,                -- Comma-separated parts of speech
+    sense_count INTEGER,         -- Number of distinct synonym/antonym sense clusters
+    synonym_count INTEGER,       -- Total synonym count across senses
+    antonym_count INTEGER,       -- Total antonym count across senses
+    data_json TEXT               -- JSON payload containing per-sense 'definition', 'synonyms', and 'antonyms'
+);
+```
+
+### 2.5 Table: `pedlex_cxn_index` (Two-Tier Construction Tagging & Reverse Subcategorization Index)
+Contains 2,635 pre-compiled constructional frames and subcategorization equivalence rows across all **Eight Lexico-Syntactic Construction Families** (both entry-level `sense_idx = -1` and sense-specific `sense_idx >= 0`):
+
+```sql
+CREATE TABLE pedlex_cxn_index (
+    subcat_group TEXT NOT NULL,      -- Syntactic equivalence class ('ADJ_IT_EXTRAPOS', 'V_GERUND_ONLY', 'N_SHELL_TO_DO', etc.)
+    family_id TEXT NOT NULL,         -- Construction family ('FAM1A_IT_OBJ_EXTRAPOS', 'FAM3_VERB_NONFINITE_COMP', etc.)
+    word TEXT NOT NULL,              -- Normalized headword or multi-word phrase key
+    pos TEXT NOT NULL,               -- Canonical POS ('adjective', 'verb', 'noun', 'phrase', etc.)
+    sense_idx INTEGER NOT NULL,      -- -1 for entry/phrase-level triggers; >= 0 for sense-specific triggers
+    cefr_int INTEGER,                -- Pre-calibrated integer CEFR level (1=A1 .. 6=C2)
+    zipf_score REAL,                 -- Word/phrase Zipf frequency score for frequency-ranked SQL retrieval
+    canonical_pattern TEXT,          -- Normalized pedagogical pattern ('it is hard (for [sb]) to do [sth]')
+    canonical_blank TEXT,            -- Prescribed option surface form ('make it possible', 'not only', 'hard')
+    cloze_frame TEXT,                -- Mandatory stem frame ('It is ____ (for [sb]) to do [sth]')
+    contrast_groups TEXT,            -- Comma-separated mutually exclusive subcat_groups for distractor lookup
+    ban_groups TEXT,                 -- Comma-separated subcat_groups barred from co-occurring as distractors
+    PRIMARY KEY (subcat_group, word, sense_idx, canonical_pattern)
+);
+CREATE INDEX idx_cxn_word ON pedlex_cxn_index(word, sense_idx);
+CREATE INDEX idx_cxn_subcat ON pedlex_cxn_index(subcat_group, pos, cefr_int);
+```
+
+### 2.6 Table: `pedlex_error_traps` (Minimal-Pair Lexical & Syntactic Error-Injection Index)
+Contains 16,759 pre-mined minimal-pair learner errors, valency violations, `<gram>` property traps, and `Grammar Box` `BADEXA` contrasts (`Don't say: ✗ ...`) for deterministic error injection in `translation_quiz` and `vocabulary_quiz`:
+
+```sql
+CREATE TABLE pedlex_error_traps (
+    word TEXT NOT NULL,              -- Normalized headword or phrase
+    pos TEXT NOT NULL,               -- Canonical part of speech
+    sense_idx INTEGER DEFAULT -1,    -- Associated sense index (-1 if entry-wide)
+    trap_type TEXT NOT NULL,         -- 'GRAMBOX_BADEXA' | 'LEXICAL_VALENCY_FRAME' | 'GRAM_UNCOUNTABLE' | 'GRAM_ATTRIBUTIVE_ONLY' | 'L1_CONJUNCTION_REDUNDANCY' | 'CLAUSE_PREP_CONFUSION'
+    forbidden_frame TEXT,            -- Prescribed ungrammatical frame or error pattern ('*originate from/at*', '*Although ..., but ...*')
+    bad_example TEXT,                -- Authentic negative example ('✗ They are able to avoid to pay taxes.')
+    good_example TEXT,               -- Paired grammatical model sentence ('They are able to avoid paying taxes.')
+    rule_note TEXT                   -- Pedagogical diagnostic explanation
+);
+CREATE INDEX idx_error_traps_word ON pedlex_error_traps(word, pos);
+```
 
 ---
 
@@ -76,9 +131,13 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `all_poses` | `list[str]` | All attested parts of speech across all senses. |
 | `entryhead_gram` | `str` \| `dict` | Entry-level grammatical constraint (`[only before noun]`, `[uncountable]`, etc.). |
 | `runon_gram` | `str` | Run-on grammatical constraint for `kind='derived'` entries. |
+| `derived_forms` | `list[dict]` | Explicit morphological run-on derivatives (`word`, `pos`, `grammar`, `examples`). |
+| `verb_table` | `dict` | Inflectional paradigm (`past`, `past_participle`, `present_participle`, `third_person`). |
+| `pronunciations` | `dict` | BrE / AmE IPA transcriptions and audio reference metadata. |
+| `cxn_specs` | `list[dict]` | Entry-level constructional frame specs (`family_id`, `subcat_group`, `cloze_frame`). |
 | `homographs` | `list[dict]` | Information on distinct homograph numbers (e.g., *lead¹* vs *lead²*). |
-| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, `grammar` tags, `patterns`, `pattern_bundles`, and `examples`. |
-| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, `forbidden_frames`, `comparison_peers`). |
+| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, `grammar`, `register_tags`, `domain_tags`, `attitude_tags`, `syntax_codes`, `selectional_restrictions`, `synonyms`, `antonyms`, `patterns`, `pattern_bundles`, `cxn_specs`, and `examples`. |
+| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, `forbidden_frames`, `comparison_peers`, `sense_indices`). |
 | `language_activator` | `list[dict]` | Semantic concept networks, fine-grained synonym distinctions, and cluster nodes. |
 | `thesaurus` | `list[dict]` | Synonym and antonym discrimination notes with per-exponent `grammar` constraints. |
 | `collocations` | `dict[str, list]` | Collocation boxes grouped by bucket (`nouns`, `verbs`, `adjectives`, `phrases`). |
@@ -88,7 +147,7 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `phrases` | `list[dict]` | Fixed idioms and phrase patterns catalogued under this entry. |
 | `entry_status` | `str` | Provenance status (`active`, `derived`, `repaired`). |
 
-### 3.1 Sense Object Format (with Subsense Unpacking & Register Metadata)
+### 3.1 Sense Object Format (with Subsense Unpacking, Register Tags & Construction Specs)
 ```json
 {
   "definition": "to leave someone, especially someone you are responsible for",
@@ -97,21 +156,31 @@ Every record's `data_json` contains a structured dictionary with the following c
   "grammar": "[transitive]",
   "sensenum": "1a)",
   "register": "formal",
+  "register_tags": ["formal"],
+  "domain_tags": [],
+  "attitude_tags": [],
+  "syntax_codes": ["[T]"],
+  "selectional_restrictions": {},
   "variety": "British English",
+  "synonyms": ["desert", "forsake"],
+  "antonyms": [],
   "examples": [
     "How could she abandon her own child?"
   ],
   "patterns": [
     "abandon somebody to something"
-  ]
+  ],
+  "cxn_specs": []
 }
 ```
 
-### 3.2 Subsense Structural Governance & Payload Deduplication
-1. **Subsense Hierarchy Flattening**: Sub-senses (`subsense`, `1a`, `1b`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, `grammar` traits, and semantic context from their parent sense elements.
-2. **Explicit Register & Variety Fields**: Stylistic registers (`[spoken]`, `[formal]`, `[literary]`) and geographical dialect varieties (`British English`, `American English`) are stripped of styling noise and persisted as explicit queryable keys.
-3. **Language Activator Multi-POS Deduplication**: Employs a strict `seen_la_concepts` uniqueness gate across multi-POS popup entries (e.g. `control`), completely preventing duplicated concept blocks (e.g. shrinking redundant concept clusters from 31 down to 17 unique blocks).
-4. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
+### 3.2 Subsense Structural Governance, Variant Consolidation & Payload Deduplication
+1. **Subsense Hierarchy Flattening (`1a`/`1b` Unpacking)**: Sub-senses (`subsense`, `1a`, `1b`, including multi-sense verb entries like `compromise` and `set`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, `grammar` traits, and semantic context from their parent sense elements while preserving sense-specific `patterns` and `examples`.
+2. **Unnumbered Single-Sense Collocation Attachment**: For unnumbered single-sense entries (`pride`, `remorse`), sense-embedded collocation blocks are accurately attached to `senses[0].patterns` and `senses[0].pattern_bundles` without loss.
+3. **British / American Variant Consolidation**: Cross-referenced regional spelling variants (`favour`/`favor`, `honour`/`honor`, `programme`/`program`) consolidate all 16+ senses and idiomatic units seamlessly across both spelling keys.
+4. **Structured Pragmatic & Syntactic Metadata**: Stylistic registers (`register_tags`: `["spoken"]`, `["formal"]`, `["literary"]`), domain labels (`domain_tags`: `["medical"]`, `["law"]`), speaker attitude markers (`attitude_tags`: `["disapproving"]`, `["humorous"]`), and conditional subject restrictions (`selectional_restrictions`, e.g., `if a machine/system/plan...`) are extracted into structured queryable fields.
+5. **Language Activator Multi-POS Deduplication**: Employs a strict `seen_la_concepts` uniqueness gate across multi-POS popup entries (e.g. `control`), completely preventing duplicated concept blocks (shrinking redundant concept clusters from 31 down to 17 unique blocks).
+6. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
 
 ---
 
@@ -149,75 +218,223 @@ When extracting vocabulary from source passages, `_lock_sense` grounds each head
 
 ---
 
-## 6. Derived Forms & Ingestion Invariants (`_resolve_ldoce_kind`)
+## 6. Derived-Word Completion & Alias Resolution Architecture (`派生词补全架构`)
 
-1. **Run-on Derivation Tracking & Recursive Resolution**:
-   - Words such as `abandonment`, `punctuality`, `attentively`, and `striving` are filed in pedagogical lexicons as run-on derivations (`kind='derived'`) with `base_word` pointing to the root lemma (including multi-hop `alias` chains such as `strip mining` $\rightarrow$ `strip mine` $\rightarrow$ `strip-mine`).
-   - When a derived row's own definition is empty or circular, [`_resolve_ldoce_kind`](../librarian/linguistics.py) and [`format_ldoce_definition`](../librarian/linguistics.py) synthesize a clear, self-contained definition from `base_word` and strip any trailing base-verb pattern fragments.
-2. **Headword-Bearing Example Harvesting & Strict Gate 2 Isolation**:
-   - A derived row **never** inherits a base-lemma example sentence unless that example physically contains the derived headword (`text_contains_form(ex, derived_word)`).
-   - `_resolve_ldoce_kind` automatically harvests authentic examples containing the derived form from the base entry's `language_activator`, `thesaurus`, `collocations`, `senses` (`pattern_bundles`/`examples`), and `corpus_examples`.
-   - If the entry still has no example, [`ensure_distinct_example`](../librarian/linguistics.py) searches `search_corpus_examples` and WordNet (`oewn:2025+`). If zero authentic distinct examples exist across all sources, the item is rejected at Gate 2 (`[DROP_INCOMPLETE_LEXICON]`) — never falling back to repeating the source passage quote.
+In raw learner dictionaries, **5,678 run-on derived words** (such as `-ly` adverbs, `-ness`/`-ity` state nouns, `-ization`/`-ation`/`-ment` process nominalizations, and `-ing` participial adjectives/nouns) are stored with `kind='derived'` and `base_word` pointing to their root lemma, without standalone definitions or sense hierarchies (or carrying only a circular `gloss_source='wordnet'` stub such as `"in an intensive manner"`, `"the condition of being urbanized"`, or `"the act of celebrating"`). Additionally, **2,846 rows** have `kind='alias'` (orthographic/regional variants or multi-hop redirects such as `strip mining` $\rightarrow$ `strip mine` $\rightarrow$ `strip-mine`).
+
+[`PedlexDbMixin._resolve_ldoce_kind`](../librarian/linguistics_core/pedlex_db.py) and [`WsdEngineMixin.format_ldoce_definition`](../librarian/linguistics_core/wsd_engine.py) deterministically upgrade all `alias` and `derived` rows at runtime (<0.2ms, cached in `_ldoce_cache`) into first-class, multi-sense dictionary entries.
+
+### 6.1 Recursive Alias Resolution (`kind == 'alias'`)
+1. **Multi-Hop Cycle-Safe Traversal**:
+   - Follows `base_word` pointers up to 5 hops (`seen_aliases` guard) until reaching the canonical `article` or `derived` row (or resolving via `get_ldoce_entry(current_base)` for hyphenated/spaced variants).
+2. **Identity & Orthographic Preservation**:
+   - Copies all lexicographical assets from the resolved target while preserving the alias's surface `word`, `alias_of`, and `entry_status = "active"`.
+
+### 6.2 Six-Stage Derived-Word Completion Pipeline (`kind == 'derived'`)
+When `get_ldoce_entry(word)` encounters `kind == 'derived'`, `_resolve_ldoce_kind` executes a 6-stage enrichment pipeline against `base_data`:
+
+```text
+[Raw 'derived' Row (word, pos, base_word, runon_gram)]
+          │
+          ▼
+1. Base-Word Pattern Leak Stripping (剥离词根句式尾巴)
+          │
+          ▼
+2. Language Activator & Thesaurus Exponent Harvesting (同义辨析精确义项收割)
+          │
+          ▼
+3. Circular/Flat WordNet Gloss Upgrading (format_ldoce_definition 脱离循环释义)
+          │
+          ▼
+4. Morphological Rule Synthesis (_synthesize_single_derived_def 构词法释义合成)
+          │
+          ▼
+5. Polysemous Base Sense Projection & Participial-Adjective Base Guard (多义词根义项投影与过去分词基词隔离)
+          │
+          ▼
+6. Cross-POS Asset Borrowing Guard & 5-Tier Authentic Example Harvesting (跨词性隔离与真实例句五层收割)
+```
+
+#### Stage 1: Base-Word Pattern Leak Stripping
+- Raw dictionary run-ons occasionally leak a trailing syntactic pattern from the parent verb onto the derived adjective/noun definition (e.g., `agonizing` having trailing `"agonize over/about"` appended to its gloss).
+- `_resolve_ldoce_kind` compares the tail of `senses[0].definition` against `base_data.senses[].patterns` and strips any leaked base-word pattern prefix/suffix cleanly.
+
+#### Stage 2: Language Activator & Thesaurus Exponent Harvesting (`gloss_source = "ldoce_activator"`)
+- Before falling back to rule-based synthesis, `_resolve_ldoce_kind` scans `base_data.language_activator` and `base_data.thesaurus` for an exponent whose headword matches `word`.
+- If an exact exponent match is found with a pedagogical definition and examples, it is promoted directly to `senses[0]` with `gloss_source = "ldoce_activator"`.
+
+#### Stage 3: Circular & Cross-POS Stub Upgrading (`format_ldoce_definition` $\rightarrow$ `gloss_source = "ldoce_upgraded"`)
+- Detects circular/tautological stub definitions (`is_circular_or_flat`), including:
+  - Manner adverb tautologies: `"in a [base] manner/way"` (`intensively` $\rightarrow$ `"in an intensive manner"`).
+  - Nominalization tautologies: `"the act/process/state/condition/quality of being [base]"` (`urbanization` $\rightarrow$ `"the condition of being urbanized"`, `celebration` $\rightarrow$ `"the act of celebrating"`).
+  - Cross-POS leaked definitions: adjective conditional definitions (`"if you are filled with..."`) leaked onto derived nouns (`wonderment`).
+- [`format_ldoce_definition`](../librarian/linguistics_core/wsd_engine.py) upgrades known circular stubs via curated pedagogical definitions (`circular_upgrades`) or delegates to Stage 4 morphological synthesis.
+
+#### Stage 4: Morphological Definition Synthesis (`_synthesize_single_derived_def`, `gloss_source = "derivational"`)
+When a derived entry has no sense or its stub was cleared in Stage 3, `_synthesize_single_derived_def(base_def, base_pos)` synthesizes a natural, non-circular definition from the base sense:
+- **Adverbs (`-ly`)**:
+  - From verbs (`base_pos == 'verb'`): transforms `"to V ..."` into `"in a way that [verb+3sg] ..."` (e.g., `"in a way that shows or expresses..."`).
+  - From adjectives: transforms into `"in a [adj] way; [base_def]"`.
+- **State/Quality Nouns (`-ness`, `-ity`, `-cy`, `-ance`, `-ence`)**:
+  - Transforms adjective base definitions into `"the quality or state of being [base_word]: [base_def]"`.
+- **Process/Action Nominalizations (`-ization`, `-ation`, `-tion`, `-sion`, `-ment`)**:
+  - Strips participial prefixes (`"made or caused to be ..."`) and converts `"to make/become X"` into `"the act or process of making/becoming X"`.
+  - If the base definition starts with `"if you V something, ..."`, rewrites it into `"the act or process of [V-ing] ...; when someone or something..."`.
+- **Verbal Nouns (`-ing`, `-ings`)**:
+  - Synthesizes `"the act or practice of [V-ing] ..."` from the parent verb definition.
+
+#### Stage 5: Polysemous Base Sense Projection (`_project_base_senses`) & Participial-Adjective Base Guard
+- **Multi-Sense Projection for Polysemous Roots**:
+  - Many derived words inherit polysemy from their root (e.g., `celebration` from `celebrate`; `intensively` from `intensive`; ` attachment` from `attach`).
+  - `_project_base_senses` projects up to 4 distinct base senses into derived senses (carrying over `signpost` and base `examples` for WSD context scoring while keeping `pattern_bundles` empty unless attested for the derived form), enabling `_lock_sense` and Stage 2 LLM arbitration to disambiguate polysemous derived words accurately.
+- **Participial-Adjective Base Guard (`is_participial_adj_base`)**:
+  - Some process nouns (e.g., `urbanization`, `modernization`, `industrialization`) point to an `-ed`/`-ized` participial adjective (`urbanized`) as their `base_word` in raw LDOCE.
+  - When `senses[0]` already holds an upgraded dynamic process definition (e.g., `urbanization` = *"the process by which towns and cities grow bigger and more and more people go to live in them"*), `is_participial_adj_base` **blocks** projecting secondary static state senses from `urbanized` (*"having a lot of houses, factories..."*), preventing static adjective senses from overwriting dynamic process nouns.
+
+#### Stage 6: Cross-POS Asset Borrowing Guard (`same_pos_family` & `_attests_derived`) & 5-Tier Authentic Example Harvesting (`own_exs`)
+1. **Cross-POS Asset Isolation across All 5,678 Derived Entries (`same_pos_family` & `_attests_derived`)**:
+   - Derived words normally differ in POS from their root (`verb` $\rightarrow$ `noun`, `adjective` $\rightarrow$ `adverb`, `participial adjective` $\rightarrow$ `verb`).
+   - `_resolve_ldoce_kind` enforces `same_pos_family = (d_pos == b_pos_top or d_pos[:3] == b_pos_top[:3])`: `thesaurus`, `collocations`, `cross_collocations`, `grammar_boxes`, and sense-level `patterns` / `syntactic_patterns` / `pattern_bundles` / `units` are NEVER blindly copied across different POS families.
+   - A base asset is inherited only if it passes `_attests_derived(t_str)`, which masks out `base_word` before checking `text_contains_form(s, req_low)` (preventing verbs like `petrify` derived from `petrified` from inheriting participial-adjective patterns like `petrified of`). Verified with **0 cross-POS leaks across all 5,678 `derived` rows**.
+   - `runon_gram` (e.g., `[uncountable]`, `[only before noun]`) is promoted to `entryhead_gram` on the derived entry and injected into `senses[0].grammar`.
+2. **Multi-POS Homograph Isolation (`work`, `control`, `study`, `record`)**:
+   - When an explicit `pos` is passed to `get_ldoce_preps`, `get_ldoce_grammar_alert`, `get_rich_collocations`, or `get_vocab_card_enrichment`, cross-POS collocations, `Grammar Boxes`, and `Thesaurus` peers are strictly filtered out (e.g., noun `work` never inherits verb grammar boxes *"He works in Manhattan"*, verb `control` never inherits noun collocations `control over`/`self-control`/`control group`, and noun `study` never inherits verb collocations `study law`/`study to be a doctor`).
+3. **5-Tier Headword-Bearing Example Harvesting (`own_exs`)**:
+   - A derived entry **never** uses a base-word example as its display example unless the sentence physically contains the inflected or base form of the derived headword (`_attests_derived`).
+   - `_resolve_ldoce_kind` harvests `own_exs` across 5 tiers of `base_data`:
+     1. `base_data.language_activator[].exponents`
+     2. `base_data.thesaurus[].exponents`
+     3. `base_data.collocations`
+     4. `base_data.senses[].pattern_bundles` & `base_data.senses[].examples`
+     5. `base_data.corpus_examples`
+   - If the entry still lacks an example after harvesting, [`ensure_distinct_example`](../librarian/linguistics_core/wsd_engine.py) queries `search_corpus_examples(word)` across all entries and WordNet (`oewn:2025+`). If 0 authentic examples exist, the candidate is cleanly dropped at Gate 2 (`[DROP_INCOMPLETE_LEXICON]`).
 
 ---
 
-## 7. Query Interfaces (`LinguisticEngine`)
+## 7. Common Retrieval & Lookup Methods (`常用检索方法与接口速查`)
 
-- `LinguisticEngine.get_ldoce_entry(word)`: Fetches parsed and kind-resolved dictionary payload from `pedlex.db`.
-- `LinguisticEngine.get_ldoce_definition_and_example(word, target_pos, context_sentence)`: Retrieves sense-locked definition and headword-bearing example via `_lock_sense` and `ensure_distinct_example`.
-- `LinguisticEngine.get_word_gram_profile(word, pos, sense)`: Aggregates entry-level (`entryhead_gram`/`runon_gram`), sense-level (`grammar`), and `grammar_boxes` constraints.
-- `LinguisticEngine.evaluate_syntactic_slot_clash(target_word, candidate_word, ...)`: Checks whether a candidate distractor violates the grammatical slot of the stem (`[only before noun]`, `[not before noun]`, `[uncountable]`, or forbidden verb complement frames).
-- `LinguisticEngine.get_vocab_card_enrichment(word, pos, definition, quote)`: Generates zero-token `Pattern` / `Grammar Box`, `Collocations`, and `Thesaurus Note` callouts for Markdown vocabulary cards.
-- `LinguisticEngine.generate_phrase_distractors(target_phrase, pos, count)`: Generates 3 structurally symmetric distractors validated against `pedlex_phrase_index`.
+All dictionary and phrase retrieval methods live in [`PedlexDbMixin`](../librarian/linguistics_core/pedlex_db.py) and [`WsdEngineMixin`](../librarian/linguistics_core/wsd_engine.py), exposed as classmethods on [`LinguisticEngine`](../librarian/linguistics.py).
+
+### 7.1 Primary Entry & Compound Lookup (`pedlex_db.py`)
+
+| Method Signature | Return Type | Purpose & Mechanics |
+| :--- | :--- | :--- |
+| `get_pedlex_entry(word)` / `get_ldoce_entry(word)` | `dict` | **Primary entry resolver** (cached in `_ldoce_cache`). Normalizes `word`, merges numbered homographs (`word_1`..`word_6`) into unified `senses`/`phrasal_verbs`/`phrases`/`grammar_boxes`/`collocations`/`thesaurus`/`language_activator`, runs `_resolve_ldoce_kind` for `alias`/`derived` rows, resolves closed/open compounds via `_ldoce_compound_index` (`potluck` $\rightarrow$ `pot luck`), and synthesizes hyphenated compounds via `_resolve_hyphenated_compound_entry`. |
+| `is_exact_pedlex_headword(word)` | `bool` | Returns `True` only if `word` (or its punctuation-normalized key) exists as an exact headword in `pedlex.db`, rather than matching via suffix-stripping fallback in `_headword_candidates`. |
+| `_resolve_hyphenated_compound_entry(word)` | `dict` | Two-tier resolver for hyphenated compounds (`in-person`, `energy-saving`): **Tier 1** promotes attested open phrases (`in person`) under the right/left constituent; **Tier 2** matches productive right-hand combining forms (`-saving`, `-based`, `-free`, `-friendly`, `-oriented`, `-driven`). |
+| `get_word_gram_profile(word, pos="", sense=None)` | `dict` | Aggregates entry-level (`entryhead_gram`, `runon_gram`), sense-level (`sense.grammar`), and `grammar_boxes` syntactic constraints into boolean flags (`only_before_noun`, `not_before_noun`, `uncountable`, `plural`, `singular`, `intransitive`, `transitive`, `forbidden_frames`). |
+| `evaluate_syntactic_slot_clash(cand, target_gram_profile, ...)` | `Optional[str]` | Verifies whether a candidate distractor violates the grammatical slot of the target blank (`[only before noun]` in predicative slot, `[not before noun]` in attributive slot, `[uncountable]` after `a/an` or pluralized, etc.). |
+
+### 7.2 Sense Locking, WSD & Definition/Example Retrieval (`wsd_engine.py` & `pedlex_db.py`)
+
+| Method Signature | Return Type | Purpose & Mechanics |
+| :--- | :--- | :--- |
+| `_lock_sense(entry, definition="", quote="", target_pos="", return_confidence=False, return_scores=False, discourse_context="")` | `Optional[dict]` (or tuple) | **Stage 1 Symbolic Sense Scorer**. Applies POS hard gates (including coordinated subject recovery when ambiguous noun/verb tokens appear in `If NP and NP <verb>`), homograph resolution, `<gram>` slot constraints, spoken/technical/pejorative register gates, **Universal Conditional-Subject Ontology Gate** (parsing `if a <Subject-Class> <verb>s` metalanguage against passage subject WordNet supersenses), CQL typed slot pattern matching, 2nd-order collocate + `±1` sentence `discourse_context` domain scoring, and `pedlex_sense_cue_index` weights. |
+| `build_top_k_vocab_candidates(word, pos, quote, discourse_context="", k=4)` | `list[dict]` | Builds the Top-$K$ ($K \le 4$) symbolic sense pool from `_lock_sense(..., return_scores=True)` with `sense_idx`, `pos`, `signpost`, `gram`, `definition`, `patterns`, `examples`, and `symbolic_score`. Includes **Cross-Lexicon Pool Fusion**: when a sole PedLex sense is pragmatically restricted (`[disapproving]`, `[spoken]`, `[informal]`, `[humorous]`, `[old-fashioned]`) or has a narrow physical condition (`if a piece of ...`), merges attested WordNet (`oewn:2025+`) synsets with examples into the pool so Stage 2 can arbitrate. |
+| `disambiguate_via_llm(item_name, sentence, candidates, discourse_context="")` | `Optional[dict]` | **Stage 2 1-Token Local LLM Arbitrator**. Formats Top-$K$ candidates — explicitly surfacing `[SIGNPOST]` (e.g., `[FAIL]` vs. `[STRUCTURE]`), `<gram>` slot constraints, and attitude/register tags (`[disapproving]`, `[technical]`, `[spoken]`) — alongside `Target Sentence` and `Surrounding Context` into a multiple-choice prompt (`A`/`B`/`C`/`D`), resolved in 1 token (`temperature=0.0`, cached in `_wsd_llm_cache`, logged to `logs/<ts>_wsd_arbitration_<unit>.log`). |
+| `get_ldoce_definition_and_example(word, target_pos="", context_sentence="", require_sense_confidence=False)` | `tuple[str, str]` | High-level helper that auto-binds `target_pos` via `determine_contextual_pos`, locks the sense via `_lock_sense`, resolves British/American cross-references (`program` $\rightarrow$ `programme`), upgrades circular derived definitions via `format_ldoce_definition`, and returns `(definition, example)`. |
+| `expression_definition_evidence(phrase, expr_type="expression", context_sentence="", enable_llm_disambiguation=True)` | `dict` | **Multi-word expression WSD resolver**. Cascades across 4 tiers: `ldoce_entry` $\rightarrow$ `phrasal_verb_block` $\rightarrow$ `sense_pattern` / `phrase_row` (via `_unit_owning_sense` & `_quote_overridden_unit_sense`) $\rightarrow$ `wordnet`, returning `{definition, example, source, locked_sense}`. |
+| `ensure_distinct_example(word, category, quote, current_example="", pos="", definition="", locked_sense=None)` | `str` | **Gate 2 Authentic Example Resolver**. Guarantees an authentic example distinct from `quote` and physically containing `word` (never stealing across senses for polysemous words). |
+| `search_corpus_examples(query, category="word", limit=3)` | `list[str]` | Searches `pedlex.db` for authentic examples containing any morphological inflection of `query`: checks own entry first (`senses`, `corpus_examples`, `collocations`), then queries `pedlex_phrase_index` and `pedlex_sense_cue_index` to locate cross-entry examples in <2ms. |
+
+### 7.3 Multi-Word Phrase Index & Typed Slot Pattern Matching (`pedlex_db.py`)
+
+At startup (or first phrase query), `_ensure_in_memory_phrase_index()` loads all rows of `pedlex_phrase_index` into 4 in-memory O(1) lookup structures in ~170ms:
+- `_phrase_by_key_cache`: `phrase_key -> list[(host_word, sense_idx, tier, raw_phrase)]`
+- `_phrase_by_raw_cache`: `raw_phrase.lower() -> list[(host_word, sense_idx, tier, raw_phrase)]`
+- `_PHRASE_INDEX_CACHE`: 26,538 normalized phrase records with pre-tokenized `words`, `first`, `last`, `n`, `tier`, and `pos` for fast structural distractor mining.
+- `_PHRASE_SYNONYMS_CACHE`: `(host_word, sense_idx) -> set[norm_phrase]` for sense-sharing phrase synonym detection.
+
+| Method Signature | Return Type | Purpose & Mechanics |
+| :--- | :--- | :--- |
+| `lookup_ldoce_phrase_candidates(phrase, headword="")` | `list[dict]` | **3-Track Multi-Candidate Phrase Lookup**: **Track 1** matches exact literal `phrase_key`/`raw_phrase`; **Track 2** strips variable slots (`somebody`, `something`, `one's`) via `_unit_tokens` and checks token-subset containment; **Track 3** lemmatizes the leading verb (`took place` $\rightarrow$ `take place`) and re-queries Tracks 1–2. Returns all matching `{host_word, sense_idx, tier, raw_phrase}` rows without `LIMIT 1` truncation. |
+| `lookup_ldoce_phrase(phrase, headword="")` | `Optional[dict]` | Convenience wrapper returning the top-ranked candidate from `lookup_ldoce_phrase_candidates`. |
+| `ldoce_phrase_hits(phrase, headword="")` | `list[dict]` | Returns all attested dictionary sub-records (`phrasal_verb`, `phrase`, `sense_pattern`, `collocation`) matching `phrase` under `headword` or its phrase-index host entry. |
+| `ldoce_phrase_evidence(phrase, headword="")` | `Optional[dict]` | Returns the highest-priority attested evidence record (`source`, `matched_unit`, `definition`, `examples`, `sense`) for `phrase`. |
+| `is_attested_phrase(phrase, headword="")` | `bool` | Fast boolean check verifying whether a multi-word unit is attested in `pedlex.db`. |
+| `ldoce_phrase_object_fit(phrase, obj, headword="")` | `int` | Scores (`0`, `1`, `2`) how well a direct/prepositional object `obj` fits the attested examples and collocations of `phrase`. |
+| `compile_typed_slot_pattern(pattern, headword="")` | `list[tuple]` | Compiles raw dictionary patterns (`(doing) something`, `somebody to do something`, `in a ... way/fashion`) into a sequence of typed token matchers (`LIT`, `OPT_LIT`, `INF_TO`, `VBG`, `OPT_VBG`, `PRON_REFL`, `NP_SLOT`, `INFIX_MOD`, `CLAUSE_WH`). |
+| `match_typed_slot_pattern(pattern, quote, doc=None, headword="")` | `int` | Matches a compiled pattern against a sentence (`doc`), enforcing clause/punctuation barriers (`_slot_Crosses_barrier`) and returning a syntactic specificity score (`45`–`95`, or `0` on mismatch). |
+
+### 7.4 Valency, Sense Cue Index, Construction Index, Error Traps & Card Enrichment (`pedlex_db.py` & `collocations_and_cards.py`)
+
+| Method Signature | Return Type | Purpose & Mechanics |
+| :--- | :--- | :--- |
+| `get_ldoce_preps(word, pos=None)` | `set[str]` | Extracts all bound prepositions attested in `patterns` and `collocations` for `word` (e.g., `{'in', 'to', 'with'}`), enforcing strict POS isolation on multi-POS homographs. |
+| `get_ldoce_phrasal_verbs(word)` | `set[str]` | Returns all attested phrasal verbs (`verb + particle`) under `word`. |
+| `get_sense_cue_scores(word, context_tokens)` | `dict[int, float]` | Queries `pedlex_sense_cue_index` for `context_tokens` (after filtering `_get_pedlex_stop_cues` super-degree nodes appearing in >500 entries) and returns `{sense_idx: cumulative_weight}`. |
+| `get_ldoce_grammar_alert(word, quote="", sense_index=None, pos=None)` | `Optional[dict]` | Extracts sense- and POS-compatible `Grammar Boxes` (`Don't say: ✗ ...`, `comparison_peers`, `syntactic_constraints`, `sense_indices`) for vocabulary cards and translation quiz error injection. |
+| `get_ldoce_thesaurus(word)` | `list[dict]` | Returns PedLex `thesaurus` and `language_activator` synonym discrimination tables for `word`. |
+| `get_oxford_thesaurus_entries(word)` | `list[dict]` | Queries `oxford_thesaurus` in `pedlex.db` (cached in `_oxford_cache`), returning per-sense `definition`, `synonyms`, and `antonyms`. |
+| `get_pedlex_and_oxford_synonyms_antonyms(word, pos="", definition="", quote="")` | `tuple[list[str], list[str]]` | Combines sense-locked synonyms and antonyms from both `ldoce` and `oxford_thesaurus`, including 1-hop reciprocal antonym discovery (`synonym -> antonym`). |
+| `get_word_cxn_specs(word, sense_idx=None)` | `list[dict]` | Queries `pedlex_cxn_index` (and entry/sense `cxn_specs`) for constructional specs (`family_id`, `subcat_group`, `canonical_pattern`, `canonical_blank`, `cloze_frame`, `contrast_groups`, `ban_groups`). |
+| `query_cxn_contrast_distractors(contrast_groups, ban_groups=None, pos=None, exclude_words=None, limit=12)` | `list[str]` | Executes a <0.2ms set-difference SQL query (`contrast_groups \ ban_groups`) on `pedlex_cxn_index` ordered by `zipf_score DESC`. |
+| `get_word_error_traps(word, pos=None)` | `list[dict]` | Retrieves pre-mined minimal-pair learner errors from `pedlex_error_traps` (supplemented by `<gram>`, valency, and L1 negative-transfer rules) for `translation_quiz` and `vocabulary_quiz`. |
+| `get_vocab_card_enrichment(word, pos, definition, quote="")` | `dict` | Zero-token Markdown vocabulary card enrichment returning `{pattern_note, grammar_usage, grammar_tag, collocations, thesaurus_note}` with strict multi-POS homograph isolation. |
+
+### 7.5 Direct CLI & Python Inspection Recipes (`命令行快速检视方法`)
+
+When debugging dictionary entries, derived words, construction specs, or error traps from the terminal, use `LinguisticEngine` directly via `python -c`:
+
+```powershell
+# 1. Inspect a kind-resolved entry (including 'derived' or 'alias' completion)
+python -c "from librarian.linguistics import LinguisticEngine as LE; import json; e = LE.get_pedlex_entry('urbanization'); print(json.dumps({'kind': e.get('kind'), 'base_word': e.get('base_word'), 'senses': e.get('senses')[:2]}, indent=2, ensure_ascii=False))"
+
+# 2. Test Two-Stage Neuro-Symbolic WSD (Stage 1 Symbolic + Stage 2 1-Token LLM)
+python -c "from librarian.linguistics import LinguisticEngine as LE; cands = LE.build_top_k_vocab_candidates('commercialize', 'verb', 'These hubs help innovators design, produce, and commercialize new technologies.'); print([(c['sense_idx'], c['symbolic_score'], c['definition']) for c in cands])"
+
+# 3. Query construction specs and reverse subcategorization distractors in pedlex_cxn_index
+python -c "from librarian.linguistics import LinguisticEngine as LE; specs = LE.get_word_cxn_specs('avoid'); print(specs[0]); print(LE.query_cxn_contrast_distractors(specs[0]['contrast_groups'], specs[0]['ban_groups'], pos='verb'))"
+
+# 4. Query minimal-pair learner error traps in pedlex_error_traps
+python -c "from librarian.linguistics import LinguisticEngine as LE; print(LE.get_word_error_traps('avoid', pos='verb')[:2])"
+```
 
 ---
 
-## 8. Pending Work: Special Collocational & Multi-Word Phrase Constructions (待办清单)
+## 8. Implemented Architecture: Two-Tier Construction Tagging (`pedlex_cxn_index`) & Minimal-Pair Error Traps (`pedlex_error_traps`)
 
-针对多词短语和复杂搭配模式，量词短语（`a piece/bit/slice of`）已完成**中心词挖空与同族干扰项生成架构**（方案 2）。以下特殊短语搭配族群已列入待实施演进清单（Pending Backlog）：
+To power the **Deterministic Assessment Machine** across all **Eight Lexico-Syntactic Construction Families** and **Minimal-Pair Translation Quizzes** without accumulating brittle regex or hardcoded word lists in Python, `pedlex.db` provides two pre-compiled relational indexes: `pedlex_cxn_index` (2,635 rows) and `pedlex_error_traps` (16,759 rows).
 
-### 8.1 关联与成对结构 (Correlative / Paired Connectors)
-- **典型短语**: `not only... but also...`, `either... or...`, `neither... nor...`, `both... and...`, `as well as...`
-- **考核特征与痛点**:
-  - 属于跨越从句或并列项的成对结构，不适合整串作为一个 token 挖空。
-  - 需要在单项选择中考核第二标志词（如挖空 `also` 或 `nor`）或前后平行句法平衡。
-- **拟定方案 (Pending)**:
-  - 建立关联连接词蓝图提取器，锁定首标志词（如题干出现 `either`），选项绑定对应关联词与其典型干扰对（如 `[or, and, nor, but]`）。
+### 8.1 Two-Tier Construction Tagging Granularity (`Entry` vs. `Sense -> Pattern Bundle`)
 
-### 8.2 双词并列固定成语与不可逆短语 (Irreversible Binomials & Coordinate Idioms)
-- **典型短语**: `pros and cons`, `ups and downs`, `bits and pieces`, `safe and sound`, `give and take`
-- **考核特征与痛点**:
-  - 核心成分不可倒置（*cons and pros* 不自然），整体作为一个不可分割的固定名/副词习语。
-- **拟定方案 (Pending)**:
-  - 已支持在 `pedlex_phrase_index` 中检索匹配同类双词并列作为全短语干扰项；
-  - 待拓展中心词挖空模式：题干提供 `pros and ____` 或 `ups and ____`，选项提供对称名词（如 `[cons, gains, evils, losses]` 或 `[downs, falls, lows, drops]`）。
+Because English lexical items range from monosemous fixed idioms to highly polysemous single words, construction triggers are attached at two distinct granularities:
 
-### 8.3 动宾惯用固定搭配 (Idiomatic Verb-Noun Collocations)
-- **典型短语**: `pay attention to`, `take advantage of`, `make use of`, `catch sight of`, `keep track of`
-- **考核特征与痛点**:
-  - 包含轻动词 + 抽象核心名词 + 固定介词。
-  - 挖空动词容易与其他同义动词混淆（如 *pay* vs *give/draw attention*），挖空名词容易与近义词混淆。
-- **拟定方案 (Pending)**:
-  - 依据 PedLex 语法模式表，支持中心轻动词挖空（`____ attention to` $\rightarrow$ `[pay, draw, give, attract]`）或固定名词挖空（`pay ____ to` $\rightarrow$ `[attention, notice, care, focus]`），并在 Double-Key 门禁中注入动宾语义唯一性约束。
+1. **Tier 1 — Multi-Word Phrases & Fixed Constructions (Entry / Phrase-Key Level Trigger, `sense_idx = -1`)**:
+   - Targets: `make [sth] possible`, `find [sth] hard` (Family 1A); `not only ... but also`, `no sooner ... than` (Family 2); `look forward to`, `have difficulty (in)` (Family 4); `take advantage of`, `pay attention to` (Family 6); `under no circumstances`, `let alone` (Family 7); `would rather`, `may/might as well` (Family 8).
+   - **Direct Lexical Activation**: Selecting the item immediately activates its pre-compiled `cxn_spec` (`canonical_blank`, `canonical_pattern`, `cloze_frame`, `contrast_groups`, and `ban_groups`).
+2. **Tier 2 — Polysemous Single-Word Headwords (`Sense` Level Trigger, `sense_idx >= 0`)**:
+   - Targets: Single-word adjectives (`hard`, `easy`, `necessary`, `possible` in Family 1B), verbs (`remind`, `prevent` in Family 4; `avoid`, `manage`, `decide` in Family 3; `insist`, `suggest` in Family 8), and shell nouns (`ability`, `possibility`, `fact`, `habit` in Family 5).
+   - **Quote-Driven Sense Activation**: During quiz blueprint generation (`Step 0: _lock_sense` $\rightarrow$ `Step 1: pick_atomic_pattern_bundle`), locking the passage `Quoted Sentence` activates `get_word_cxn_specs(word, sense_idx)` only when the locked sense and pattern match that constructional family.
 
-### 8.4 复合介词与介词短语框架 (Prepositional Frame Phrases)
-- **典型短语**: `in terms of`, `by means of`, `in spite of`, `on behalf of`, `with regard to`, `in front of`
-- **考核特征与痛点**:
-  - 结构均为 `介词 + 核心名词 + 介词`（Prepositional Frame）。
-  - 若整串挖空，选项过长；若只挖空首/尾介词，属于基础虚词考核。
-- **拟定方案 (Pending)**:
-  - 采用中心名词挖空策略：`in ____ of`，选项由同框架高频功能名词构成（如 `[terms, spite, respect, light]`），依据上下文语义唯一锁定。
+### 8.2 Reverse Subcategorization Set-Difference for Zero-Collision Distractors (`query_cxn_contrast_distractors`)
 
-### 8.5 方案 B 模式：多候选干扰项池的代码级精准初筛体系 (Multi-Candidate Distractor Screening Gate)
-- **核心定位与前置条件**:
-  - 方案 B 给 LLM 提供 4~6 个高质量备选词，让模型根据题干语境自主挑选 3 个并造句。
-  - **决定成败的前提**：代码端（0 Token）生成的候选池**必须 100% 合格**，绝对不能夹带不合规杂质（严防错漏）。
-- **待沉淀与强化的代码级硬门禁 (Hard Invariants)**:
-  1. **词义锁定 (Sense Lock Invariant)**：
-     - 单纯按词头查同反义词必然导致多义词漂移（如 `stamp` 漂移成印章/粘土、`interest` 漂移成利息）。必须以课文原句 (`quoted_sentence`) 和词汇表释义 (`definition`) 输入 `_lock_sense`，锁定目标义项对应的 PedLex Thesaurus 与 WordNet 同义位。
-  2. **词性一致性硬门禁 (POS Symmetrical Gate)**：
-     - 彻底杜绝名动同形词的跨词性污染。候选词必须通过 PedLex 主词性校验（如目标词是抽象名词 `control` 时，坚决过滤掉具有明显动词倾向的 `run`, `supervise`；目标词是副词 `closely` 时，坚决过滤掉形容词或名词）。
-  3. **目标词防篡改与唯一解校验 (Target Word Usurpation Defense)**：
-     - Prompt 与 Level 1 Code Gate 强力保证：目标词必须作为唯一的正确答案参与选项，严禁模型挑选候选池里的近义词直接替换目标词作为答案。
-  4. **CEFR 与 Zipf 难度天花板过滤 (Ceiling & Frequency Gate)**：
-     - 候选干扰词必须经过 `cefrpy` + Zipf 频率门禁（A1/A2 不得选入 C1/C2 生僻偏词），确保与目标词处于同等认知难度梯度。
+Because `pedlex.db` records all attested syntactic patterns for every headword, the offline compiler partitions the lexicon into **mutually exclusive syntactic subcategorization groups (`subcat_group`)** via set difference ($\text{Contrast} \setminus \text{Ban}$):
+
+| `subcat_group` | `family_id` | Offline `pedlex.db` Extraction Rule (`senses[].patterns` & `grammar`) | Examples Indexed (`0` Manual Word Lists) | Contrasting Distractor Pool (`contrast_groups`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `V_IT_ADJ_INF` | `FAM1A_IT_OBJ_EXTRAPOS` | Preparatory-object extraposition (`make/find/keep it <adj> to do`) | `make`, `find`, `keep`, `leave`, `consider` | `V_OBJ_INF_DIRECT` (`cause`, `require`, `persuade`) |
+| `ADJ_IT_EXTRAPOS` / `ADJ_TOUGH_BOTH` | `FAM1B_ADJ_COMPLEMENTATION` | Has pattern `it is <adj> (for sb) to do sth` | `hard`, `easy`, `difficult`, `possible`, `necessary`, `essential`, `vital` | `ADJ_ANIMATE_CONTROL` (`eager`, `willing`, `able`, `happy`, `proud`) |
+| `V_GERUND_ONLY` | `FAM3_VERB_NONFINITE_COMP` | Has `<V> doing sth` **AND NOT** `<V> to do sth` | `avoid`, `admit`, `deny`, `enjoy`, `mind`, `postpone`, `practice`, `risk`, `finish` | `V_INF_ONLY` (excludes dual `V_BOTH_INF_GERUND`) |
+| `V_INF_ONLY` | `FAM3_VERB_NONFINITE_COMP` | Has `<V> to do sth` **AND NOT** `<V> doing sth` | `manage`, `afford`, `refuse`, `fail`, `hesitate`, `agree`, `decide`, `offer`, `promise` | `V_GERUND_ONLY` |
+| `V_OBJ_PREP_OF` | `FAM4_TRIVALENT_V_OBJ_PREP` | Has `<V> sb of sth` | `remind`, `inform`, `convince`, `accuse`, `suspect`, `assure`, `rob`, `warn` | `V_OBJ_PREP_WITH` / `V_OBJ_PREP_FROM` / `V_DITRANS_NP_NP` |
+| `V_OBJ_PREP_FROM` | `FAM4_TRIVALENT_V_OBJ_PREP` | Has `<V> sb/sth from (doing) sth` | `prevent`, `stop`, `keep`, `discourage`, `prohibit`, `ban`, `deter`, `restrain` | `V_OBJ_PREP_OF` / `V_OBJ_PREP_WITH` / `V_INF_ONLY` |
+| `N_SHELL_TO_DO` | `FAM5_SHELL_NOUN_COMP` | Has `<N> to do sth` **AND NOT** `<N> of doing sth` | `ability`, `tendency`, `attempt`, `effort`, `willingness`, `reluctance`, `decision` | `N_SHELL_OF_DOING` + `N_SHELL_THAT_ONLY` |
+| `N_SHELL_OF_DOING` | `FAM5_SHELL_NOUN_COMP` | Has `<N> of doing sth` **AND NOT** `<N> to do sth` | `habit`, `intention`, `risk`, `method`, `way`, `fear`, `possibility` | `N_SHELL_TO_DO` + `N_SHELL_THAT_ONLY` |
+| `N_SHELL_THAT_ONLY` | `FAM5_SHELL_NOUN_COMP` | Has `the <N> that...` **AND NOT** `<N> to do / of doing` | `fact`, `belief`, `assumption`, `notion`, `rumor`, `evidence`, `doubt` | `N_SHELL_TO_DO` + `N_SHELL_OF_DOING` |
+| `PHR_FRONTED_INV` | `FAM6_FRONTED_NEG_INVERSION` | Negative fronted adverbial triggering `Aux + S + V` | `not only`, `under no circumstances`, `by no means`, `on no account`, `no sooner` | `PHR_NON_INV_PP` (`regardless of`, `owing to`, `in terms of`) |
+| `V_MANDATIVE_SUBJ` | `FAM8_MANDATIVE_AND_LV_TRIAD` | Mandative verb triggering `that S (should) V_base` | `insist`, `demand`, `suggest`, `recommend`, `propose`, `require` | `V_GERUND_ONLY` (`deny`, `admit`, `fancy`) |
+
+At runtime (<0.2ms), `LinguisticEngine.query_cxn_contrast_distractors(contrast_groups, ban_groups, pos)` executes a parameterized SQL set-difference query ordered by `zipf_score DESC`, filtered by `cefrpy` level and WordNet synset disjointness.
+
+### 8.3 Pre-Mined Minimal-Pair Error Traps (`pedlex_error_traps` & `get_word_error_traps`)
+
+To eliminate random unfocused errors in `translation_quiz` and provide authentic grammatical pitfalls for `vocabulary_quiz`, `pedlex_error_traps` indexes 16,759 structured error records across 5 categories:
+1. **`GRAMBOX_BADEXA` (Authentic Dictionary Negative Examples)**:
+   - Extracted directly from LDOCE `Grammar Boxes` (`✗ They are able to avoid to pay taxes` vs. `✓ They are able to avoid paying taxes`; `✗ He won despite he was injured` vs. `✓ He won despite being injured`).
+2. **`LEXICAL_VALENCY_FRAME` (Bound Preposition & Complement Traps)**:
+   - Targets obligatory prepositional/clausal complements (`originate in/from`, `decide to do`, `regulatory body/authority`).
+3. **`GRAM_UNCOUNTABLE` & `GRAM_ATTRIBUTIVE_ONLY` (`<gram>` Property Traps)**:
+   - Targets uncountable nouns (`*an news / *newss`, `*find a work`) and `[only before noun]` / `[not before noun]` positional adjectives.
+4. **`L1_CONJUNCTION_REDUNDANCY` & `CLAUSE_PREP_CONFUSION` (Syntactic L1 Negative-Transfer Traps)**:
+   - Targets paired conjunction redundancy (`*Although ..., but ...*`) and preposition-vs-conjunction complement confusion (`*despite + finite clause*`).

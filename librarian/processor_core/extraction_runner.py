@@ -325,7 +325,8 @@ class ExtractionRunnerMixin:
                 raw_v_items = LinguisticEngine.extract_deterministic_vocabulary(
                     raw_source_text,
                     syllabus_vocab=cleaned_syllabus_vocab if syllabus_vocab else None,
-                    target_count=target_vocab_count
+                    target_count=target_vocab_count,
+                    exclude_words={w for w, _ in f12_suppressed} if f12_suppressed else None
                 )
                 v_items_list = []
                 for it in raw_v_items:

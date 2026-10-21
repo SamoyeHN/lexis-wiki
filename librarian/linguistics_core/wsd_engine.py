@@ -58,6 +58,28 @@ class WsdEngineMixin:
             return code
         return raw if len(raw) <= 5 else ""
 
+    @classmethod
+    def _sense_pos_codes(cls, sense: Dict[str, Any]) -> Set[str]:
+        """Return all normalized POS codes declared on a sense (`pos` + `all_poses`)."""
+        codes: Set[str] = set()
+        if not isinstance(sense, dict):
+            return codes
+        p0 = cls._pos_code(sense.get("pos"))
+        if p0:
+            codes.add(p0)
+        for p in (sense.get("all_poses") or []):
+            pc = cls._pos_code(p)
+            if pc:
+                codes.add(pc)
+        return codes
+
+    @classmethod
+    def _sense_matches_pos(cls, sense: Dict[str, Any], target_p: str) -> bool:
+        """True if `sense` supports normalized POS code `target_p` via `pos` or `all_poses`."""
+        if not target_p:
+            return True
+        return target_p in cls._sense_pos_codes(sense)
+
     # B1: how much quote evidence a sense lock needs before its definition may be shipped.
     # A lock that scores under the floor, or that beats its runner-up by less than the margin,
     # was chosen by ordering rather than read out of the sentence, and is reported as
@@ -449,8 +471,7 @@ class WsdEngineMixin:
             clean_def = re.sub(r"\[.*?\]", "", definition).strip().lower()
             if clean_def:
                 for idx, s in enumerate(senses):
-                    s_pos = cls._pos_code(s.get("pos"))
-                    if target_p and s_pos != target_p:
+                    if target_p and not cls._sense_matches_pos(s, target_p):
                         continue
                     s_defn_clean = re.sub(r"\[.*?\]", "", s.get("definition") or "").strip().lower()
                     if s_defn_clean and (s_defn_clean == clean_def or s_defn_clean.startswith(clean_def) or clean_def.startswith(s_defn_clean)):
@@ -502,10 +523,15 @@ class WsdEngineMixin:
         # Homograph blocks : one row can hold 'right1 adj', 'right2 noun',
         # 'right3 verb'. A sense that sits in the block declaring the target POS is the
         # primary one for this query, so it must not lose a tie to ordering alone.
-        block_pos = {
-            h.get("homograph_num"): cls._pos_code(h.get("pos"))
-            for h in entry.get("homographs") or []
-        }
+        block_poses: Dict[Any, Set[str]] = {}
+        for h in entry.get("homographs") or []:
+            h_num = h.get("homograph_num")
+            h_codes = {cls._pos_code(h.get("pos"))} if h.get("pos") else set()
+            for hp in (h.get("all_poses") or []):
+                hpc = cls._pos_code(hp)
+                if hpc:
+                    h_codes.add(hpc)
+            block_poses[h_num] = {c for c in h_codes if c}
 
         target_w_clean = (entry.get("word") or "").lower()
         headword_tokens = set(re.findall(r"\b[a-z]+\b", target_w_clean))
@@ -678,7 +704,7 @@ class WsdEngineMixin:
 
         for i, s in enumerate(senses):
             s_pos = cls._pos_code(s.get("pos"))
-            if target_p and s_pos != target_p:
+            if target_p and not cls._sense_matches_pos(s, target_p):
                 continue
 
             eligible_senses += 1
@@ -687,8 +713,10 @@ class WsdEngineMixin:
             # 0. Homograph block agreement: the sense that lives in the block which
             # declares the target POS outranks a same-POS sense borrowed from another
             # block, instead of losing to whichever sense happens to come first.
-            if target_p and block_pos.get(s.get("homograph_num")) == target_p:
+            if target_p and target_p in block_poses.get(s.get("homograph_num"), set()):
                 score += 10
+            elif target_p and s_pos == target_p:
+                score += 4
 
             # 0a. Phrasal Verb Particle Gate:
             # If this sense belongs to a phrasal verb block with a mandatory particle (e.g. 'pay back' -> 'back', 'pay off' -> 'off', 'pay out' -> 'out'),
@@ -747,16 +775,36 @@ class WsdEngineMixin:
                     score -= 50
 
             is_tech_sense = (
-                s_reg in ("technical", "chemistry", "physics", "biology", "computing")
-                or any(tag in s_gram_str for tag in ("[technical]", "[chemistry]", "[physics]", "[computing]"))
+                s_reg in ("chemistry", "physics", "biology", "computing")
+                or (s_reg == "technical" and i > 0)
+                or any(tag in s_gram_str for tag in ("[chemistry]", "[physics]", "[computing]"))
+                or ("[technical]" in s_gram_str and i > 0)
                 or s_signpost in ("chemistry", "physics", "technical", "chemical")
             )
             if is_tech_sense:
                 has_tech_trigger = any(w in q_low_all for w in (
                     "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
-                    "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound"
+                    "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound",
+                    "technology", "technological", "scientific", "science", "engineering"
                 ))
                 if not has_tech_trigger:
+                    score -= 50
+
+            # 0e. Pejorative / Disapproval Stance Gate:
+            # Senses explicitly marked 'used to show disapproval' (e.g. 'commercialize' sense 0: 'to be more concerned
+            # with making money from something than about its quality – used to show disapproval') require a critical/pejorative
+            # context or default absence of constructive enabling framing ('help ... design, produce, and commercialize their ideas').
+            s_defn_raw_low = (s.get("definition") or "").lower()
+            if "show disapproval" in s_defn_raw_low or "disapproving" in s_reg:
+                has_pejorative_cue = any(w in q_low_all for w in (
+                    "too", "overly", "merely", "corrupt", "ruin", "ruined", "spoil", "spoiled", "spoilt",
+                    "cheap", "greed", "greedy", "profit", "money", "exploit", "bad", "poor", "excessive", "shameless"
+                ))
+                has_constructive_frame = any(w in q_low_all for w in (
+                    "help", "helps", "helped", "helping", "enable", "enables", "enabled", "allow", "allows",
+                    "support", "encourage", "develop", "design", "produce", "innovate", "innovation", "launch"
+                ))
+                if has_constructive_frame and not has_pejorative_cue:
                     score -= 50
 
             # 1. Quote token overlap against sense examples & patterns
@@ -987,6 +1035,29 @@ class WsdEngineMixin:
                             # Bound preposition match (e.g. serious about)
                             score += 25
 
+                # 5a. Example-Attested Preposition Frame Parity:
+                # When a sense omits `patterns` in the dictionary (e.g. 'paradigm' Sense 0 has patterns=[]
+                # while its own dictionary example is 'the basic paradigm of the family tree', whereas Sense 1
+                # declares patterns=['paradigm of']), grant frame parity if both the quote and this sense's
+                # own examples attest the exact same contiguous '<headword> <prep>' frame declared by a sibling sense.
+                if not s.get("patterns") and not s.get("units") and s.get("examples"):
+                    sibling_prep_frames: Set[str] = set()
+                    for sib_s in senses:
+                        if sib_s is s or cls._pos_code(sib_s.get("pos")) != s_pos:
+                            continue
+                        for sib_pat in (sib_s.get("patterns") or []):
+                            sib_words = cls._pattern_words(sib_pat.lower().strip())
+                            if len(sib_words) == 2 and sib_words[0] == target_w_clean and sib_words[1] in cls._PATTERN_PREPS:
+                                sibling_prep_frames.add(sib_words[1])
+                    for prep_f in sibling_prep_frames:
+                        if cls._quote_has_frame(q_seq, [target_w_clean, prep_f], window=1):
+                            if any(
+                                cls._quote_has_frame(re.findall(r"\b[a-z]+\b", ex_s.lower()), [target_w_clean, prep_f], window=1)
+                                for ex_s in (s.get("examples") or [])
+                            ):
+                                score += 40
+                                break
+
             # 5b. Units Matching & Idiom Constraint Enforcement
             if quote:
                 any_unit_demanded = False
@@ -1031,7 +1102,11 @@ class WsdEngineMixin:
                     is_formulaic_greeting = ("!" in u_clean) or any(k in str(s.get("definition", "")).lower() for k in ("used to greet", "exclamation", "used when someone is leaving"))
                     for br in branches:
                         # 'do' in 'to do something' is a placeholder for any action verb
-                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if len(w) >= 2 and w not in ("the", "an", "somebody", "something", "someone", "your", "his", "her", "their", "my", "its", "one", "oneself", "sb", "sth", "etc", "eg", "ie", "doing")]
+                        # Note: Only strip attributive determiners ('your', 'her', 'my', 'their', 'our', 'its'), NEVER strip
+                        # predicative possessive pronouns ('yours', 'hers', 'mine', 'theirs', 'ours') nor 'his' when part of a possessive pronoun slash group.
+                        _is_poss_pron_unit = any(p in u_clean for p in ("yours", "hers", "mine", "theirs", "ours"))
+                        _unit_stop = ("the", "an", "somebody", "something", "someone", "your", "her", "their", "my", "its", "one", "oneself", "sb", "sth", "etc", "eg", "ie", "doing") + (() if _is_poss_pron_unit else ("his",))
+                        words = [w for w in re.findall(r"\b[a-z]+\b", br) if len(w) >= 2 and w not in _unit_stop]
                         if len(words) >= 2:
                             # If extracting a bare single word without negator, a unit sense that prepends an external negator
                             # ('not a single' -> 'no people or things at all') defines the negative phrase, not the bare headword
@@ -1039,10 +1114,17 @@ class WsdEngineMixin:
                                 score -= 50
                                 continue
                             # If a verb sense explicitly declares [transitive], a prepositional unit (e.g. 'tend to sb/sth')
-                            # is an optional prepositional variant, not an obligatory idiom requirement
-                            if not (target_p == "v" and re.search(r"(?<!in)transitive", s_gram_low)):
-                                any_unit_demanded = True
+                            # is an optional prepositional variant, not an obligatory idiom requirement.
+                            # Similarly, an intensifier + headword GramExa (e.g. 'all alone', 'quite right', 'long before')
+                            # is an optional degree collocation, not an obligatory fixed idiom.
                             other_words = [w for w in words if not cls.form_matches(w, target_w_clean) and w not in headword_tokens]
+                            _is_optional_intensifier_unit = (
+                                bool(other_words)
+                                and all(ow in ("all", "quite", "very", "completely", "entirely", "totally", "just", "right", "far", "much", "well", "long", "soon", "ever") for ow in other_words)
+                                and not s_defn.startswith(tuple(other_words))
+                            )
+                            if not (target_p == "v" and re.search(r"(?<!in)transitive", s_gram_low)) and not _is_optional_intensifier_unit:
+                                any_unit_demanded = True
                             if is_formulaic_greeting:
                                 # Formulaic greetings and conversational exclamations (e.g. "hello, stranger!", "bless you!")
                                 # are fixed frozen locutions; they require strict syntactic adjacency in the sentence.
@@ -1123,7 +1205,7 @@ class WsdEngineMixin:
                         score -= 80
                 if any_unit_matched:
                     score += best_unit_bonus
-                elif any_unit_demanded and not any(re.search(r"\betc\b", str(u_item).lower()) for u_item in s.get("units", [])):
+                elif any_unit_demanded and not (target_p == "v" and any(re.search(r"\betc\b", str(u_item).lower()) for u_item in s.get("units", []))):
                     score -= 30
 
                 # Specific suppressions (e.g. keep somebody posted when 'keep' is absent)
@@ -1363,7 +1445,7 @@ class WsdEngineMixin:
                             continue
 
                         # If target is an adjective, check its modified noun or copula subject against sense patterns & examples
-                        if tok.pos_ == "ADJ" or is_hyphen_adj:
+                        if (tok.pos_ == "ADJ" and target_p != "v") or is_hyphen_adj:
                             gram_l = (s.get("grammar") or "").lower()
                             is_attr_slot = (
                                 tok.dep_ in ("amod", "compound", "nmod")
@@ -1571,7 +1653,7 @@ class WsdEngineMixin:
                                                 score += 15
 
                         # If target is a verb, check transitivity, complex complements and arguments
-                        elif tok.pos_ == "VERB" or (target_p == "v" and (tok.dep_ in ("ROOT", "conj", "advcl", "relcl", "ccomp", "xcomp") or any(ch.dep_ in ("nsubj", "nsubjpass", "csubj") for ch in tok.children))):
+                        elif tok.pos_ == "VERB" or (target_p == "v" and (tok.dep_ in ("ROOT", "conj", "advcl", "relcl", "ccomp", "xcomp", "pobj", "dobj", "obj", "amod", "compound") or any(ch.dep_ in ("nsubj", "nsubjpass", "csubj") for ch in tok.children))):
                             # Section 7.3: Deep Passive Projection
                             # In passive voice, the surface subject (nsubjpass) is the underlying semantic object (deep_dobj),
                             # and the prepositional 'by' agent is the underlying semantic subject (deep_nsubj).
@@ -1596,11 +1678,26 @@ class WsdEngineMixin:
                                     score -= 50
 
                             surface_dobjs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj")]
+                            if not surface_dobjs and target_p == "v" and tok.dep_ in ("amod", "compound") and tok.head.pos_ in ("NOUN", "PROPN") and tok.head.i > tok.i:
+                                surface_dobjs = [tok.head]
+                            if not surface_dobjs and target_p == "v" and tok.dep_ == "conj":
+                                _r_head = (
+                                    tok.head if tok.head.dep_ == "ROOT"
+                                    else (
+                                        tok.head.head.head
+                                        if tok.head.dep_ == "pobj" and tok.head.head.dep_ == "prep" and tok.head.head.head.dep_ == "ROOT"
+                                        else None
+                                    )
+                                )
+                                if _r_head is not None and tok.i + 1 < len(q_doc) and q_doc[tok.i + 1].text != ",":
+                                    surface_dobjs = [ch for ch in _r_head.children if ch.dep_ == "appos" and ch.i > tok.i]
                             passive_dobjs = [ch for ch in tok.children if ch.dep_ in ("nsubjpass", "nsubj:pass")] if is_passive else []
                             rel_dobjs = [tok.head] if (
                                 tok.dep_ == "relcl"
                                 and tok.head.pos_ in ("NOUN", "PROPN", "PRON")
+                                and tok.head.lemma_.lower() not in ("way", "time", "day", "year", "moment", "reason", "place", "manner", "case")
                                 and not surface_dobjs
+                                and not any(t.text == "," for t in q_doc[tok.head.i : tok.i])
                                 and any(ch.dep_ in ("nsubj", "csubj") and ch.lower_ not in ("which", "that", "who") for ch in tok.children)
                             ) else []
                             deep_dobj_tokens = surface_dobjs + passive_dobjs + rel_dobjs
@@ -1625,6 +1722,24 @@ class WsdEngineMixin:
                                                             by_agents.append(ggc)
 
                             surface_nsubjs = [ch for ch in tok.children if ch.dep_ in ("nsubj", "csubj")]
+                            if not surface_nsubjs and target_p == "v":
+                                left_nom_children = [
+                                    ch for ch in tok.children
+                                    if ch.dep_ in ("compound", "nmod", "npadvmod")
+                                    and ch.pos_ in ("NOUN", "PROPN", "PRON")
+                                    and ch.i < tok.i
+                                ]
+                                for lnc in list(left_nom_children):
+                                    for gc in lnc.children:
+                                        if gc.dep_ == "conj" and gc.pos_ in ("NOUN", "PROPN", "PRON") and gc.i < tok.i:
+                                            left_nom_children.append(gc)
+                                surface_nsubjs = left_nom_children
+                                if tok.dep_ == "conj" and tok.i > 0 and q_doc[tok.i - 1].pos_ in ("NOUN", "PROPN", "PRON") and q_doc[tok.i - 1].dep_ == "conj" and q_doc[tok.i - 1].head == tok.head:
+                                    surface_nsubjs.append(q_doc[tok.i - 1])
+                                elif tok.dep_ == "conj" and tok.head.pos_ in ("NOUN", "PROPN", "PRON") and tok.head.i < tok.i:
+                                    surface_nsubjs.append(tok.head)
+                                    if tok.head.dep_ == "pobj" and tok.head.head.dep_ == "prep" and tok.head.head.head.pos_ in ("NOUN", "PROPN", "PRON"):
+                                        surface_nsubjs.append(tok.head.head.head)
                             deep_nsubj_tokens = by_agents if (is_passive and by_agents) else surface_nsubjs
 
                             # Complex clausal complement with infinitive: e.g. [V] + [NP] + [to-inf]
@@ -1704,8 +1819,20 @@ class WsdEngineMixin:
                                 else:
                                     score -= 65
 
+                            is_coord_predicate_ellipsis = (
+                                not has_effective_obj
+                                and (any(c.dep_ == "conj" for c in tok.children) or tok.dep_ == "conj")
+                                and any(
+                                    sn.lemma_.lower() in ("relationship", "divorce", "failure", "defeat", "rejection", "criticism", "remark", "comment", "word", "experience", "life")
+                                    for sn in deep_nsubj_tokens
+                                )
+                                and any(k in s_defn for k in ("affect someone badly", "feel less confident", "make them feel", "upset", "emotional"))
+                            )
+
                             if not has_effective_obj:
                                 if is_pure_intransitive and not requires_obj:
+                                    score += 25
+                                elif is_coord_predicate_ellipsis:
                                     score += 25
                                 elif requires_obj:
                                     # Penalize transitive senses when sentence has no direct object or clausal complement
@@ -1720,12 +1847,19 @@ class WsdEngineMixin:
                                 # senses providing explicit transitive patterns (e.g. 'attach something to something', 'pay somebody something')
                                 # strongly match the syntactic frame; senses whose patterns are strictly intransitive (e.g. 'attach to')
                                 # receive a discount.
-                                has_trans_pat = any(
-                                    ("something" in p.lower() or "somebody" in p.lower() or " sb " in f" {p.lower()} " or " sth " in f" {p.lower()} ")
-                                    for p in s_pats
-                                )
+                                _all_pat_preps = set(cls._PATTERN_PREPS) | {
+                                    "above", "before", "after", "below", "under", "over", "between",
+                                    "among", "into", "onto", "against", "through", "across", "towards",
+                                    "toward", "upon", "by", "without", "behind", "beside", "beyond", "around"
+                                }
+                                def _pat_preps_satisfied(pat_str: str) -> bool:
+                                    p_toks = re.findall(r"\b[a-z]+\b", pat_str.lower())
+                                    req_preps = [t for t in p_toks if t in _all_pat_preps]
+                                    return (not req_preps) or any(rp in q_seq for rp in req_preps)
+
+                                has_trans_pat = any(_requires_direct_object(p) and _pat_preps_satisfied(p) for p in s_pats)
                                 has_strictly_intrans_prep_pat = any(
-                                    not ("something" in p.lower() or "somebody" in p.lower() or " sb " in f" {p.lower()} " or " sth " in f" {p.lower()} ")
+                                    not _requires_direct_object(p)
                                     and any(prep in p.lower().split() for prep in cls._PATTERN_PREPS)
                                     for p in s_pats
                                 )
@@ -1734,16 +1868,27 @@ class WsdEngineMixin:
                                 elif has_strictly_intrans_prep_pat and not has_trans_pat:
                                     score -= 30
 
+                            # Mandatory Passive / Predicative Frame Gate (e.g. 'be well/ideally placed to do something'):
+                            if all_pat_units and all(re.match(r"^be\b", p.strip()) for p in all_pat_units):
+                                if not is_passive and tok.tag_ not in ("VBN", "JJ"):
+                                    score -= 60
+
                             # Mandatory Locative / Prepositional Complement Gate:
-                            # Senses marked '[... always + adverb/preposition]' (e.g. 'conduct sb to/into sth': 'to take or lead someone somewhere')
-                            # require a prepositional or directional adverbial complement governed by the verb.
+                            # Senses marked '[... always + adverb/preposition]' (e.g. 'conduct sb to/into sth', 'place sth on/under sth')
+                            # require a prepositional or directional adverbial complement governed by the verb (or attached to its direct object).
                             if "always + adverb/preposition" in gram_l:
                                 has_adv_or_prep_comp = any(
                                     c.dep_ in ("prep", "prt", "npadvmod")
                                     or (c.dep_ == "advmod" and c.i > tok.i)
                                     for c in tok.children
+                                ) or any(
+                                    gc.dep_ in ("prep", "prt", "npadvmod") or (gc.dep_ == "advmod" and gc.i > tok.i)
+                                    for dobj_c in surface_dobjs
+                                    for gc in dobj_c.children
                                 )
-                                if not has_adv_or_prep_comp:
+                                if has_adv_or_prep_comp:
+                                    score += 35
+                                else:
                                     score -= 70
 
                             # Direct object argument matching (governs deep_dobj_tokens, supporting passive projection)
@@ -2058,6 +2203,133 @@ class WsdEngineMixin:
                                     if is_body_movement_sense and not has_body_part_in_quote:
                                         score -= 40
 
+                                    # Quantitative / Financial / Abstract Metric Subject vs. Physical Gravity / Spatial Relocation:
+                                    is_metric_or_abstract_subj = (
+                                        subj_lem in (
+                                            "price", "prices", "stock", "stocks", "gold", "rate", "rates", "wage", "wages",
+                                            "tax", "taxes", "demand", "supply", "export", "exports", "import", "imports",
+                                            "credit", "trust", "wealth", "power", "value", "cost", "costs", "revenue",
+                                            "income", "profit", "profits", "temperature", "temperatures", "heat", "pressure",
+                                            "level", "levels", "standard", "standards", "quality", "culture", "management",
+                                            "policy", "policies", "law", "laws", "attitude", "attitudes", "habit", "habits",
+                                        )
+                                        or (
+                                            bool(subj_supersenses & {"noun.possession", "noun.quantity", "noun.attribute", "noun.cognition"})
+                                            and not bool(subj_supersenses & {"noun.artifact", "noun.body", "noun.person", "noun.animal", "noun.plant", "noun.object"})
+                                        )
+                                    )
+                                    if is_metric_or_abstract_subj:
+                                        if any(k in s_defn or k in sp for k in (
+                                            "lower level or amount", "lower level, amount", "become less", "decrease",
+                                            "opinions, beliefs", "become different", "go upwards", "increase in",
+                                        )):
+                                            score += 18
+                                        elif any(k in s_defn for k in (
+                                            "onto the ground", "from one place or position to another",
+                                            "from a higher position to a lower position", "take off your clothes",
+                                            "take back to a shop",
+                                        )):
+                                            score -= 18
+
+                                    # Universal Conditional-Subject Ontology Gate ('if a <Subject-Class> <verb>s'):
+                                    # Parse LDOCE's canonical conditional subject clause (e.g. 'if a piece of furniture or equipment collapses',
+                                    # 'if a piece of fruit bruises', 'if a system, idea, or organization collapses') and verify ontological
+                                    # compatibility between the passage subject (subj_lem + WordNet supersenses) and the condition's nouns.
+                                    m_cond_subj = re.match(
+                                        r"^if\s+(?:a\s+|an\s+|the\s+|your\s+)?([^,]{2,65}?)\s+"
+                                        + rf"(?:{re.escape(target_w_clean)}[a-z]*|{re.escape(tok.lemma_.lower())}[a-z]*)\b",
+                                        s_defn,
+                                    )
+                                    if m_cond_subj:
+                                        cond_np = m_cond_subj.group(1).lower()
+                                        _cond_stop = {
+                                            "piece", "pieces", "kind", "kinds", "type", "types", "sort", "sorts",
+                                            "part", "parts", "amount", "number", "group", "set", "someone", "somebody",
+                                            "something", "person", "people", "thing", "things", "one", "two", "other",
+                                            "particular", "certain", "large", "small", "new", "old", "etc"
+                                        }
+                                        cond_nouns = [
+                                            w_c for w_c in re.findall(r"[a-z]{3,}", cond_np)
+                                            if w_c not in stopwords and w_c not in _cond_stop
+                                        ]
+                                        if cond_nouns:
+                                            _open_class_anchors = {
+                                                "system", "organization", "situation", "process", "idea", "plan",
+                                                "institution", "company", "business", "relationship", "activity",
+                                                "opinion", "opinions", "belief", "beliefs", "price", "prices", "level", "levels",
+                                            }
+                                            is_open_class_cond = (
+                                                len(cond_nouns) >= 3
+                                                or "etc" in cond_np
+                                                or bool(set(cond_nouns) & _open_class_anchors)
+                                            )
+                                            cond_supers: Set[str] = set()
+                                            for cn in cond_nouns:
+                                                cond_supers.update(cls.get_wordnet_supersenses(cn, pos="n"))
+                                            # Check primary WordNet hypernym closure for narrow conditions
+                                            is_hypernym_of_cond = False
+                                            wn_inst = cls.get_wordnet()
+                                            if wn_inst and subj_lem:
+                                                try:
+                                                    for syn in (wn_inst.synsets(subj_lem, pos="n") or [])[:2]:
+                                                        for h_path in syn.hypernym_paths():
+                                                            for h_syn in h_path:
+                                                                h_lems = {l.lower() for l in h_syn.lemmas()}
+                                                                if h_lems & set(cond_nouns):
+                                                                    is_hypernym_of_cond = True
+                                                                    break
+                                                            if is_hypernym_of_cond:
+                                                                break
+                                                        if is_hypernym_of_cond:
+                                                            break
+                                                except Exception:
+                                                    pass
+                                            # Direct lexical or hypernym/supersense match with passage subject
+                                            if subj_lem in cond_nouns or any(cls.form_matches(subj_lem, cn) for cn in cond_nouns) or is_hypernym_of_cond:
+                                                score += 45
+                                            elif is_open_class_cond and subj_supersenses and cond_supers and (subj_supersenses & cond_supers):
+                                                score += 15
+                                            elif any(cn in q_low_all for cn in cond_nouns):
+                                                score += 20
+                                            elif not is_open_class_cond:
+                                                # Narrow closed-class condition (e.g. 'if the wind changes', 'if a leader or a government falls',
+                                                # 'if someone's voice or a sound falls', 'if a piece of furniture or equipment collapses')
+                                                # is penalized when the passage subject is neither the restricted noun nor its hyponym.
+                                                score -= 25
+                                            else:
+                                                # Narrow concrete/artifact/substance conditional subjects should be penalized when
+                                                # the passage subject belongs to a disjoint ontological domain (e.g. abstract/state/location)
+                                                _narrow_concrete_supers = {
+                                                    "noun.food", "noun.plant", "noun.animal", "noun.substance", "noun.body"
+                                                }
+                                                _narrow_artifact_nouns = {
+                                                    "furniture", "equipment", "chair", "table", "bed", "tent", "vehicle",
+                                                    "car", "aircraft", "plane", "ship", "boat", "train", "machine", "engine",
+                                                    "garment", "cloth", "clothing", "shoe", "containers", "container", "bottle",
+                                                    "pipe", "wire", "coin", "note", "cheque", "check", "wound", "bone", "tooth"
+                                                }
+                                                is_narrow_concrete_cond = (
+                                                    bool(cond_supers & _narrow_concrete_supers)
+                                                    or any(cn in _narrow_artifact_nouns for cn in cond_nouns)
+                                                )
+                                                if is_narrow_concrete_cond and not (subj_supersenses & (cond_supers | {"noun.Tops"})):
+                                                    score -= 35
+
+                                    if "piece of furniture or equipment" in s_defn:
+                                        if not any(fw in q_low_all for fw in ("furniture", "equipment", "chair", "table", "bed", "tent", "umbrella", "stroller", "tripod", "fold")):
+                                            score -= 35
+                                    if "piece of fruit" in s_defn:
+                                        if not any(fw in q_low_all for fw in ("fruit", "fruits", "apple", "peach", "pear", "banana", "plum", "berry", "tomato", "produce", "peel", "ripe")):
+                                            score -= 45
+                                    if subj_lem in ("relationship", "divorce", "failure", "defeat", "rejection", "criticism", "remark", "comment", "word", "experience"):
+                                        if any(k in s_defn for k in ("affect someone badly", "feel less confident", "make them feel", "upset", "hurt")):
+                                            score += 55
+                                    if subj_lem in ("system", "economy", "society", "environment", "ecosystem", "land", "ocean", "atmosphere", "nature", "climate", "civilization", "empire", "regime", "marriage", "relationship", "talk", "negotiation"):
+                                        if "system, idea, or organization" in s_defn:
+                                            score += 35
+                                        elif "building, wall" in s_defn:
+                                            score -= 20
+
                             # Discourse/deliberative forum context alignment (e.g. 'Go to shareholder meetings and speak up')
                             has_forum_context = any(
                                 t_ctx.lemma_.lower() in ("meeting", "conference", "assembly", "shareholder", "debate", "discussion", "hearing", "forum", "session", "council", "parliament", "board")
@@ -2077,8 +2349,8 @@ class WsdEngineMixin:
                                         score += 45
                                         break
 
-                        # If target is a preposition / conjunction, check complement
-                        elif tok.pos_ in ("ADP", "PREP") or tok.dep_ == "prep":
+                        # If target is a preposition / conjunction, check complement & clause aspect
+                        elif tok.pos_ in ("ADP", "PREP", "SCONJ") or tok.dep_ in ("prep", "mark") or target_p in ("prep", "conj"):
                             time_nouns = {"day", "hour", "minute", "second", "week", "month", "year", "decade", "century", "time", "period"}
                             has_time_pobj = any(
                                 c.lemma_.lower() in time_nouns or any(gc.lemma_.lower() in time_nouns for gc in c.subtree)
@@ -2095,6 +2367,105 @@ class WsdEngineMixin:
                                 if has_num_time:
                                     if "before a certain period" in s_defn or any("24 hours" in ex or "an hour" in ex for ex in s.get("examples", [])):
                                         score += 25
+
+                            # Temporal vs. Causal Conjunction Disambiguation (e.g. 'since', 'as'):
+                            # 1) Temporal origin sense ('from a particular time in the past until a later past time, or until now'):
+                            #    governed by perfect aspect in matrix clause ('has/have/had + VBN'), 'ever since', or past-tense point-in-time subordinate clause.
+                            # 2) Causal reason sense ('used to give the reason why something happens'):
+                            #    sentence-initial or present/modal subordinate clause without 'ever since' and without matrix temporal duration.
+                            if target_p == "conj" or tok.dep_ == "mark":
+                                is_temporal_origin_sense = (
+                                    "from a particular time in the past" in s_defn
+                                    or str(s.get("signpost") or "").strip().lower() == "time"
+                                )
+                                is_causal_reason_sense = (
+                                    "give the reason" in s_defn
+                                    or "because" in s_defn
+                                    or str(s.get("signpost") or "").strip().lower() == "reason"
+                                )
+                                if is_temporal_origin_sense or is_causal_reason_sense:
+                                    sub_verb = tok.head if tok.dep_ == "mark" else None
+                                    matrix_verb = sub_verb.head if (sub_verb is not None and sub_verb.head != sub_verb) else None
+                                    has_ever_since = tok.i > 0 and q_doc[tok.i - 1].lemma_.lower() == "ever"
+                                    sub_is_past_event = bool(
+                                        sub_verb is not None
+                                        and (
+                                            sub_verb.tag_ == "VBD"
+                                            or any(ch.tag_ == "VBD" for ch in sub_verb.children if ch.dep_ in ("aux", "auxpass"))
+                                        )
+                                    )
+                                    sub_is_present_or_modal = bool(
+                                        sub_verb is not None
+                                        and (
+                                            sub_verb.tag_ in ("VBP", "VBZ")
+                                            or any(ch.tag_ in ("VBP", "VBZ", "MD") for ch in sub_verb.children if ch.dep_ in ("aux", "auxpass"))
+                                        )
+                                    )
+                                    matrix_has_perfect_or_time = bool(
+                                        matrix_verb is not None
+                                        and (
+                                            any(ch.lemma_.lower() == "have" and ch.dep_ == "aux" for ch in matrix_verb.children)
+                                            or any(t.lemma_.lower() in time_nouns or t.lemma_.lower() in ("pass", "elapse", "ago") for t in q_doc)
+                                        )
+                                    )
+                                    if has_ever_since or (sub_is_past_event and matrix_has_perfect_or_time):
+                                        if is_temporal_origin_sense:
+                                            score += 45
+                                        if is_causal_reason_sense:
+                                            score -= 35
+                                    elif sub_is_present_or_modal and not has_ever_since and target_w_clean in ("since", "as"):
+                                        if is_causal_reason_sense:
+                                            score += 45
+                                        if is_temporal_origin_sense:
+                                            score -= 35
+                                if tok.dep_ == "mark" and target_w_clean == "after":
+                                    if "when a particular event or time has happened" in s_defn:
+                                        score += 45
+                                    elif "because of something that happened earlier" in s_defn:
+                                        score -= 30
+
+                        # If target is an adverb, check focus attachment, degree-infinitive frame, and motion/space vs dimension/time
+                        if tok.pos_ == "ADV" or target_p == "adv":
+                            # 1) Post-nominal focus adverb ('Money alone cannot solve this', 'in legal fees alone')
+                            if (
+                                tok.i > 0
+                                and q_doc[tok.i - 1].pos_ in ("NOUN", "PROPN", "PRON")
+                                and (tok.head == q_doc[tok.i - 1] or q_doc[tok.i - 1].dep_ in ("nsubj", "nsubjpass", "pobj", "dobj"))
+                            ):
+                                if any(k in s_defn for k in ("without including anything else", "emphasize that there is only one")):
+                                    score += 45
+                                elif any(k in s_defn for k in ("there is no one with you", "without any friends")):
+                                    score -= 35
+                            # 2) Degree adverb with 'to'-infinitive / 'for' complement ('fast enough to catch', 'old enough for school')
+                            if (
+                                (tok.i + 1 < len(q_doc) and q_doc[tok.i + 1].lower_ in ("to", "for"))
+                                or any(c.dep_ in ("xcomp", "advcl") for c in tok.head.children)
+                            ):
+                                if "to the degree that is necessary or wanted" in s_defn:
+                                    score += 45
+                                elif "fairly but not very" in s_defn:
+                                    score -= 35
+                            # 3) Directional motion adverb vs. dimensional width measurement ('swam across' vs '2 km across')
+                            has_measure_np = tok.i > 0 and (
+                                q_doc[tok.i - 1].pos_ == "NUM"
+                                or (
+                                    q_doc[tok.i - 1].pos_ == "NOUN"
+                                    and any(c.pos_ == "NUM" or c.dep_ == "nummod" for c in q_doc[tok.i - 1].children)
+                                )
+                            )
+                            if not has_measure_np and tok.head.pos_ == "VERB":
+                                if any(k in s_defn for k in ("from one side of something to the other", "towards someone or something on the other side")):
+                                    score += 40
+                                elif "used to show how wide something is" in s_defn:
+                                    score -= 40
+                            # 4) Spatial vs. Temporal separation ('in between' two houses vs two times/events)
+                            _adv_time_nouns = {"day", "hour", "minute", "second", "week", "month", "year", "decade", "century", "time", "period", "meal", "job", "event", "monday", "sunday", "christmas", "summer", "winter"}
+                            _has_adv_time = any(t.lemma_.lower() in _adv_time_nouns or t.ent_type_ in ("DATE", "TIME") for t in q_doc)
+                            if not _has_adv_time:
+                                if "in or through the space that separates" in s_defn:
+                                    score += 35
+                                elif "in the time that separates" in s_defn:
+                                    score -= 35
                 except Exception:
                     pass
 
@@ -2162,7 +2533,7 @@ class WsdEngineMixin:
             idx = best_idx
         elif target_p:
             # Check if any sense matches target_pos
-            idx = next((i for i, s in enumerate(senses) if cls._pos_code(s.get("pos")) == target_p), None)
+            idx = next((i for i, s in enumerate(senses) if cls._sense_matches_pos(s, target_p)), None)
             if idx is None:
                 # If entry is an entity or has only 1 sense carrying no POS label, fall back to sense 0
                 if len(senses) == 1 and (entry.get("kind") == "entity" or not senses[0].get("pos")):
@@ -2204,7 +2575,7 @@ class WsdEngineMixin:
                     "confidence": "low", "eligible_senses": 0}
         target_p = cls._pos_code(target_pos)
         eligible = [s for s in senses
-                    if not (target_p and cls._pos_code(s.get("pos")) != target_p)]
+                    if not (target_p and not cls._sense_matches_pos(s, target_p))]
         idx, score, margin, confidence = cls._lock_sense(
             entry,
             definition=definition,
@@ -2336,7 +2707,7 @@ class WsdEngineMixin:
 
         target_p = cls._pos_code(target_pos)
         if target_p:
-            entry_poses = {cls._pos_code(s.get("pos")) for s in senses}
+            entry_poses = {pc for s in senses for pc in cls._sense_pos_codes(s)}
             if target_p not in entry_poses and locked_idx is None:
                 return ("", "")
 
@@ -2397,7 +2768,7 @@ class WsdEngineMixin:
             pos_tag = cls._pos_code(target_pos)
             matching_senses = [
                 s for s in senses
-                if not pos_tag or cls._pos_code(s.get("pos")) == pos_tag or not s.get("pos")
+                if not pos_tag or cls._sense_matches_pos(s, pos_tag) or not s.get("pos")
             ]
             same_pos_pool: List[str] = []
             for s in matching_senses:
@@ -2648,8 +3019,10 @@ class WsdEngineMixin:
                 and not ("hospital" in str(text).lower() and context_sentence and not any(hw in context_sentence.lower() for hw in ("hospital", "patient", "ward", "doctor", "ill", "sick", "injured", "emergency")))
                 and not (is_passive_k and re.search(rf"\b{re.escape(key_toks_0[-1])}\s+(?:doing\s+|somebody\b|sb\b)", re.sub(r"[()\[\]]+", " ", str(text).lower())))
             }
+            is_caus_adj_k = len(key_toks_0) == 2 and key_toks_0[0] in ("make", "keep", "find", "leave", "remain", "stay", "fall")
+            ordered_hosts_0 = list(reversed(hosts)) if is_caus_adj_k else list(hosts)
             matching_cands = []
-            for host in hosts:
+            for host in ordered_hosts_0:
                 entry = cls.get_ldoce_entry(host)
                 if not entry:
                     continue
@@ -2665,10 +3038,18 @@ class WsdEngineMixin:
                             continue
                         if is_passive_k and re.search(rf"\b{re.escape(key_toks_0[-1])}\s+(?:doing\s+|somebody\b|sb\b)", p_flat_0):
                             continue
+                        if is_caus_adj_k and host == key_toks_0[1] and re.search(
+                            rf"\b{re.escape(key_toks_0[0])}s?\s+(?:it\s+|something\s+|somebody\s+|sb\s+|sth\s+)?{re.escape(key_toks_0[1])}\b",
+                            p_low_0
+                        ):
+                            matching_cands.append((host, sense, "sense_pattern"))
+                            break
                         for unit in cls._slash_variants(pattern):
                             if cls._entry_text_normalizer(unit) in licensed:
                                 matching_cands.append((host, sense, "sense_pattern"))
                                 break
+                if is_caus_adj_k and host == key_toks_0[1] and matching_cands:
+                    break
             if matching_cands:
                 if is_passive_k:
                     # Also include sibling senses of the same host whose examples explicitly attest the passive frame
@@ -2878,6 +3259,7 @@ class WsdEngineMixin:
                                         return (cand_hw, s, "sense_pattern")
 
                     # Sub-frame 2: Light-verb + Head Noun with role/partitive pattern (e.g. 'do part' -> 'part')
+                    # or Causative/Copular Verb + Adjective Complement (e.g. 'make possible' -> 'possible', 'keep silent' -> 'silent')
                     if len(tokens_k) == 2:
                         v_tok, n_tok = tokens_k[0], tokens_k[1]
                         n_entry = cls.get_ldoce_entry(n_tok)
@@ -2887,6 +3269,11 @@ class WsdEngineMixin:
                                 if not isinstance(s, dict) or not str(s.get("definition") or "").strip():
                                     continue
                                 pats = [str(p).lower().strip() for p in (s.get("patterns") or [])]
+                                pb_pats = [
+                                    str(pb.get("pattern") or "").lower().strip()
+                                    for pb in (s.get("pattern_bundles") or [])
+                                    if isinstance(pb, dict) and pb.get("pattern")
+                                ]
                                 units = [str(u).lower().strip() for u in (s.get("units") or [])]
                                 if any(
                                     p.startswith(f"have a {n_tok}")
@@ -2894,7 +3281,11 @@ class WsdEngineMixin:
                                     or p.startswith(f"{v_tok} a {n_tok}")
                                     or p.startswith(f"somebody's {n_tok}")
                                     or p.startswith(f"one's {n_tok}")
-                                    for p in pats + units
+                                    or (
+                                        v_tok in ("make", "keep", "find", "leave", "remain", "stay", "fall")
+                                        and re.search(rf"\b{re.escape(v_tok)}s?\s+(?:it\s+|something\s+|somebody\s+|sb\s+|sth\s+)?{re.escape(n_tok)}\b", p)
+                                    )
+                                    for p in pats + pb_pats + units
                                 ):
                                     role_senses.append(s)
                             if role_senses:
@@ -3257,6 +3648,12 @@ class WsdEngineMixin:
                 if v_head in ("keep", "remain", "stay"):
                     return "to continue to be " + defn_body
                 return "to become or feel " + defn_body
+            if k_low.startswith("make ") and "adj" in s_pos:
+                return "to make something " + defn_body
+        elif k_low.startswith("make ") and "adj" in s_pos:
+            m_if_can_be = re.match(rf"^if\s+something\s+is\s+{re.escape(host.lower())},\s*it\s+can\s+be\s+(.+)$", defn_body, flags=re.IGNORECASE)
+            if m_if_can_be:
+                return "to make something able to happen, be " + m_if_can_be.group(1)
         elif defn_clean.lower() == "to have or experience a particular feeling" and k_low.startswith("take "):
             toks = [t for t in k_low.split()[1:] if len(t) >= 3 and t not in cls._PHRASE_PARTICLE_WORDS and t not in cls._PHRASE_SLOT_WORDS]
             if toks:
@@ -3448,7 +3845,11 @@ class WsdEngineMixin:
                 if context_sentence and cls._unit_example(key, [context_sentence], allow_modifier=True):
                     tokens = key.split()
                     for v_host in cls._phrase_headwords(key, None):
-                        if v_host != _host and cls.determine_contextual_pos(v_host, context_sentence) == "verb":
+                        if (
+                            v_host != _host
+                            and not (v_host in ("make", "keep", "find", "leave", "get", "have") and _host == tokens[-1])
+                            and cls.determine_contextual_pos(v_host, context_sentence) == "verb"
+                        ):
                             v_entry = cls.get_ldoce_entry(v_host)
                             if not v_entry:
                                 continue
@@ -3698,8 +4099,14 @@ class WsdEngineMixin:
         for idx, cand in enumerate(candidates[:len(letters)]):
             pos_str = f"({cand.get('pos', '')}) " if cand.get('pos') else ""
             raw_s = cand.get("raw_sense") if isinstance(cand.get("raw_sense"), dict) else {}
-            gram_raw = str(raw_s.get("grammar") or "").strip()
             defn_str = cand.get('definition', '').strip()
+            signpost_raw = str(cand.get("signpost") or raw_s.get("signpost") or "").strip()
+            signpost_str = (
+                f"[{signpost_raw.upper()}] "
+                if signpost_raw and f"[{signpost_raw.lower()}]" not in defn_str.lower()
+                else ""
+            )
+            gram_raw = str(raw_s.get("grammar") or "").strip()
             gram_str = (
                 f"{gram_raw} "
                 if any(
@@ -3713,6 +4120,12 @@ class WsdEngineMixin:
                         "countable",
                         "intransitive",
                         "transitive",
+                        "disapproving",
+                        "approving",
+                        "figurative",
+                        "technical",
+                        "literary",
+                        "humorous",
                     )
                 )
                 and gram_raw.lower() not in defn_str.lower()
@@ -3722,8 +4135,8 @@ class WsdEngineMixin:
             pat_str = f" [Pattern: {', '.join(str(p) for p in pats[:2] if p)}]" if pats else ""
             exs = cand.get('examples') or []
             ex_str = f" (e.g. \"{str(exs[0]).strip()}\")" if exs and str(exs[0]).strip() else ""
-            options_text.append(f"{letters[idx]}. {pos_str}{gram_str}{defn_str}{pat_str}{ex_str}")
-            cand_sig_parts.append(f"{cand.get('pos', '')}:{gram_str}{defn_str}:{pat_str}")
+            options_text.append(f"{letters[idx]}. {pos_str}{signpost_str}{gram_str}{defn_str}{pat_str}{ex_str}")
+            cand_sig_parts.append(f"{cand.get('pos', '')}:{signpost_str}{gram_str}{defn_str}:{pat_str}")
 
         ctx_clean = str(discourse_context or "").strip()
         cache_raw = f"{active_model}|v2|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
@@ -3753,8 +4166,8 @@ class WsdEngineMixin:
             f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
             f"Instructions:\n"
             f"- Match the exact contextual meaning, subject/object domain, and syntactic frame in the sentence.\n"
-            f"- Pay strict attention to 'if a [subject] {item_name}s' conditions: if the sentence subject is a sound/voice/words (e.g. 'words resounded in the office') rather than a place ('a place resounds with a sound'), select the sense whose subject is a sound rather than a place or abstract fame/folklore.\n"
-            f"- Avoid narrow technical, legal, medical, or '[spoken]' interjection senses unless the sentence explicitly uses them.\n"
+            f"- Pay close attention to sense signposts (e.g. [SYSTEM] vs [BUILDING] vs [FOLD]), attitude/register labels (e.g. [disapproving], [technical], [spoken]), and 'if a [subject] {item_name}s' selectional conditions: if the sentence subject is a sound/voice/words (e.g. 'words resounded in the office') rather than a place ('a place resounds with a sound'), select the sense whose subject is a sound rather than a place or abstract fame/folklore.\n"
+            f"- Avoid narrow technical, legal, medical, '[disapproving]', or '[spoken]' interjection senses unless the sentence explicitly carries that domain or negative connotation.\n"
             f"Reply with ONLY the letter of the correct sense (e.g. A):"
         )
 

@@ -351,12 +351,45 @@ class CollocationsAndCardsMixin:
         head = word.strip().lower()
         sense_pos = {(s.get("pos") or "").strip().lower() for s in (ldoce.get("senses") or [])}
         sense_pos.discard("")
-        declared = (pos or ldoce.get("pos") or "").strip().lower()
-        has_noun = "noun" in sense_pos or declared == "noun"
-        has_verb = "verb" in sense_pos or declared == "verb"
-        has_adj = bool({"adjective", "adj"} & sense_pos) or declared in ("adjective", "adj")
+        explicit_pos = (pos or "").strip().lower()
+        if explicit_pos:
+            if explicit_pos.startswith("n"):
+                explicit_pos = "noun"
+            elif explicit_pos.startswith("v"):
+                explicit_pos = "verb"
+            elif explicit_pos.startswith("adj") or explicit_pos == "a":
+                explicit_pos = "adjective"
+            elif explicit_pos.startswith("adv") or explicit_pos == "r":
+                explicit_pos = "adverb"
+        strict_pos = bool(
+            explicit_pos
+            and (
+                not sense_pos
+                or explicit_pos in sense_pos
+                or (explicit_pos == "adjective" and "adj" in sense_pos)
+            )
+        )
+        declared = (explicit_pos if strict_pos else (ldoce.get("pos") or explicit_pos or "")).strip().lower()
+        if strict_pos:
+            has_noun = declared == "noun"
+            has_verb = declared == "verb"
+            has_adj = declared in ("adjective", "adj")
+        else:
+            has_noun = "noun" in sense_pos or declared == "noun"
+            has_verb = "verb" in sense_pos or declared == "verb"
+            has_adj = bool({"adjective", "adj"} & sense_pos) or declared in ("adjective", "adj")
         texts = cls._collocation_texts(ldoce)
-        preps = {p.strip().lower() for p in cls.get_ldoce_preps(word)}
+        preps = {p.strip().lower() for p in cls.get_ldoce_preps(word, pos=declared if strict_pos else None)}
+        verb_only_preps = (
+            {p.strip().lower() for p in cls.get_ldoce_preps(word, pos="verb")} - preps
+            if (strict_pos and has_noun and "verb" in sense_pos)
+            else set()
+        )
+        noun_only_preps = (
+            {p.strip().lower() for p in cls.get_ldoce_preps(word, pos="noun")} - preps
+            if (strict_pos and has_verb and "noun" in sense_pos)
+            else set()
+        )
         head_forms = sorted({f for f in cls.inflected_forms(head) if f}, key=len, reverse=True)
         head_alt = "(?:%s)" % "|".join(re.escape(f) for f in head_forms)
         head_any_re = rf"(?<!\w){head_alt}(?!\w)"
@@ -371,10 +404,12 @@ class CollocationsAndCardsMixin:
             tokens = [t for t in re.split(r"[\s/]+", (text or "").strip().lower()) if t]
             return bool(tokens) and tokens[-1] in head_forms
 
-        noun_box = declared == "noun" or any(
-            ends_with_headword(s)
-            for bucket in ("adj", "colloc_nouns")
-            for s in (entry.get(bucket) or [])
+        noun_box = False if (strict_pos and not has_noun) else (
+            declared == "noun" or any(
+                ends_with_headword(s)
+                for bucket in ("adj", "colloc_nouns")
+                for s in (entry.get(bucket) or [])
+            )
         )
         # Each box item carries the example PedLex printed beside it, which is the entry's
         # own statement of what the pairing means.
@@ -499,6 +534,36 @@ class CollocationsAndCardsMixin:
             # for 'time' but 'network' does not count for 'work', and 'human rights' is
             # already the phrase rather than something to glue a second 'right' onto).
             if re.search(head_any_re, lowered):
+                if mode == "adj" and not has_noun:
+                    return None
+                if mode == "verb_before" and not (has_noun or has_adj):
+                    return None
+                if strict_pos and has_verb and not has_noun:
+                    if " " not in lowered:
+                        return None
+                    if mode in ("noun", "phrase") and ends_with_headword(lowered):
+                        w_parts = lowered.split()
+                        if len(w_parts) != 2 or not (w_parts[0].endswith("ly") or w_parts[0] in ("to", "not", "never", "always", "often")):
+                            return None
+                    if mode == "phrase" and any(
+                        re.search(rf"\b(?:a|an|the|this|that|my|your|his|her|its|our|their)\s+{re.escape(lowered)}\b", ex)
+                        for ex in texts
+                    ):
+                        return None
+                    if re.search(
+                        rf"\b(?:a|an|the|this|that|some|any|no|my|your|his|her|its|our|their|public|good|firm|solid|on|under|in|of|into|beyond|out of|outside|within|without|have|has|had|take|took|lose|lost|gain|gained|regain|regained|keep|kept|maintain|maintained)\s+(?:[a-z-]+\s+)?{head_alt}\b",
+                        lowered,
+                    ):
+                        return None
+                    for m_np in re.finditer(rf"\b{head_alt}\s+([a-z]+)\b", lowered):
+                        if m_np.group(1) in noun_only_preps:
+                            return None
+                if strict_pos and has_noun and not has_verb and mode == "phrase":
+                    if re.match(rf"^{head_alt}\s+(?:to\s+be|to\s+[a-z]+|part-time|full-time|late|hard|round\s+the\s+clock)\b", lowered):
+                        return None
+                    m_vp = re.match(rf"^{head_alt}\s+([a-z]+)\b", lowered)
+                    if m_vp and (m_vp.group(1) in verb_only_preps or "/" in (item or "")):
+                        return None
                 return text
 
             if mode == "verb_before":
@@ -526,7 +591,7 @@ class CollocationsAndCardsMixin:
                     # 'based' arrives from 'be based on' - a participle the box filed under
                     # verbs. 'based foundation' is not a phrase and nothing says it is.
                     return None
-                if found is None and not box_shows_noun_use(item):
+                if (found is None or found[0] != "item") and not box_shows_noun_use(item):
                     return None
                 return f"{text} {head}"
 
@@ -540,7 +605,9 @@ class CollocationsAndCardsMixin:
                 if not found:
                     return None
                 order, gap, head_form = found
-                if order == "headword" and not (has_noun or has_adj):
+                if order == "item" and not has_noun:
+                    return None
+                if order == "headword" and not governed(gap) and not (has_noun or has_adj):
                     return None
                 if not governed(gap) and head_form != head:
                     # The headword matched as 'works' in 'This system works' - a subject
@@ -554,6 +621,8 @@ class CollocationsAndCardsMixin:
                 if declared in ("adjective", "adj") or (has_adj and not has_verb):
                     return f"{text} {head}"
                 if has_verb:
+                    if strict_pos and (lowered in noun_only_preps or lowered in cls._COLLOCATION_GAP_WORDS):
+                        return None
                     # 'never' is in lose's ADVERBS section because the entry says 'never
                     # lose', not 'lose never' - the attested order decides which side the
                     # adverb goes on.
@@ -571,42 +640,68 @@ class CollocationsAndCardsMixin:
             return None
 
         # 1. Verb + Noun: 'lay [word]', 'establish [word]'
-        for v in (entry.get("verb_before") or [])[:3]:
-            if "(" not in v:
-                phrase = render(v, "verb_before")
-                if phrase:
-                    results.append(phrase)
+        if has_noun or has_adj:
+            added = 0
+            for v in (entry.get("verb_before") or []):
+                if "(" not in v:
+                    phrase = render(v, "verb_before")
+                    if phrase:
+                        results.append(phrase)
+                        added += 1
+                        if added >= 3:
+                            break
 
         # 2. Adj + Noun: 'firm [word]', 'solid [word]'
-        for adj in (entry.get("adj") or [])[:3]:
-            phrase = render(adj, "adj")
-            if phrase:
-                results.append(phrase)
+        if has_noun:
+            added = 0
+            for adj in (entry.get("adj") or []):
+                phrase = render(adj, "adj")
+                if phrase:
+                    results.append(phrase)
+                    added += 1
+                    if added >= 3:
+                        break
 
         # 3. Noun collocations: '[word] guide', 'birth [word]'
-        for noun in (entry.get("colloc_nouns") or [])[:3]:
+        added = 0
+        for noun in (entry.get("colloc_nouns") or []):
             phrase = render(noun, "noun")
             if phrase:
                 results.append(phrase)
+                added += 1
+                if added >= 3:
+                    break
 
         # 4. Adv + Verb: '[word] heavily', '[word] directly'
-        for adv in (entry.get("verb") or [])[:2]:
+        added = 0
+        for adv in (entry.get("verb") or []):
             phrase = render(adv, "adverb")
             if phrase:
                 results.append(phrase)
+                added += 1
+                if added >= 2:
+                    break
 
         # 5. The ADVERB section of a COLLOCATIONS box ('completely wrong', 'listen
         # attentively') and the PHRASES section ('listen to reason', 'Have a listen').
         # (F7 遗留 ①: bare prepositions like 'director of' or 'streak on' are syntactic patterns,
         # not complete phrases, and are excluded from rich phrase outputs).
-        for adv in (entry.get("adverb") or [])[:3]:
+        added = 0
+        for adv in (entry.get("adverb") or []):
             phrase = render(adv, "adverb")
             if phrase:
                 results.append(phrase)
-        for phrase_text in (entry.get("noun_after") or [])[:3]:
+                added += 1
+                if added >= 3:
+                    break
+        added = 0
+        for phrase_text in (entry.get("noun_after") or []):
             phrase = render(phrase_text, "phrase")
             if phrase:
                 results.append(phrase)
+                added += 1
+                if added >= 3:
+                    break
 
         # Dedup preserving order
         seen = set()
@@ -1205,7 +1300,7 @@ class CollocationsAndCardsMixin:
             if pats:
                 pattern_parts.append(f"*{pats[0]}*")
 
-        gb_alert = cls.get_ldoce_grammar_alert(w_clean, quote=quote, sense_index=t_s_idx)
+        gb_alert = cls.get_ldoce_grammar_alert(w_clean, quote=quote, sense_index=t_s_idx, pos=p_code)
         if gb_alert:
             rules = []
             for r in (gb_alert.get("rules") or []):
@@ -1254,6 +1349,17 @@ class CollocationsAndCardsMixin:
                     if ow != w_clean and ow not in locked_def_kws:
                         other_sense_kws.add(ow)
 
+        entry_p_code = cls._pos_code(entry.get("pos"))
+        all_poses = [cls._pos_code(p) for p in (entry.get("all_poses") or []) if cls._pos_code(p)]
+        is_multi_pos = len(set(all_poses)) > 1
+        verb_only_preps: Set[str] = set()
+        noun_only_preps: Set[str] = set()
+        if is_multi_pos and "v" in all_poses and "n" in all_poses:
+            v_preps = set(cls.get_ldoce_preps(w_clean, pos="verb"))
+            n_preps = set(cls.get_ldoce_preps(w_clean, pos="noun"))
+            verb_only_preps = v_preps - n_preps
+            noun_only_preps = n_preps - v_preps
+
         def _sense_pos_matches(s_obj: Dict[str, Any]) -> bool:
             if not p_code:
                 return True
@@ -1272,11 +1378,22 @@ class CollocationsAndCardsMixin:
             c_low = c_s.lower()
             if c_low == w_clean or c_low in (f"the {w_clean}", f"a {w_clean}", f"an {w_clean}"):
                 return
-            if p_code == "v" and re.search(rf"\b(?:a|an|the|to a)\s+{re.escape(w_clean)}\b", c_low):
+            if p_code == "v" and re.search(rf"\b(?:a|an|the|to a|under|out of|in|beyond|within|without)\s+{re.escape(w_clean)}\b", c_low):
                 return
             c_words = c_low.split()
             if p_code == "n" and len(c_words) == 2 and c_words[1] == w_clean and re.match(r"^[a-z]+ing$", c_words[0]):
                 return
+            if is_multi_pos and p_code == "n" and "v" in all_poses and c_words and c_words[0] == w_clean:
+                # Guard against verb-initial frames leaking onto noun cards (e.g., "study to be...", "study law/business/...", "study for an exam")
+                if len(c_words) >= 2 and (
+                    c_words[1] == "to"
+                    or "/" in c_words[1]
+                    or c_words[1] in verb_only_preps
+                ):
+                    return
+            if is_multi_pos and p_code == "v" and "n" in all_poses and c_words and c_words[0] == w_clean:
+                if len(c_words) >= 2 and c_words[1] in noun_only_preps:
+                    return
             if check_cross_sense and other_sense_kws:
                 c_toks = {w for w in re.findall(r"[a-z]{4,}", c_low) if w != w_clean}
                 if c_toks & other_sense_kws and not (c_toks & locked_def_kws):
@@ -1304,18 +1421,25 @@ class CollocationsAndCardsMixin:
                 _add_colloc(str(u))
 
         # Tier B: Authentic multi-word dictionary Collocations Box entries (source != "corpus")
-        entry_p_code = cls._pos_code(entry.get("pos"))
-        all_poses = [cls._pos_code(p) for p in (entry.get("all_poses") or []) if cls._pos_code(p)]
         colloc_box_pos_ok = (
             not entry_p_code
             or not p_code
             or entry_p_code == p_code
-            or len(set(all_poses)) <= 1
+            or not is_multi_pos
         )
         if len(colloc_items) < 5 and colloc_box_pos_ok:
             raw_collocs = entry.get("collocations")
             if isinstance(raw_collocs, dict):
-                for cat_k in ("phrases", "verbs", "adjectives", "nouns", "adverbs"):
+                allowed_cats = ("phrases", "verbs", "adjectives", "nouns", "adverbs")
+                if p_code == "v":
+                    allowed_cats = ("adverbs", "phrases", "nouns")
+                elif p_code == "n":
+                    allowed_cats = ("verbs", "adjectives", "phrases", "nouns")
+                elif p_code == "adj":
+                    allowed_cats = ("adverbs", "nouns", "phrases")
+                elif p_code == "adv":
+                    allowed_cats = ("verbs", "adjectives", "phrases")
+                for cat_k in allowed_cats:
                     for it_c in (raw_collocs.get(cat_k) or []):
                         if not isinstance(it_c, dict) or it_c.get("source") == "corpus":
                             continue
@@ -1349,7 +1473,7 @@ class CollocationsAndCardsMixin:
                 _add_colloc(str(ph_str or ""), check_cross_sense=True)
                 if len(colloc_items) >= 5:
                     break
-        if len(colloc_items) < 5 and len(set(all_poses)) <= 1:
+        if len(colloc_items) < 5 and not is_multi_pos:
             for cr_obj in (entry.get("cross_collocations") or []):
                 if isinstance(cr_obj, dict):
                     _add_colloc(str(cr_obj.get("collocation") or ""), check_cross_sense=True)
@@ -1362,14 +1486,42 @@ class CollocationsAndCardsMixin:
         # 3. Sense-Aligned THESAURUS Note (exclude target word itself; rank peers by semantic overlap & proximity)
         thes_list = entry.get("thesaurus") or []
         if thes_list:
+            def _thes_item_matches_pos(t_obj: Dict[str, Any]) -> bool:
+                if not is_multi_pos or not p_code:
+                    return True
+                tw_low = str(t_obj.get("word") or "").strip().lower()
+                tg_low = str(t_obj.get("grammar") or "").lower()
+                td_low = re.sub(r"^[:\s]+", "", str(t_obj.get("distinction") or "")).strip().lower()
+                has_n_gram = any(k in tg_low for k in ("countable", "uncountable", "singular", "plural", "noun"))
+                has_v_gram = any(k in tg_low for k in ("transitive", "intransitive", "phrasal verb"))
+                starts_v_def = bool(re.match(r"^(?:to\s+[a-z]+|if\s+you\s+[a-z]+)\b", td_low))
+                starts_n_def = bool(
+                    re.match(r"^(?:a|an|the|one\s+of\s+the|something\s+that|information\s+about|someone\s+who)\b", td_low)
+                )
+                is_reflexive_vp = any(r in tw_low for r in ("yourself", "himself", "herself", "oneself", "themselves"))
+                if p_code == "v":
+                    if has_n_gram or starts_n_def or (not has_v_gram and not starts_v_def):
+                        return False
+                elif p_code == "n":
+                    if has_v_gram or is_reflexive_vp or (starts_v_def and not has_n_gram):
+                        return False
+                elif p_code in ("adj", "adv"):
+                    if has_n_gram or has_v_gram or starts_v_def or is_reflexive_vp:
+                        return False
+                return True
+
             locked_def = (definition or (cls.format_ldoce_definition(locked_sense) if locked_sense else "")).strip()
             self_indices = [
                 idx_t for idx_t, t in enumerate(thes_list)
-                if cls._thesaurus_variant_matches(t.get("word"), w_clean)
+                if cls._thesaurus_variant_matches(t.get("word"), w_clean) and _thes_item_matches_pos(t)
             ]
             self_exp = thes_list[self_indices[0]] if self_indices else None
             # Only surface THESAURUS box when its cluster aligns with the locked sense (or entry has 1 POS)
             box_matches_sense = True
+            if is_multi_pos and not self_indices:
+                # Verify that at least one peer matches the requested POS
+                if not any(_thes_item_matches_pos(t) for t in thes_list):
+                    box_matches_sense = False
             if self_exp and locked_def and len(senses) > 1:
                 self_dist = re.sub(r"^[:\s]+", "", str(self_exp.get("distinction") or "")).strip()
                 if self_dist and cls._definition_overlap_ratio(self_dist, locked_def) < 0.25:
@@ -1386,6 +1538,8 @@ class CollocationsAndCardsMixin:
                 scored_peers: List[Tuple[float, int, str]] = []
                 seen_peer_words: Set[str] = set()
                 for idx_t, t in enumerate(thes_list):
+                    if not _thes_item_matches_pos(t):
+                        continue
                     ew = str(t.get("word") or "").strip()
                     ed = re.sub(r"^[:\s]+", "", str(t.get("distinction") or "")).strip()
                     eg = str(t.get("grammar") or "").strip()

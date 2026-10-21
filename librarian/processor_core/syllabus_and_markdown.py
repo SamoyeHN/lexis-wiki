@@ -1117,7 +1117,8 @@ class SyllabusAndMarkdownMixin:
                 det_v = LinguisticEngine.extract_deterministic_vocabulary(
                     clean_p,
                     syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
-                    target_count=target_k
+                    target_count=target_k,
+                    exclude_words={w for w, _ in f12_suppressed} if f12_suppressed else None
                 )
                 v_items = [
                     VocabularyItem(
