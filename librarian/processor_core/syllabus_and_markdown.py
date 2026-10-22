@@ -1085,6 +1085,7 @@ class SyllabusAndMarkdownMixin:
             """Runs fresh deterministic vocabulary + expression extraction with F12 atom suppression/recovery, returning structured items."""
             with open(src_path, "r", encoding="utf-8") as f:
                 src_text = f.read()
+            src_text = LinguisticEngine.sanitize_source_markdown(src_text, source_path=src_path)
             clean_p, syl_v, syl_g, syl_e = self.parse_syllabus_sections(src_text)
             self._last_source_content = clean_p or src_text
             det_c = LinguisticEngine.calculate_text_cefr(clean_p) if clean_p else cefr

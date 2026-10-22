@@ -219,6 +219,7 @@ class ExtractionRunnerMixin:
 
         with open(source_path, "r", encoding="utf-8") as f:
             content = f.read()
+        content = LinguisticEngine.sanitize_source_markdown(content, source_path=source_path)
 
         # Plan 1 (Single Source): Parse optional syllabus sections directly from source markdown
         clean_content, syllabus_vocab, syllabus_grammar, syllabus_expressions = self.parse_syllabus_sections(content)

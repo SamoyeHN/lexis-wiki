@@ -3923,7 +3923,7 @@ class TestExpressionDefinitionHost:
         "keep silent": ("sense_pattern", "not saying anything"),
         "long for something": ("sense_pattern", "to want something very much"),
         "worry about something": ("sense_pattern", "to be anxious or unhappy about"),
-        "make something possible": ("sense_pattern", "to cause something to happen, or cause a particular state or condition"),
+        "make something possible": ("sense_pattern", "to make something able to happen, be done or achieved"),
     }
 
     # Verb + preposition pairs the dependency parse mines and Longman never states.  They are

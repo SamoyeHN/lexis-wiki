@@ -591,7 +591,7 @@ class CollocationsAndCardsMixin:
                     # 'based' arrives from 'be based on' - a participle the box filed under
                     # verbs. 'based foundation' is not a phrase and nothing says it is.
                     return None
-                if (found is None or found[0] != "item") and not box_shows_noun_use(item):
+                if found is None and not box_shows_noun_use(item):
                     return None
                 return f"{text} {head}"
 

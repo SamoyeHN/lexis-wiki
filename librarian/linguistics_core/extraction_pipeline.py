@@ -27,6 +27,179 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 class ExtractionPipelineMixin:
 
     # -------------------------------------------------------------------------
+    # 0. Pre-Extraction Source Hygiene & Idempotent Persistence
+    # -------------------------------------------------------------------------
+    _BYLINE_META_RE = re.compile(
+        r"^\s*\(\s*(?:posted|updated|published|written|reported|edited|archived)\s+"
+        r"(?:on|by|in|at)\b[^)]*\)\s*\.?\s*$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_byline_or_meta_line(cls, line_or_para: str) -> bool:
+        """
+        Detects editorial bylines / timestamp metadata lines such as:
+        '(Posted on January 22, 2015 by Karen)' or '(Updated on March 3, 2020 by Staff)'.
+        """
+        s = (line_or_para or "").strip()
+        if not s:
+            return False
+        return bool(cls._BYLINE_META_RE.match(s))
+
+    @classmethod
+    def _normalize_inline_quotes_and_dashes(cls, s: str) -> str:
+        """
+        Normalizes OCR / copy-paste typography defects on a single prose line:
+          - Repairs mojibake em-dash ('\\ufffdC') -> '—'
+          - Normalizes spaced ellipsis ('. . .') -> '...'
+          - Normalizes curly quote spacing ('“ word ”' -> '“word”')
+          - When a line has balanced straight double quotes ('"'), uses quote parity
+            (even = opening quote, odd = closing quote) to deterministically fix
+            stuck quotes ('me."Pose' -> 'me. "Pose') and inverted quote spaces
+            ('ached." I' -> 'ached. "I', 'responded," The' -> 'responded, "The',
+            '" upright "' -> '"upright"').
+        """
+        if not s:
+            return s
+        # 1. Mojibake GBK em-dash repair and spaced ellipsis normalization
+        s = s.replace("\ufffdC", "—")
+        s = re.sub(r"\.\s+\.\s+\.", "...", s)
+
+        # 2. Curly quote spacing normalization
+        s = re.sub(r"([“«])\s+", r"\1", s)
+        s = re.sub(r"\s+([”»])", r"\1", s)
+        s = re.sub(r"(\w|[.!?,:;])([“«])", r"\1 \2", s)
+        s = re.sub(r"([”»])(\w)", r"\1 \2", s)
+
+        # 3. Parity-based straight double-quote ('"') spacing repair (only when '"' count is even > 0)
+        q_count = s.count('"')
+        if q_count >= 2 and q_count % 2 == 0:
+            parts = s.split('"')
+            # parts[0] is outside, parts[1] is inside quote 1, parts[2] is outside, parts[3] is inside quote 2, ...
+            for i in range(1, len(parts), 2):
+                # Strip accidental inner leading/trailing spaces inside quoted span: `" upright "` -> `"upright"`
+                parts[i] = parts[i].strip()
+            for i in range(0, len(parts), 2):
+                # Outside span before an opening quote (if i < len(parts) - 1):
+                if i < len(parts) - 1:
+                    prev_out = parts[i].rstrip()
+                    if prev_out and prev_out[-1] not in ("(", "[", "{", "—", "–", "/", "\n"):
+                        parts[i] = prev_out + " "
+                    else:
+                        parts[i] = prev_out
+                # Outside span after a closing quote (if i > 0):
+                if i > 0:
+                    cur_out = parts[i].lstrip()
+                    if cur_out and cur_out[0] not in (".", ",", "!", "?", ";", ":", ")", "]", "}", "—", "–", "'", "’"):
+                        parts[i] = " " + cur_out
+                    else:
+                        parts[i] = cur_out
+            s = '"'.join(parts)
+
+        return re.sub(r" {2,}", " ", s).strip()
+
+    @classmethod
+    def sanitize_source_markdown(
+        cls,
+        text: str,
+        source_path: Optional[Union[str, Path]] = None,
+    ) -> str:
+        """
+        Deterministic, idempotent pre-extraction source text sanitizer.
+        Cleans obvious OCR / copy-paste formatting defects in body prose while leaving
+        YAML frontmatter and `## Syllabus Vocabulary` / `## Appendix` untouched:
+          1. Collapses multiple consecutive horizontal spaces (` {2,}`, `\t`, `\u00a0`) to a single space.
+          2. Repairs missing or inverted spaces around paired quotation marks (`an"upright"message`,
+             `me."Pose`, `ached." I`, `responded," The`, `" upright "`), mojibake em-dashes (`\\ufffdC`),
+             and spaced ellipses (`. . .`).
+          3. Appends a missing terminal period `.` to multi-word declarative prose paragraphs
+             (>= 6 words, starts with a capital letter/quote, contains a finite verb/auxiliary,
+             not a heading/list marker/byline/title, and lacks terminal punctuation).
+        If `source_path` is provided and the sanitized text differs from disk, persists the
+        cleaned text back to `source_path` so `sources/<Unit>.md`, `sentence_pool`, and
+        Verbatim Quote Gate checks remain 100% synchronized.
+        """
+        if not text:
+            return text
+
+        fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)", text, re.DOTALL)
+        frontmatter = fm_match.group(1) if fm_match else ""
+        body = fm_match.group(2) if fm_match else text
+
+        syllabus_suffix = ""
+        m_appendix = re.search(r"(?mi)^(?:#+\s*(?:Syllabus\s+Vocabulary|Appendix)\b.*)$", body)
+        if m_appendix:
+            syllabus_suffix = body[m_appendix.start():]
+            body = body[:m_appendix.start()]
+
+        nlp = cls.get_spacy()
+        raw_lines = body.split("\n")
+        cleaned_lines: List[str] = []
+
+        for idx, line in enumerate(raw_lines):
+            # Normalize non-breaking spaces and tabs, collapse multiple inline spaces
+            s = line.replace("\u00a0", " ").replace("\t", " ")
+            s = re.sub(r" {2,}", " ", s).strip()
+            if not s:
+                cleaned_lines.append("")
+                continue
+
+            # Skip headings and horizontal rules
+            if s.startswith("#") or re.match(r"^[-*_]{3,}\s*$", s):
+                cleaned_lines.append(s)
+                continue
+
+            # Repair quote spacing, mojibake em-dashes, and spaced ellipses
+            s = cls._normalize_inline_quotes_and_dashes(s)
+
+            # Check if a standalone prose paragraph line is missing a terminal period:
+            # Must not be a byline, heading, short subheading/caption, or already end with punctuation.
+            next_non_empty = ""
+            for nxt in raw_lines[idx + 1:]:
+                if nxt.strip():
+                    next_non_empty = nxt.strip()
+                    break
+            is_para_end = (idx == len(raw_lines) - 1) or (not raw_lines[idx + 1].strip()) or next_non_empty.startswith("#")
+
+            if (
+                is_para_end
+                and not cls._is_byline_or_meta_line(s)
+                and not s.endswith((".", "!", "?", '"', "”", "’", "'", ":", ";", ")", "]", "—", "–", "…"))
+                and re.match(r'^[A-Z“"‘\']', s)
+            ):
+                words = s.split()
+                # Exclude Title-Case headings (where >65% of 4+ letter words are capitalized)
+                alpha_4 = [re.sub(r"^[^a-zA-Z]+|[^a-zA-Z]+$", "", w) for w in words]
+                alpha_4 = [w for w in alpha_4 if len(w) >= 4 and w.isalpha()]
+                cap_ratio = (
+                    sum(1 for w in alpha_4 if w[0].isupper()) / len(alpha_4)
+                    if alpha_4 else 1.0
+                )
+                if len(words) >= 6 and cap_ratio < 0.60:
+                    doc_line = nlp(s)
+                    has_finite_verb = any(
+                        t.pos_ in ("VERB", "AUX") and t.tag_ in ("VBD", "VBP", "VBZ", "MD", "VB")
+                        for t in doc_line
+                    )
+                    if has_finite_verb:
+                        s = s + "."
+
+            cleaned_lines.append(s)
+
+        new_body = "\n".join(cleaned_lines)
+        reconstructed = frontmatter + new_body + syllabus_suffix
+
+        if source_path is not None and reconstructed != text:
+            try:
+                p = Path(source_path)
+                if p.is_file():
+                    p.write_text(reconstructed, encoding="utf-8")
+            except Exception:
+                pass
+
+        return reconstructed
+
+    # -------------------------------------------------------------------------
     # 1. Sentence Boundary Tokenization & Indexing ([S-1], [S-2])
     # -------------------------------------------------------------------------
     @classmethod
@@ -37,6 +210,7 @@ class ExtractionPipelineMixin:
             indexed_text: Text formatted with '[S-1] ... [S-2] ...' for LLM prompts.
             sentence_pool: Dict mapping 'S-1' -> pristine full sentence text.
         """
+        text = cls.sanitize_source_markdown(text)
         nlp = cls.get_spacy()
         # Cleanly separate frontmatter if present so spaCy only tokenizes authentic body prose
         fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)", text, re.DOTALL)
@@ -75,6 +249,11 @@ class ExtractionPipelineMixin:
                 indexed_paragraphs.append(para)
                 continue
 
+            # Drop editorial bylines / timestamp metadata lines from content lines so they are never indexed as S-k
+            lines = [l for l in lines if not cls._is_byline_or_meta_line(l)]
+            if not lines:
+                continue
+
             # Separate optional leading heading lines in this paragraph
             prefix_lines = []
             content_lines = []
@@ -86,7 +265,7 @@ class ExtractionPipelineMixin:
 
             prefix_str = "\n\n".join(prefix_lines) + "\n\n" if prefix_lines else ""
             para_raw_text = " ".join(content_lines).strip()
-            if not para_raw_text:
+            if not para_raw_text or cls._is_byline_or_meta_line(para_raw_text):
                 if prefix_lines:
                     indexed_paragraphs.append("\n\n".join(prefix_lines))
                 continue
@@ -99,17 +278,41 @@ class ExtractionPipelineMixin:
             list_marker = bullet_match.group(1).strip() if bullet_match else ""
             para_text = bullet_match.group(2).strip() if bullet_match else para_raw_text
 
-            # Protect terminal punctuation inside dialogue quotation marks so sentences like
-            # 'Their attitude was “Ah! You’re here! We can start now!”' stay unified as one full authentic sentence
+            # Protect internal punctuation inside quotation marks while allowing true sentence breaks
+            # when a quote closes with '.!?' and is followed by a new capitalized sentence.
             def _mask_quoted_punct(m: re.Match) -> str:
-                quote_open = m.group(1)
-                quote_body = m.group(2)
-                quote_close = m.group(3)
-                # Protect abbreviations (Mr., Ms., Dr., etc.) inside quotes so they don't get split
+                quote_open = m.group(1) or m.group(4) or m.group(7)
+                quote_body = m.group(2) or m.group(5) or m.group(8)
+                quote_close = m.group(3) or m.group(6) or m.group(9)
+                after_str = m.string[m.end():]
+
+                # Check if the quote ends with terminal punctuation (.!?) and is followed by
+                # end-of-paragraph or a new independent sentence (whitespace + capital letter / opening quote),
+                # rather than a lowercase continuation or speech attribution ('said ...', 'added ...').
+                body_r = quote_body.rstrip()
+                trailing_punct = body_r[-1] if body_r and body_r[-1] in ".!?" else ""
+                after_clean = after_str.lstrip()
+                is_sentence_end_quote = False
+                if trailing_punct:
+                    if not after_clean:
+                        is_sentence_end_quote = True
+                    elif re.match(r'^[“"‘\'\(\[]?[A-Z]', after_clean):
+                        # Make sure it's not followed by a proper-noun attribution verb ('..." Mary said.')
+                        m_attr = re.match(
+                            r'^([A-Z][a-z]+)\s+(said|asked|replied|added|noted|wrote|explained|recalled|whispered|shouted|cried|argued|warned|insisted|continued|thought)\b',
+                            after_clean
+                        )
+                        if not m_attr:
+                            is_sentence_end_quote = True
+
+                core_body = body_r[:-1] if (is_sentence_end_quote and trailing_punct) else quote_body
+
+                # Protect abbreviations (Mr., Ms., Dr., etc.) and ellipses inside quotes so they don't get split
+                protected_body = core_body.replace("...", "§ELLIPSIS§")
                 protected_body = re.sub(
                     r'\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e)\.',
                     lambda x: x.group(1) + '§ABBRDOT§',
-                    quote_body,
+                    protected_body,
                     flags=re.IGNORECASE
                 )
                 masked_body = (
@@ -118,31 +321,62 @@ class ExtractionPipelineMixin:
                                   .replace("?", " §QUES§ ")
                                   .replace('§ABBRDOT§', '.')
                 )
+                if is_sentence_end_quote and trailing_punct:
+                    p_tok = {".": "§QFINAL_DOT§", "!": "§QFINAL_EXCL§", "?": "§QFINAL_QUES§"}[trailing_punct]
+                    return f"{quote_open}{masked_body}{p_tok}{quote_close} §QBREAK§ "
                 return f"{quote_open}{masked_body}{quote_close}"
 
-            # Match curly and straight quotes
+            # Match curly and straight quotes cleanly (curly pairs first, then straight pairs)
             masked_para_text = re.sub(
-                r'([“"«])([^”"»]+?)([”"»])',
+                r'(?:(“)([^”]+?)(”)|(")([^"]+? )(")|(«)([^»]+?)(»))'.replace("? )", "?)"),
                 _mask_quoted_punct,
                 para_text
             )
 
             para_doc = nlp(masked_para_text)
-            para_sent_parts = []
+            raw_sents: List[str] = []
             for sent in para_doc.sents:
-                raw_sent = sent.text
-                raw_sent = re.sub(r'\s*§DOT§\s*', '. ', raw_sent)
-                raw_sent = re.sub(r'\s*§EXCL§\s*', '! ', raw_sent)
-                raw_sent = re.sub(r'\s*§QUES§\s*', '? ', raw_sent)
-                raw_sent = re.sub(r'([,:;])(["“«])(?=\w)', r'\1 \2', raw_sent)
-                raw_sent = re.sub(r'([.!?,\u2026])\s+(["”»])(?=\s|$|[)\].,:;!?])', r'\1\2', raw_sent)
-                raw_sent = re.sub(r'\s+([”»])', r'\1', raw_sent)
-                raw_sent = re.sub(r'([“«])\s+', r'\1', raw_sent)
-                raw_sent = re.sub(r'\s{2,}', ' ', raw_sent).strip()
-                if not raw_sent:
-                    continue
+                for sub_sent in sent.text.split("§QBREAK§"):
+                    raw_sent = sub_sent.strip()
+                    if not raw_sent:
+                        continue
+                    # Restore quote-final punctuation before closing quote mark
+                    raw_sent = raw_sent.replace("§QFINAL_DOT§", ".").replace("§QFINAL_EXCL§", "!").replace("§QFINAL_QUES§", "?")
+                    raw_sent = re.sub(r'\s*§DOT§\s*', '. ', raw_sent)
+                    raw_sent = re.sub(r'\s*§EXCL§\s*', '! ', raw_sent)
+                    raw_sent = re.sub(r'\s*§QUES§\s*', '? ', raw_sent)
+                    raw_sent = raw_sent.replace("§ELLIPSIS§", "...")
+                    raw_sent = re.sub(r'([,:;])(["“«])(?=\w)', r'\1 \2', raw_sent)
+                    raw_sent = re.sub(r'([.!?,\u2026])\s+(["”»])(?=\s|$|[)\].,:;!?])', r'\1\2', raw_sent)
+                    raw_sent = re.sub(r'\s+([”»])', r'\1', raw_sent)
+                    raw_sent = re.sub(r'([“«])\s+', r'\1', raw_sent)
+                    raw_sent = re.sub(r'\s{2,}', ' ', raw_sent).strip()
+                    if raw_sent:
+                        raw_sents.append(raw_sent)
+
+            # Merge any sentences where spaCy split across an unclosed quotation mark
+            # or left an orphan attribution/punctuation fragment (e.g. `”, added Tom.`)
+            merged_sents: List[str] = []
+            for seg in raw_sents:
+                if merged_sents:
+                    prev = merged_sents[-1]
+                    unclosed_curly = prev.count("“") > prev.count("”")
+                    unclosed_straight = (prev.count('"') % 2) == 1
+                    starts_with_close_or_punct = bool(re.match(r'^[”».,:;!?\)]', seg)) or (
+                        unclosed_straight and seg.startswith('"')
+                    )
+                    if unclosed_curly or unclosed_straight or starts_with_close_or_punct:
+                        sep = "" if starts_with_close_or_punct else " "
+                        merged_sents[-1] = re.sub(r'\s{2,}', ' ', f"{prev}{sep}{seg}").strip()
+                        continue
+                merged_sents.append(seg)
+
+            para_sent_parts = []
+            for raw_sent in merged_sents:
                 # Clean enclosing markdown bold/italic formatting from pristine sentence text
                 sent_clean = re.sub(r'^\*+|\*+$', '', raw_sent).strip()
+                if cls._is_byline_or_meta_line(sent_clean):
+                    continue
                 words = [t for t in nlp(sent_clean) if t.is_alpha]
                 if len(words) < 2 and not sent_clean.endswith((".", "?", "!")):
                     para_sent_parts.append(raw_sent)
@@ -776,14 +1010,14 @@ class ExtractionPipelineMixin:
 
         for sid, sent in sentence_pool.items():
             sent_clean = sent.strip()
-            # Skip very short sentences
-            if len(sent_clean.split()) < 7:
+            # Skip very short sentences or editorial bylines
+            if len(sent_clean.split()) < 7 or cls._is_byline_or_meta_line(sent_clean):
                 continue
             # Skip passage title (S-1) when passage has multiple sentences, section headers, and syllabus word-lists
             if sid == "S-1" and len(sentence_pool) > 1:
                 continue
             # If sentence does not end with standard sentence punctuation, skip (headings/titles)
-            if not sent_clean.endswith((".", "!", "?", '"', "'")):
+            if not sent_clean.endswith((".", "!", "?", '"', "'", "”", "’")):
                 continue
             # If sentence is a colon-separated headline/title (e.g. "Title: Subtitle") without terminal punctuation
             if ":" in sent_clean and not any(sent_clean.endswith(p) for p in (".", "!", "?")):

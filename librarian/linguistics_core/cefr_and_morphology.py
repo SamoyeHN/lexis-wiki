@@ -1397,7 +1397,63 @@ class CefrAndMorphologyMixin:
         return verdict
 
     @classmethod
-    def determine_contextual_pos(cls, word: str, quoted_sentence: str) -> str:
+    def determine_all_contextual_poses(cls, word: str, quoted_sentence: str) -> List[Tuple[int, str, str]]:
+        """
+        Returns a list of `(token_index, surface_text, contextual_pos)` for every occurrence
+        of `word` (or its inflected forms) in `quoted_sentence` in linear sentence order.
+        Useful when a homograph appears multiple times in the same sentence with different
+        syntactic roles (e.g. "The cost of the damage will cost millions.").
+        """
+        sent_text = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", quoted_sentence or "").strip()
+        if sent_text.startswith("**") and sent_text.endswith("**") and len(sent_text) > 4:
+            sent_text = sent_text[2:-2].strip()
+        elif sent_text.startswith("*") and sent_text.endswith("*") and len(sent_text) > 2:
+            sent_text = sent_text[1:-1].strip()
+        if not sent_text or not word:
+            return []
+        sent_text = re.sub(r'(\w)(["“”])(\w)', r'\1 \2 \3', sent_text)
+        sent_text = re.sub(r'(\S)(—|–|--)(\S)', r'\1 — \3', sent_text)
+        sent_text = cls._strip_lexical_quotes(sent_text)
+        caps_words = re.findall(r"\b[A-Z]{2,}\b", sent_text)
+        if len(caps_words) >= 2:
+            def _truecase_caps_match(m: re.Match) -> str:
+                tok_str = m.group(0)
+                start_i = m.start()
+                prefix = sent_text[:start_i]
+                if not prefix.strip() or re.search(r"(?:^|[:.!?—–])\s*[“\"'(\[]*\s*$", prefix):
+                    return tok_str.capitalize()
+                return tok_str.lower()
+            sent_text = re.sub(r"\b[A-Z]{2,}\b", _truecase_caps_match, sent_text)
+
+        nlp = cls.get_spacy()
+        doc = nlp(sent_text)
+        clean_w = re.sub(r"\[.*?\]|\(.*?\)", "", word).strip().lower()
+        w_toks = clean_w.split()
+        target_tok = w_toks[0] if w_toks else clean_w
+        target_forms = cls.inflected_forms(clean_w) | {clean_w}
+        matched_toks = []
+        for tok in doc:
+            tok_lower = tok.text.lower()
+            tok_lem = tok.lemma_.lower()
+            if (
+                tok_lower == target_tok or tok_lem == target_tok or
+                tok_lower in target_forms or tok_lem in target_forms or
+                cls.form_matches(tok_lower, clean_w) or cls.form_matches(tok_lem, clean_w)
+            ):
+                matched_toks.append(tok)
+        return [
+            (tok.i, tok.text, cls.determine_contextual_pos(clean_w, quoted_sentence, occurrence=idx))
+            for idx, tok in enumerate(matched_toks)
+        ]
+
+    @classmethod
+    def determine_contextual_pos(
+        cls,
+        word: str,
+        quoted_sentence: str,
+        preferred_pos: Optional[str] = None,
+        occurrence: Optional[int] = None,
+    ) -> str:
         """
         Deterministically infers the contextual part of speech (noun, verb, adjective, adverb,
         preposition, conjunction, interjection) using spaCy dependency parsing and POS tagging.
@@ -1405,7 +1461,7 @@ class CefrAndMorphologyMixin:
         """
         VALID_POS_MAP = {
             "NOUN": "noun", "PROPN": "noun",
-            "VERB": "verb",
+            "VERB": "verb", "AUX": "verb",
             "ADJ": "adjective",
             "ADV": "adverb",
             "ADP": "preposition",
@@ -1413,6 +1469,26 @@ class CefrAndMorphologyMixin:
             "DET": "determiner",
             "INTJ": "interjection",
         }
+        _HINT_POS_MAP = {
+            "n": "noun", "noun": "noun",
+            "v": "verb", "vt": "verb", "vi": "verb", "verb": "verb",
+            "adj": "adjective", "adjective": "adjective",
+            "adv": "adverb", "adverb": "adverb",
+            "prep": "preposition", "preposition": "preposition",
+            "conj": "conjunction", "conjunction": "conjunction",
+            "det": "determiner", "determiner": "determiner",
+            "intj": "interjection", "interjection": "interjection",
+        }
+        if preferred_pos:
+            preferred_pos = _HINT_POS_MAP.get(preferred_pos.strip().lower().rstrip("."), preferred_pos.strip().lower())
+        elif word:
+            m_hint = re.search(
+                r"[\(\[]\s*(n\.?|noun|v\.?|vt\.?|vi\.?|verb|adj\.?|adjective|adv\.?|adverb|prep\.?|preposition|conj\.?|conjunction)\s*[\)\]]",
+                word,
+                re.IGNORECASE,
+            )
+            if m_hint:
+                preferred_pos = _HINT_POS_MAP.get(m_hint.group(1).lower().rstrip("."))
         sent_text = re.sub(r"^\s*\[?\bS-\d+\b\]?\s*[:\-]??\s*", "", quoted_sentence or "").strip()
         # Strip outer markdown bold or italic wrappers (e.g. **Heading!**)
         if sent_text.startswith("**") and sent_text.endswith("**") and len(sent_text) > 4:
@@ -1424,8 +1500,25 @@ class CefrAndMorphologyMixin:
 
         # Normalize missing spaces around quotation marks (e.g. an"upright"message -> an "upright" message)
         sent_text = re.sub(r'(\w)(["“”])(\w)', r'\1 \2 \3', sent_text)
+        # Normalize tight em-dashes / en-dashes / double-hyphens (e.g. crisis—which lasted three years—devastated)
+        sent_text = re.sub(r'(\S)(—|–|--)(\S)', r'\1 — \3', sent_text)
         # Strip word-level double/single quotation marks so spaCy tags quoted nouns/verbs natively
         sent_text = cls._strip_lexical_quotes(sent_text)
+
+        # Dual-View Non-Destructive ALL-CAPS Truecasing for POS Tagging:
+        # When a sentence or clause has >= 2 ALL-CAPS words (e.g. 'WARNING: HIGH VOLTAGE CAN CAUSE SEVERE INJURY.',
+        # 'DO NOT THROW AWAY.'), spaCy's statistical tagger mis-tags ALL-CAPS tokens as PROPN (NNP).
+        # Normalize ALL-CAPS words to lowercase (preserving sentence/clause-initial title case) for syntactic parsing.
+        caps_words = re.findall(r"\b[A-Z]{2,}\b", sent_text)
+        if len(caps_words) >= 2:
+            def _truecase_caps_match(m: re.Match) -> str:
+                tok_str = m.group(0)
+                start_i = m.start()
+                prefix = sent_text[:start_i]
+                if not prefix.strip() or re.search(r"(?:^|[:.!?—–])\s*[“\"'(\[]*\s*$", prefix):
+                    return tok_str.capitalize()
+                return tok_str.lower()
+            sent_text = re.sub(r"\b[A-Z]{2,}\b", _truecase_caps_match, sent_text)
 
         nlp = cls.get_spacy()
         doc = nlp(sent_text)
@@ -1564,16 +1657,41 @@ class CefrAndMorphologyMixin:
                         return pref_p
 
         # 1. Exact match on token text, lemma, or morphological inflection
+        # Prioritize exact surface matches over lemma-only matches when multiple forms occur in one sentence
+        # (e.g. 'costs' vs 'cost' in "The high cost of materials costs the company millions."),
+        # and support explicit occurrence index or preferred_pos disambiguation for identical surface homographs
+        # (e.g. "The cost of the damage will cost millions.").
         target_forms = cls.inflected_forms(clean_w) | {clean_w}
-        for tok in doc:
+        exact_surface_toks = []
+        lemma_or_inflected_toks = []
+        all_matched_in_order = []
+        for _cand_tok in doc:
+            _tl = _cand_tok.text.lower()
+            _tlem = _cand_tok.lemma_.lower()
+            if _tl == target_tok:
+                exact_surface_toks.append(_cand_tok)
+                all_matched_in_order.append(_cand_tok)
+            elif (
+                _tlem == target_tok or
+                _tl in target_forms or _tlem in target_forms or
+                cls.form_matches(_tl, clean_w) or cls.form_matches(_tlem, clean_w)
+            ):
+                lemma_or_inflected_toks.append(_cand_tok)
+                all_matched_in_order.append(_cand_tok)
+
+        if occurrence is not None and 0 <= occurrence < len(all_matched_in_order):
+            ordered_cand_toks = [all_matched_in_order[occurrence]]
+        else:
+            if preferred_pos and len(all_matched_in_order) > 1:
+                for _occ_i in range(len(all_matched_in_order)):
+                    if cls.determine_contextual_pos(clean_w, quoted_sentence, occurrence=_occ_i) == preferred_pos:
+                        return preferred_pos
+            ordered_cand_toks = exact_surface_toks + lemma_or_inflected_toks
+
+        for tok in ordered_cand_toks:
             tok_lower = tok.text.lower()
             tok_lem = tok.lemma_.lower()
-            matches_target = (
-                tok_lower == target_tok or tok_lem == target_tok or
-                tok_lower in target_forms or tok_lem in target_forms or
-                cls.form_matches(tok_lower, clean_w) or cls.form_matches(tok_lem, clean_w)
-            )
-            if matches_target:
+            if True:
                 # Special contextual overrides for degree/directional adverbs
                 if clean_w == "way" and "way too" in sent_text.lower():
                     return "adverb"
@@ -1642,8 +1760,35 @@ class CefrAndMorphologyMixin:
                         for c in tok.children
                     )
                 )
+                # Post-Parenthetical Main-Verb Counterfactual Projection:
+                # When an intervening parenthetical ('—which lasted three years—', ', which lasted three years,', '(...)')
+                # separates the subject NP from an '-ed' transitive main verb ('devastated trade'), spaCy mis-attaches
+                # the finite verb as 'amod' of its bare object noun and leaves the subject NP as a verbless ROOT.
+                has_post_paren_main_verb = False
+                if (
+                    tok.i > 1
+                    and doc[tok.i - 1].text in ("—", "–", "--", ",", ")")
+                    and tok.dep_ in ("amod", "acl", "dep", "conj")
+                ):
+                    stripped_paren = re.sub(
+                        r"(?:\s*[—–]\s*[^—–]+\s*[—–]\s*|\s*,\s*[^,]+\s*,\s*|\s*\([^)]+\)\s*)",
+                        " ",
+                        sent_text,
+                    )
+                    stripped_paren = re.sub(r"\s{2,}", " ", stripped_paren).strip()
+                    if stripped_paren and stripped_paren != sent_text:
+                        for st in nlp(stripped_paren):
+                            if st.text.lower() == tok_lower and (
+                                st.dep_ in ("ROOT", "conj", "ccomp", "advcl")
+                                or st.tag_ in ("VBD", "VBP", "VBZ")
+                                or any(c.dep_ in ("dobj", "obj", "nsubj") for c in st.children)
+                            ):
+                                has_post_paren_main_verb = True
+                                break
+
                 has_verbal_frame = (
                     has_contracted_s_ing_frame
+                    or has_post_paren_main_verb
                     or any(
                         c.dep_ in ("aux", "auxpass", "agent", "ccomp", "xcomp", "prt")
                         or (c.dep_ == "advmod" and tok.dep_ not in ("amod", "acomp", "oprd"))
@@ -1696,8 +1841,6 @@ class CefrAndMorphologyMixin:
                     if tok_lower != clean_w and surf_poses_set:
                         if not has_verbal_frame:
                             dict_poses |= surf_poses_set
-                        elif tok.tag_ == "VBN" and surf_has_pred_adj:
-                            dict_poses.add("adjective")
 
                 # Conversely, if clean_w is an inflected -ing/-ed form (e.g. 'opening', 'rising', 'demanding', 'understanding', 'planning')
                 # whose surface entry in PedLex only lists noun/adjective, fuse 'verb' from its base verb lemma when it
@@ -1715,7 +1858,7 @@ class CefrAndMorphologyMixin:
                     )
                     if lem_has_verb and (clean_w == tok_lem or has_verbal_frame):
                         dict_poses.add("verb")
-                        if has_contracted_s_ing_frame:
+                        if has_contracted_s_ing_frame or has_post_paren_main_verb:
                             return "verb"
                 if (
                     "adjective" not in dict_poses
@@ -2032,9 +2175,33 @@ class CefrAndMorphologyMixin:
                         ):
                             return "noun"
                     else:
-                        if tok.tag_ in ("VBN", "VBG") or tok.pos_ == "VERB":
+                        if tok.tag_ in ("VBN", "VBG", "VBD") or tok.pos_ == "VERB":
                             if has_verbal_frame and "verb" in dict_poses:
                                 return "verb"
+                            # Post-Parenthetical Main-Verb Rescue:
+                            # When an intervening parenthetical ('—which lasted three years—', ', which lasted three years,', '(...)')
+                            # separates the subject NP from an '-ed' transitive main verb ('devastated trade'), spaCy mis-attaches
+                            # the finite verb as 'amod' of its bare object noun and leaves the subject NP as a verbless ROOT.
+                            # Stripping the preceding parenthetical projects the main clause back to its canonical SVO dependency tree.
+                            if (
+                                ("verb" in dict_poses or bool(cls.get_ldoce_entry(tok.lemma_.lower())))
+                                and tok.i > 1
+                                and doc[tok.i - 1].text in ("—", "–", "--", ",", ")")
+                            ):
+                                stripped_paren = re.sub(
+                                    r"(?:\s*[—–]\s*[^—–]+\s*[—–]\s*|\s*,\s*[^,]+\s*,\s*|\s*\([^)]+\)\s*)",
+                                    " ",
+                                    sent_text,
+                                )
+                                stripped_paren = re.sub(r"\s{2,}", " ", stripped_paren).strip()
+                                if stripped_paren and stripped_paren != sent_text:
+                                    for st in nlp(stripped_paren):
+                                        if st.text.lower() == tok.text.lower() and (
+                                            st.dep_ in ("ROOT", "conj", "ccomp", "advcl")
+                                            or st.tag_ in ("VBD", "VBP", "VBZ")
+                                            or any(c.dep_ in ("dobj", "obj", "nsubj") for c in st.children)
+                                        ):
+                                            return "verb"
                             has_adj = ("adjective" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="a") or wn.synsets(clean_w, pos="s")))
                             if has_adj:
                                 return "adjective"
@@ -2180,7 +2347,10 @@ class CefrAndMorphologyMixin:
                         # 1. A bare plural/base verb following a plural subject NP (e.g. 'Human relationships bruise, collide, and comfort')
                         # is often mis-tagged NOUN (tag='NN', dep='ROOT') with the plural subject attached as 'compound' (tag='NNS'),
                         # and its coordinated predicates ('collide', 'comfort') also mis-tagged NOUN.
-                        has_det_or_poss = any(c.dep_ in ("det", "poss", "nummod") for c in tok.children)
+                        has_det_or_poss = any(
+                            c.dep_ in ("det", "poss", "nummod") or (c.dep_ == "amod" and c.i < tok.i)
+                            for c in tok.children
+                        )
                         has_verb_conj_child = any(
                             c.dep_ == "conj" and (
                                 c.pos_ == "VERB"
