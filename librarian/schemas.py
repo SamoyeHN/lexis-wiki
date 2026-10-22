@@ -325,6 +325,22 @@ def validate_and_map(cls: Type, data: Dict[str, Any]) -> Any:
                         kwargs["correct_answer_index"] = o_idx
                         break
 
+    # Deterministic hydration for TranslationQuestion (Zero-Redundancy Schema Pruning)
+    idiom_t = str(kwargs.get("idiomatic_translation") or "").strip()
+    flawed_t = str(kwargs.get("flawed_translation") or "").strip()
+    if idiom_t and flawed_t:
+        if not kwargs.get("options"):
+            corr_i = kwargs.get("correct_answer_index", 0)
+            if corr_i == 1:
+                kwargs["options"] = [flawed_t, idiom_t]
+            else:
+                kwargs["options"] = [idiom_t, flawed_t]
+                kwargs["correct_answer_index"] = 0
+        if not kwargs.get("correct_english_answer"):
+            kwargs["correct_english_answer"] = idiom_t
+        if not kwargs.get("explanation") and kwargs.get("diagnostic_critique"):
+            kwargs["explanation"] = str(kwargs["diagnostic_critique"]).strip()
+
     return cls(**kwargs)
 
 def _map_value(t: Any, val: Any) -> Any:
@@ -497,13 +513,13 @@ class ReadingQuiz:
 class TranslationQuestion:
     design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
     translated_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
-    target_keyword: str = dataclasses.field(default="", metadata={"minLength": 1})
-    target_grammar: str = dataclasses.field(default="", metadata={"minLength": 1})
     idiomatic_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
     flawed_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
-    flaw_type: str = dataclasses.field(default="", metadata={"minLength": 1})
     diagnostic_critique: str = dataclasses.field(default="", metadata={"minLength": 1})
-    # Presentation fields (deterministically hydrated from idiomatic_translation and flawed_translation)
+    # Blueprint-owned & presentation fields (deterministically hydrated in code; excluded from LLM JSON schema)
+    target_keyword: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
+    target_grammar: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
+    flaw_type: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"exclude_from_schema": True})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"exclude_from_schema": True})
     hint: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})

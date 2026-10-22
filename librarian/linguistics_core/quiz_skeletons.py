@@ -671,11 +671,28 @@ class QuizSkeletonsMixin:
             discontinuous_prep = None
             causative_extraposition_pat = None
             causative_extraposition_ex = None
+            correlative_second_arm = None
+            correlative_pat = None
+            correlative_frame = None
+            lv_triad_prep = None
+            lv_triad_pat = None
+            lv_triad_frame = None
+            cxn_override_pat = None
+            cxn_override_frame = None
+
             m_disc = re.match(
-                r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\))\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
+                r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
                 raw_w_item.strip(),
                 re.IGNORECASE
             )
+            if not m_disc and len(w_lower.split()) == 2:
+                w_p0, w_p1 = w_lower.split()
+                if w_p1 in ("of", "from", "into", "for", "on", "to", "with") and w_p0 in {
+                    "remind", "convince", "inform", "warn", "assure", "rob", "deprive", "rid", "cure",
+                    "prevent", "stop", "prohibit", "discourage", "deter", "accuse", "suspect",
+                    "congratulate", "blame", "thank", "forgive", "talk", "trick", "deceive", "fool",
+                }:
+                    m_disc = re.match(r'^([a-z]+)\s+([a-z]+)$', w_lower)
             if m_disc:
                 head_v = m_disc.group(1).lower()
                 disc_p = m_disc.group(2).lower()
@@ -686,20 +703,36 @@ class QuizSkeletonsMixin:
                     discontinuous_prep = disc_p
                     raw_pos = "verb"
 
-            # Discontinuous Causative Verb + [sth] + Adjective Extraposition Frame Resolution (e.g. "make [sth] possible"):
+            # Family 1A: Discontinuous Causative Verb + [sth/it] + Adjective Extraposition Frame Resolution
+            # (e.g. "make [sth] possible", "find [sth] easier", "keep it simple", "leave it clear"):
             # Stripping '[sth]' into bare 2-word 'make possible' produces an ungrammatical contiguous string ('*make possible it').
-            # Transform into the single-blank preparatory-object extraposition construction 'make it <adj>' with frame
-            # 'make it <adj> ... to do [sth]'.
+            # Transform into the single-blank preparatory-object extraposition construction '(make|find|keep|leave) it <adj>'
+            # with frame '<verb> it <adj> ... to do [sth]'.
+            _comp_adj_to_base = {
+                "easier": "easy",
+                "harder": "hard",
+                "clearer": "clear",
+                "simpler": "simple",
+                "safer": "safe",
+            }
             m_caus_adj = re.match(
-                r'^(make|find|keep|leave)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+([a-z]+)$',
+                r'^(make|find|keep|leave)\s+(?:it|\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+([a-z]+)$',
                 raw_w_item.strip(),
                 re.IGNORECASE
             )
-            if not m_caus_adj and re.match(r'^(make|find)\s+(possible|impossible|clear|easy|difficult|hard|certain|plain)$', w_lower):
-                m_caus_adj = re.match(r'^(make|find)\s+([a-z]+)$', w_lower)
+            if not m_caus_adj and re.match(
+                r'^(make|find|keep|leave)\s+(?:it\s+)?(possible|impossible|clear|clearer|easy|easier|difficult|hard|harder|certain|plain|simple|simpler|safe|safer)$',
+                w_lower,
+            ):
+                m_caus_adj = re.match(r'^(make|find|keep|leave)\s+(?:it\s+)?([a-z]+)$', w_lower)
             if m_caus_adj:
                 caus_v = m_caus_adj.group(1).lower()
-                adj_w = m_caus_adj.group(2).lower()
+                raw_adj_w = m_caus_adj.group(2).lower()
+                adj_w = _comp_adj_to_base.get(raw_adj_w, raw_adj_w)
+                w = f"{caus_v} it {adj_w}"
+                w_lower = w
+                raw_pos = "collocation"
+                causative_extraposition_pat = f"{caus_v} it {adj_w} ... to do [sth]"
                 adj_entry = cls.get_ldoce_entry(adj_w)
                 if adj_entry and adj_entry.get("senses"):
                     for s_cand in adj_entry["senses"]:
@@ -710,20 +743,90 @@ class QuizSkeletonsMixin:
                                 continue
                             pb_pat = str(pb.get("pattern") or "").lower()
                             if re.search(rf"\b{re.escape(caus_v)}s?\s+it\s+{re.escape(adj_w)}\b.*\bto\b", pb_pat):
-                                w = f"{caus_v} it {adj_w}"
-                                w_lower = w
-                                raw_pos = "collocation"
                                 raw_s_def = cls.format_ldoce_definition(s_cand)
                                 comp_def = cls._compose_collocation_definition(
                                     f"{caus_v} {adj_w}", "collocation", adj_w, s_cand, raw_s_def, it.get("quote")
                                 )
                                 if comp_def:
                                     it["definition"] = comp_def
-                                causative_extraposition_pat = f"{caus_v} it {adj_w} ... to do [sth]"
                                 causative_extraposition_ex = str(pb.get("example") or "").strip() or None
                                 break
-                        if causative_extraposition_pat:
+                        if causative_extraposition_ex:
                             break
+
+            # Family 2: Discontinuous Paired Correlatives ('not only ... but (also)', 'neither ... nor', 'no sooner ... than', etc.)
+            # Decompose discontinuous correlative headwords into the first arm as the single-blank target while locking the second arm
+            # in the stem's Cloze Slot Frame ('... ____ ... but also ...').
+            _correl_decomp_map = [
+                (r"^not\s+only\b.*\bbut(?:\s+also)?\b", "not only", "but also", "not only ... but also ...", "... ____ ... but also ..."),
+                (r"^neither\b.*\bnor\b", "neither", "nor", "neither ... nor ...", "... ____ ... nor ..."),
+                (r"^either\b.*\bor\b", "either", "or", "either ... or ...", "... ____ ... or ..."),
+                (r"^whether\b.*\bor\b", "whether", "or", "whether ... or ...", "... ____ ... or ..."),
+                (r"^no\s+sooner\b.*\bthan\b", "no sooner", "than", "no sooner ... than ...", "... ____ ... than ..."),
+                (r"^hardly\b.*\bwhen\b", "hardly", "when", "hardly ... when ...", "... ____ ... when ..."),
+                (r"^scarcely\b.*\bwhen\b", "scarcely", "when", "scarcely ... when ...", "... ____ ... when ..."),
+                (r"^would\s+rather\b.*\bthan\b", "would rather", "than", "would rather ... than ...", "... ____ ... than ..."),
+            ]
+            for c_rx, first_arm, sec_arm, c_pat, c_frame in _correl_decomp_map:
+                if re.search(c_rx, raw_w_item.strip(), re.IGNORECASE) or re.search(c_rx, w_lower, re.IGNORECASE):
+                    w = first_arm
+                    w_lower = first_arm
+                    raw_pos = "phrase"
+                    correlative_second_arm = sec_arm
+                    correlative_pat = c_pat
+                    correlative_frame = c_frame
+                    break
+            if not correlative_frame and w_lower in ("not only", "neither", "either", "no sooner", "hardly", "scarcely", "would rather") and it.get("quote"):
+                q_low_corr = it["quote"].lower()
+                _quote_correl_map = {
+                    "not only": ("but", "not only ... but also ...", "... ____ ... but also ..."),
+                    "neither": ("nor", "neither ... nor ...", "... ____ ... nor ..."),
+                    "either": ("or", "either ... or ...", "... ____ ... or ..."),
+                    "no sooner": ("than", "no sooner ... than ...", "... ____ ... than ..."),
+                    "hardly": ("when", "hardly ... when ...", "... ____ ... when ..."),
+                    "scarcely": ("when", "scarcely ... when ...", "... ____ ... when ..."),
+                    "would rather": ("than", "would rather ... than ...", "... ____ ... than ..."),
+                }
+                sec_arm, c_pat, c_frame = _quote_correl_map[w_lower]
+                if re.search(rf"\b{re.escape(w_lower)}\b[^.?!;]*\b{re.escape(sec_arm)}\b", q_low_corr):
+                    raw_pos = "phrase"
+                    correlative_second_arm = sec_arm
+                    correlative_pat = c_pat
+                    correlative_frame = c_frame
+
+            # Family 6: Light-Verb + (Det/Adj) + Noun + Prep Triad Internal-Modifier Decomposition
+            # When the passage quote inserts an internal adjective modifier before the triad head noun
+            # (e.g. 'pay close attention to', 'have a profound impact on', 'play a vital role in'),
+            # a contiguous 3-word phrase option cannot fit without colliding with or dropping the modifier.
+            # Decompose to the triad head noun ('attention', 'impact', 'role') with locked triad frame.
+            _lv_triads = {
+                "pay attention to": ("pay", "attention", "to"),
+                "have an impact on": ("have", "impact", "on"),
+                "have an effect on": ("have", "effect", "on"),
+                "play a role in": ("play", "role", "in"),
+                "play a part in": ("play", "part", "in"),
+                "take advantage of": ("take", "advantage", "of"),
+                "make use of": ("make", "use", "of"),
+            }
+            if w_lower in _lv_triads and it.get("quote"):
+                lv_v, lv_n, lv_p = _lv_triads[w_lower]
+                m_lv_mod = re.search(
+                    rf"\b({re.escape(lv_v)}(?:s|es|ed|d|ing)?|had|has|having|paid|paying|played|playing|took|taken|taking|made|making)\s+(?:(a|an|the)\s+)?([a-z]+)\s+{re.escape(lv_n)}\s+{re.escape(lv_p)}\b",
+                    it["quote"],
+                    re.IGNORECASE,
+                )
+                if m_lv_mod:
+                    det_part = (m_lv_mod.group(2) or "").lower()
+                    adj_mod = m_lv_mod.group(3).lower()
+                    if adj_mod not in ("a", "an", "the", "no", "any", "some", "much", "more", "little", "less") and lv_n not in single_word_targets:
+                        w = lv_n
+                        w_lower = lv_n
+                        raw_pos = "noun"
+                        lv_triad_prep = lv_p
+                        prefix_str = f"{lv_v} {det_part} [{adj_mod}]".replace("  ", " ") if det_part else f"{lv_v} [{adj_mod}]"
+                        frame_prefix = f"{lv_v} {det_part} {adj_mod}".replace("  ", " ") if det_part else f"{lv_v} {adj_mod}"
+                        lv_triad_pat = f"{prefix_str} {lv_n} {lv_p} [sth]"
+                        lv_triad_frame = f"... {frame_prefix} ____ {lv_p} [sth]"
 
             # Map POS category
             # Idiomatic Slot Gate: If single word is embedded in a fixed idiomatic construction in authentic quote
@@ -738,6 +841,10 @@ class QuizSkeletonsMixin:
             if not is_idiom_slot:
                 if discontinuous_prep:
                     canonical_pos = "verb"
+                elif correlative_frame:
+                    canonical_pos = "phrase"
+                elif lv_triad_frame:
+                    canonical_pos = "noun"
                 else:
                     resolved = cls.resolve_item_pos(w_lower, it.get("quote"), manual_pos=raw_pos)
                     if resolved in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom"):
@@ -852,6 +959,20 @@ class QuizSkeletonsMixin:
             prep_obj = None
             quote_governed_prep: Optional[str] = discontinuous_prep if discontinuous_prep else None
 
+            if correlative_frame:
+                anchor = correlative_second_arm
+                anchor_type = "correl_pair"
+                cxn_override_pat = correlative_pat
+                cxn_override_frame = correlative_frame
+            elif lv_triad_frame:
+                anchor = lv_triad_prep
+                anchor_type = "lv_triad"
+                cxn_override_pat = lv_triad_pat
+                cxn_override_frame = lv_triad_frame
+
+            word_cxn_specs = cls.get_word_cxn_specs(w_lower)
+            word_subcats = {str(sp.get("subcat_group") or "") for sp in word_cxn_specs}
+
             def _tok_matches_target(tok, doc_obj) -> bool:
                 if "-" not in w_lower:
                     if (tok.i > 0 and doc_obj[tok.i - 1].text == "-" and not doc_obj[tok.i - 1].whitespace_) or (
@@ -861,8 +982,47 @@ class QuizSkeletonsMixin:
                 return tok.text.lower() == w_lower or tok.lemma_.lower() == w_lower
 
             if canonical_pos == "verb":
+                q_low_v = (it.get("quote") or "").lower()
+                # Family 8: Mandative Subjunctive Verb ('insist/suggest/demand/recommend that [sb] (should) [V-base]')
+                if not anchor and "V_MANDATIVE_SUBJ" in word_subcats and q_low_v:
+                    if re.search(
+                        rf"\b{re.escape(w_lower)}(?:s|es|ed|d|ing)?\s+that\s+(?:[a-z]+\s+){{1,4}}(?:should\s+[a-z]+|be\b|not\s+[a-z]+|[a-z]+\b)",
+                        q_low_v,
+                    ) and not re.search(rf"\b{re.escape(w_lower)}(?:s|es|ed|d|ing)?\s+(?:on|upon|to|with)\b", q_low_v):
+                        anchor = "that"
+                        anchor_type = "mandative_subj"
+                        cxn_override_pat = f"{w_lower} that [sb] (should) [V-base]"
+                        cxn_override_frame = "... ____ that [sb] (should) [V-base]"
+                # Family 7: Negative Polarity Verb ('budge' under negation)
+                if not anchor and "NPI_ITEM" in word_subcats and q_low_v:
+                    if re.search(r"\b(?:not|n't|never|hardly|scarcely|barely|refused?\s+to|would\s+not|could\s+not|will\s+not|cannot|can't|won't|wouldn't|couldn't)\b", q_low_v):
+                        anchor = "not"
+                        anchor_type = "npi"
+                        cxn_override_pat = f"not/never {w_lower}"
+                        cxn_override_frame = "... not/never ____"
+                # Family 3: Gerund-Only vs Infinitive-Only Verb Complementation
+                if not anchor and "V_GERUND_ONLY" in word_subcats and q_low_v:
+                    if re.search(rf"\b{re.escape(w_lower)}(?:s|es|ed|d|ing)?\s+(?:not\s+)?[a-z]+ing\b", q_low_v):
+                        anchor = "doing"
+                        anchor_type = "gerund"
+                        cxn_override_pat = f"{w_lower} [doing sth]"
+                        cxn_override_frame = "... ____ [doing sth]"
+                if not anchor and "V_INF_ONLY" in word_subcats and q_low_v:
+                    if re.search(rf"\b{re.escape(w_lower)}(?:s|es|ed|d|ing)?\s+(?:not\s+)?to\s+[a-z]+\b", q_low_v):
+                        anchor = "to"
+                        anchor_type = "to_inf"
+                        cxn_override_pat = f"{w_lower} to do [sth]"
+                        cxn_override_frame = "... ____ to do [sth]"
+                # Family 4: Verb + [sb] + to do [sth]
+                if not anchor and "V_OBJ_TO_DO" in word_subcats and q_low_v:
+                    if re.search(rf"\b{re.escape(w_lower)}(?:s|es|ed|d|ing)?\s+(?:[a-z]+\s+){{1,3}}to\s+[a-z]+\b", q_low_v):
+                        anchor = "to"
+                        anchor_type = "sb_to_do"
+                        cxn_override_pat = f"{w_lower} [sb] to do [sth]"
+                        cxn_override_frame = "... ____ [sb] to do [sth]"
+
                 # Verb Step A: Extract the valency complement PP from the authentic quote.
-                if it["quote"]:
+                if not anchor and it["quote"]:
                     try:
                         doc = nlp(it["quote"])
                         v_collocs = cls.get_oxford_collocations(w_lower, pos="verb")
@@ -956,7 +1116,25 @@ class QuizSkeletonsMixin:
 
             elif canonical_pos == "noun":
                 n_entry = cls.get_oxford_collocations(w_lower, pos="noun")
-                if it["quote"]:
+                q_low_n = (it.get("quote") or "").lower()
+                # Family 5: Shell Nouns & Abstract Nouns Taking Post-Nominal Complements
+                if not anchor and q_low_n and word_subcats & {"N_SHELL_TO_DO", "N_SHELL_OF_DOING", "N_SHELL_THAT_ONLY"}:
+                    if "N_SHELL_TO_DO" in word_subcats and re.search(rf"\b{re.escape(w_lower)}(?:s|es|ies)?\s+to\s+[a-z]+\b", q_low_n):
+                        anchor = "to"
+                        anchor_type = "shell_to_do"
+                        cxn_override_pat = f"{w_lower} to do [sth]"
+                        cxn_override_frame = "... ____ to do [sth]"
+                    elif "N_SHELL_OF_DOING" in word_subcats and re.search(rf"\b{re.escape(w_lower)}(?:s|es|ies)?\s+of\s+(?:[a-z]+\s+)?[a-z]+ing\b", q_low_n):
+                        anchor = "of"
+                        anchor_type = "shell_of_doing"
+                        cxn_override_pat = f"{w_lower} of [doing sth]"
+                        cxn_override_frame = "... ____ of [doing sth]"
+                    elif "N_SHELL_THAT_ONLY" in word_subcats and re.search(rf"\b{re.escape(w_lower)}(?:s|es|ies)?\s+that\s+[a-z]+\b", q_low_n):
+                        anchor = "that"
+                        anchor_type = "shell_that"
+                        cxn_override_pat = f"the {w_lower} that ..."
+                        cxn_override_frame = "... the ____ that ..."
+                if not anchor and it["quote"]:
                     try:
                         doc = nlp(it["quote"])
                         ocd_prep_tokens = set()
@@ -1052,8 +1230,33 @@ class QuizSkeletonsMixin:
                     or "never before noun" in adj_locked_gram
                     or bool(adj_prof.get("not_before_noun"))
                 )
+                q_low_adj = (it.get("quote") or "").lower()
+                # Family 8: Mandative Subjunctive Adjective ('It is essential/vital/imperative that [sb] (should) [V-base]')
+                if not anchor and "ADJ_MANDATIVE_SUBJ" in word_subcats and q_low_adj:
+                    if re.search(rf"\bit\s+(?:is|was)\s+(?:not\s+|very\s+|quite\s+)?{re.escape(w_lower)}\s+that\b", q_low_adj):
+                        anchor = "that"
+                        anchor_type = "mandative_subj"
+                        cxn_override_pat = f"it is {w_lower} that [sb] (should) [V-base]"
+                        cxn_override_frame = "It is ____ that [sb] (should) [V-base]"
+                # Family 1B: Subject Extraposition 'It is <adj> (for/of [sb]) to do [sth]' & For-To Infinitival Guard
+                # Never extract 'for' or 'of' inside 'It is <adj> for/of sb to do' as a lexical preposition anchor ('*necessary for [sth]').
+                if not anchor and q_low_adj:
+                    m_it_adj_inf = re.search(
+                        rf"\bit\s+(?:is|was|seems|appears|becomes|gets|'s|would\s+be|will\s+be|can\s+be|could\s+be)\s+(?:not\s+|very\s+|quite\s+|extremely\s+|particularly\s+|especially\s+|too\s+|so\s+)?{re.escape(w_lower)}\b(?:[^.?!;]*?\b(for|of)\s+[^.?!;]+?)?\s+to\s+[a-z]+\b",
+                        q_low_adj,
+                    )
+                    if m_it_adj_inf:
+                        anchor = "to"
+                        anchor_type = "it_extrapos"
+                        for_or_of = (m_it_adj_inf.group(1) or "").lower()
+                        if for_or_of in ("for", "of"):
+                            cxn_override_pat = f"it is {w_lower} {for_or_of} [sb] to do [sth]"
+                            cxn_override_frame = f"It is ____ {for_or_of} [sb] to do [sth]"
+                        else:
+                            cxn_override_pat = f"it is {w_lower} to do [sth]"
+                            cxn_override_frame = "It is ____ to do [sth]"
                 # Adjective Step A: Syntactic Dependency Analysis on Authentic Quote
-                if it["quote"]:
+                if not anchor and it["quote"]:
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
@@ -1109,10 +1312,14 @@ class QuizSkeletonsMixin:
                         candidate_senses = [locked_sense] if locked_sense else ld_entry.get("senses", [])
                         for s in candidate_senses:
                             for pat in s.get("patterns", []):
+                                pat_low_c = pat.lower()
+                                # For-To Infinitival Guard: do not extract 'for'/'of'/'to' as a lexical prep from 'it is <adj> (for/of sb) to do'
+                                if re.search(rf"\bit\s+is\s+{re.escape(w_lower)}\b.*\bto\b", pat_low_c):
+                                    continue
                                 for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at"):
-                                    if re.search(rf"\b{p}\b", pat.lower()):
+                                    if re.search(rf"\b{p}\b", pat_low_c):
                                         if p == "to":
-                                            m_inf = re.search(r"\bto\s+([a-z]+)", pat.lower())
+                                            m_inf = re.search(r"\bto\s+([a-z]+)", pat_low_c)
                                             if m_inf and m_inf.group(1) not in (
                                                 "sb", "sth", "someone", "something", "oneself", "himself", "herself", "them", "the", "a", "an"
                                             ):
@@ -1131,9 +1338,36 @@ class QuizSkeletonsMixin:
                                 anchor_type = "prep"
                                 break
 
-            elif canonical_pos == "adv":
+            elif canonical_pos in ("adv", "function_word", "phrase"):
+                q_low_adv = (it.get("quote") or "").lower()
+                # Family 7: Fronted Negative Inversion ('Seldom/Rarely/Never/Under no circumstances + Aux + Subj + V')
+                if not anchor and word_subcats & {"ADV_FRONTED_INV", "PHR_FRONTED_INV"}:
+                    if canonical_pos == "phrase" or (
+                        q_low_adv
+                        and re.search(
+                            rf"(?:^|[.;!?]\s*|\b(?:and|but)\s+){re.escape(w_lower)}\s+(?:do|does|did|have|has|had|am|is|are|was|were|can|could|will|would|shall|should|may|might|must)\b",
+                            q_low_adv,
+                        )
+                    ):
+                        anchor = "inversion"
+                        anchor_type = "fronted_inv"
+                        cxn_override_pat = f"{w_lower} + Aux + Subj + V"
+                        cxn_override_frame = "____ + Aux + Subj + V"
+                # Family 7: Negative Polarity Adverb/Phrase ('remotely', 'whatsoever', 'at all', 'lift a finger', etc.)
+                if not anchor and "NPI_ITEM" in word_subcats:
+                    if canonical_pos == "phrase" or (
+                        q_low_adv
+                        and re.search(
+                            r"\b(?:not|n't|never|hardly|scarcely|barely|seldom|rarely|little|few|no|neither|nor|without|doubt|deny|refused?|failed?|unlikely|impossible)\b",
+                            q_low_adv,
+                        )
+                    ):
+                        anchor = "not"
+                        anchor_type = "npi"
+                        cxn_override_pat = f"not/never ... {w_lower}"
+                        cxn_override_frame = "... not/never ... ____"
                 # Adverb Syntactic Dependency Walker & Sense-Lock Gate
-                if it.get("quote"):
+                if not anchor and canonical_pos == "adv" and it.get("quote"):
                     try:
                         doc = nlp(it["quote"])
                         for tok in doc:
@@ -1153,7 +1387,7 @@ class QuizSkeletonsMixin:
                         pass
 
                 # Priority B: Dictionary lookup from PedLex zero collision anchor
-                if not anchor:
+                if not anchor and canonical_pos == "adv":
                     ld_anc, ld_atype, ld_frame, _ = cls.find_ldoce_zero_collision_anchor(
                         target_word=w_lower,
                         pos="adv",
@@ -1173,11 +1407,17 @@ class QuizSkeletonsMixin:
                             anchor = aligned
                             anchor_type = ld_atype or "modifies_verb"
 
+            _cxn_anchor_types = {
+                "it_extrapos", "gerund", "to_inf", "sb_to_do",
+                "shell_to_do", "shell_of_doing", "shell_that",
+                "correl_pair", "fronted_inv", "npi", "mandative_subj", "lv_triad"
+            }
+
             # 1.5 Sense-Native Atomic Pattern Anchor Inheritance (GEMINI.md §1.10):
             # If Step 1 found no anchor (or only a weak fallback) and the locked sense's
             # atomic pattern bundle specifies a bound preposition, inherit it BEFORE Step 3
             # distractor generation so double-key clearance runs against the true anchor.
-            if not is_idiom_slot and sense_native_prep and (not anchor or anchor_type == "collocation"):
+            if not is_idiom_slot and sense_native_prep and anchor_type not in _cxn_anchor_types and (not anchor or anchor_type == "collocation"):
                 if not cls._in_forbidden_word_set(sense_native_prep, batch_target_words):
                     anchor = sense_native_prep
                     anchor_type = "prep"
@@ -1513,7 +1753,7 @@ class QuizSkeletonsMixin:
                 best_pattern = atomic_bundle.get("pattern")
                 if atomic_bundle.get("example"):
                     ldoce_pattern_example = atomic_bundle["example"]
-                if atomic_bundle.get("prep"):
+                if atomic_bundle.get("prep") and anchor_type not in _cxn_anchor_types:
                     pat_prep = atomic_bundle["prep"]
                     anchor_in_bundle_ex = bool(
                         anchor
@@ -1536,6 +1776,8 @@ class QuizSkeletonsMixin:
                 best_pattern = causative_extraposition_pat
                 if causative_extraposition_ex:
                     ldoce_pattern_example = causative_extraposition_ex
+            elif cxn_override_pat:
+                best_pattern = cxn_override_pat
 
             quote_shown_prep = bool(anchor) and anchor_type == "prep" and bool(
                 quote_governed_prep and str(anchor).lower() == quote_governed_prep.lower()
@@ -1543,7 +1785,7 @@ class QuizSkeletonsMixin:
             quote_shown_partitive = bool(anchor) and anchor_type == "partitive" and bool(re.search(
                 rf"\b{re.escape(str(anchor).lower())}\b", (it.get("quote") or "").lower()))
 
-            if anchor and anchor_type != "contextual" and not ldoce_pattern_example:
+            if anchor and anchor_type != "contextual" and anchor_type not in _cxn_anchor_types and not ldoce_pattern_example:
                 lookup_anchor = prep_obj if anchor_type == "partitive" else anchor
                 ldoce_pattern_example = cls.ldoce_example_for_anchor(
                     final_target,
@@ -1554,7 +1796,8 @@ class QuizSkeletonsMixin:
                     pos=canonical_pos
                 )
                 pattern_anchor = anchor
-            if (not anchor or anchor_type == "contextual"
+            if anchor_type not in _cxn_anchor_types and (
+                    not anchor or anchor_type == "contextual"
                     or (not ldoce_pattern_example and not quote_shown_prep and not quote_shown_partitive)):
                 ld_anchor, ld_atype, ld_fdesc, ld_ex = cls.find_ldoce_zero_collision_anchor(
                     target_word=final_target,
@@ -1571,7 +1814,7 @@ class QuizSkeletonsMixin:
                     pattern_anchor = ld_anchor
 
             # Batch Anchor Collision Gate 
-            if batch_target_words and not is_idiom_slot and (anchor or prep_obj):
+            if batch_target_words and not is_idiom_slot and anchor_type not in _cxn_anchor_types and (anchor or prep_obj):
                 if prep_obj and cls._in_forbidden_word_set(prep_obj, batch_target_words):
                     prep_obj = None
                 if (anchor and anchor_type == "partitive"
@@ -1648,7 +1891,7 @@ class QuizSkeletonsMixin:
 
             # If a re-anchoring produced a new anchor, look up the PedLex sentence that
             # actually demonstrates this (target, anchor) pair within the locked sense.
-            if anchor and not ldoce_pattern_example and anchor != pattern_anchor:
+            if anchor and not ldoce_pattern_example and anchor != pattern_anchor and anchor_type not in _cxn_anchor_types:
                 ldoce_pattern_example = cls.ldoce_example_for_anchor(
                     final_target,
                     prep_obj if anchor_type == "partitive" else anchor,
@@ -1685,7 +1928,7 @@ class QuizSkeletonsMixin:
 
             # Final Atomic Pattern-Anchor-Example Synchronization (GEMINI.md §1.10):
             # Ensure best_pattern never claims a preposition that clashes with final anchor or is absent from ldoce_pattern_example.
-            if best_pattern:
+            if best_pattern and anchor_type not in _cxn_anchor_types and not causative_extraposition_pat and not cxn_override_pat:
                 p_clean_sync = re.sub(r"\[.*?\]|\(.*?\)", "", best_pattern).strip().lower()
                 p_for_prep_sync = re.sub(r"\bto\s+(?:do(?:\s+something)?|\w+ing)\b", "", p_clean_sync)
                 pat_preps_sync = re.findall(
@@ -1858,11 +2101,17 @@ class QuizSkeletonsMixin:
 
             # Streamlined Context Stem Directive
             cloze_slot_frame = None
-            if best_pattern:
-                # Preserve trailing object placeholders ([sb/sth], [sb], [sth]) while stripping editorial notes
+            if cxn_override_frame:
+                cloze_slot_frame = cxn_override_frame
+            elif best_pattern:
+                # Preserve trailing object placeholders ([sb/sth], [sb], [sth], [doing sth], [V-base]) while stripping editorial notes
                 p_clean = re.sub(r"\(.*?\)", "", best_pattern).strip()
+                p_clean = re.sub(r"\bdoing\s+something\b", "[doing sth]", p_clean, flags=re.IGNORECASE)
+                p_clean = re.sub(r"\bto\s+do\s+something\b", "to do [sth]", p_clean, flags=re.IGNORECASE)
+                p_clean = re.sub(r"\bsomebody\b", "[sb]", p_clean, flags=re.IGNORECASE)
+                p_clean = re.sub(r"\bsomething\b", "[sth]", p_clean, flags=re.IGNORECASE)
                 p_clean = re.sub(
-                    r"\[(?!(?:sb/sth|sth/sb|sb|sth|somebody|something)\]).*?\]",
+                    r"\[(?!(?:sb/sth|sth/sb|sb|sth|somebody|something|doing sth|V-base|adj|close|great|special)\]).*?\]",
                     "",
                     p_clean,
                     flags=re.IGNORECASE,
@@ -2101,3 +2350,709 @@ class QuizSkeletonsMixin:
                 skel["correct_answer_index"] = new_slot
 
         return skeletons
+
+    # =========================================================================
+    # SYMBOLIC TRANSLATION MICRO-TASK BLUEPRINTS (translation_quiz)
+    # =========================================================================
+
+    @classmethod
+    def _classify_vocab_register(cls, word: str, pos: str = "", definition: str = "") -> str:
+        """
+        Deterministically classifies a vocabulary item's pragmatic register into
+        'formal', 'informal', or 'neutral' using PedLex register_tags, definition labels,
+        phrasal verb morphology, and CEFR/Latinate profile.
+        """
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip().lower()
+        w_clean = re.sub(r"\s+", " ", w_clean)
+        def_low = str(definition or "").lower()
+        pos_low = str(pos or "").lower()
+
+        # 1. Explicit bracketed register tags in definition
+        if any(t in def_low for t in ("[spoken]", "[informal]", "[slang]", "[colloquial]", "spoken,", "informal]")):
+            return "informal"
+        if any(t in def_low for t in ("[formal]", "[written]", "[technical]", "[literary]", "[law]", "[medical]")):
+            return "formal"
+
+        # 2. PedLex entry & sense register_tags lookup
+        entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_clean.split()[0]) if " " in w_clean else None)
+        if isinstance(entry, dict):
+            senses = entry.get("senses") or []
+            matched_sense = None
+            if def_low:
+                norm_target = re.sub(r"[^a-z0-9 ]", "", def_low).strip()
+                for s in senses:
+                    s_def = re.sub(r"[^a-z0-9 ]", "", str(s.get("definition") or "").lower()).strip()
+                    if norm_target and s_def and (norm_target in s_def or s_def in norm_target):
+                        matched_sense = s
+                        break
+            target_senses = [matched_sense] if matched_sense else senses[:2]
+            for s in target_senses:
+                if not isinstance(s, dict):
+                    continue
+                reg_tags = [str(r).lower() for r in (s.get("register_tags") or [])]
+                dom_tags = [str(d).lower() for d in (s.get("domain_tags") or [])]
+                s_def_txt = str(s.get("definition") or "").lower()
+                if any(r in reg_tags for r in ("spoken", "informal", "slang", "colloquial", "everyday")) or "[spoken]" in s_def_txt or "[informal]" in s_def_txt:
+                    return "informal"
+                if any(r in reg_tags for r in ("formal", "written", "technical", "literary", "academic")) or any(d in dom_tags for d in ("law", "science", "medicine", "economics")) or "[formal]" in s_def_txt:
+                    return "formal"
+
+        # 3. Multi-word phrasal verbs with conversational particles default to informal
+        conversational_particles = {"up", "out", "off", "down", "around", "away", "back", "over", "along", "in", "through"}
+        tokens = w_clean.split()
+        if pos_low == "phrasal verb" or (len(tokens) == 2 and tokens[1] in conversational_particles):
+            # Exclude formal prepositional verbs like "originate in", "comply with", "consist of", "result in"
+            formal_prep_verbs = {"originate", "comply", "consist", "culminate", "pertain", "adhere", "concur", "abstain", "deviate", "reside", "prevail"}
+            if tokens[0] not in formal_prep_verbs:
+                return "informal"
+
+        # 4. Formal academic / Latinate headwords
+        formal_academic_roots = {
+            "originate", "regulatory", "comply", "subsequent", "consequently", "notwithstanding",
+            "constitute", "implement", "predominant", "facilitate", "mandate", "jurisdiction",
+            "stipulate", "commence", "endeavor", "ascertain", "proliferate", "mitigate",
+            "exacerbate", "unprecedented", "indispensable", "autonomous", "empirical", "paradigm",
+        }
+        if w_clean in formal_academic_roots:
+            return "formal"
+
+        if " " not in w_clean and len(w_clean) >= 8:
+            cefr_lvl = cls.get_word_cefr(w_clean)
+            if cefr_lvl in ("C1", "C2") and w_clean.endswith(("ate", "ory", "tion", "ive", "ity", "ence", "ance", "ous")):
+                return "formal"
+
+        return "neutral"
+
+    @classmethod
+    def _classify_grammar_register(cls, name: str, formula: str = "", pedagogical_function: str = "") -> str:
+        """
+        Deterministically classifies a grammar pattern's stylistic register into
+        'formal', 'informal', or 'neutral'.
+        """
+        combined = f"{name or ''} {formula or ''} {pedagogical_function or ''}".lower()
+
+        # Check informal / conversational markers first
+        if any(k in combined for k in (
+            "[spoken]", "[informal]", "conversational", "spoken", "informal",
+            "question tag", "ellipsis", "get-passive", "everyday coordination",
+            "simple coordination", "colloquial", "casual"
+        )):
+            return "informal"
+
+        # Check formal / elevated academic syntax
+        if any(k in combined for k in (
+            "inversion", "not only", "seldom", "rarely", "never ", "little + aux",
+            "only when", "only by", "only after", "participial", "participle",
+            "adjunct", "having +", "v-ing,", "v-ed,", "shell noun", "appositive",
+            "cleft", "nominalization", "extraposition", "preposition + which",
+            "preposition + whom", "formal", "academic", "elevated"
+        )):
+            return "formal"
+
+        return "neutral"
+
+    @classmethod
+    def _resolve_translation_lexical_trap(
+        cls,
+        word: str,
+        pos: str = "",
+        definition: str = "",
+        quote: str = "",
+        example_usage: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Resolves the target keyword's Required Lexical Frame, Model Example, and
+        optional single-point Lexical Error Trap from `pedlex_error_traps` (with
+        deterministic symbolic fallback when pedlex.db is absent or unindexed).
+        Enforces strict POS and `sense_idx` isolation.
+        """
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip()
+        w_clean = re.sub(r"\s+", " ", w_clean)
+        def_str = str(definition or "").strip()
+        pos_str = str(pos or "").strip()
+
+        # 1. Query atomic pattern bundle for canonical pattern & authentic example
+        locked_sense = None
+        s_idx: Optional[int] = None
+        entry = cls.get_ldoce_entry(w_clean)
+        if entry and entry.get("senses"):
+            s_idx = cls._lock_sense(
+                entry,
+                definition=def_str,
+                quote=quote,
+                target_pos=pos_str or None,
+            )
+            if s_idx is not None and 0 <= s_idx < len(entry["senses"]):
+                locked_sense = entry["senses"][s_idx]
+
+        atomic_bundle = (
+            cls.pick_atomic_pattern_bundle(locked_sense, w_clean, quote=quote)
+            if locked_sense
+            else None
+        )
+        bundle_pat = str((atomic_bundle.get("pattern") if isinstance(atomic_bundle, dict) else "") or "").strip()
+        bundle_ex = str((atomic_bundle.get("example") if isinstance(atomic_bundle, dict) else "") or "").strip()
+        if bundle_pat:
+            bundle_pat = re.sub(r"\s+\betc\.?\b", "", bundle_pat).strip()
+
+        if not bundle_pat and isinstance(locked_sense, dict):
+            sense_pats = [
+                re.sub(r"\s+\betc\.?\b", "", str(p)).strip()
+                for p in (locked_sense.get("patterns") or [])
+                if str(p).strip()
+            ]
+            if sense_pats:
+                q_low = f"{quote} {example_usage}".lower()
+                matched_pats = [p for p in sense_pats if p.lower() in q_low]
+                bundle_pat = matched_pats[0] if matched_pats else sense_pats[0]
+
+        model_example = bundle_ex or example_usage or quote or ""
+        if not bundle_pat:
+            ctx_sample = f"{model_example} {quote} {definition}"
+            if pos_str.lower() == "noun" and re.search(rf"\bthe\s+{re.escape(w_clean)}\s+of\b", ctx_sample, re.IGNORECASE):
+                bundle_pat = f"the {w_clean} of [sth]"
+            elif pos_str.lower() == "verb":
+                m_vp = re.search(rf"\b{re.escape(w_clean)}(?:s|ed|ing|med|ming)?\s+(into|in|on|to|with|from|for|of)\b", ctx_sample, re.IGNORECASE)
+                if m_vp:
+                    bundle_pat = f"{w_clean} {m_vp.group(1).lower()} [sth]"
+        required_frame = bundle_pat or w_clean
+
+        # 2. Query pedlex_error_traps with strict POS and sense_idx isolation
+        traps = cls.get_word_error_traps(w_clean, pos=pos_str or None, sense_idx=s_idx)
+        best_trap: Optional[Dict[str, Any]] = None
+        if traps:
+            priority_order = {
+                "GRAM_BOX_DONTSAY": 0,
+                "GRAMBOX_BADEXA": 0,
+                "GRAMBOX_RULE_TRAP": 1,
+                "PREP_COLLOC_TRAP": 2,
+                "SYNTAX_COMP_TRAP": 3,
+                "GRAM_ATTRIBUTIVE_ONLY": 4,
+                "GRAM_NOT_BEFORE_NOUN": 4,
+                "GRAM_UNCOUNTABLE": 5,
+                "GRAM_INTRANSITIVE": 6,
+                "L1_CONJUNCTION_REDUNDANCY": 7,
+                "CLAUSE_PREP_CONFUSION": 7,
+                "GRAM_PROPERTY_TRAP": 8,
+            }
+            valid_traps = [
+                t for t in traps
+                if str(t.get("trap_type") or "") in priority_order
+            ]
+            if valid_traps:
+                sorted_traps = sorted(
+                    valid_traps,
+                    key=lambda t: priority_order.get(str(t.get("trap_type") or ""), 99)
+                )
+                best_trap = sorted_traps[0]
+                c_f = str(best_trap.get("correct_frame") or "").strip()
+                if (
+                    c_f
+                    and required_frame == w_clean
+                    and not c_f.startswith("[")
+                    and not c_f.endswith((".", "!", "?"))
+                    and len(c_f.split()) <= 6
+                ):
+                    required_frame = c_f
+                if best_trap.get("model_example") and not model_example:
+                    model_example = str(best_trap["model_example"]).strip()
+
+        # 3. Deterministic fallback for explicit <gram> properties or bound prepositions
+        if not best_trap:
+            def_low = def_str.lower()
+            if ("[only before noun]" in def_low or "attributive" in pos_str.lower()) and pos_str.lower() in ("adjective", "adj", ""):
+                best_trap = {
+                    "trap_type": "GRAM_ATTRIBUTIVE_ONLY",
+                    "correct_frame": f"[only before noun] ({w_clean} + Noun)",
+                    "wrong_frame": f"*be + {w_clean}* (predicative misuse)",
+                    "pedagogical_note": f"'{w_clean}' is an attributive-only adjective ([only before noun]) and cannot be used as a predicate after a linking verb.",
+                }
+            elif "[uncountable]" in def_low and pos_str.lower() in ("noun", "n", ""):
+                best_trap = {
+                    "trap_type": "GRAM_UNCOUNTABLE",
+                    "correct_frame": f"[uncountable] ({w_clean})",
+                    "wrong_frame": f"*a {w_clean} / {w_clean}s* (uncountable pluralization)",
+                    "pedagogical_note": f"'{w_clean}' is an uncountable noun and must not take 'a/an' or a plural '-s' suffix.",
+                }
+            else:
+                # Check common bound-preposition collocation frames
+                prep_fallbacks = {
+                    "originate": ("originate in [place/situation]", "*originate from / originate at*", "Many Christmas traditions originated in Germany."),
+                    "comply": ("comply with [rule/law]", "*comply to / comply by*", "All companies must comply with the new safety regulations."),
+                    "depend": ("depend on [sb/sth]", "*depend of / depend from*", "Our success depends on everyone's cooperation."),
+                    "rely": ("rely on [sb/sth]", "*rely in / rely at*", "Many rural communities rely on public transport."),
+                    "consist": ("consist of [parts]", "*be consisted of / consist in*", "The committee consists of ten senior members."),
+                    "result": ("result in [outcome]", "*result to*", "The policy change resulted in a sharp drop in emissions."),
+                    "contribute": ("contribute to [sth/V-ing]", "*contribute for*", "Regular exercise contributes to better mental health."),
+                    "adapt": ("adapt to [new situation]", "*adapt with*", "Species must adapt to changing environments."),
+                    "participate": ("participate in [activity]", "*participate on / participate to*", "Students are encouraged to participate in seminar discussions."),
+                    "succeed": ("succeed in [sth/V-ing]", "*succeed to do*", "She succeeded in persuading the board."),
+                    "insist": ("insist on [sth/V-ing]", "*insist to do*", "He insisted on paying for the meal."),
+                }
+                w_low = w_clean.lower()
+                if w_low in prep_fallbacks:
+                    c_frame, w_frame, mod_ex = prep_fallbacks[w_low]
+                    if required_frame == w_clean or required_frame.startswith(f"{w_low} "):
+                        required_frame = c_frame
+                    if not model_example:
+                        model_example = mod_ex
+                    best_trap = {
+                        "trap_type": "PREP_COLLOC_TRAP",
+                        "correct_frame": c_frame,
+                        "wrong_frame": w_frame,
+                        "pedagogical_note": f"Use the collocation '{c_frame}', not {w_frame}.",
+                    }
+                elif bundle_pat and " " in bundle_pat:
+                    m_prep = re.search(rf"\b{re.escape(w_low)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\b", bundle_pat.lower())
+                    if m_prep:
+                        prep_tok = m_prep.group(1)
+                        alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
+                        best_trap = {
+                            "trap_type": "PREP_COLLOC_TRAP",
+                            "correct_frame": bundle_pat,
+                            "wrong_frame": f"*{w_clean} {alt_prep}*",
+                            "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
+                        }
+
+        # Format human-readable lexical flaw label and corruption instruction
+        lex_flaw_label = ""
+        lex_corruption_step = ""
+        if best_trap:
+            t_type = str(best_trap.get("trap_type") or "")
+            c_frame = str(best_trap.get("correct_frame") or required_frame).strip()
+            w_frame = str(best_trap.get("wrong_frame") or "").strip()
+            dont_say = str(best_trap.get("dont_say") or best_trap.get("bad_example") or "").strip()
+            if t_type == "PREP_COLLOC_TRAP":
+                lex_flaw_label = f"Lexical Valency / Preposition Trap (`{c_frame}` vs `{w_frame}`)"
+                lex_corruption_step = f"substituting the wrong preposition `{w_frame}` instead of `{c_frame}`"
+            elif t_type == "SYNTAX_COMP_TRAP":
+                lex_flaw_label = f"Subcategorization Complement Trap (`{c_frame}` vs `{w_frame}`)"
+                lex_corruption_step = f"replacing the required complement frame `{c_frame}` with `{w_frame}`"
+            elif t_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN", "GRAM_UNCOUNTABLE", "GRAM_INTRANSITIVE", "GRAM_PROPERTY_TRAP"):
+                lex_flaw_label = f"Lexical Grammar Property Violation (`{c_frame}` -> `{w_frame}`)"
+                lex_corruption_step = f"violating `{c_frame}` by using `{w_frame}`"
+            elif t_type in ("GRAM_BOX_DONTSAY", "GRAMBOX_BADEXA", "GRAMBOX_RULE_TRAP"):
+                bad_ex = f" (Do NOT say: {dont_say})" if dont_say else f" (`{w_frame}`)"
+                lex_flaw_label = f"Lexical Collocation / Usage Trap on `{w_clean}`{bad_ex}"
+                lex_corruption_step = f"introducing the authentic learner error `{w_frame or dont_say}` instead of `{c_frame}`"
+
+        return {
+            "required_frame": required_frame,
+            "model_example": model_example,
+            "trap": best_trap,
+            "flaw_label": lex_flaw_label,
+            "corruption_step": lex_corruption_step,
+        }
+
+    @classmethod
+    def _resolve_translation_syntactic_trap(cls, gram_item: Dict[str, str]) -> Dict[str, str]:
+        """
+        Deterministically extracts a Single-Point Syntactic L1 Negative-Transfer Trap
+        from a grammar pattern and its `Grammar Warning (<TOPIC>)` common mistake.
+        Matches strictly against the pattern name, formula, and warning topic header
+        (never matching incidental prose words inside the explanation body).
+        """
+        name = str(gram_item.get("name") or "Target Grammar Pattern").strip()
+        formula = str(gram_item.get("formula") or name).strip()
+        mistakes = str(gram_item.get("common_mistakes") or "").strip()
+
+        m_topic = re.search(r"(?:Grammar\s+Warning\s*)?\(([^)]+)\)", mistakes, re.IGNORECASE)
+        warn_topic = m_topic.group(1).strip() if m_topic else ""
+        header_low = f"{name} {formula} {warn_topic}".lower()
+        form_low = formula.lower()
+
+        if any(k in header_low for k in ("although", "even though", "though")) and "despite" not in header_low:
+            return {
+                "flaw_label": "L1 Conjunction Redundancy (`Although ... but ...` double conjunction)",
+                "corruption_step": "adding redundant `but` before the main clause in an `Although / Even though` sentence",
+                "constraint_note": "NO 'but' in main clause",
+                "zh_cue": "虽然...，但...",
+            }
+        if any(k in header_low for k in ("despite", "in spite of")):
+            return {
+                "flaw_label": "Clause-Preposition Confusion (`Despite / In spite of + *finite clause*`)",
+                "corruption_step": "placing a bare finite clause directly after `Despite / In spite of` instead of a noun phrase, `-ing` gerund, or `the fact that`",
+                "constraint_note": "followed by NP / V-ing / the fact that, NOT a bare finite clause",
+                "zh_cue": "尽管...，...",
+            }
+        if (
+            "passive" in header_low
+            or "unaccusative" in header_low
+            or "be/modal be" in form_low
+            or bool(re.search(r"\[be[^\]]*\]\s*\+\s*\[v(?:-ed|3)\]", form_low))
+        ):
+            return {
+                "flaw_label": "Passive Voice / Unaccusative Verb Trap (malformed passive auxiliary/participle or passivized intransitive verb)",
+                "corruption_step": "corrupting the passive verb form (`[be] + [V-ed]` -> active/base verb or missing `be`) or passivizing an intransitive verb",
+                "constraint_note": "use `[be/modal be] + past participle [V-ed]`",
+                "zh_cue": "被……/由……",
+            }
+        if (
+            "causative" in header_low
+            or "bare infinitive" in header_low
+            or "bare verb" in header_low
+            or bool(re.search(r"\b(?:let|make|have)\s*\+\s*\[", form_low))
+        ):
+            return {
+                "flaw_label": "Causative Infinitive Trap (`let/make/have + Object + *to do*` instead of bare infinitive)",
+                "corruption_step": "inserting ungrammatical `*to*` before the infinitive verb after causative `let / make / have` (e.g., `*let sb. to do*`)",
+                "constraint_note": "use a bare infinitive (NO 'to') after `let / make / have + Object`",
+                "zh_cue": "让/使某人做……",
+            }
+        if (
+            "resultative particip" in header_low
+            or "post-positioned present particip" in header_low
+            or "comma splice" in header_low
+            or bool(re.search(r"\[vp\]\s*,\s*\[v-ing", form_low))
+        ):
+            return {
+                "flaw_label": "Resultative Participle vs. Comma Splice Trap (replacing `, [V-ing]` with an uncoordinated finite verb `*, V-ed*`)",
+                "corruption_step": "replacing the post-positioned present participle `, [V-ing]` with a bare finite past/present verb (comma splice) or passive participle",
+                "constraint_note": "attach `, [V-ing Phrase]` directly after the main clause without a conjunction",
+                "zh_cue": "……，从而造成了/使得……",
+            }
+        if (
+            any(k in header_low for k in ("inversion", "negative adv", "seldom", "rarely", "never", "little", "only when", "only by", "only after"))
+            or ("not only" in header_low and "correlative" not in header_low and "aux" in form_low)
+        ):
+            return {
+                "flaw_label": "Failed Subject-Auxiliary Inversion (keeping declarative Subject + Verb order)",
+                "corruption_step": "failing to invert the auxiliary verb and subject after the fronted negative/restrictive adverbial",
+                "constraint_note": "invert Auxiliary + Subject in the main/fronted clause",
+                "zh_cue": "不仅/很少/只有...",
+            }
+        if "correlative" in header_low or ("not only" in header_low and "but also" in header_low):
+            return {
+                "flaw_label": "Correlative Parallelism Misplacement (`not only ... but also` unbalanced constituent slots)",
+                "corruption_step": "breaking parallel constituent structure after `not only` and `but also`",
+                "constraint_note": "place parallel grammatical constituents immediately after `not only` and `but also`",
+                "zh_cue": "不仅……，而且……",
+            }
+        if any(k in header_low for k in ("particip", "v-ing", "v-ed", "adjunct", "having +")):
+            return {
+                "flaw_label": "Dangling Participle / Participle Voice Confusion",
+                "corruption_step": "misusing the participle voice (`-ing` vs `-ed`) or inserting a redundant conjunction (`and`/`so`) before the main clause",
+                "constraint_note": "align participle subject with main-clause subject without redundant conjunction",
+                "zh_cue": "伴随/分词状语...",
+            }
+        if any(k in header_low for k in ("shell noun", "appositive")):
+            return {
+                "flaw_label": "Appositive Clause Connector Trap (using `*which*` instead of appositive `that`)",
+                "corruption_step": "replacing the appositive complementizer `that` with `*which*` after the shell noun",
+                "constraint_note": "use appositive `that` + complete clause",
+                "zh_cue": "……这一事实/观点",
+            }
+        if any(k in header_low for k in (", which", "non-restrictive", "anaphoric", "sentential relative")):
+            return {
+                "flaw_label": "Non-Restrictive Relative Clause Trap (`*, that*` or comma splice)",
+                "corruption_step": "replacing `, which` with ungrammatical `*, that*` or omitting the relative pronoun in a comma splice",
+                "constraint_note": "use `, which` + singular verb",
+                "zh_cue": "……，这意味着/表明……",
+            }
+        if any(k in header_low for k in ("conditional", "unless", "as long as", "provided that", "stipulative")) or form_low.startswith("if "):
+            return {
+                "flaw_label": "Conditional Tense / Modal Trap (inserting modal `*will / would*` inside the conditional clause)",
+                "corruption_step": "inserting modal `*will*` or `*would*` inside the conditional subordinate clause",
+                "constraint_note": "use present/past indicative tense (NOT 'will/would') inside the conditional clause",
+                "zh_cue": "如果/除非……，就……",
+            }
+        if any(k in header_low for k in ("cleft", "extraposition", "dummy-it", "it + [be]", "it is")):
+            return {
+                "flaw_label": "Extraposition / Cleft Structure Trap (missing dummy `It` or malformed connector)",
+                "corruption_step": "omitting dummy subject `It` or replacing the required `that/to` complementizer",
+                "constraint_note": "preserve `It is ... that/to` frame",
+                "zh_cue": "正是/……是必要的",
+            }
+
+        clean_warn = re.sub(r"^(?:Grammar\s+Warning\s*)?\([^)]*\)\s*:?\s*", "", mistakes, flags=re.IGNORECASE).strip()
+        if clean_warn:
+            # Split at sentence boundary or example markers without splitting on 'sb.', 'sth.', 'vs.', 'e.g.'
+            parts = re.split(r"(?<!\bvs)(?<!\bsb)(?<!\bsth)(?<!\be\.g)(?<!\bi\.e)\.\s+|\n|\[INCORRECT:|✗", clean_warn)
+            short_warn = parts[0].strip().rstrip(":")
+            topic_label = f"{warn_topic}: {short_warn}" if warn_topic and warn_topic.lower() not in short_warn.lower() else short_warn
+            return {
+                "flaw_label": f"Syntactic Structure Trap ({topic_label[:110]})",
+                "corruption_step": f"violating the `{name}` rule ({topic_label[:110]})",
+                "constraint_note": f"strictly follow `{formula}`",
+                "zh_cue": "",
+            }
+
+        return {
+            "flaw_label": f"Syntactic Formula Breakdown (`{name}`)",
+            "corruption_step": f"distorting the required syntactic formula `{formula}` while keeping all other words identical",
+            "constraint_note": f"strictly follow `{formula}`",
+            "zh_cue": "",
+        }
+
+    @classmethod
+    def calculate_minimal_pair_similarity(cls, idiomatic: str, flawed: str) -> float:
+        """
+        Computes the word-level overlap similarity (0.0 to 1.0) between
+        `idiomatic_translation` and `flawed_translation` to verify the Minimal-Pair
+        corruption contract (≥85% shared non-target wording).
+        """
+        import difflib
+        from collections import Counter
+
+        t1 = re.findall(r"[a-z0-9']+", str(idiomatic or "").lower())
+        t2 = re.findall(r"[a-z0-9']+", str(flawed or "").lower())
+        if not t1 or not t2:
+            return 0.0
+
+        c1, c2 = Counter(t1), Counter(t2)
+        shared = sum((c1 & c2).values())
+        denom = max(min(len(t1), len(t2)), 1)
+        multiset_overlap = shared / denom
+        seq_ratio = difflib.SequenceMatcher(None, t1, t2).ratio()
+        return round(min(1.0, max(multiset_overlap, seq_ratio)), 4)
+
+    @classmethod
+    def build_translation_micro_task_blueprints(
+        cls,
+        vocab_content: Any,
+        grammar_content: Any = None,
+        target_count: int = 5,
+        target_language: str = "Chinese",
+        cefr_level: str = "B2",
+    ) -> List[Dict[str, Any]]:
+        """
+        Builds Symbolic Translation Micro-Task Blueprints (`translation_quiz`):
+        1. Step 1 — Register-Aligned Lexical & Syntactic Pairing (`Symbolic Pair Matching`):
+           Pairs each `Target Keyword` with a register-compatible `Target Grammar Pattern`
+           (preventing awkward forced marriages like `[spoken]` phrasal verbs with formal inversions).
+        2. Step 2 — Single-Point Minimal-Pair Corruption Operator (`pedlex_error_traps` & `Grammar Warning`):
+           Assigns a deterministic single-point flaw operator and CRC32-balanced `correct_answer_index` (0 or 1).
+        3. Step 3 — Formats the canonical `### Item N Specification ###` with `🎯 Micro-Task for LLM`.
+        """
+        # 1. Parse vocabulary items (structured list or Markdown string)
+        vocab_items: List[Dict[str, str]] = []
+        for norm_it in cls._normalize_vocab_items_input(vocab_content):
+            vocab_items.append({
+                "word": norm_it.get("word") or "",
+                "pos": norm_it.get("part_of_speech") or "word",
+                "definition": norm_it.get("definition") or "",
+                "quote": norm_it.get("quote") or "",
+                "example_usage": norm_it.get("example_usage") or "",
+            })
+
+        if not vocab_items:
+            return []
+
+        # 2. Parse grammar items (structured list or Markdown string)
+        grammar_items: List[Dict[str, str]] = []
+        if isinstance(grammar_content, (list, tuple)):
+            for git in grammar_content:
+                if isinstance(git, dict):
+                    explicit_topic = str(git.get("syntax_topic") or git.get("name") or "").strip()
+                    raw_f = str(git.get("pattern_formula") or explicit_topic or "").strip()
+                    explicit_form = str(git.get("formula") or git.get("pattern_formula") or "").strip()
+                    ped_f = str(git.get("pedagogical_function") or "").strip()
+                    mist = str(git.get("common_mistakes") or git.get("mistakes") or "").strip()
+                else:
+                    explicit_topic = str(getattr(git, "syntax_topic", "") or getattr(git, "name", "") or "").strip()
+                    raw_f = str(getattr(git, "pattern_formula", "") or explicit_topic or "").strip()
+                    explicit_form = str(getattr(git, "formula", "") or getattr(git, "pattern_formula", "") or "").strip()
+                    ped_f = str(getattr(git, "pedagogical_function", "") or "").strip()
+                    mist = str(getattr(git, "common_mistakes", "") or getattr(git, "mistakes", "") or "").strip()
+                if not raw_f:
+                    continue
+                if explicit_topic and explicit_form and explicit_topic != explicit_form:
+                    g_name, g_form = explicit_topic, explicit_form
+                elif ":" in raw_f:
+                    g_name, g_form = [p.strip() for p in raw_f.split(":", 1)]
+                else:
+                    g_name, g_form = raw_f, explicit_form or raw_f
+                grammar_items.append({
+                    "name": g_name,
+                    "formula": g_form,
+                    "pedagogical_function": ped_f,
+                    "common_mistakes": mist,
+                })
+        elif isinstance(grammar_content, str) and grammar_content.strip():
+            g_blocks = re.split(r"(?=^##\s*\[\[)", grammar_content.strip(), flags=re.MULTILINE)
+            for gb in g_blocks:
+                m_gn = re.search(r"^##\s*\[\[(.*)\]\]\s*$", gb, re.MULTILINE)
+                if not m_gn:
+                    continue
+                g_name = m_gn.group(1).strip()
+                m_gf = re.search(r"-\s*\*\*Pattern Formula\*\*:\s*(.*)", gb, re.IGNORECASE)
+                g_form = m_gf.group(1).strip() if m_gf else g_name
+                m_gp = re.search(r"-\s*\*\*Pedagogical Function\*\*:\s*(.*)", gb, re.IGNORECASE)
+                ped_f = m_gp.group(1).strip() if m_gp else ""
+                m_gm = re.search(r"-\s*\*\*Common Mistakes\*\*:\s*(.*)", gb, re.IGNORECASE)
+                mist = m_gm.group(1).strip() if m_gm else ""
+                grammar_items.append({
+                    "name": g_name,
+                    "formula": g_form,
+                    "pedagogical_function": ped_f,
+                    "common_mistakes": mist,
+                })
+
+        # Fallback grammar pool if none provided
+        if not grammar_items:
+            grammar_items = [
+                {
+                    "name": "Concessive Clause",
+                    "formula": "Although / Even though + Subject + Verb, Main Clause",
+                    "pedagogical_function": "Frames a contrast between an obstacle and an outcome.",
+                    "common_mistakes": "Grammar Warning (CONCESSIVE CONNECTIVES): Never pair 'Although / Even though' with 'but' in the same sentence.",
+                }
+            ]
+
+        # Classify registers on all vocabulary and grammar candidates
+        for vit in vocab_items:
+            vit["register"] = cls._classify_vocab_register(vit["word"], vit["pos"], vit["definition"])
+        for git in grammar_items:
+            git["register"] = cls._classify_grammar_register(git["name"], git["formula"], git["pedagogical_function"])
+
+        effective_count = min(max(1, target_count), len(vocab_items))
+        selected_vocab = vocab_items[:effective_count]
+
+        # 3. Step 1: Register-Aligned Lexical & Syntactic Pairing (Symbolic Pair Matching)
+        gram_usage_counts = [0] * len(grammar_items)
+        paired_specs: List[Tuple[Dict[str, str], Dict[str, str]]] = []
+
+        for v_it in selected_vocab:
+            v_reg = v_it["register"]
+            best_g_idx = 0
+            best_score = -10**9
+            for g_idx, g_it in enumerate(grammar_items):
+                g_reg = g_it["register"]
+                g_comb = f"{g_it['name']} {g_it['formula']}".lower()
+                score = 0
+                # Penalize forced marriages between opposite registers
+                if v_reg == "informal" and g_reg == "formal":
+                    score -= 100
+                elif v_reg == "formal" and g_reg == "informal":
+                    score -= 100
+                elif v_reg == g_reg:
+                    score += 30
+                elif v_reg == "formal" and g_reg == "neutral":
+                    # Concessive / conditional / relative clauses pair naturally with formal academic words
+                    score += 25 if any(k in g_comb for k in ("concessive", "although", "despite", "while", "whereas")) else 18
+                elif v_reg == "informal" and g_reg == "neutral":
+                    score += 20
+                else:
+                    # neutral vocab works cleanly with any grammar pattern
+                    score += 22 if g_reg == "neutral" else 15
+
+                # Encourage even rotation across compatible grammar patterns
+                score -= gram_usage_counts[g_idx] * 18
+                if score > best_score:
+                    best_score = score
+                    best_g_idx = g_idx
+
+            gram_usage_counts[best_g_idx] += 1
+            paired_specs.append((v_it, grammar_items[best_g_idx]))
+
+        # 4. Compute deterministic CRC32-balanced 2-option slots (0 vs 1, 50/50 split)
+        n_items = len(paired_specs)
+        slot_0_count = n_items // 2 + (n_items % 2)
+        slot_1_count = n_items // 2
+        balanced_slots = [0] * slot_0_count + [1] * slot_1_count
+        seed_str = "|".join(f"{v['word']}:{g['name']}" for v, g in paired_specs)
+        rng_state = zlib.crc32(seed_str.encode("utf-8"))
+        for i in range(len(balanced_slots) - 1, 0, -1):
+            rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+            j = rng_state % (i + 1)
+            balanced_slots[i], balanced_slots[j] = balanced_slots[j], balanced_slots[i]
+
+        # 5. Step 2 & Step 3: Build Single-Point Minimal-Pair Corruption Operator & Micro-Task Blueprint
+        blueprints: List[Dict[str, Any]] = []
+        cefr_upper = str(cefr_level or "B2").upper()
+
+        for idx, (v_it, g_it) in enumerate(paired_specs, 1):
+            word = v_it["word"]
+            pos = v_it["pos"]
+            defn = v_it["definition"]
+            v_reg = v_it["register"]
+
+            g_name = g_it["name"]
+            g_formula = g_it["formula"]
+            g_reg = g_it["register"]
+            target_grammar_display = (
+                f"{g_name} (`{g_formula}`)"
+                if g_formula and g_formula.lower() != g_name.lower()
+                else g_name
+            )
+
+            lex_info = cls._resolve_translation_lexical_trap(
+                word, pos=pos, definition=defn, quote=v_it.get("quote", ""), example_usage=v_it.get("example_usage", "")
+            )
+            syn_info = cls._resolve_translation_syntactic_trap(g_it)
+
+            req_frame = lex_info["required_frame"] or word
+            model_ex = lex_info["model_example"]
+            frame_line = f"{req_frame} (Model: \"{model_ex}\")" if model_ex else req_frame
+
+            # Select primary Prescribed Flaw Type:
+            # - If lexical trap is an explicit property/dontsay trap (GRAM_ATTRIBUTIVE_ONLY, GRAM_UNCOUNTABLE, GRAM_BOX_DONTSAY),
+            #   or on odd/even items when a lexical trap exists and we balance lexical vs syntactic traps across the quiz.
+            lex_trap = lex_info.get("trap")
+            lex_trap_type = str(lex_trap.get("trap_type") or "") if isinstance(lex_trap, dict) else ""
+            use_lexical_primary = False
+            if lex_trap and lex_info.get("flaw_label"):
+                if lex_trap_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_UNCOUNTABLE", "GRAM_BOX_DONTSAY"):
+                    use_lexical_primary = True
+                elif idx % 2 == 1 and not ("although" in g_formula.lower() and word.lower() == "originate"):
+                    use_lexical_primary = True
+
+            if use_lexical_primary:
+                prescribed_flaw_type = lex_info["flaw_label"]
+                flaw_category = "lexical"
+                primary_corruption = lex_info["corruption_step"]
+                secondary_alt = f", or {syn_info['corruption_step']}" if syn_info.get("corruption_step") else ""
+                critique_focus = (
+                    f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation and `{g_name}` structure"
+                )
+            else:
+                prescribed_flaw_type = syn_info["flaw_label"]
+                flaw_category = "syntactic"
+                primary_corruption = syn_info["corruption_step"]
+                secondary_alt = (
+                    f", or misusing `{word}` ({lex_info['corruption_step']})"
+                    if lex_info.get("corruption_step")
+                    else f", or misusing `{word}`"
+                )
+                critique_focus = (
+                    f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation"
+                )
+
+            zh_cue_str = f" (matching `{g_name}` + `{word}` meaning: \"{defn}\")"
+            gram_constraint = f" ({syn_info['constraint_note']})" if syn_info.get("constraint_note") else ""
+
+            micro_task_lines = [
+                f"### Item {idx} Specification ###",
+                f"- Target Keyword: {word} ({pos}) — \"{defn}\"",
+                f"- Required Lexical Frame: {frame_line}",
+                f"- Target Grammar Pattern: {target_grammar_display}",
+                f"- Prescribed Flaw Type: {prescribed_flaw_type}",
+                f"- 🎯 Micro-Task for LLM:",
+                f"  1. `translated_sentence`: Write a natural {target_language} sentence{zh_cue_str}.",
+                f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English integrating BOTH `{req_frame}` and `{g_formula}`{gram_constraint}.",
+                f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed flaw ({primary_corruption}{secondary_alt}).",
+                f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
+            ]
+            micro_task_block = "\n".join(micro_task_lines)
+
+            blueprints.append({
+                "item_index": idx,
+                "target_keyword": word,
+                "part_of_speech": pos,
+                "definition": defn,
+                "vocab_register": v_reg,
+                "required_lexical_frame": req_frame,
+                "model_example": model_ex,
+                "target_grammar": f"{g_name}: {g_formula}" if g_formula and g_formula.lower() != g_name.lower() else g_name,
+                "target_grammar_name": g_name,
+                "target_grammar_formula": g_formula,
+                "grammar_register": g_reg,
+                "flaw_type": prescribed_flaw_type,
+                "flaw_category": flaw_category,
+                "lexical_trap": lex_trap,
+                "syntactic_trap": syn_info,
+                "correct_answer_index": balanced_slots[idx - 1],
+                "micro_task_block": micro_task_block,
+            })
+
+        return blueprints

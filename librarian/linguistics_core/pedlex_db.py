@@ -2775,17 +2775,22 @@ class PedlexDbMixin:
         cls,
         word: str,
         pos: Optional[str] = None,
+        sense_idx: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve pre-mined lexical/syntactic minimal-pair error traps from `pedlex_error_traps`
-        for `translation_quiz` and `vocabulary_quiz` distractor/error-injection specs."""
+        for `translation_quiz` and `vocabulary_quiz` distractor/error-injection specs.
+        Enforces strict POS and `sense_idx` isolation so cross-homograph / cross-sense
+        `<gram>` properties (e.g., `interior` adj `[only before noun]` vs `interior` noun,
+        or `cram` sense 3 `[intransitive]` vs sense 0 `[transitive]`) never contaminate
+        the locked sense."""
         w_clean = (word or "").strip().lower()
         if not w_clean or not cls._ensure_ldoce_conn():
             return []
+        p_low = pos.strip().lower() if pos else ""
         out: List[Dict[str, Any]] = []
         if cls._ldoce_table_exists("pedlex_error_traps"):
             try:
-                if pos:
-                    p_low = pos.strip().lower()
+                if p_low:
                     rows = cls._ldoce_conn.execute(
                         "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
                         "FROM pedlex_error_traps WHERE word = ? AND (pos = ? OR pos = '' OR pos = 'other')",
@@ -2798,16 +2803,40 @@ class PedlexDbMixin:
                         (w_clean,),
                     ).fetchall()
                 for r in rows:
+                    r_pos = str(r[1] or "").strip().lower()
+                    r_sidx = r[2]
+                    t_type = str(r[3] or "").strip()
+                    # Sense-level isolation: sense-specific <gram> traps must match the locked sense_idx
+                    if sense_idx is not None and r_sidx is not None and r_sidx >= 0 and r_sidx != sense_idx:
+                        continue
+                    # Strict POS compatibility guard for <gram> property traps
+                    if p_low:
+                        if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN") and p_low != "adjective":
+                            continue
+                        if t_type == "GRAM_UNCOUNTABLE" and p_low != "noun":
+                            continue
+                        if t_type == "GRAM_INTRANSITIVE" and p_low not in ("verb", "phrasal verb"):
+                            continue
+                    if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY"):
+                        c_frame = f"{w_clean} + noun"
+                    elif t_type == "GRAM_NOT_BEFORE_NOUN":
+                        c_frame = f"be/seem + {w_clean}"
+                    elif t_type == "GRAM_UNCOUNTABLE":
+                        c_frame = f"{w_clean} [uncountable]"
+                    elif t_type == "GRAM_INTRANSITIVE":
+                        c_frame = f"{w_clean} [intransitive]"
+                    else:
+                        c_frame = w_clean
                     out.append({
                         "word": r[0],
-                        "pos": r[1],
-                        "sense_idx": r[2],
-                        "trap_type": r[3],
+                        "pos": r_pos,
+                        "sense_idx": r_sidx,
+                        "trap_type": "GRAM_ATTRIBUTIVE_ONLY" if t_type == "GRAM_ONLY_BEFORE_NOUN" else t_type,
                         "forbidden_frame": r[4],
                         "bad_example": r[5],
                         "good_example": r[6],
                         "rule_note": r[7],
-                        "correct_frame": r[6] or w_clean,
+                        "correct_frame": c_frame,
                         "wrong_frame": r[5] or r[4],
                         "warning_note": r[7],
                         "authentic_example": r[6],
@@ -2819,12 +2848,16 @@ class PedlexDbMixin:
             entry = cls.get_ldoce_entry(w_clean)
             if entry:
                 for s_idx, s in enumerate(entry.get("senses") or []):
+                    if sense_idx is not None and s_idx != sense_idx:
+                        continue
                     s_pos = str(s.get("pos") or entry.get("pos") or "other").lower()
+                    if p_low and s_pos not in (p_low, "other", ""):
+                        continue
                     gram = str(s.get("grammar") or "").lower()
                     pats = s.get("patterns") or []
                     exs = s.get("examples") or []
                     ex0 = exs[0] if exs else ""
-                    if "only before noun" in gram:
+                    if "only before noun" in gram and s_pos == "adjective":
                         out.append({
                             "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                             "trap_type": "GRAM_ATTRIBUTIVE_ONLY",
@@ -2837,7 +2870,7 @@ class PedlexDbMixin:
                             "warning_note": f"'{w_clean}' is [only before noun].",
                             "authentic_example": ex0,
                         })
-                    elif "uncountable" in gram and "countable" not in gram.replace("uncountable", ""):
+                    elif "uncountable" in gram and "countable" not in gram.replace("uncountable", "") and s_pos == "noun":
                         out.append({
                             "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                             "trap_type": "GRAM_UNCOUNTABLE",
@@ -2877,7 +2910,7 @@ class PedlexDbMixin:
                             "authentic_example": ex0,
                         })
                     elif pats:
-                        p0 = str(pats[0])
+                        p0 = re.sub(r"\s+\betc\.?\b", "", str(pats[0])).strip()
                         out.append({
                             "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                             "trap_type": "LEXICAL_VALENCY_FRAME",

@@ -1526,6 +1526,40 @@ class ExtractionPipelineMixin:
                 e_lower = expr_clean.lower()
                 cand_item = None
 
+                # Family 1B Routing Guard: Open-slot preparatory-subject extraposition ('It is <adj> (for/of sb) to do [sth]')
+                # belongs exclusively to Syntactic Grammar ('Information Packaging: dummy_it_extraposition'), never multi-word vocabulary.
+                # Only fixed lexicalized idioms ('it is high time', 'it is no wonder', 'it is no use') are permitted as expressions.
+                if re.match(
+                    r"^it\s+(?:is|was|seems|becomes|gets|'s)\s+(?!high\s+time\b|no\s+wonder\b|no\s+use\b|no\s+good\b|worth\b)[a-z]+(?:\s+(?:for|of)\s+(?:\[?(?:sb|somebody|someone)\]?|[a-z]+))?(?:\s+to(?:\s+do(?:\s+\[?(?:sth|something)\]?)?)?)?$",
+                    e_lower,
+                ):
+                    continue
+
+                # Family 1A Preparatory-Object Extraposition & Causative Resultative ('make/find/keep/leave [sth/it] <adj>')
+                _fam1a_comp_map = {
+                    "easier": "easy",
+                    "harder": "hard",
+                    "clearer": "clear",
+                    "simpler": "simple",
+                    "safer": "safe",
+                    "surer": "sure",
+                    "plainer": "plain",
+                }
+                _m_fam1a = re.match(
+                    r"^(make|makes|made|making|find|finds|found|finding|keep|keeps|kept|keeping|leave|leaves|left|leaving)\s+(?:(it|\[sth\]|\[sb/sth\]|\[sth/sb\]|something)\s+)?(?:more\s+)?([a-z]+)$",
+                    e_lower,
+                )
+                _fam1a_v = None
+                _fam1a_adj = None
+                if _m_fam1a:
+                    _v_raw = _m_fam1a.group(1)
+                    _v_lem = {"makes": "make", "made": "make", "making": "make", "finds": "find", "found": "find", "finding": "find", "keeps": "keep", "kept": "keep", "keeping": "keep", "leaves": "leave", "left": "leave", "leaving": "leave"}.get(_v_raw, _v_raw)
+                    _adj_raw = _m_fam1a.group(3)
+                    _adj_base = _fam1a_comp_map.get(_adj_raw, _adj_raw)
+                    if _adj_base in {"possible", "impossible", "easy", "hard", "difficult", "clear", "certain", "plain", "necessary", "safe", "simple"}:
+                        _fam1a_v = _v_lem
+                        _fam1a_adj = _adj_base
+
                 # 1. Specialized High-Frequency Idioms (figurative, non-compositional units)
                 KNOWN_IDIOMS = {
                     "hats off", "hat off", "pat on the back", 
@@ -1572,13 +1606,15 @@ class ExtractionPipelineMixin:
                         "pattern_formula": formula,
                         "score": 100,
                     }
-                elif "make" in words and "possible" in words:
+                elif _fam1a_v and _fam1a_adj:
+                    _uses_it = bool(_m_fam1a and _m_fam1a.group(2) == "it")
+                    _fam1a_phrase = f"{_fam1a_v} it {_fam1a_adj}" if _uses_it else f"{_fam1a_v} [sth] {_fam1a_adj}"
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
-                        "phrase": "make [sth] possible",
+                        "phrase": _fam1a_phrase,
                         "type": "collocation",
-                        "pattern_formula": "make [sth] possible",
+                        "pattern_formula": _fam1a_phrase,
                         "score": 85,
                     }
                 elif has_placeholder:

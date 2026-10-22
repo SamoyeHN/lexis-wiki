@@ -171,13 +171,15 @@ class QuizGeneratorMixin:
                     raw_formula = str(item.get("pattern_formula") or "").strip()
                     ped_func = str(item.get("pedagogical_function") or "").strip()
                     mistakes = str(item.get("common_mistakes") or "").strip()
+                    topic_name = str(item.get("syntax_topic") or item.get("name") or "").strip()
                 else:
                     raw_formula = str(getattr(item, "pattern_formula", "") or "").strip()
                     ped_func = str(getattr(item, "pedagogical_function", "") or "").strip()
                     mistakes = str(getattr(item, "common_mistakes", "") or "").strip()
+                    topic_name = str(getattr(item, "syntax_topic", "") or getattr(item, "name", "") or "").strip()
                 norm_formula = cls.normalize_grammar_formula(raw_formula)
-                name = norm_formula or raw_formula or "Grammar Pattern"
-                if ":" in name:
+                name = topic_name or norm_formula or raw_formula or "Grammar Pattern"
+                if ":" in name and not topic_name:
                     name = name.split(":", 1)[0].strip()
                 blocks.append(
                     f"## [[{name}]]\n"
@@ -243,6 +245,80 @@ class QuizGeneratorMixin:
         flush_pattern()
 
         return "\n".join(clean_lines).strip(), pattern_summaries
+
+    @classmethod
+    def hydrate_translation_blueprint_items(
+        cls,
+        quiz_obj: Any,
+        blueprint_specs: List[Dict[str, Any]],
+    ) -> Any:
+        """
+        Deterministically hydrates blueprint-owned fields on TranslationQuiz items:
+        - Binds `target_keyword`, `target_grammar`, and `flaw_type` from `blueprint_specs`.
+        - Constructs `options` from `[idiomatic_translation, flawed_translation]` ordered according
+          to `prescribed_correct_index` (CRC32-locked 0 or 1).
+        - Sets `correct_answer_index`, `correct_english_answer`, and hydrates `explanation` from
+          `diagnostic_critique`.
+        """
+        if not quiz_obj or not blueprint_specs:
+            return quiz_obj
+
+        q_list = (
+            quiz_obj.get("questions", [])
+            if isinstance(quiz_obj, dict)
+            else getattr(quiz_obj, "questions", [])
+        )
+        if not isinstance(q_list, list):
+            return quiz_obj
+
+        for q_i, q_item in enumerate(q_list):
+            if q_i >= len(blueprint_specs):
+                break
+            spec = blueprint_specs[q_i] or {}
+            is_dict = isinstance(q_item, dict)
+
+            def _get(field: str, default: Any = "") -> Any:
+                return q_item.get(field, default) if is_dict else getattr(q_item, field, default)
+
+            def _set(field: str, val: Any) -> None:
+                if is_dict:
+                    q_item[field] = val
+                else:
+                    setattr(q_item, field, val)
+
+            if spec.get("target_keyword"):
+                _set("target_keyword", spec["target_keyword"])
+            if spec.get("target_grammar"):
+                _set("target_grammar", spec["target_grammar"])
+            if spec.get("flaw_type"):
+                _set("flaw_type", spec["flaw_type"])
+
+            idiomatic = str(_get("idiomatic_translation", "") or "").strip()
+            flawed = str(_get("flawed_translation", "") or "").strip()
+            critique = str(_get("diagnostic_critique", "") or "").strip()
+
+            if idiomatic and flawed:
+                prescribed_idx = spec.get("prescribed_correct_index")
+                if prescribed_idx is None:
+                    prescribed_idx = spec.get("correct_answer_index")
+                if prescribed_idx not in (0, 1):
+                    import zlib
+                    seed = f"{spec.get('target_keyword', '')}:{q_i}".encode("utf-8")
+                    prescribed_idx = zlib.crc32(seed) % 2
+
+                if prescribed_idx == 1:
+                    opts = [flawed, idiomatic]
+                else:
+                    opts = [idiomatic, flawed]
+
+                _set("options", opts)
+                _set("correct_answer_index", prescribed_idx)
+                _set("correct_english_answer", idiomatic)
+
+            if critique:
+                _set("explanation", critique)
+
+        return quiz_obj
 
     @classmethod
     def shuffle_quiz_options(cls, quiz_obj: Any, preserve_blueprint_order: bool = False) -> Any:
@@ -821,17 +897,39 @@ class QuizGeneratorMixin:
             sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
             raw_g = data.get("grammar_list", "")
             sanitized_g, unit_grammar_patterns = self._sanitize_grammar_for_quiz(raw_g)
-            kwargs["vocabulary_content"] = sanitized_v
-            kwargs["grammar_content"] = sanitized_g
-            kwargs["target_language"] = self.config.get("target_language") or "Chinese"
+            target_lang = self.config.get("target_language") or "Chinese"
             cefr = (data.get("cefr_level") or "B2").upper()
+            kwargs["target_language"] = target_lang
             kwargs["cefr_level"] = cefr
 
-            # Dynamically cap count by available resources if both are present
-            if unit_headwords and unit_grammar_patterns:
-                kwargs["count"] = min(count, len(unit_headwords), len(unit_grammar_patterns))
-            elif unit_headwords:
-                kwargs["count"] = min(count, len(unit_headwords))
+            # Build Symbolic Translation Micro-Task Blueprints (Register-Aligned Pairing + Minimal-Pair Corruption Spec)
+            translation_blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
+                raw_v,
+                grammar_content=raw_g,
+                target_count=count,
+                target_language=target_lang,
+                cefr_level=cefr,
+            )
+            if translation_blueprints:
+                effective_count = min(count, len(translation_blueprints))
+                kwargs["count"] = effective_count
+                has_prescribed_options = True
+                blueprint_specs = list(translation_blueprints[:effective_count])
+                kwargs["vocabulary_content"] = "\n\n".join(
+                    bp["micro_task_block"] for bp in blueprint_specs if bp.get("micro_task_block")
+                )
+                kwargs["grammar_content"] = sanitized_g or "Included in each Item Specification above."
+                logger.info(
+                    f"🎯 Built {len(blueprint_specs)} symbolic translation micro-task blueprints "
+                    f"(Register-Aligned Pairing + Minimal-Pair Corruption Operators)."
+                )
+            else:
+                kwargs["vocabulary_content"] = sanitized_v
+                kwargs["grammar_content"] = sanitized_g
+                if unit_headwords and unit_grammar_patterns:
+                    kwargs["count"] = min(count, len(unit_headwords), len(unit_grammar_patterns))
+                elif unit_headwords:
+                    kwargs["count"] = min(count, len(unit_headwords))
 
             if cefr in ("A1", "A2"):
                 kwargs["sentence_complexity_guidance"] = (
@@ -1038,32 +1136,35 @@ class QuizGeneratorMixin:
                 return "Error: LLM returned empty quiz data."
 
             # 4.4. Deterministic Blueprint Hydration: bind blueprint-owned fields
-            # (target_word, definition, options, correct_answer_index) directly from code
+            # (target_word/target_keyword, definition, target_grammar, flaw_type, options, correct_answer_index) directly from code
             if blueprint_specs:
-                q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
-                if isinstance(q_list, list):
-                    for q_i, q_item in enumerate(q_list):
-                        if q_i >= len(blueprint_specs):
-                            break
-                        spec = blueprint_specs[q_i]
-                        if isinstance(q_item, dict):
-                            if spec.get("target_word"):
-                                q_item["target_word"] = spec["target_word"]
-                            if spec.get("definition"):
-                                q_item["definition"] = spec["definition"]
-                            if spec.get("options"):
-                                q_item["options"] = list(spec["options"])
-                            if spec.get("correct_answer_index") is not None:
-                                q_item["correct_answer_index"] = spec["correct_answer_index"]
-                        else:
-                            if spec.get("target_word"):
-                                setattr(q_item, "target_word", spec["target_word"])
-                            if spec.get("definition"):
-                                setattr(q_item, "definition", spec["definition"])
-                            if spec.get("options"):
-                                setattr(q_item, "options", list(spec["options"]))
-                            if spec.get("correct_answer_index") is not None:
-                                setattr(q_item, "correct_answer_index", spec["correct_answer_index"])
+                if template_name == "translation":
+                    quiz_obj = self.hydrate_translation_blueprint_items(quiz_obj, blueprint_specs)
+                else:
+                    q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
+                    if isinstance(q_list, list):
+                        for q_i, q_item in enumerate(q_list):
+                            if q_i >= len(blueprint_specs):
+                                break
+                            spec = blueprint_specs[q_i]
+                            if isinstance(q_item, dict):
+                                if spec.get("target_word"):
+                                    q_item["target_word"] = spec["target_word"]
+                                if spec.get("definition"):
+                                    q_item["definition"] = spec["definition"]
+                                if spec.get("options"):
+                                    q_item["options"] = list(spec["options"])
+                                if spec.get("correct_answer_index") is not None:
+                                    q_item["correct_answer_index"] = spec["correct_answer_index"]
+                            else:
+                                if spec.get("target_word"):
+                                    setattr(q_item, "target_word", spec["target_word"])
+                                if spec.get("definition"):
+                                    setattr(q_item, "definition", spec["definition"])
+                                if spec.get("options"):
+                                    setattr(q_item, "options", list(spec["options"]))
+                                if spec.get("correct_answer_index") is not None:
+                                    setattr(q_item, "correct_answer_index", spec["correct_answer_index"])
 
             # 4.5. Randomize options (skip when blueprint prescribes CRC32-balanced options)
             quiz_obj = self._shuffle_quiz_options(quiz_obj, preserve_blueprint_order=has_prescribed_options)
@@ -1162,7 +1263,8 @@ class QuizGeneratorMixin:
                             quiz_dict_eval,
                             unit_headwords=unit_headwords,
                             target_language=curr_tgt_lang,
-                            cefr_level=kwargs.get("cefr_level", "B2")
+                            cefr_level=kwargs.get("cefr_level", "B2"),
+                            enforce_minimal_pair=bool(blueprint_specs),
                         )
                     else:
                         is_cloze_mode = (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
@@ -1364,9 +1466,15 @@ class QuizGeneratorMixin:
                                             if not re.search(r'[\u4e00-\u9fff]', curr_stem) and re.search(r'[\u4e00-\u9fff]', orig_stem):
                                                 candidate_cure["translated_sentence"] = orig_stem
 
+                                    for bp_field in ("target_keyword", "target_grammar", "flaw_type"):
+                                        if not candidate_cure.get(bp_field) and orig_dict.get(bp_field):
+                                            candidate_cure[bp_field] = orig_dict[bp_field]
+                                    if not candidate_cure.get("explanation") and candidate_cure.get("diagnostic_critique"):
+                                        candidate_cure["explanation"] = candidate_cure["diagnostic_critique"]
+
                                 # Validate candidate cure through Level 1 Code Gate
                                 temp_wrap = {"questions": [candidate_cure]}
-                                temp_wrap = self._shuffle_quiz_options(temp_wrap)
+                                temp_wrap = self._shuffle_quiz_options(temp_wrap, preserve_blueprint_order=has_prescribed_options)
                                 healed_item = temp_wrap["questions"][0]
 
                                 # Modality-specific Level 1 gate on candidate cure
@@ -1399,7 +1507,8 @@ class QuizGeneratorMixin:
                                         {"questions": [healed_item]},
                                         unit_headwords=unit_headwords,
                                         target_language=curr_tgt_lang,
-                                        cefr_level=cure_cefr
+                                        cefr_level=cure_cefr,
+                                        enforce_minimal_pair=bool(blueprint_specs),
                                     )
                                     cure_item_failed = bool(cure_l1_flagged)
                                 else:

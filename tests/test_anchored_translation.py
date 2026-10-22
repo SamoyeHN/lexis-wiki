@@ -305,6 +305,217 @@ class TestAnchoredTranslation(unittest.TestCase):
         self.assertIn("flawed_translation", html)
         self.assertIn("diagnostic_critique", html)
 
+    def test_step1_and_step2_translation_micro_task_blueprint_generation(self):
+        """
+        Verify Step 1 (Register-Aligned Lexical & Syntactic Pairing) and
+        Step 2 (Single-Point Minimal-Pair Corruption Operator) in build_translation_micro_task_blueprints.
+        """
+        from librarian.linguistics import LinguisticEngine
+
+        vocab_items = [
+            {
+                "word": "pack up",
+                "part_of_speech": "phrasal verb",
+                "definition": "[spoken, informal] to stop working or operating properly",
+                "quote": "The old printer packed up right before the deadline.",
+                "example_usage": "My car engine packed up on the motorway.",
+            },
+            {
+                "word": "originate",
+                "part_of_speech": "verb",
+                "definition": "[formal] to come from a particular place or start in a particular situation",
+                "quote": "Many academic traditions originated in medieval universities.",
+                "example_usage": "Many Christmas traditions originated in Germany.",
+            },
+        ]
+        grammar_items = [
+            {
+                "name": "Negative Adverbial Inversion",
+                "formula": "Never / Seldom / Rarely + Auxiliary + Subject + Main Verb",
+                "pedagogical_function": "Creates formal academic emphasis at the clause front.",
+                "common_mistakes": "Grammar Warning (NEGATIVE INVERSION): Never keep normal declarative Subject + Verb order after fronted 'Seldom' or 'Never'.",
+            },
+            {
+                "name": "Concessive Clause",
+                "formula": "Although / Even though + Subject + Verb, Main Clause",
+                "pedagogical_function": "Frames an everyday contrast between an obstacle and an outcome.",
+                "common_mistakes": "Grammar Warning (CONCESSIVE CONNECTIVES): Never pair 'Although / Even though' with 'but' in the same sentence.",
+            },
+        ]
+
+        blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
+            vocab_content=vocab_items,
+            grammar_content=grammar_items,
+            target_count=2,
+            target_language="Simplified Chinese",
+            cefr_level="B2",
+        )
+        self.assertEqual(len(blueprints), 2)
+
+        bp_pack = next(bp for bp in blueprints if bp["target_keyword"] == "pack up")
+        bp_orig = next(bp for bp in blueprints if bp["target_keyword"] == "originate")
+
+        self.assertEqual(bp_pack["vocab_register"], "informal")
+        self.assertEqual(bp_pack["target_grammar_name"], "Concessive Clause")
+        self.assertEqual(bp_orig["vocab_register"], "formal")
+        self.assertEqual(bp_orig["target_grammar_name"], "Negative Adverbial Inversion")
+
+        for bp in blueprints:
+            self.assertIn(bp["correct_answer_index"], (0, 1))
+            self.assertIn("### Item", bp["micro_task_block"])
+            self.assertIn("🎯 Micro-Task for LLM:", bp["micro_task_block"])
+            self.assertIn("Minimal Pair", bp["micro_task_block"])
+
+    def test_step3_zero_redundancy_schema_and_hydration(self):
+        """
+        Verify Step 3:
+        1. translation_quiz.json schema requires only the 5 pruned LLM keys.
+        2. hydrate_translation_blueprint_items deterministically populates target_keyword,
+           target_grammar, flaw_type, CRC32-ordered options, correct_answer_index, and explanation.
+        3. audit_translation_integrity enforces the >=85% Minimal-Pair overlap contract.
+        """
+        import json
+        from pathlib import Path
+        from librarian.linguistics import LinguisticEngine
+
+        schema_path = Path("librarian/prompts/translation_quiz.json")
+        schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
+        item_schema = schema_data["properties"]["questions"]["items"]
+        expected_keys = {
+            "design_audit",
+            "translated_sentence",
+            "idiomatic_translation",
+            "flawed_translation",
+            "diagnostic_critique",
+        }
+        self.assertEqual(set(item_schema["required"]), expected_keys)
+        self.assertEqual(set(item_schema["properties"].keys()), expected_keys)
+
+        blueprints = [
+            {
+                "item_index": 1,
+                "target_keyword": "originate",
+                "target_grammar": "Concessive Clause: Although / Even though + Subject + Verb, Main Clause",
+                "flaw_type": "L1 Conjunction Redundancy (`Although ... but ...` double conjunction)",
+                "correct_answer_index": 1,
+            }
+        ]
+        raw_llm_output = {
+            "title": "Translation Appraisal Quiz",
+            "questions": [
+                {
+                    "design_audit": "AUDIT: [originate] + [Although + Clause] -> L1 Conjunction Redundancy",
+                    "translated_sentence": "虽然许多圣诞传统起源于德国，但它们如今已传播到世界各地。",
+                    "idiomatic_translation": "Although many Christmas traditions originated in Germany, they have now spread around the world.",
+                    "flawed_translation": "Although many Christmas traditions originated in Germany, but they have now spread around the world.",
+                    "diagnostic_critique": "The flawed translation commits an L1 conjunction redundancy error by adding 'but' after an 'Although' clause, whereas the idiomatic version uses 'originated in' and a clean main clause.",
+                }
+            ],
+        }
+
+        hydrated = WikiProcessor.hydrate_translation_blueprint_items(raw_llm_output, blueprints)
+        q0 = hydrated["questions"][0]
+        self.assertEqual(q0["target_keyword"], "originate")
+        self.assertEqual(
+            q0["target_grammar"],
+            "Concessive Clause: Although / Even though + Subject + Verb, Main Clause",
+        )
+        self.assertEqual(
+            q0["flaw_type"],
+            "L1 Conjunction Redundancy (`Although ... but ...` double conjunction)",
+        )
+        self.assertEqual(q0["correct_answer_index"], 1)
+        self.assertEqual(q0["options"][1], q0["idiomatic_translation"])
+        self.assertEqual(q0["options"][0], q0["flawed_translation"])
+        self.assertEqual(q0["explanation"], q0["diagnostic_critique"])
+
+        flagged, defects = WikiProcessor.audit_translation_integrity(
+            hydrated,
+            unit_headwords=["originate"],
+            target_language="Chinese",
+            cefr_level="B2",
+            enforce_minimal_pair=True,
+        )
+        self.assertEqual(flagged, [])
+        self.assertEqual(defects, [])
+
+    def test_pruned_schema_evaluator_and_blueprint_isolation(self):
+        """
+        Regression test for:
+        1. _score_pedagogy on pruned 5-field LLM output (before hydrate_translation_blueprint_items).
+        2. POS & sense_idx isolation in get_word_error_traps ('interior' noun vs adj; 'cram' sense 0 vs sense 3).
+        3. Syntactic trap resolution for passive/unaccusative (ignoring incidental 'never' in common_mistakes)
+           and causative 'let sb. do' (avoiding truncation at 'sb.').
+        """
+        from librarian.evaluator import _score_pedagogy
+        from librarian.linguistics import LinguisticEngine
+
+        raw_pruned_items = [
+            {
+                "design_audit": "AUDIT: [interior] + [S VP, V-ing Phrase] -> Lexical Valency Trap",
+                "translated_sentence": "参观完大厅后，我们注意到教堂的内部很昏暗。",
+                "idiomatic_translation": "Having visited the hall, we noticed that the interior of the church was dark.",
+                "flawed_translation": "Having visited the hall, we noticed that the interior from the church was dark.",
+                "diagnostic_critique": "The flawed version uses 'interior from' instead of 'the interior of [sth]'.",
+            },
+            {
+                "design_audit": "AUDIT: [cram] + [S let O Bare Inf] -> Causative Infinitive Trap (let sb to do)",
+                "translated_sentence": "她允许我们挤进那辆小汽车，尽管空间很紧张。",
+                "idiomatic_translation": "She let us cram into the small car, even though space was tight.",
+                "flawed_translation": "She let us to cram into the small car, even though space was tight.",
+                "diagnostic_critique": "The flawed version adds 'to' after causative 'let'.",
+            },
+        ]
+        user_prompt = (
+            "### Item 1 Specification ###\n"
+            "- Target Keyword: interior (noun) — \"[written] the inner part or inside of something\"\n"
+            "### Item 2 Specification ###\n"
+            "- Target Keyword: cram (verb) — \"if a lot of people cram into a place or vehicle\"\n"
+        )
+        score, flags = _score_pedagogy(raw_pruned_items, task_type="quiz", user_prompt=user_prompt)
+        self.assertEqual(flags, [])
+        self.assertEqual(score, 25.0)
+
+        interior_res = LinguisticEngine._resolve_translation_lexical_trap(
+            word="interior",
+            pos="noun",
+            definition="[written] the inner part or inside of something",
+            example_usage="The interior of the church was dark.",
+        )
+        self.assertEqual(interior_res["required_frame"], "the interior of [sth]")
+        if interior_res.get("trap"):
+            self.assertNotEqual(interior_res["trap"].get("trap_type"), "GRAM_ATTRIBUTIVE_ONLY")
+
+        cram_res = LinguisticEngine._resolve_translation_lexical_trap(
+            word="cram",
+            pos="verb",
+            definition="if a lot of people cram into a place or vehicle, they go into it so it is then full",
+            example_usage="We all crammed in and Pete started the car.",
+        )
+        self.assertNotIn("week", cram_res["required_frame"].lower())
+        self.assertIn("cram", cram_res["required_frame"].lower())
+
+        passive_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "[S] + [be/modal be] + [V3]",
+            "formula": "[S] + [be/modal be] + [V3]",
+            "common_mistakes": (
+                "Grammar Warning (Unaccusative Verbs in Passive Voice): Learners frequently passivize "
+                "intransitive change-of-state verbs. Intransitive verbs like 'take place' never form a passive voice."
+            ),
+        })
+        self.assertIn("Passive Voice", passive_trap["flaw_label"])
+        self.assertNotIn("Inversion", passive_trap["flaw_label"])
+
+        causative_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "[S] + let + [NP] + [Bare Infinitive]",
+            "formula": "[S] + let + [NP] + [Bare Infinitive]",
+            "common_mistakes": (
+                "Grammar Warning (Causative 'Let' vs. 'Allow'): Learners frequently blend 'let sb. do' with 'allow sb. to do'."
+            ),
+        })
+        self.assertIn("Causative Infinitive Trap", causative_trap["flaw_label"])
+        self.assertNotIn("blend 'let sb)", causative_trap["flaw_label"])
+
 
 if __name__ == "__main__":
     import dataclasses

@@ -930,17 +930,23 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     # Extract study list headwords and blueprint specifications from prompt if evaluating a quiz
     prompt_headwords = set()
     prompt_blueprints: Dict[str, Dict[str, Any]] = {}
+    translation_bp_targets: List[str] = []
     if task_type == "quiz" and user_prompt:
         for m in re.finditer(r"## \[\[(.*?)\]\]", user_prompt):
             prompt_headwords.add(m.group(1).strip().lower())
         if not prompt_headwords:
             for m in re.finditer(r"-\s*Target:\s*([^\n\r]+)", user_prompt):
                 prompt_headwords.add(m.group(1).strip().lower())
-        # Support Target Word from Authentic Corpus Blueprint
-        for m in re.finditer(r"-\s*Target Word:\s*([^\n\r]+)", user_prompt, re.IGNORECASE):
+        # Support Target Word from Authentic Corpus Blueprint or Translation Micro-Task Blueprint
+        for m in re.finditer(r"-\s*Target\s+(?:Word|Keyword):\s*([^\n\r(]+)", user_prompt, re.IGNORECASE):
             w = m.group(1).strip().lower()
             if w:
                 prompt_headwords.add(w)
+        translation_bp_targets = [
+            m.group(1).strip().lower()
+            for m in re.finditer(r"-\s*Target\s+Keyword:\s*([^\n\r(]+)", user_prompt, re.IGNORECASE)
+            if m.group(1).strip()
+        ]
 
         # Parse full item blueprints: ### Item N ###
         blueprint_blocks = re.split(r"###\s*Item\s*\d+\s*###", user_prompt, flags=re.IGNORECASE)
@@ -1431,6 +1437,27 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             is_translation = bool(item.get("translated_sentence") or item.get("source_sentence") or item.get("english_skeleton") or item.get("target_keyword") or item.get("idiomatic_translation"))
             skeleton = _safe_str(item.get("english_skeleton"))
             is_comparative_translation = bool(item.get("idiomatic_translation") and item.get("flawed_translation"))
+            if is_comparative_translation:
+                # Pruned comparative translation schema strips `options`, `correct_answer_index`,
+                # `explanation`, and `target_keyword` from LLM output and hydrates them post-evaluation.
+                if not options:
+                    options = [
+                        _safe_str(item.get("idiomatic_translation")),
+                        _safe_str(item.get("flawed_translation")),
+                    ]
+                if idx is None:
+                    idx = 0
+                if not target:
+                    audit_str = _safe_str(item.get("design_audit"))
+                    m_aud = re.search(
+                        r"AUDIT:\s*\[?\s*([A-Za-z][A-Za-z\s\-']*?)\s*\]?(?:\s*\+|\s*[:—\-])",
+                        audit_str,
+                        re.IGNORECASE,
+                    )
+                    if m_aud:
+                        target = m_aud.group(1).strip().lower()
+                    elif checks < len(translation_bp_targets):
+                        target = translation_bp_targets[checks]
             is_comprehension = not target and not is_translation
             expected_opt_count = 2 if is_comparative_translation else 4
             checks += 1

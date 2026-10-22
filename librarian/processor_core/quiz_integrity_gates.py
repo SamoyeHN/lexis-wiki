@@ -682,7 +682,8 @@ class QuizIntegrityGatesMixin:
         unit_headwords: List[str] = None,
         unit_grammar_patterns: List[str] = None,
         target_language: str = "Chinese",
-        cefr_level: str = "B2"
+        cefr_level: str = "B2",
+        enforce_minimal_pair: bool = False,
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Target-to-English Translation Quiz.
@@ -894,6 +895,17 @@ class QuizIntegrityGatesMixin:
                             f"Translation Item #{idx + 1}: Translation option contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{opt[:40]}\""
                         )
                         break
+
+                # 2.4b Single-Point Minimal-Pair Contract Gate (Comparative Appraisal)
+                if is_comparative:
+                    mp_sim = LinguisticEngine.calculate_minimal_pair_similarity(idiomatic_trans, flawed_trans)
+                    min_sim_threshold = 0.85 if enforce_minimal_pair else 0.50
+                    if mp_sim < min_sim_threshold:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1}: Minimal-Pair contract violation — idiomatic_translation and "
+                            f"flawed_translation share only {mp_sim:.0%} wording (< {min_sim_threshold:.0%} required)."
+                        )
 
             # 2.5 Answer index range
             if not isinstance(correct_idx, int) or correct_idx not in range(expected_opt_count):

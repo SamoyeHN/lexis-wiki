@@ -1134,6 +1134,31 @@ class DistractorEngineMixin:
                 clean_target, gw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
             )[0]
         } | {clean_target}
+
+        # 3b. Unified Eight Construction Families Subcategorization Gate (`pedlex_cxn_index`):
+        # When the target word in context instantiates one of the 8 lexico-syntactic construction families,
+        # prioritize subcategorization-contrasting distractors (`contrast_groups \ ban_groups`) and ban
+        # same-construction synonyms/antonyms (`ban_groups`) that also fit the grammatical slot.
+        cxn_cands, active_cxn = cls.get_construction_contrast_distractors(
+            clean_target,
+            pos=pos,
+            quote=quote,
+            context_anchor=context_anchor,
+            anchor_type=anchor_type,
+            target_count=max(target_count * 2, 6),
+            exclude_words=exclude_words,
+            require_context_match=True,
+        )
+        cxn_cand_set: Set[str] = set()
+        if active_cxn:
+            cxn_banned = cls.get_cxn_banned_words(active_cxn.get("ban_groups"))
+            forbidden_words |= cxn_banned
+            sense_antonyms = [ant for ant in sense_antonyms if ant not in cxn_banned]
+            if cxn_cands:
+                cxn_cand_set = set(cxn_cands)
+                candidates = [c for c in cxn_cands if c not in forbidden_words] + [
+                    c for c in candidates if c not in cxn_cand_set
+                ]
         if context_anchor:
             clean_anchor = context_anchor.strip().lower()
             if wn_pos == "a" and anchor_type == "prep":
@@ -1169,10 +1194,12 @@ class DistractorEngineMixin:
         safe_distractors: List[str] = []
         distractor_metadata: Dict[str, str] = {}
 
-        # Slot 1: Sense-Locked Antonym (if available)
+        # Slot 1: Sense-Locked Antonym (if available and not superseded by a Construction Family contrast)
         # Antonyms are whitelisted from context_anchor collision clearance because their
         # collocational plausibility is deliberate, to be eliminated by sentence polarity/logic.
-        max_antonyms = 1 if (wn_pos != "a" or len(tier2_satellites) >= 2) else 2
+        # However, when a Construction Family subcategorization contrast (`cxn_cand_set`) is active,
+        # subcategorization-contrasting candidates take primary slots so syntactic frame contrast is tested.
+        max_antonyms = 0 if cxn_cand_set else (1 if (wn_pos != "a" or len(tier2_satellites) >= 2) else 2)
         for ant in sense_antonyms:
             if len([s for s in safe_distractors if distractor_metadata.get(s) == "antonym"]) >= max_antonyms:
                 break
@@ -1208,19 +1235,22 @@ class DistractorEngineMixin:
 
             # Deterministic Double-Key & Pattern Exclusion Gate:
             # Rejects candidates that share identical syntactic patterns or collocations (double-key collision)
-            is_dk, dk_reason = cls.double_key_collision(
-                clean_target, cand,
-                anchor=context_anchor,
-                anchor_type=anchor_type,
-                pos=pos,
-                quote=quote
-            )
-            if is_dk:
-                continue
+            if cand not in cxn_cand_set:
+                is_dk, dk_reason = cls.double_key_collision(
+                    clean_target, cand,
+                    anchor=context_anchor,
+                    anchor_type=anchor_type,
+                    pos=pos,
+                    quote=quote
+                )
+                if is_dk:
+                    continue
 
             if cand not in forbidden_words and cand not in exclude_words and len(cand) >= 2:
                 safe_distractors.append(cand)
-                if cand in sense_antonyms:
+                if cand in cxn_cand_set:
+                    distractor_metadata[cand] = "cxn_subcat_contrast"
+                elif cand in sense_antonyms:
                     distractor_metadata[cand] = "antonym"
                 elif cand in tier0_ldoce_thesaurus:
                     distractor_metadata[cand] = "ldoce_thesaurus"
@@ -2320,6 +2350,31 @@ class DistractorEngineMixin:
         t_lem = cls.lemma_of(t) if " " not in t else t
         d_lem = cls.lemma_of(d) if " " not in d else d
 
+        # Construction Family Subcategorization Gate (`pedlex_cxn_index`):
+        # When `anchor_type` or `quote` locks one of the 8 construction families, any candidate in
+        # `ban_groups` (sharing the target's subcategorization frame in the same semantic/syntactic class)
+        # is a constructional double-key, whereas verified `contrast_groups` candidates are single-fit safe.
+        if anchor_type in (
+            "it_extrapos", "gerund", "to_inf", "sb_to_do",
+            "shell_to_do", "shell_of_doing", "shell_that",
+            "correl_pair", "fronted_inv", "npi", "mandative_subj", "lv_triad",
+        ):
+            cxn_cands, active_cxn = cls.get_construction_contrast_distractors(
+                t_lem,
+                pos=pos or "noun",
+                quote=quote,
+                context_anchor=anchor,
+                anchor_type=anchor_type,
+                target_count=12,
+                require_context_match=True,
+            )
+            if active_cxn:
+                cxn_banned = cls.get_cxn_banned_words(active_cxn.get("ban_groups"))
+                if d in cxn_banned or d_lem in cxn_banned:
+                    return True, "double_key_pattern"
+                if d in cxn_cands or d_lem in cxn_cands:
+                    return False, "none"
+
         # Syntactic Disjointness Exemption Gate (<GRAM> / THESAURUS / grammar_boxes):
         # If distractor `d` has a hard grammatical clash with the syntactic slot of `t` in `quote`/`anchor_type`
         # (e.g., [only before noun] in predicative slot, [not before noun] in attributive slot,
@@ -2808,6 +2863,46 @@ class DistractorEngineMixin:
             return tier_rank.get(tier, len(tier_rank))
 
         # -------------------------------------------------------------
+        # 0a. Unified Construction Families Phrase Contrast (`pedlex_cxn_index`)
+        # (Article Minimal-Pair PPs, Fronted Negative Inversion Prepositional Phrases, Correlative Triggers)
+        # -------------------------------------------------------------
+        if phrase_clean in cls._CORREL_FIRST_ARMS:
+            correl_cands, _ = cls.get_construction_contrast_distractors(
+                phrase_clean, pos="phrase", target_count=count, exclude_words=exclude
+            )
+            if len(correl_cands) >= count:
+                return correl_cands[:count]
+            distractors.extend(correl_cands)
+        else:
+            cxn_p_cands, cxn_p_spec = cls.get_construction_contrast_distractors(
+                phrase_clean, pos="phrase", target_count=count * 2, exclude_words=exclude
+            )
+            if cxn_p_spec and cxn_p_spec.get("subcat_group") in (
+                "PP_BARE_ARTICLE", "PP_DEF_ARTICLE", "PHR_FRONTED_INV", "CORREL_PAIR"
+            ):
+                subcat_g = cxn_p_spec.get("subcat_group")
+                filtered_cxn_p: List[str] = []
+                # For PP_BARE_ARTICLE <-> PP_DEF_ARTICLE, place the exact article minimal-pair counterpart first
+                if subcat_g == "PP_BARE_ARTICLE" and n_words >= 3:
+                    counterpart = f"{words[0]} the {' '.join(words[1:])}"
+                    if counterpart not in exclude and counterpart != phrase_clean:
+                        filtered_cxn_p.append(counterpart)
+                elif subcat_g == "PP_DEF_ARTICLE" and n_words >= 4 and words[1] == "the":
+                    counterpart = f"{words[0]} {' '.join(words[2:])}"
+                    if counterpart not in exclude and counterpart != phrase_clean:
+                        filtered_cxn_p.append(counterpart)
+                for cp in cxn_p_cands:
+                    if cp in filtered_cxn_p or cp in exclude or cp == phrase_clean:
+                        continue
+                    if subcat_g in ("PP_BARE_ARTICLE", "PP_DEF_ARTICLE") and words[0] in ("in", "out", "on", "at", "by", "under", "for"):
+                        if cp.split()[0] not in ("in", "out", "on", "at", "by", "under", "for"):
+                            continue
+                    filtered_cxn_p.append(cp)
+                if len(filtered_cxn_p) >= count:
+                    return filtered_cxn_p[:count]
+                distractors.extend(filtered_cxn_p)
+
+        # -------------------------------------------------------------
         # 0. Declarative Collocation & Prepositional Frames
         # (Verb + Prep, Adjective + Prep, Noun + Prep, 3/4-Part Prepositional Frames)
         # -------------------------------------------------------------
@@ -3072,7 +3167,13 @@ class DistractorEngineMixin:
                 "take", "find", "have", "get", "make", "give", "keep", "hold", "bear",
                 "pay", "show", "feel", "put", "set", "bring", "come", "go", "lose", "catch"
             }
-            if not cands_found or len(cands_found) < count:
+            is_v_it_adj_target = (
+                n_words == 3
+                and words[0] in ("make", "find", "keep", "leave")
+                and words[1] == "it"
+                and bool(cls._wordnet_pos(words[2]) & {"a", "s"})
+            )
+            if (not cands_found or len(cands_found) < count) and not is_v_it_adj_target:
                 tail_lengths = [2] if target_is_v_noun_prep else ([2, 1] if n_words >= 3 else [1])
                 for tl in tail_lengths:
                     if words[0] in light_support_verbs and tl >= n_words - 1:
@@ -3115,20 +3216,30 @@ class DistractorEngineMixin:
             if len(cands_found) < count:
                 prefix_2 = " ".join(words[:2]) + " "
                 prefix_cands = []
-                is_make_it_adj = (
+                is_v_it_adj = (
                     n_words == 3
-                    and words[:2] == ["make", "it"]
+                    and words[0] in ("make", "find", "keep", "leave")
+                    and words[1] == "it"
                     and bool(cls._wordnet_pos(words[2]) & {"a", "s"})
                 )
-                inf_taking_adjs = {"possible", "impossible", "easy", "easier", "hard", "harder", "difficult"}
-                if is_make_it_adj:
-                    # For extraposition 'make it <adj>' (e.g. 'make it possible ... to do [sth]'),
-                    # prioritize attested 'make it <adj/participle>' constructions that take that-clauses or NP complements
+                inf_taking_adjs = {
+                    "possible", "impossible", "easy", "easier", "hard", "harder",
+                    "difficult", "simple", "simpler", "safe", "safer", "necessary", "essential",
+                }
+                if is_v_it_adj:
+                    # For extraposition '(make|find|keep|leave) it <adj>' (e.g. 'make it possible ... to do [sth]', 'find it hard ... to do [sth]'),
+                    # prioritize attested '<verb> it <adj/participle>' constructions that take that-clauses or NP complements
                     # rather than '(for sb) to do sth' to guarantee zero double-key collision.
-                    curated_make_it = ["make it clear", "make it known", "make it certain", "make it plain", "make it good"]
-                    for ph in curated_make_it:
-                        if ships(ph) and ph not in cands_found and ph not in prefix_cands:
-                            prefix_cands.append(ph)
+                    if words[0] == "make":
+                        curated_v_it = ["make it clear", "make it known", "make it certain", "make it plain", "make it good"]
+                    elif words[0] == "find":
+                        curated_v_it = ["find it strange", "find it odd", "find it clear", "find it funny", "find it weird"]
+                    else:
+                        curated_v_it = [f"{words[0]} it clear", f"{words[0]} it plain", f"{words[0]} it secret", f"{words[0]} it quiet"]
+                    for ph in curated_v_it:
+                        if ph != phrase_clean and ph not in exclude and ph not in synonym_set and ph not in cands_found and ph not in prefix_cands:
+                            if words[0] != "make" or ships(ph):
+                                prefix_cands.append(ph)
                 popular_have_a = ["have a go", "have a care", "have a heart", "have a think", "have a word", "have a ball", "have a breather"]
                 for ph in popular_have_a:
                     if prefix_2.strip() == "have a" and ships(ph) and ph not in cands_found and ph not in prefix_cands:
@@ -3136,14 +3247,14 @@ class DistractorEngineMixin:
                 for k in phrase_index:
                     kw = k.split()
                     if len(kw) == n_words and k.startswith(prefix_2) and ships(k) and k not in cands_found and k not in prefix_cands:
-                        if is_make_it_adj:
+                        if is_v_it_adj:
                             if kw[2] in cls._PHRASE_PARTICLE_WORDS or kw[2] in {"snappy"}:
                                 continue
                             if words[2] in inf_taking_adjs and kw[2] in inf_taking_adjs:
                                 continue
                         prefix_cands.append(k)
                 if prefix_cands:
-                    if not is_make_it_adj:
+                    if not is_v_it_adj:
                         prefix_cands.sort(key=lambda c: (strength(c), c))
                     cands_found.extend(prefix_cands)
 
@@ -3559,6 +3670,160 @@ class DistractorEngineMixin:
 
         return final_distractors
 
+    _CORREL_FIRST_ARMS: Dict[str, List[str]] = {
+        "not only": ["neither", "either", "no sooner", "hardly", "whether", "scarcely"],
+        "neither": ["either", "not only", "no sooner", "hardly", "whether", "both"],
+        "either": ["neither", "not only", "no sooner", "hardly", "whether", "both"],
+        "no sooner": ["hardly", "scarcely", "not only", "neither", "either", "whether"],
+        "hardly": ["no sooner", "not only", "neither", "either", "whether"],
+        "scarcely": ["no sooner", "not only", "neither", "either", "whether"],
+        "whether": ["either", "neither", "not only", "no sooner", "hardly"],
+        "would rather": ["had better", "would prefer", "not only", "neither", "either"],
+    }
+
+    _LV_TRIAD_NOUN_CONTRASTS: Dict[str, Tuple[List[str], Set[str]]] = {
+        "attention": (["impact", "role", "advantage", "use", "place", "charge"], {"attention", "heed", "tribute", "homage", "respect"}),
+        "impact": (["attention", "role", "advantage", "use", "place", "charge"], {"impact", "effect", "influence", "bearing"}),
+        "effect": (["attention", "role", "advantage", "use", "place", "charge"], {"impact", "effect", "influence", "bearing"}),
+        "role": (["attention", "impact", "advantage", "use", "charge", "care"], {"role", "part"}),
+        "part": (["attention", "impact", "advantage", "use", "charge", "care"], {"role", "part"}),
+        "advantage": (["attention", "impact", "role", "place", "effort", "decision"], {"advantage", "use", "care", "charge", "notice", "account"}),
+        "use": (["attention", "impact", "role", "place", "effort", "decision"], {"advantage", "use", "sense", "fun", "room", "way"}),
+    }
+
+    @classmethod
+    def get_cxn_banned_words(cls, ban_groups: Optional[List[str]]) -> Set[str]:
+        """Return all words belonging to `ban_groups` in `pedlex_cxn_index`."""
+        if not ban_groups or not cls._ensure_ldoce_conn() or not cls._ldoce_table_exists("pedlex_cxn_index"):
+            return set()
+        clean_groups = [str(g).strip() for g in ban_groups if g]
+        if not clean_groups:
+            return set()
+        placeholders = ",".join("?" for _ in clean_groups)
+        try:
+            cur = cls._ldoce_conn.execute(
+                f"SELECT DISTINCT word FROM pedlex_cxn_index WHERE subcat_group IN ({placeholders})",
+                tuple(clean_groups),
+            )
+            return {str(r[0]).strip().lower() for r in cur.fetchall() if r and r[0]}
+        except Exception:
+            return set()
+
+    @classmethod
+    def _match_cxn_spec_to_context(
+        cls,
+        w_clean: str,
+        specs: List[Dict[str, Any]],
+        quote: Optional[str],
+        context_anchor: Optional[str],
+        anchor_type: Optional[str],
+        require_context_match: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Match a candidate `pedlex_cxn_index` spec against the active syntactic context."""
+        if not specs:
+            return None
+        q_low = (quote or "").lower()
+        anc_low = str(context_anchor or "").strip().lower()
+        atype = str(anchor_type or "").strip().lower()
+
+        for sp in specs:
+            subcat = str(sp.get("subcat_group") or "")
+            prep_a = str(sp.get("prep_anchor") or "").strip().lower()
+            if not prep_a and subcat.startswith("V_OBJ_PREP_"):
+                prep_a = subcat.split("V_OBJ_PREP_", 1)[1].strip().lower()
+            # 1. Explicit constructional anchor_type match
+            if atype == "it_extrapos" and subcat in ("ADJ_IT_EXTRAPOS", "ADJ_TOUGH", "ADJ_TOUGH_BOTH", "ADJ_MANDATIVE_SUBJ"):
+                return sp
+            if atype == "gerund" and subcat == "V_GERUND_ONLY":
+                return sp
+            if atype == "to_inf" and subcat == "V_INF_ONLY":
+                return sp
+            if atype == "sb_to_do" and subcat == "V_OBJ_TO_DO":
+                return sp
+            if atype == "shell_to_do" and subcat == "N_SHELL_TO_DO":
+                return sp
+            if atype == "shell_of_doing" and subcat == "N_SHELL_OF_DOING":
+                return sp
+            if atype == "shell_that" and subcat == "N_SHELL_THAT_ONLY":
+                return sp
+            if atype == "correl_pair" and subcat == "CORREL_PAIR":
+                return sp
+            if atype == "fronted_inv" and subcat in ("ADV_FRONTED_INV", "PHR_FRONTED_INV"):
+                return sp
+            if atype == "npi" and subcat == "NPI_ITEM":
+                return sp
+            if atype == "mandative_subj" and subcat in ("V_MANDATIVE_SUBJ", "ADJ_MANDATIVE_SUBJ", "N_MANDATIVE_SUBJ"):
+                return sp
+            if atype == "lv_triad" and (subcat.startswith("LV_TRIAD_") or subcat == "LV_DEVERBAL_TRIAD"):
+                return sp
+
+            # 2. Multi-word phrase entry (sense_idx == -1)
+            if " " in w_clean and int(sp.get("sense_idx", -1)) == -1:
+                return sp
+
+            # 3. Trivalent Verb + Object + Preposition (+ NP / -ing)
+            if (subcat.startswith("V_OBJ_PREP_") or subcat in ("V_OBJ_FROM_ING", "V_OBJ_INTO_ING")) and prep_a:
+                if (atype == "prep" and anc_low == prep_a) or (
+                    q_low and re.search(rf"\b{re.escape(prep_a)}\s+(?:[a-z]+\s+)?[a-z]+", q_low)
+                ):
+                    return sp
+
+            # 4. Quote-based syntactic frame match
+            if q_low:
+                if subcat in ("ADJ_IT_EXTRAPOS", "ADJ_TOUGH", "ADJ_TOUGH_BOTH") and re.search(
+                    rf"\bit\s+(?:is|was|seems|appears|becomes|gets|'s|would\s+be|will\s+be|can\s+be|could\s+be)\s+(?:not\s+|very\s+|quite\s+|extremely\s+|particularly\s+|especially\s+)?{re.escape(w_clean)}\b[^.?!;]*\bto\s+[a-z]+\b",
+                    q_low,
+                ):
+                    return sp
+                if (
+                    subcat == "V_GERUND_ONLY"
+                    and atype not in ("prep", "object", "verb_subject")
+                    and re.search(rf"\b{re.escape(w_clean)}(?:s|es|ed|d|ing)?\s+(?:not\s+)?[a-z]+ing\b", q_low)
+                ):
+                    return sp
+                if (
+                    subcat == "V_INF_ONLY"
+                    and atype not in ("prep", "object", "verb_subject")
+                    and re.search(rf"\b{re.escape(w_clean)}(?:s|es|ed|d|ing)?\s+(?:not\s+)?to\s+[a-z]+\b", q_low)
+                ):
+                    return sp
+                if subcat == "N_SHELL_TO_DO" and (
+                    (atype == "prep" and anc_low == "to")
+                    or re.search(rf"\b{re.escape(w_clean)}(?:s|es|ies)?\s+to\s+[a-z]+\b", q_low)
+                ):
+                    return sp
+                if subcat == "N_SHELL_OF_DOING" and (
+                    (atype == "prep" and anc_low == "of" and re.search(r"\bof\s+(?:[a-z]+\s+)?[a-z]+ing\b", q_low))
+                    or re.search(rf"\b{re.escape(w_clean)}\s+of\s+(?:[a-z]+\s+)?[a-z]+ing\b", q_low)
+                ):
+                    return sp
+                if subcat == "N_SHELL_THAT_ONLY" and re.search(rf"\b{re.escape(w_clean)}\s+that\s+[a-z]+\b", q_low):
+                    return sp
+                if subcat in ("ADV_FRONTED_INV", "PHR_FRONTED_INV") and re.search(
+                    rf"(?:^|[.;!?]\s*|\b(?:and|but)\s+){re.escape(w_clean)}\s+(?:do|does|did|have|has|had|am|is|are|was|were|can|could|will|would|shall|should|may|might|must)\b",
+                    q_low,
+                ):
+                    return sp
+                if subcat == "NPI_ITEM" and re.search(
+                    r"\b(?:not|n't|never|hardly|scarcely|barely|seldom|rarely|little|few|no|neither|nor|without|doubt|deny|refused?|failed?|unlikely|impossible)\b",
+                    q_low,
+                ):
+                    return sp
+                if subcat in ("V_MANDATIVE_SUBJ", "ADJ_MANDATIVE_SUBJ") and re.search(
+                    rf"\b{re.escape(w_clean)}(?:s|es|ed|d|ing)?\s+that\s+(?:[a-z]+\s+){{1,4}}(?:should\s+[a-z]+|be\b|not\s+[a-z]+)",
+                    q_low,
+                ):
+                    return sp
+
+        if not require_context_match:
+            if q_low and len(specs) > 1:
+                for sp in specs:
+                    prep_a = str(sp.get("prep_anchor") or "").strip().lower()
+                    if prep_a and re.search(rf"\b{re.escape(prep_a)}\b", q_low):
+                        return sp
+            return specs[0]
+        return None
+
     @classmethod
     def get_construction_contrast_distractors(
         cls,
@@ -3566,33 +3831,68 @@ class DistractorEngineMixin:
         pos: str = "noun",
         sense_idx: Optional[int] = None,
         quote: Optional[str] = None,
+        context_anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
         target_count: int = 3,
         exclude_words: Optional[Set[str]] = None,
+        require_context_match: bool = False,
     ) -> Tuple[List[str], Optional[Dict[str, Any]]]:
         """Query `pedlex_cxn_index` for construction-family contrasting distractors (`contrast_groups \\ ban_groups`).
         Returns `(distractors, matched_cxn_spec)`."""
         w_clean = (target_word or "").strip().lower()
         if not w_clean:
             return [], None
+        excl = {w.strip().lower() for w in (exclude_words or set()) if w} | {w_clean}
+
+        # Special handler 1: Decomposed Family 2 Correlative First Arms ('not only', 'neither', 'no sooner', etc.)
+        if w_clean in cls._CORREL_FIRST_ARMS and (not require_context_match or anchor_type == "correl_pair"):
+            cands = [c for c in cls._CORREL_FIRST_ARMS[w_clean] if c not in excl]
+            synth_spec = {
+                "word": w_clean,
+                "pos": "phrase",
+                "family_id": 2,
+                "subcat_group": "CORREL_PAIR",
+                "canonical_blank": w_clean,
+                "contrast_groups": ["CORREL_MISMATCH"],
+                "ban_groups": ["CORREL_SYNONYM"],
+            }
+            return cands[:target_count], synth_spec
+
+        # Special handler 2: Decomposed Family 6 Light-Verb Triad Head Nouns ('attention', 'impact', 'role', etc.)
+        if anchor_type == "lv_triad" and w_clean in cls._LV_TRIAD_NOUN_CONTRASTS:
+            contrast_nouns, banned_nouns = cls._LV_TRIAD_NOUN_CONTRASTS[w_clean]
+            cands = [c for c in contrast_nouns if c not in excl and c not in banned_nouns]
+            synth_spec = {
+                "word": w_clean,
+                "pos": "noun",
+                "family_id": 6,
+                "subcat_group": "LV_TRIAD_NOUN",
+                "canonical_blank": w_clean,
+                "contrast_groups": ["LV_TRIAD_CONTRAST"],
+                "ban_groups": [],
+            }
+            return cands[:target_count], synth_spec
+
         specs = cls.get_word_cxn_specs(w_clean, sense_idx=sense_idx)
         if not specs:
             return [], None
 
-        q_low = (quote or "").lower()
-        chosen_spec = specs[0]
-        if q_low and len(specs) > 1:
-            for sp in specs:
-                prep_a = str(sp.get("prep_anchor") or "").strip().lower()
-                if prep_a and re.search(rf"\b{re.escape(prep_a)}\b", q_low):
-                    chosen_spec = sp
-                    break
+        chosen_spec = cls._match_cxn_spec_to_context(
+            w_clean=w_clean,
+            specs=specs,
+            quote=quote,
+            context_anchor=context_anchor,
+            anchor_type=anchor_type,
+            require_context_match=require_context_match,
+        )
+        if not chosen_spec:
+            return [], None
 
         contrast_groups = list(chosen_spec.get("contrast_groups") or [])
         ban_groups = list(chosen_spec.get("ban_groups") or [])
         if not contrast_groups:
             return [], chosen_spec
 
-        excl = {w.strip().lower() for w in (exclude_words or set()) if w} | {w_clean}
         raw_cands = cls.query_cxn_contrast_distractors(
             contrast_groups=contrast_groups,
             ban_groups=ban_groups,

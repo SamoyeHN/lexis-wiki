@@ -4936,3 +4936,360 @@ class TestGrammarProfilesStaticHygiene:
                     )
 
 
+class TestEightConstructionFamiliesBlueprint:
+    """End-to-end verification of the Eight Lexico-Syntactic Construction Families
+    across extraction routing, single-blank decomposition, cloze frames, and
+    pedlex_cxn_index subcategorization-contrasting distractors."""
+
+    @staticmethod
+    def _single_skeleton(vocab_block: str):
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(vocab_block, target_count=1)
+        assert len(skeletons) == 1
+        return skeletons[0]
+
+    def test_family_1a_preparatory_object_extraposition_and_comparative_normalization(self):
+        """Family 1A: 'make [sth] possible' / 'make it easier' normalizes to 3-word blank
+        'make it possible' / 'make it easy' with frame '... ____ ... to do [sth]' and
+        same-verb complement-contrasting distractors."""
+        sample_vocab = """
+## [[make [sth] easy]]
+- **Part Of Speech**: phrase
+- **Definition**: To make it easier for someone to do something.
+- **Quoted Sentence**: "Modern communication tools make it easier for remote teams to collaborate across time zones."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "make it easy"
+        assert "to do [sth]" in (s.get("best_pattern") or "")
+        assert "Fit into frame '... ____ ... to do [sth]'" in s["micro_task"]
+        opts = [o.lower() for o in s["prescribed_options"]]
+        assert "make it easy" in opts
+        for d in opts:
+            if d != "make it easy":
+                assert d.startswith("make it ")
+                assert d not in ("make it possible", "make it impossible", "make it hard", "make it difficult", "make it simple")
+
+    def test_family_1b_extraction_guard_and_chomsky_easy_vs_eager_contrast(self):
+        """Family 1B: 'It is <adj> (for sb) to do' is guarded out of multi-word expression extraction
+        and tested as a single-word adjective against animate-subject control adjectives (eager/willing/afraid)."""
+        passage = "It is hard for young workers to balance personal autonomy and career demands."
+        exprs = LinguisticEngine.extract_deterministic_expressions(
+            passage, syllabus_expressions=["it is hard", "make it possible"]
+        )
+        extracted_expr_names = {e["expression"].lower() for e in exprs}
+        assert "it is hard" not in extracted_expr_names
+
+        sample_vocab = """
+## [[hard]]
+- **Part Of Speech**: adj
+- **Definition**: Difficult to do, understand, or deal with.
+- **Quoted Sentence**: "It is hard for young workers to balance personal autonomy and career demands."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "hard"
+        assert s["anchor_type"] == "it_extrapos"
+        assert "It is ____" in s["micro_task"] and "to do [sth]" in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "hard" in opts
+        # Same-slot extraposition adjectives must be banned to prevent double keys
+        banned_extrapos = {"difficult", "tough", "easy", "simple", "possible", "impossible", "necessary", "essential", "vital", "important"}
+        assert opts.isdisjoint(banned_extrapos)
+
+    def test_family_2_discontinuous_correlative_first_arm_blanking(self):
+        """Family 2: Discontinuous correlatives ('not only ... but also') blank the first arm ('not only')
+        and lock the second arm ('... ____ ... but also ...') with cross-correlative distractors."""
+        sample_vocab = """
+## [[not only ... but also]]
+- **Part Of Speech**: phrase
+- **Definition**: Used to emphasize that something else is also true.
+- **Quoted Sentence**: "The reform not only improved efficiency but also reduced environmental waste."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "not only"
+        assert s["anchor_type"] == "correl_pair"
+        assert "... ____ ... but also ..." in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "not only" in opts
+        assert len(opts & {"neither", "either", "hardly", "scarcely", "no sooner", "whether", "rather than"}) >= 2
+
+    def test_family_3_discontinuous_verb_object_prep_frame(self):
+        """Family 3: 'prevent [sb] from doing' blanks the governing verb ('prevent') and locks
+        '[sb/sth] from [doing sth]' in the frame while excluding co-licensing verbs (stop/keep/discourage)."""
+        sample_vocab = """
+## [[prevent]]
+- **Part Of Speech**: verb
+- **Definition**: To stop something from happening, or stop someone from doing something.
+- **Quoted Sentence**: "Strict safety regulations prevent factories from dumping untreated chemicals into the river."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"].startswith("prevent")
+        assert s["anchor_type"] == "sb_to_do" or s["context_anchor"] == "from"
+        assert "from" in s["micro_task"]
+        opts_base = {o.lower().rstrip("s") for o in s["prescribed_options"]}
+        assert opts_base.isdisjoint({"stop", "keep", "discourage", "prohibit", "ban", "hinder", "deter"})
+
+    def test_family_4_non_finite_verb_complementation_inversion(self):
+        """Family 4: Gerund-requiring verbs ('avoid doing') preserve '[doing sth]' in the frame
+        and select infinitive-only verbs as syntactic contrast distractors."""
+        sample_vocab = """
+## [[avoid]]
+- **Part Of Speech**: verb
+- **Definition**: To deliberately stay away from someone or something, or prevent something from happening.
+- **Quoted Sentence**: "Experienced drivers avoid driving during severe winter storms."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"].startswith("avoid")
+        assert s["anchor_type"] == "gerund"
+        assert "[doing sth]" in s["micro_task"]
+        opts_base = {o.lower() for o in s["prescribed_options"]}
+        # Dual-complement aspectual verbs and other gerund-taking verbs must not collide
+        assert opts_base.isdisjoint({"begin", "start", "continue", "enjoy", "mind", "postpone", "deny", "admit"})
+
+    def test_family_5_shell_nouns_post_nominal_complement_clash(self):
+        """Family 5: Shell nouns ('ability to do') lock 'the ____ to do [sth]' and contrast against
+        nouns that require 'of doing' or 'that-clause' while banning co-licensing 'attempt'/'effort'."""
+        sample_vocab = """
+## [[ability]]
+- **Part Of Speech**: noun
+- **Definition**: The state of being able to do something; skill or power.
+- **Quoted Sentence**: "The ability to adapt quickly is crucial in modern engineering."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "ability"
+        assert s["anchor_type"] == "shell_to_do"
+        assert "____ to do [sth]" in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "ability" in opts
+        assert opts.isdisjoint({"attempt", "effort", "tendency", "willingness", "opportunity", "chance", "right"})
+
+    def test_family_6_light_verb_triads_dual_blanking_modes(self):
+        """Family 6: Full 3-word triad ('take advantage of') excludes synonymous 'make use of';
+        internal adjective modifier ('pay close attention to') blanks the internal noun ('attention')."""
+        sample_full = """
+## [[take advantage of]]
+- **Part Of Speech**: phrase
+- **Definition**: To use a particular situation to do or get what you want.
+- **Quoted Sentence**: "Students should take advantage of the university library resources."
+"""
+        s_full = self._single_skeleton(sample_full)
+        assert s_full["target_word"] == "take advantage of"
+        opts_full = {o.lower() for o in s_full["prescribed_options"]}
+        assert "make use of" not in opts_full
+
+        sample_internal = """
+## [[pay attention to]]
+- **Part Of Speech**: phrase
+- **Definition**: To watch, listen to, or think about someone or something carefully.
+- **Quoted Sentence**: "Researchers must pay close attention to subtle changes in temperature."
+"""
+        s_int = self._single_skeleton(sample_internal)
+        assert s_int["target_word"] == "attention"
+        assert s_int["part_of_speech"] == "noun"
+        assert s_int["anchor_type"] == "lv_triad"
+        assert "pay close ____ to [sth]" in s_int["micro_task"] or "pay [close] ____ to [sth]" in s_int["micro_task"]
+
+    def test_families_7_and_8_fronted_inversion_and_mandative_subjunctive(self):
+        """Families 7 & 8: Fronted negative inversion ('under no circumstances') enforces Aux+Subj+V frame
+        and pairs with non-inverting PP distractors; mandative trigger ('insist') locks 'that [sb] (should) [V-base]'."""
+        sample_f7 = """
+## [[under no circumstances]]
+- **Part Of Speech**: phrase
+- **Definition**: Used to emphasize that something must never happen or be allowed.
+- **Quoted Sentence**: "Under no circumstances should passengers leave their luggage unattended."
+"""
+        s7 = self._single_skeleton(sample_f7)
+        assert s7["target_word"] == "under no circumstances"
+        assert s7["anchor_type"] == "fronted_inv"
+        assert "Aux + Subj + V" in s7["micro_task"] or "Aux + S + V" in s7["micro_task"]
+        opts7 = {o.lower() for o in s7["prescribed_options"]}
+        assert opts7.isdisjoint({"by no means", "on no account", "in no way", "at no time"})
+
+        sample_f8 = """
+## [[insist]]
+- **Part Of Speech**: verb
+- **Definition**: To demand that something should happen and refuse to let anyone say no.
+- **Quoted Sentence**: "The committee insisted that the contractor submit a revised safety report."
+"""
+        s8 = self._single_skeleton(sample_f8)
+        assert s8["target_word"].startswith("insist")
+        assert s8["anchor_type"] == "mandative_subj"
+        assert "that [sb] (should) [V-base]" in s8["micro_task"]
+
+
+
+
+
+class TestEightConstructionFamiliesBlueprint:
+    """End-to-end verification of the Eight Lexico-Syntactic Construction Families
+    across extraction routing, single-blank decomposition, cloze frames, and
+    pedlex_cxn_index subcategorization-contrasting distractors."""
+
+    @staticmethod
+    def _single_skeleton(vocab_block: str):
+        skeletons = LinguisticEngine.build_precomputed_target_skeletons(vocab_block, target_count=1)
+        assert len(skeletons) == 1
+        return skeletons[0]
+
+    def test_family_1a_preparatory_object_extraposition_and_comparative_normalization(self):
+        """Family 1A: 'make [sth] possible' / 'make it easier' normalizes to 3-word blank
+        'make it possible' / 'make it easy' with frame '... ____ ... to do [sth]' and
+        same-verb complement-contrasting distractors."""
+        sample_vocab = """
+## [[make [sth] easy]]
+- **Part Of Speech**: phrase
+- **Definition**: To make it easier for someone to do something.
+- **Quoted Sentence**: "Modern communication tools make it easier for remote teams to collaborate across time zones."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "make it easy"
+        assert "to do [sth]" in (s.get("best_pattern") or "")
+        assert "Fit into frame '... ____ ... to do [sth]'" in s["micro_task"]
+        opts = [o.lower() for o in s["prescribed_options"]]
+        assert "make it easy" in opts
+        for d in opts:
+            if d != "make it easy":
+                assert d.startswith("make it ")
+                assert d not in ("make it possible", "make it impossible", "make it hard", "make it difficult", "make it simple")
+
+    def test_family_1b_extraction_guard_and_chomsky_easy_vs_eager_contrast(self):
+        """Family 1B: 'It is <adj> (for sb) to do' is guarded out of multi-word expression extraction
+        and tested as a single-word adjective against animate-subject control adjectives (eager/willing/afraid)."""
+        passage = "It is hard for young workers to balance personal autonomy and career demands."
+        exprs = LinguisticEngine.extract_deterministic_expressions(
+            passage, syllabus_expressions=["it is hard", "make it possible"]
+        )
+        extracted_expr_names = {e["expression"].lower() for e in exprs}
+        assert "it is hard" not in extracted_expr_names
+
+        sample_vocab = """
+## [[hard]]
+- **Part Of Speech**: adj
+- **Definition**: Difficult to do, understand, or deal with.
+- **Quoted Sentence**: "It is hard for young workers to balance personal autonomy and career demands."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "hard"
+        assert s["anchor_type"] == "it_extrapos"
+        assert "It is ____" in s["micro_task"] and "to do [sth]" in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "hard" in opts
+        banned_extrapos = {"difficult", "tough", "easy", "simple", "possible", "impossible", "necessary", "essential", "vital", "important"}
+        assert opts.isdisjoint(banned_extrapos)
+
+    def test_family_2_discontinuous_correlative_first_arm_blanking(self):
+        """Family 2: Discontinuous correlatives ('not only ... but also') blank the first arm ('not only')
+        and lock the second arm ('... ____ ... but also ...') with cross-correlative distractors."""
+        sample_vocab = """
+## [[not only ... but also]]
+- **Part Of Speech**: phrase
+- **Definition**: Used to emphasize that something else is also true.
+- **Quoted Sentence**: "The reform not only improved efficiency but also reduced environmental waste."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "not only"
+        assert s["anchor_type"] == "correl_pair"
+        assert "... ____ ... but also ..." in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "not only" in opts
+        assert len(opts & {"neither", "either", "hardly", "scarcely", "no sooner", "whether", "rather than"}) >= 2
+
+    def test_family_3_discontinuous_verb_object_prep_frame(self):
+        """Family 3: 'prevent [sb] from doing' blanks the governing verb ('prevent') and locks
+        '[sb/sth] from [doing sth]' in the frame while excluding co-licensing verbs (stop/keep/discourage)."""
+        sample_vocab = """
+## [[prevent]]
+- **Part Of Speech**: verb
+- **Definition**: To stop something from happening, or stop someone from doing something.
+- **Quoted Sentence**: "Strict safety regulations prevent factories from dumping untreated chemicals into the river."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"].startswith("prevent")
+        assert s["anchor_type"] == "sb_to_do" or s["context_anchor"] == "from"
+        assert "from" in s["micro_task"]
+        opts_base = {o.lower().rstrip("s") for o in s["prescribed_options"]}
+        assert opts_base.isdisjoint({"stop", "keep", "discourage", "prohibit", "ban", "hinder", "deter"})
+
+    def test_family_4_non_finite_verb_complementation_inversion(self):
+        """Family 4: Gerund-requiring verbs ('avoid doing') preserve '[doing sth]' in the frame
+        and select infinitive-only verbs as syntactic contrast distractors."""
+        sample_vocab = """
+## [[avoid]]
+- **Part Of Speech**: verb
+- **Definition**: To deliberately stay away from someone or something, or prevent something from happening.
+- **Quoted Sentence**: "Experienced drivers avoid driving during severe winter storms."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"].startswith("avoid")
+        assert s["anchor_type"] == "gerund"
+        assert "[doing sth]" in s["micro_task"]
+        opts_base = {o.lower() for o in s["prescribed_options"]}
+        assert opts_base.isdisjoint({"begin", "start", "continue", "enjoy", "mind", "postpone", "deny", "admit"})
+
+    def test_family_5_shell_nouns_post_nominal_complement_clash(self):
+        """Family 5: Shell nouns ('ability to do') lock 'the ____ to do [sth]' and contrast against
+        nouns that require 'of doing' or 'that-clause' while banning co-licensing 'attempt'/'effort'."""
+        sample_vocab = """
+## [[ability]]
+- **Part Of Speech**: noun
+- **Definition**: The state of being able to do something; skill or power.
+- **Quoted Sentence**: "The ability to adapt quickly is crucial in modern engineering."
+"""
+        s = self._single_skeleton(sample_vocab)
+        assert s["target_word"] == "ability"
+        assert s["anchor_type"] == "shell_to_do"
+        assert "____ to do [sth]" in s["micro_task"]
+        opts = {o.lower() for o in s["prescribed_options"]}
+        assert "ability" in opts
+        assert opts.isdisjoint({"attempt", "effort", "tendency", "willingness", "opportunity", "chance", "right"})
+
+    def test_family_6_light_verb_triads_dual_blanking_modes(self):
+        """Family 6: Full 3-word triad ('take advantage of') excludes synonymous 'make use of';
+        internal adjective modifier ('pay close attention to') blanks the internal noun ('attention')."""
+        sample_full = """
+## [[take advantage of]]
+- **Part Of Speech**: phrase
+- **Definition**: To use a particular situation to do or get what you want.
+- **Quoted Sentence**: "Students should take advantage of the university library resources."
+"""
+        s_full = self._single_skeleton(sample_full)
+        assert s_full["target_word"] == "take advantage of"
+        opts_full = {o.lower() for o in s_full["prescribed_options"]}
+        assert "make use of" not in opts_full
+
+        sample_internal = """
+## [[pay attention to]]
+- **Part Of Speech**: phrase
+- **Definition**: To watch, listen to, or think about someone or something carefully.
+- **Quoted Sentence**: "Researchers must pay close attention to subtle changes in temperature."
+"""
+        s_int = self._single_skeleton(sample_internal)
+        assert s_int["target_word"] == "attention"
+        assert s_int["part_of_speech"] == "noun"
+        assert s_int["anchor_type"] == "lv_triad"
+        assert "pay close ____ to [sth]" in s_int["micro_task"] or "pay [close] ____ to [sth]" in s_int["micro_task"]
+
+    def test_families_7_and_8_fronted_inversion_and_mandative_subjunctive(self):
+        """Families 7 & 8: Fronted negative inversion ('under no circumstances') enforces Aux+Subj+V frame
+        and pairs with non-inverting PP distractors; mandative trigger ('insist') locks 'that [sb] (should) [V-base]'."""
+        sample_f7 = """
+## [[under no circumstances]]
+- **Part Of Speech**: phrase
+- **Definition**: Used to emphasize that something must never happen or be allowed.
+- **Quoted Sentence**: "Under no circumstances should passengers leave their luggage unattended."
+"""
+        s7 = self._single_skeleton(sample_f7)
+        assert s7["target_word"] == "under no circumstances"
+        assert s7["anchor_type"] == "fronted_inv"
+        assert "Aux + Subj + V" in s7["micro_task"] or "Aux + S + V" in s7["micro_task"]
+        opts7 = {o.lower() for o in s7["prescribed_options"]}
+        assert opts7.isdisjoint({"by no means", "on no account", "in no way", "at no time"})
+
+        sample_f8 = """
+## [[insist]]
+- **Part Of Speech**: verb
+- **Definition**: To demand that something should happen and refuse to let anyone say no.
+- **Quoted Sentence**: "The committee insisted that the contractor submit a revised safety report."
+"""
+        s8 = self._single_skeleton(sample_f8)
+        assert s8["target_word"].startswith("insist")
+        assert s8["anchor_type"] == "mandative_subj"
+        assert "that [sb] (should) [V-base]" in s8["micro_task"]
