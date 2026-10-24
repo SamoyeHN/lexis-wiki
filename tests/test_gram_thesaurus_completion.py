@@ -198,7 +198,12 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
     )
     assert "## [[suggest]] verb" in md_out
     assert "**Pattern**:" in md_out
-    sanitized, _, _ = proc._sanitize_vocab_for_quiz([
+    sanitized, _, _ = proc._sanitize_vocab_for_quiz(md_out)
+    assert "**Pattern**:" not in sanitized
+    assert "**Collocations**:" not in sanitized
+    assert "**Thesaurus Note**:" not in sanitized
+    assert "## [[suggest]]" in sanitized
+    _, hws, banned = proc._sanitize_vocab_for_quiz([
         {
             "word": "suggest",
             "part_of_speech": "verb",
@@ -207,10 +212,8 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
             "example": "I suggest trying the local seafood.",
         }
     ])
-    assert "**Pattern**:" not in sanitized
-    assert "**Collocations**:" not in sanitized
-    assert "**Thesaurus Note**:" not in sanitized
-    assert "## [[suggest]]" in sanitized
+    assert "suggest" in hws
+    assert "She suggested going out for a walk." in banned
 
 
 def test_main_entry_and_sense_grammar_edge_cases():

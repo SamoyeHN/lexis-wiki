@@ -16,7 +16,7 @@ Both databases are purely local SQLite files queried synchronously by [`Linguist
 ## 2. Table Schemas (`pedlex.db`)
 
 ### 2.1 Table: `ldoce` (Primary Pedagogical Lexicon Table)
-Main lexical entries table (59,368 total rows). Contains primary headwords (`article`, 46,989 rows), derived run-ons (`derived`, 5,678 rows), alias redirects (`alias`, 2,846 rows), and encyclopedic/named entities (`entity`, 3,855 rows).
+Main lexical entries table (48,960 consolidated entries after homograph/variant folding). Contains primary headwords (`article`, 41,286 rows), derived run-ons (`derived`, 4,949 rows), alias redirects (`alias`, 1,932 rows), and encyclopedic/named entities (`entity`, 793 rows).
 
 ```sql
 CREATE TABLE ldoce (
@@ -30,21 +30,21 @@ CREATE TABLE ldoce (
 ```
 
 ### 2.2 Table: `pedlex_phrase_index` (Active Pedagogical Phrase & Distractor Index)
-Contains 106,738 authentic multi-word phrase patterns catalogued across Pedagogical Lexicon entries (covering 26,538 unique normalized phrase units in `_PHRASE_INDEX_CACHE`; also aliased as `ldoce_phrase_index` for backward compatibility).
+Contains 111,012 authentic multi-word phrase patterns catalogued across Pedagogical Lexicon entries across 4 structural tiers (`phrasal_verb`, `phrase_row`, `sense_unit`, and `colloc_phrase`, with direct 0-based `sense_idx` pointers; also aliased as `ldoce_phrase_index` for backward compatibility).
 
 ```sql
 CREATE TABLE pedlex_phrase_index (
     phrase_key TEXT NOT NULL,    -- Normalized phrase lookup key
-    tier TEXT NOT NULL,          -- Index tier: 'phrasal_verb' | 'phrase' | 'collocation'
+    tier TEXT NOT NULL,          -- Index tier: 'phrasal_verb' | 'phrase_row' | 'sense_unit' | 'colloc_phrase'
     host_word TEXT NOT NULL,     -- Host headword where this phrase is catalogued in PedLex
-    sense_idx INTEGER,           -- Sense index under the host headword (if attached to a specific sense)
+    sense_idx INTEGER,           -- Direct 0-based sense index under the host headword (dereferenced from sense_num)
     raw_phrase TEXT NOT NULL,    -- Exact raw title / pattern as recorded in PedLex (with slots like 'sb/sth')
     PRIMARY KEY (phrase_key, tier, host_word, sense_idx, raw_phrase)
 );
 ```
 
 ### 2.3 Table: `pedlex_sense_cue_index` (Sense-Collocation Reversing Lookup Index)
-Contains inverted cue-to-sense mappings across PedLex headwords (also aliased as `ldoce_sense_cue_index`). Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
+Contains 226,419 inverted cue-to-sense mappings across PedLex headwords (also aliased as `ldoce_sense_cue_index`). Formatted as an ultra-compact `WITHOUT ROWID` index to accelerate offline WSD:
 
 ```sql
 CREATE TABLE pedlex_sense_cue_index (
@@ -61,7 +61,7 @@ CREATE TABLE pedlex_sense_cue_index (
 > Allows instant retrieval of sense candidates matching contextual tokens from the passage. Queries `SELECT host_word, sense_idx, weight FROM pedlex_sense_cue_index WHERE cue_word = ? AND host_word = ?` in sub-millisecond offline lookup without parsing full entries.
 
 ### 2.4 Table: `oxford_thesaurus` (Sense-Grouped Synonym & Antonym Companion Table)
-Stores fine-grained sense-grouped synonyms and antonyms (16,234 rows) used alongside `ldoce.thesaurus` and `ldoce.language_activator` for distractor generation and double-key collision screening:
+Stores fine-grained sense-grouped synonyms and antonyms (17,975 rows) used alongside `ldoce.thesaurus` and `ldoce.language_activator` for distractor generation and double-key collision screening:
 
 ```sql
 CREATE TABLE oxford_thesaurus (
@@ -76,7 +76,7 @@ CREATE TABLE oxford_thesaurus (
 ```
 
 ### 2.5 Table: `pedlex_cxn_index` (Two-Tier Construction Tagging & Reverse Subcategorization Index)
-Contains 2,635 pre-compiled constructional frames and subcategorization equivalence rows across all **Eight Lexico-Syntactic Construction Families** (both entry-level `sense_idx = -1` and sense-specific `sense_idx >= 0`):
+Contains 2,638 pre-compiled constructional frames and subcategorization equivalence rows across all **Eight Lexico-Syntactic Construction Families** (both entry-level `sense_idx = -1` and sense-specific `sense_idx >= 0`):
 
 ```sql
 CREATE TABLE pedlex_cxn_index (
@@ -136,22 +136,24 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `pronunciations` | `dict` | BrE / AmE IPA transcriptions and audio reference metadata. |
 | `cxn_specs` | `list[dict]` | Entry-level constructional frame specs (`family_id`, `subcat_group`, `cloze_frame`). |
 | `homographs` | `list[dict]` | Information on distinct homograph numbers (e.g., *lead¹* vs *lead²*). |
-| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, `grammar`, `register_tags`, `domain_tags`, `attitude_tags`, `syntax_codes`, `selectional_restrictions`, `synonyms`, `antonyms`, `patterns`, `pattern_bundles`, `cxn_specs`, and `examples`. |
-| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, `forbidden_frames`, `comparison_peers`, `sense_indices`). |
+| `senses` | `list[dict]` | Itemized sense definitions, frequency markers, `licensed_poses`, `grammar`, `register_tags`, `domain_tags`, `attitude_tags`, `syntax_codes`, `selectional_restrictions`, `synonyms`, `antonyms`, `patterns`, `pattern_bundles`, `collocations`, `cxn_specs`, `crossref_target`, `resolved_from`, and `examples`. |
+| `crossrefs` | `list[dict]` | Entry-level and sense-level cross-reference pointers (`raw`, `phrase`, `target_word`, `target_homograph`, `target_sense_num`, `target_sense_idx`, `sense_idx`). |
+| `grammar_boxes` | `list[dict]` | Pedagogical diagnostic alerts (`Don't say: ✗ ...`, `forbidden_frames`, `comparison_peers`, `sense_indices`, `homograph_num`, `pos`, `scope`). |
 | `language_activator` | `list[dict]` | Semantic concept networks, fine-grained synonym distinctions, and cluster nodes. |
-| `thesaurus` | `list[dict]` | Synonym and antonym discrimination notes with per-exponent `grammar` constraints. |
-| `collocations` | `dict[str, list]` | Collocation boxes grouped by bucket (`nouns`, `verbs`, `adjectives`, `phrases`). |
-| `cross_collocations` | `list[dict]` | Collocations cross-referenced from other entries where this headword appears. |
+| `thesaurus` | `list[dict]` | Synonym and antonym discrimination notes with per-exponent `grammar`, `concept`, `pos`, `homograph_num`, and `sense_indices`. |
+| `collocations` | `dict[str, list]` | Collocation boxes grouped by bucket (`nouns`, `verbs`, `adjectives`, `phrases`), with per-item `gloss`, `sense_idx`, `sense_indices`, `pos`, and `homograph_num`. |
+| `cross_collocations` | `list[dict]` | Collocations cross-referenced from other entries (`collocation`, `example`, `gloss`, `sense_idx`, `target_word`, `target_sense_num`, `target_sense_idx`). |
 | `word_family` | `dict[str, list]` | Morphological family groupings (`noun`, `verb`, `adjective`, `adverb`). |
-| `phrasal_verbs` | `list[dict]` | Phrasal verbs catalogued under this verb entry. |
-| `phrases` | `list[dict]` | Fixed idioms and phrase patterns catalogued under this entry. |
+| `phrasal_verbs` | `list[dict]` | Phrasal verbs catalogued under this verb entry (with unpacked `1a)`/`1b)` subsenses and `[SIGNPOST]` tags). |
+| `phrases` | `list[dict]` | Fixed idioms and phrase patterns catalogued under this entry (`phrase`, `node_word`, `sense_idx`, `definition`, `examples`). |
 | `entry_status` | `str` | Provenance status (`active`, `derived`, `repaired`). |
 
-### 3.1 Sense Object Format (with Subsense Unpacking, Register Tags & Construction Specs)
+### 3.1 Sense Object Format (with Subsense Unpacking, Multi-POS Licensing, Direct Collocations & Construction Specs)
 ```json
 {
   "definition": "to leave someone, especially someone you are responsible for",
   "pos": "verb",
+  "licensed_poses": ["verb"],
   "signpost": "LEAVE SOMEBODY",
   "grammar": "[transitive]",
   "sensenum": "1a)",
@@ -170,17 +172,70 @@ Every record's `data_json` contains a structured dictionary with the following c
   "patterns": [
     "abandon somebody to something"
   ],
+  "pattern_bundles": [
+    {
+      "pattern": "abandon somebody to something",
+      "examples": ["They abandoned him to his fate."],
+      "gram": "",
+      "gloss": ""
+    }
+  ],
+  "collocations": [],
   "cxn_specs": []
 }
 ```
 
 ### 3.2 Subsense Structural Governance, Variant Consolidation & Payload Deduplication
-1. **Subsense Hierarchy Flattening (`1a`/`1b` Unpacking)**: Sub-senses (`subsense`, `1a`, `1b`, including multi-sense verb entries like `compromise` and `set`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, `grammar` traits, and semantic context from their parent sense elements while preserving sense-specific `patterns` and `examples`.
+1. **Subsense Hierarchy Flattening & Parent Inheritance (`1a`/`1b` Unpacking)**: Sub-senses (`subsense`, `1a`, `1b`, including multi-sense verb entries like `compromise`, `go on`, and `set`) are unpacked into first-class citizens in `senses[]`, deterministically inheriting `signpost`, `grammar` traits, `patterns`, and `pattern_bundles` from their parent sense elements while preserving sense-specific `patterns` and `examples`.
 2. **Unnumbered Single-Sense Collocation Attachment**: For unnumbered single-sense entries (`pride`, `remorse`), sense-embedded collocation blocks are accurately attached to `senses[0].patterns` and `senses[0].pattern_bundles` without loss.
 3. **British / American Variant Consolidation**: Cross-referenced regional spelling variants (`favour`/`favor`, `honour`/`honor`, `programme`/`program`) consolidate all 16+ senses and idiomatic units seamlessly across both spelling keys.
 4. **Structured Pragmatic & Syntactic Metadata**: Stylistic registers (`register_tags`: `["spoken"]`, `["formal"]`, `["literary"]`), domain labels (`domain_tags`: `["medical"]`, `["law"]`), speaker attitude markers (`attitude_tags`: `["disapproving"]`, `["humorous"]`), and conditional subject restrictions (`selectional_restrictions`, e.g., `if a machine/system/plan...`) are extracted into structured queryable fields.
 5. **Language Activator Multi-POS Deduplication**: Employs a strict `seen_la_concepts` uniqueness gate across multi-POS popup entries (e.g. `control`), completely preventing duplicated concept blocks (shrinking redundant concept clusters from 31 down to 17 unique blocks).
-6. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
+6. **Collocations Inter-Tier Deduplication**: Evaluates `(collocation, example, pos)` tuples across both lexical entry boxes (`source: entry`) and sense-embedded examples (`source: sense`), permanently eliminating duplicate collocation rows.
+
+### 3.3 PedLex v2 New Entry & Sense Attributes and Their Runtime Applications
+Built and verified via [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.py) and [`scripts/upgrade_pedlex_db.py`](../scripts/upgrade_pedlex_db.py), PedLex v2 introduces seven structural attribute families that eliminate runtime heuristic guessing:
+
+1. **Direct 0-Based `sense_idx` Pointers (`collocations`, `cross_collocations`, `phrases`, `pedlex_phrase_index`)**:
+   - **Attribute Schema**: Every item in `collocations[bucket]`, `cross_collocations`, `phrases`, and `pedlex_phrase_index` carries an integer `sense_idx` (and `sense_indices: list[int]` when a collocation box spans multiple meanings such as `"Meanings 1 & 2"`), dereferenced offline from raw dictionary sense numbers (`(sense 3)` $\rightarrow$ `sense_idx = 2`).
+   - **Runtime Application**:
+     - [`PedlexDbMixin.lookup_ldoce_phrase_candidates`](../librarian/linguistics_core/pedlex_db.py) and [`ldoce_phrase_hits`](../librarian/linguistics_core/pedlex_db.py) directly resolve `senses[sense_idx]` in $O(1)$ without scanning all senses or guessing via string overlap.
+     - [`CollocationsAndCardsMixin.get_vocab_card_enrichment`](../librarian/linguistics_core/collocations_and_cards.py) filters collocations by matching `item.sense_idx == locked_sense_idx` (or `locked_sense_idx in item.sense_indices`), guaranteeing sense-isolated collocation display on vocabulary cards.
+
+2. **Inline Collocation `gloss` & `colloc_phrase` Index Tier (`peace of mind`)**:
+   - **Attribute Schema**: Parenthetical glosses inside collocation boxes (`<span class="collgloss">`, e.g., `peace of mind (=a feeling of calm and not being worried)`) are extracted into `item["gloss"]` on `collocations`, `cross_collocations`, and `senses[i].collocations`, and indexed in `pedlex_phrase_index` under `tier = 'colloc_phrase'` (adding 4,274 attested collocation phrases).
+   - **Runtime Application**:
+     - [`WsdEngineMixin.expression_definition_evidence`](../librarian/linguistics_core/wsd_engine.py) and [`ldoce_phrase_hits`](../librarian/linguistics_core/pedlex_db.py) promote `item["gloss"]` directly as the authoritative idiom definition when a multi-word expression (such as `peace of mind`) is catalogued inside a collocation box rather than a standalone headword entry, while pairing it with the collocation's own `example` (`"Having insurance gives you peace of mind."`).
+
+3. **Structured Cross-Entry `crossrefs` (`pros and cons`, Stub Sense Dereferencing)**:
+   - **Attribute Schema**: Entry-level, tail-level, and sense-level `<span class="crossref">` elements are parsed into `entry["crossrefs"]`:
+     ```json
+     {
+       "raw": "the pros and cons at pro1(3)",
+       "phrase": "the pros and cons",
+       "target_word": "pro",
+       "target_homograph": 1,
+       "target_sense_num": "3",
+       "target_sense_idx": 2,
+       "sense_idx": null
+     }
+     ```
+     Furthermore, stub senses that consist solely of a cross-reference pointer have their `definition` and `examples` automatically populated from `target_word.senses[target_sense_idx]` (`resolved_from`, `crossref_target`).
+   - **Runtime Application**:
+     - When `expression_definition_evidence` or `ldoce_phrase_hits` looks up `pros and cons` (whose token `cons` lemmatizes to `con`), it follows `con.crossrefs` directly to `pro` (`sense_idx = 2`: *"the advantages and disadvantages of something"*, example *"We weighed up the pros and cons."*), resolving cross-referenced idioms with 100% accuracy.
+
+4. **Multi-POS Entryhead `licensed_poses` (`half-price`, `all-out`, `first-hand`)**:
+   - **Attribute Schema**: When an entry header declares multiple parts of speech (`<span class="pos">adjective, adverb</span>`), `homographs[h].all_poses` and every sense's `licensed_poses` record all licensed POS tags (`["adjective", "adverb"]`).
+   - **Runtime Application**:
+     - [`CefrAndMorphologyMixin.determine_contextual_pos`](../librarian/linguistics_core/cefr_and_morphology.py) and [`WsdEngineMixin._lock_sense`](../librarian/linguistics_core/wsd_engine.py) check `sense.get("licensed_poses")` during POS hard gating so multi-POS entries are never falsely blocked when used in their secondary declared POS.
+
+5. **DOM Child-Span Leak Isolation (`variety` & `register` Cleanup)**:
+   - **Attribute Schema**: During HTML ingestion, sense-level `variety` (`<span class="geo">`) and `register` (`<span class="registerlab">`) are extracted strictly from direct sense-header children (`recursive=False`), excluding nested `variants`, `lexvar`, `exa`, `collo`, and `grambox` spans.
+   - **Runtime Application**: Prevents variant-specific labels (such as `"British English"` on the variant *trick-or-treating* inside `trick or treat`) from leaking onto the entire sense.
+
+6. **Offline Derived-Word Sense Bridging (`gloss_source = "base_sense_bridge"`)**:
+   - **Attribute Schema**: During `upgrade_pedlex_db.py`, all 4,949 `kind='derived'` rows (`-ly`, `-ness`, `-ity`, `-ment`, `-ation`) are pre-bridged with morphological definitions and headword-attested examples harvested from their `base_word` entry (`derived_forms`, `language_activator`, `thesaurus`, `collocations`, and `senses`).
+   - **Runtime Application**: Works in tandem with runtime `_resolve_ldoce_kind` (Section 6) so derived words carry immediate non-empty definitions and examples in SQL queries and card enrichment.
 
 ---
 
@@ -331,9 +386,9 @@ All dictionary and phrase retrieval methods live in [`PedlexDbMixin`](../librari
 | :--- | :--- | :--- |
 | `_lock_sense(entry, definition="", quote="", target_pos="", return_confidence=False, return_scores=False, discourse_context="")` | `Optional[dict]` (or tuple) | **Stage 1 Symbolic Sense Scorer**. Applies POS hard gates (including coordinated subject recovery when ambiguous noun/verb tokens appear in `If NP and NP <verb>`), homograph resolution, `<gram>` slot constraints, spoken/technical/pejorative register gates, **Universal Conditional-Subject Ontology Gate** (parsing `if a <Subject-Class> <verb>s` metalanguage against passage subject WordNet supersenses), CQL typed slot pattern matching, 2nd-order collocate + `±1` sentence `discourse_context` domain scoring, and `pedlex_sense_cue_index` weights. |
 | `build_top_k_vocab_candidates(word, pos, quote, discourse_context="", k=4)` | `list[dict]` | Builds the Top-$K$ ($K \le 4$) symbolic sense pool from `_lock_sense(..., return_scores=True)` with `sense_idx`, `pos`, `signpost`, `gram`, `definition`, `patterns`, `examples`, and `symbolic_score`. Includes **Cross-Lexicon Pool Fusion**: when a sole PedLex sense is pragmatically restricted (`[disapproving]`, `[spoken]`, `[informal]`, `[humorous]`, `[old-fashioned]`) or has a narrow physical condition (`if a piece of ...`), merges attested WordNet (`oewn:2025+`) synsets with examples into the pool so Stage 2 can arbitrate. |
-| `disambiguate_via_llm(item_name, sentence, candidates, discourse_context="")` | `Optional[dict]` | **Stage 2 1-Token Local LLM Arbitrator**. Formats Top-$K$ candidates — explicitly surfacing `[SIGNPOST]` (e.g., `[FAIL]` vs. `[STRUCTURE]`), `<gram>` slot constraints, and attitude/register tags (`[disapproving]`, `[technical]`, `[spoken]`) — alongside `Target Sentence` and `Surrounding Context` into a multiple-choice prompt (`A`/`B`/`C`/`D`), resolved in 1 token (`temperature=0.0`, cached in `_wsd_llm_cache`, logged to `logs/<ts>_wsd_arbitration_<unit>.log`). |
+| `disambiguate_via_llm(item_name, sentence, candidates, discourse_context="")` | `dict` | **Stage 2 1-Token Local LLM Arbitrator (Zero-Fallback Contract)**. Formats Top-$K$ candidates — explicitly surfacing `[SIGNPOST]` (e.g., `[FAIL]` vs. `[STRUCTURE]`), `<gram>` slot constraints, and attitude/register tags (`[disapproving]`, `[technical]`, `[spoken]`) — alongside `Target Sentence` and `Surrounding Context` into a multiple-choice prompt (`A`/`B`/`C`/`D`), resolved in 1 token (`temperature=0.0`, cached in `_wsd_llm_cache`, logged to `logs/<ts>_wsd_arbitration_<unit>.log`). Enforces a strict **Zero-Fallback Invariant**: if the local LLM service is unreachable or returns an unparseable token after retry, raises `WSDArbitrationError` instead of silently falling back to `candidates[0]`. |
 | `get_ldoce_definition_and_example(word, target_pos="", context_sentence="", require_sense_confidence=False)` | `tuple[str, str]` | High-level helper that auto-binds `target_pos` via `determine_contextual_pos`, locks the sense via `_lock_sense`, resolves British/American cross-references (`program` $\rightarrow$ `programme`), upgrades circular derived definitions via `format_ldoce_definition`, and returns `(definition, example)`. |
-| `expression_definition_evidence(phrase, expr_type="expression", context_sentence="", enable_llm_disambiguation=True)` | `dict` | **Multi-word expression WSD resolver**. Cascades across 4 tiers: `ldoce_entry` $\rightarrow$ `phrasal_verb_block` $\rightarrow$ `sense_pattern` / `phrase_row` (via `_unit_owning_sense` & `_quote_overridden_unit_sense`) $\rightarrow$ `wordnet`, returning `{definition, example, source, locked_sense}`. |
+| `expression_definition_evidence(phrase, expr_type="expression", context_sentence="", enable_llm_disambiguation=True)` | `dict` | **Multi-word expression WSD resolver**. Cascades across `ldoce_entry` $\rightarrow$ `phrasal_verb_block` $\rightarrow$ `sense_pattern` / `phrase_row` / `colloc_phrase` (using direct `sense_idx` pointers, collocation `gloss` definitions, `_unit_owning_sense`, & `_quote_overridden_unit_sense`) $\rightarrow$ `crossrefs` (cross-entry idiom pointers) $\rightarrow$ `wordnet`, returning `{definition, example, source, locked_sense}`. |
 | `ensure_distinct_example(word, category, quote, current_example="", pos="", definition="", locked_sense=None)` | `str` | **Gate 2 Authentic Example Resolver**. Guarantees an authentic example distinct from `quote` and physically containing `word` (never stealing across senses for polysemous words). |
 | `search_corpus_examples(query, category="word", limit=3)` | `list[str]` | Searches `pedlex.db` for authentic examples containing any morphological inflection of `query`: checks own entry first (`senses`, `corpus_examples`, `collocations`), then queries `pedlex_phrase_index` and `pedlex_sense_cue_index` to locate cross-entry examples in <2ms. |
 
@@ -347,9 +402,9 @@ At startup (or first phrase query), `_ensure_in_memory_phrase_index()` loads all
 
 | Method Signature | Return Type | Purpose & Mechanics |
 | :--- | :--- | :--- |
-| `lookup_ldoce_phrase_candidates(phrase, headword="")` | `list[dict]` | **3-Track Multi-Candidate Phrase Lookup**: **Track 1** matches exact literal `phrase_key`/`raw_phrase`; **Track 2** strips variable slots (`somebody`, `something`, `one's`) via `_unit_tokens` and checks token-subset containment; **Track 3** lemmatizes the leading verb (`took place` $\rightarrow$ `take place`) and re-queries Tracks 1–2. Returns all matching `{host_word, sense_idx, tier, raw_phrase}` rows without `LIMIT 1` truncation. |
+| `lookup_ldoce_phrase_candidates(phrase, headword="")` | `list[dict]` | **3-Track Multi-Candidate Phrase Lookup**: **Track 1** matches exact literal `phrase_key`/`raw_phrase` (including `colloc_phrase` rows and `get / feel / be` slash-alternation expansion); **Track 2** strips variable slots (`somebody`, `something`, `one's`) via `_unit_tokens` and checks token-subset containment; **Track 3** lemmatizes the leading verb (`took place` $\rightarrow$ `take place`) and re-queries Tracks 1–2. Returns all matching `{host_word, sense_idx, tier, raw_phrase}` rows without `LIMIT 1` truncation. |
 | `lookup_ldoce_phrase(phrase, headword="")` | `Optional[dict]` | Convenience wrapper returning the top-ranked candidate from `lookup_ldoce_phrase_candidates`. |
-| `ldoce_phrase_hits(phrase, headword="")` | `list[dict]` | Returns all attested dictionary sub-records (`phrasal_verb`, `phrase`, `sense_pattern`, `collocation`) matching `phrase` under `headword` or its phrase-index host entry. |
+| `ldoce_phrase_hits(phrase, headword="")` | `list[dict]` | Returns all attested dictionary sub-records (`phrasal_verb`, `phrase`, `sense_pattern`, `collocation` with `gloss` and `sense_idx`, and cross-entry `crossrefs`) matching `phrase` under `headword` or its phrase-index host entry. |
 | `ldoce_phrase_evidence(phrase, headword="")` | `Optional[dict]` | Returns the highest-priority attested evidence record (`source`, `matched_unit`, `definition`, `examples`, `sense`) for `phrase`. |
 | `is_attested_phrase(phrase, headword="")` | `bool` | Fast boolean check verifying whether a multi-word unit is attested in `pedlex.db`. |
 | `ldoce_phrase_object_fit(phrase, obj, headword="")` | `int` | Scores (`0`, `1`, `2`) how well a direct/prepositional object `obj` fits the attested examples and collocations of `phrase`. |
@@ -370,7 +425,7 @@ At startup (or first phrase query), `_ensure_in_memory_phrase_index()` loads all
 | `get_word_cxn_specs(word, sense_idx=None)` | `list[dict]` | Queries `pedlex_cxn_index` (and entry/sense `cxn_specs`) for constructional specs (`family_id`, `subcat_group`, `canonical_pattern`, `canonical_blank`, `cloze_frame`, `contrast_groups`, `ban_groups`). |
 | `query_cxn_contrast_distractors(contrast_groups, ban_groups=None, pos=None, exclude_words=None, limit=12)` | `list[str]` | Executes a <0.2ms set-difference SQL query (`contrast_groups \ ban_groups`) on `pedlex_cxn_index` ordered by `zipf_score DESC`. |
 | `get_word_error_traps(word, pos=None)` | `list[dict]` | Retrieves pre-mined minimal-pair learner errors from `pedlex_error_traps` (supplemented by `<gram>`, valency, and L1 negative-transfer rules) for `translation_quiz` and `vocabulary_quiz`. |
-| `get_vocab_card_enrichment(word, pos, definition, quote="")` | `dict` | Zero-token Markdown vocabulary card enrichment returning `{pattern_note, grammar_usage, grammar_tag, collocations, thesaurus_note}` with strict multi-POS homograph isolation. |
+| `get_vocab_card_enrichment(word, pos, definition, quote="")` | `dict` | Zero-token Markdown vocabulary card enrichment returning `{pattern_note, grammar_usage, grammar_tag, collocations, thesaurus_note}` with strict `sense_idx` / `pos` isolation (`collocations` filtered by `sense_idx`, `thesaurus` boxes filtered by `sense_indices` and `pos`, `grammar_boxes` filtered by `sense_indices` and `homograph_num`). |
 
 ### 7.5 Direct CLI & Python Inspection Recipes (`命令行快速检视方法`)
 
@@ -438,3 +493,31 @@ To eliminate random unfocused errors in `translation_quiz` and provide authentic
    - Targets uncountable nouns (`*an news / *newss`, `*find a work`) and `[only before noun]` / `[not before noun]` positional adjectives.
 4. **`L1_CONJUNCTION_REDUNDANCY` & `CLAUSE_PREP_CONFUSION` (Syntactic L1 Negative-Transfer Traps)**:
    - Targets paired conjunction redundancy (`*Although ..., but ...*`) and preposition-vs-conjunction complement confusion (`*despite + finite clause*`).
+
+---
+
+## 9. Authoritative Database Build & QA Scripts Inventory (`scripts/`)
+
+All obsolete, one-off debugging and scratch scripts have been removed from `scripts/`. The directory retains **11 authoritative scripts** divided into the **5-Stage Offline Database Build Pipeline** and **6 Database QA & Corpus Audit Tools**:
+
+### 9.1 Five-Stage Offline Database Build Pipeline
+To rebuild `librarian/data/pedlex.db` from raw `.mdx` sources or apply incremental schema upgrades, execute the following scripts in order:
+
+| Stage | Script | Purpose & Key Tables Populated |
+| :--- | :--- | :--- |
+| **Stage 1** | [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.py) (with [`scripts/ldoce_runon_audit.py`](../scripts/ldoce_runon_audit.py)) | **Primary LDOCE6 MDX-to-SQLite Compiler**. Parses raw LDOCE6 HTML into the `ldoce` table (59,011 rows) with strict `<span class="phrvbentry">` isolation, `1a)`/`1b)` subsense unpacking, direct `sense_idx` pointers on `collocations`/`phrases`/`crossrefs`, collocation `gloss` extraction, `licensed_poses` multi-POS detection, `thesaurus` `sense_indices`/`topic` preservation, and `recursive=False` DOM label isolation. |
+| **Stage 2** | [`scripts/build_oxford_thesaurus.py`](../scripts/build_oxford_thesaurus.py) | **Oxford Learner's Thesaurus Compiler**. Parses Oxford Thesaurus `.mdx` into the `oxford_thesaurus` table (31,599 rows) with sense-level synonym/antonym clusters and discriminator notes. |
+| **Stage 3** | [`scripts/build_sense_cue_index.py`](../scripts/build_sense_cue_index.py) | **Contextual Sense Cue Inverted Index Builder**. Populates `pedlex_sense_cue_index` (306,166 weighted `(word, cue_token, sense_idx, weight, source)` rows) from signposts, collocations, patterns, definitions, and examples. |
+| **Stage 4** | [`scripts/build_ldoce_fts.py`](../scripts/build_ldoce_fts.py) | **Multi-Word Phrase Inverted Index Builder**. Populates `pedlex_phrase_index` (~109,593 rows across `entry_head`, `phrasal_verb`, `phrase_box`, `sense_pattern`, and `colloc_phrase` tiers). |
+| **Stage 5** | [`scripts/upgrade_pedlex_db.py`](../scripts/upgrade_pedlex_db.py) | **PedLex v2 Schema & Relational Index Upgrader**. Consolidates numbered homographs, bridges definitions/examples onto all 4,949 `kind='derived'` entries (`base_sense_bridge`), and builds `pedlex_cxn_index` (2,635 rows across 8 construction families) and `pedlex_error_traps` (16,759 minimal-pair learner error rows). |
+
+### 9.2 Database QA, Regression & Inspection Tools
+
+| Script | Purpose |
+| :--- | :--- |
+| [`scripts/ldoce_qa.py`](../scripts/ldoce_qa.py) | **Automated PedLex Schema & Invariant QA Suite**. Verifies 0 HTML tag residue, 0 cross-homograph/phrasal-verb leaks, subsense unpacking completeness, and derived-word resolution coverage (also invoked by `tests/test_linguistics.py`). |
+| [`scripts/shadow_engine_diff.py`](../scripts/shadow_engine_diff.py) | **Shadow Regression Harness**. Compares `LinguisticEngine` outputs across database versions to verify 0 regressions in POS, WSD sense locking, and collocation retrieval. |
+| [`scripts/audit_sense_extraction.py`](../scripts/audit_sense_extraction.py) | **End-to-End Passage WSD & Extraction Auditor**. Audits vocabulary and multi-word expression sense locking across textbook units. |
+| [`scripts/audit_corpus_offline.py`](../scripts/audit_corpus_offline.py) | **Offline Corpus Coverage & Gate 2 Example Auditor**. Verifies Gate 1–3 pass rates and authentic example coverage across all `wiki/` units. |
+| [`scripts/query_ldoce.py`](../scripts/query_ldoce.py) | **CLI Entry Inspector**. Pretty-prints any headword's JSON payload (`senses`, `collocations`, `phrasal_verbs`, `phrases`, `thesaurus`, `grammar_boxes`) from `librarian/data/pedlex.db`. |
+

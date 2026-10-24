@@ -233,6 +233,8 @@ def _is_real_string_closer(s: str, i: int) -> bool:
 class LLMClient:
     def __init__(self, model: Optional[str] = None):
         self._model_override = model
+        self._health_cache: Optional[Dict[str, Any]] = None
+        self._health_cache_ts: float = 0.0
         self._refresh_config()
         if model:
             self.model = model
@@ -321,6 +323,107 @@ class LLMClient:
             except Exception as e:
                 import logging
                 logging.getLogger("librarian.llm").warning(f"Failed to unload model '{target}' from Ollama: {e}")
+
+    @staticmethod
+    def _normalize_model_id(name: str) -> str:
+        s = str(name or "").strip().lower()
+        for ch in (":", "/", "-", "_", "."):
+            s = s.replace(ch, "")
+        return s
+
+    def check_health(self, force: bool = False, model_override: Optional[str] = None) -> Dict[str, Any]:
+        """Probes LLM endpoint reachability and active model availability with a 3s TTL cache."""
+        import time
+        now = time.monotonic()
+        self._refresh_config()
+        if self._model_override:
+            self.model = self._model_override
+        active_model = str(model_override or self.model or "").strip()
+        if (
+            not force
+            and self._health_cache is not None
+            and (now - self._health_cache_ts) < 3.0
+            and self._health_cache.get("api_url") == self.api_url
+            and self._health_cache.get("active_model") == active_model
+        ):
+            return dict(self._health_cache)
+
+        models = self.list_models()
+        online = bool(getattr(self, "last_models_ok", False))
+        model_ready = False
+        if online and active_model:
+            norm_active = self._normalize_model_id(active_model)
+            for m in models:
+                if m == active_model or self._normalize_model_id(m) == norm_active:
+                    model_ready = True
+                    break
+                if ":" not in active_model and str(m).split(":")[0].lower() == active_model.lower():
+                    model_ready = True
+                    break
+
+        err = getattr(self, "last_models_error", None)
+        if online and not active_model:
+            err = "No active LLM model configured in wiki_config.json"
+        elif online and not model_ready:
+            err = f"Configured model '{active_model}' is not available on {self.api_url} (available: {', '.join(models[:5]) or 'none'})"
+
+        health = {
+            "online": online,
+            "model_ready": model_ready,
+            "model": active_model,
+            "active_model": active_model,
+            "available_models": models,
+            "api_type": self.api_type,
+            "api_url": self.api_url,
+            "error": err,
+        }
+        self._health_cache = health
+        self._health_cache_ts = now
+        return dict(health)
+
+    def ensure_available(
+        self,
+        task_name: Optional[str] = None,
+        prompt_summary: str = "",
+        model_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Pre-flight fail-fast gate: verifies LLM is online & model is ready; otherwise writes a FAILED log and raises LLMError."""
+        health = self.check_health(force=True, model_override=model_override)
+        if health["online"] and health["model_ready"]:
+            return health
+
+        if not health["online"]:
+            failure_category = "LLM_OFFLINE"
+            err_msg = (
+                f"LLM service is unreachable at {health['api_url']} ({health['api_type']}). "
+                f"Please start Ollama / LLM server before running this task. Details: {health.get('error') or 'Connection refused'}"
+            )
+        else:
+            failure_category = "MODEL_NOT_FOUND"
+            err_msg = (
+                f"LLM server at {health['api_url']} is online, but configured model '{health['active_model']}' "
+                f"is not loaded or installed. Details: {health.get('error')}"
+            )
+
+        if task_name:
+            try:
+                from .logger import log_task
+                log_task(
+                    task_name=task_name,
+                    system_prompt="",
+                    user_prompt=prompt_summary or f"[Pre-Flight Gate] Task '{task_name}' requires active LLM '{health['active_model']}' at {health['api_url']}.",
+                    response_text=f"[LLM_PREFLIGHT_FAILED] {err_msg}",
+                    status="FAILED",
+                    failure_category=failure_category,
+                    mode="PREFLIGHT_GATE",
+                    duration=0.0,
+                    model=health["active_model"] or "unknown",
+                )
+            except Exception as log_err:
+                import logging
+                logging.getLogger("librarian").warning(f"Failed to write preflight failure log: {log_err}")
+
+        raise LLMError(err_msg)
 
     def chat(self, messages, stream=False, json_format=True, schema=None, task_name=None, model=None, **kwargs):
         """
@@ -437,15 +540,6 @@ class LLMClient:
         schema_for_api = schema if use_gbnf else None
         force_json_mode = json_format or bool(schema and not use_gbnf)
 
-        # 5. Call API
-        start_time = datetime.datetime.now()
-        if self.api_type == "openai":
-            content = self._chat_openai(messages, stream, force_json_mode, schema_for_api, **kwargs)
-        else:
-            content = self._chat_ollama(messages, stream, force_json_mode, schema_for_api, **kwargs)
-        end_time = datetime.datetime.now()
-        call_duration = (end_time - start_time).total_seconds()
-
         # Prompts for logging
         mode_str = "STRICT_SCHEMA" if (schema and use_gbnf) else ("JSON_MODE" if force_json_mode else "TEXT_MODE")
         if critique_msg:
@@ -455,6 +549,49 @@ class LLMClient:
         eval_user_prompt = initial_user_prompt or user_prompt
         t_name = task_name or "chat"
         schema_dict = schema if isinstance(schema, dict) else (get_json_schema(schema, include_descriptions=False) if schema else None)
+
+        # 5. Call API
+        start_time = datetime.datetime.now()
+        try:
+            if self.api_type == "openai":
+                content = self._chat_openai(messages, stream, force_json_mode, schema_for_api, **kwargs)
+            else:
+                content = self._chat_ollama(messages, stream, force_json_mode, schema_for_api, **kwargs)
+        except Exception as api_err:
+            self._health_cache = None
+            end_time = datetime.datetime.now()
+            call_duration = (end_time - start_time).total_seconds()
+            if not stream and not skip_log:
+                err_text = str(api_err)
+                err_lower = err_text.lower()
+                fail_cat = (
+                    "CONNECTION_TIMEOUT"
+                    if any(
+                        kw in err_lower
+                        for kw in ("timeout", "timed out", "connection", "connect", "unreachable", "refused")
+                    )
+                    else "API_ERROR"
+                )
+                from .logger import log_task
+                log_task(
+                    f"{t_name}_{mode_str}",
+                    system_prompt,
+                    user_prompt,
+                    f"[LLM Communication Failure]\n{err_text}",
+                    schema=schema_dict,
+                    status="FAILED",
+                    failure_category=fail_cat,
+                    mode=mode_str,
+                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                    duration=call_duration,
+                    start_time=start_time,
+                    end_time=end_time,
+                    model=self.model,
+                    context_prompt=eval_user_prompt,
+                )
+            raise
+        end_time = datetime.datetime.now()
+        call_duration = (end_time - start_time).total_seconds()
 
         # 6. Post-Processing & Parsing
         if schema and not stream:

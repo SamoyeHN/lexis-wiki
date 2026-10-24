@@ -2,16 +2,10 @@
 Deterministic sentence indexing and vocabulary, multi-word expression, and COBUILD syntactic grammar extraction.
 """
 
-"""
-Linguistic Engine for Lexis Wiki.
-Integrates spaCy (computational dependency syntax) and WordNet (lexical relations)
-to achieve deterministic sentence indexing, macro grammar domain classification,
-boundary-accurate phrase extraction, canonical lemmatization, and zero-collision distractors.
-"""
-
 import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,6 +15,8 @@ from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+
+logger = logging.getLogger("librarian.linguistics")
 
 
 
@@ -884,8 +880,10 @@ class ExtractionPipelineMixin:
             # Dense Prepositional Frame (Instead of, By doing, Thanks to...)
             m_prep = re.match(r"^(instead of|by|through|despite|in spite of|thanks to|due to|owing to)\b", text_lower)
             if m_prep:
-                prep_head = m_prep.group(1).capitalize()
-                return f"{prep_head} + [V-ing/NP], [Subject] + [VP]"
+                raw_prep = m_prep.group(1).lower()
+                if raw_prep != "by" or re.match(r"^by\s+(?:not\s+)?[a-z]+ing\b", text_lower):
+                    prep_head = m_prep.group(1).capitalize()
+                    return f"{prep_head} + [V-ing/NP], [Subject] + [VP]"
             # Non-finite Subject Nominalization (Gerund / Infinitive phrase as Subject)
             # Detects direct sentence subject or embedded predicate clause subject (e.g. That is why [being on wheels] means...)
             for token in doc:
@@ -981,7 +979,14 @@ class ExtractionPipelineMixin:
 
             # Passive voice
             for token in doc:
-                if token.dep_ in ("nsubjpass", "auxpass") and token.head.lemma_.lower() not in {"go", "come", "fall", "rise", "arrive", "depart", "vanish", "disappear", "die", "remain", "stay"}:
+                if token.dep_ in ("nsubjpass", "auxpass") and token.head.lemma_.lower() not in {
+            "go", "come", "fall", "rise", "arrive", "depart", "vanish", "disappear", "die", "remain", "stay",
+            "finish", "done", "tired", "worried", "interested", "bored", "excited", "married", "engaged",
+            "lost", "prepared", "convinced", "pleased", "satisfied", "embarrassed", "confused", "scared",
+            "shocked", "surprised", "dressed", "located", "situated", "based", "involved", "related",
+            "connected", "accustomed", "opposed", "dedicated", "devoted", "committed", "crowded", "filled",
+            "covered", "equipped"
+        }:
                     return "[Subject] + [be/modal be] + [V-ed]"
 
         # Default fallback standard formula
@@ -1040,14 +1045,19 @@ class ExtractionPipelineMixin:
                         })
             else:
                 cat = cls.classify_grammar_dependency(sent_clean)
-                formula = cls.generate_cobuild_formula(sent_clean, category=cat) if cat else ""
-                if cat and formula and not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
-                    raw_skeletons.append({
-                        "sid": sid,
-                        "quote": sent_clean,
-                        "category": cat,
-                        "pattern_formula": formula,
-                    })
+                cand_cats = [cat] if cat else []
+                for extra_c in ("Rhetoric & Emphasis", "Logic & Stance", "Cohesion & Framing", "Information Packaging"):
+                    if extra_c not in cand_cats:
+                        cand_cats.append(extra_c)
+                for c_try in cand_cats:
+                    formula = cls.generate_cobuild_formula(sent_clean, category=c_try) if c_try else ""
+                    if c_try and formula and not formula.startswith("[Subject] + [VP] + [Clause]") and "[" in formula:
+                        raw_skeletons.append({
+                            "sid": sid,
+                            "quote": sent_clean,
+                            "category": c_try,
+                            "pattern_formula": formula,
+                        })
 
         if not raw_skeletons:
             return []
@@ -1158,7 +1168,7 @@ class ExtractionPipelineMixin:
                 if len(selected) >= target_count:
                     break
 
-        # Pass 3: if still under target_count, append remaining distinct quotes (preferring unused profiles first)
+        # Pass 3: if still under target_count, append remaining distinct quotes with unused profiles
         if len(selected) < target_count:
             for item in ranked_skeletons:
                 quote = item["quote"]
@@ -1170,12 +1180,13 @@ class ExtractionPipelineMixin:
                         seen_profiles.add(pkey)
                 if len(selected) >= target_count:
                     break
+        # Pass 3b: allow a second pattern from an already-used sentence ONLY if its profile is completely unused
         if len(selected) < target_count:
             for item in ranked_skeletons:
-                quote = item["quote"]
-                if quote not in seen_quotes:
+                pkey = _get_prof_key(item)
+                if pkey and pkey not in seen_profiles and item not in selected:
                     selected.append(item)
-                    seen_quotes.add(quote)
+                    seen_profiles.add(pkey)
                 if len(selected) >= target_count:
                     break
 
@@ -1218,6 +1229,8 @@ class ExtractionPipelineMixin:
             return []
 
         nlp = cls.get_spacy()
+        from librarian.expression_patterns import ExpressionPatternEngine
+        expr_engine = ExpressionPatternEngine.get_engine(nlp)
 
         COMMON_PARTICLES = frozenset({"away", "back", "down", "in", "off", "on", "out", "over", "round", "through", "up"})
         DEPENDENT_PREPS = frozenset({"on", "upon", "to", "with", "for", "from", "into", "against", "about", "of", "in"})
@@ -1233,14 +1246,30 @@ class ExtractionPipelineMixin:
             text_lower = sent_clean.lower()
 
             # 1. Dependency Syntax Phrasal Verbs & Prepositional Combinations via Declarative Expression Pattern Engine
-            from librarian.expression_patterns import ExpressionPatternEngine
-            expr_engine = ExpressionPatternEngine.get_engine(nlp)
             for match in expr_engine.match_sentence(doc):
                 m_type = match["type"]
                 if m_type == "phrasal verb":
                     m_words = match["phrase"].lower().split()
                     if len(m_words) == 2 and m_words[1] not in COMMON_PARTICLES and not cls._unit_blocks(match["phrase"].lower()):
-                        m_type = "collocation"
+                        v_lem_0, p_w_1 = m_words[0], m_words[1]
+                        v_ent_0 = cls.get_ldoce_entry(v_lem_0) or {}
+                        v_verb_senses_0 = [
+                            s for s in (v_ent_0.get("senses") or [])
+                            if cls._pos_code(s.get("pos")) == "v" or not s.get("pos")
+                        ]
+                        primary_governs_prep = False
+                        if p_w_1 in DEPENDENT_PREPS and v_verb_senses_0:
+                            s0_v = v_verb_senses_0[0]
+                            s0_pats = list(s0_v.get("patterns") or []) + [
+                                pb.get("pattern") for pb in (s0_v.get("pattern_bundles") or [])
+                                if isinstance(pb, dict) and pb.get("pattern")
+                            ]
+                            if len(v_verb_senses_0) == 1 or any(
+                                p_w_1 in re.findall(r"[a-z]+", str(p).lower()) for p in s0_pats
+                            ):
+                                primary_governs_prep = True
+                        if not primary_governs_prep and not cls._phrasal_verb_blocks(match["phrase"].lower(), v_lem_0):
+                            m_type = "collocation"
                 raw_candidates.append({
                     "sid": sid,
                     "quote": sent_clean,
@@ -1252,9 +1281,6 @@ class ExtractionPipelineMixin:
                     "score": match.get("priority", 8),
                 })
 
-
-        if not raw_candidates:
-            return []
 
         # PedLex attestation gate: a candidate ships only when PedLex itself states the unit.
         # The old gate asked the Oxford Collocations file whether it had a headword for the
@@ -1319,7 +1345,7 @@ class ExtractionPipelineMixin:
             # Default: if none of the specific validation branches match, drop unverified candidate
 
         raw_candidates = verified_candidates
-        if not raw_candidates:
+        if not raw_candidates and not syllabus_expressions:
             return []
 
         selected: List[Dict[str, str]] = []
@@ -1354,6 +1380,11 @@ class ExtractionPipelineMixin:
                 raw_norm = re.sub(r"\b(?:sth|something)\b\.?", "[sth]", raw_norm, flags=re.IGNORECASE)
                 raw_norm = re.sub(r"\.{2,}", "[sth]", raw_norm)
                 raw_norm = re.sub(r"\[+\s*(one's|oneself|sth/sb|sb/sth|sth|sb)\s*\]+", r"[\1]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\[sb\]\s*/\s*\[sth\]", "[sb/sth]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\[sth\]\s*/\s*\[sb\]", "[sth/sb]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\[one's\]\s*/\s*\[sth\]", "[one's]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\bthe\s*/\s*\[one's\]", "[one's]", raw_norm, flags=re.IGNORECASE)
+                raw_norm = re.sub(r"\bitself\s*/\s*themselves\b", "itself/themselves", raw_norm, flags=re.IGNORECASE)
                 raw_norm = re.sub(r"\s+", " ", raw_norm).strip()
 
                 # Pre-expand multi-word slash alternatives (e.g. 'have a edge over / an edge on',
@@ -1370,8 +1401,10 @@ class ExtractionPipelineMixin:
                         multi_slash_seeds = [f"{prefix_p} {alt1}".strip(), f"{prefix_p} {alt2}".strip()]
                     else:
                         slash_parts = [p.strip() for p in raw_norm.split(" / ") if p.strip()]
-                        if len(slash_parts) >= 2 and all(len(p.split()) >= 2 for p in slash_parts):
+                        if len(slash_parts) >= 2 and all(len(p.split()) >= 2 for p in slash_parts) and not any(p.startswith("[") or p.endswith("]") for p in slash_parts):
                             multi_slash_seeds = slash_parts
+                        else:
+                            multi_slash_seeds = [re.sub(r"(?<=\S)\s+/\s+(?=\S)", "/", raw_norm)]
 
                 # Expand single-token slash alternatives (e.g. 'put [sth] into the atmosphere/air' ->
                 # ['put [sth] into the atmosphere', 'put [sth] into the air'])
@@ -1594,7 +1627,7 @@ class ExtractionPipelineMixin:
                         "phrase": expr_clean,
                         "type": "set phrase",
                         "pattern_formula": expr_clean,
-                        "score": 75,
+                        "score": 95,
                     }
                 elif "touch" in e_lower and any(v in e_lower for v in ("keep", "stay", "get", "lose", "be")):
                     formula = f"{e_lower} [sb]" if "with" in e_lower else f"{e_lower}"
@@ -1816,7 +1849,7 @@ class ExtractionPipelineMixin:
                             "score": 90 if cand_type == "phrasal verb" else 80,
                         }
                     elif words[0].lower() in ("in", "on", "at", "by", "for", "with", "from", "to", "under", "over", "toward", "towards"):
-                        # Prepositional expressions (e.g. toward the end of [sth], in touch with [sb])
+                        # Prepositional expressions (e.g. in the past, toward the end of [sth], in touch with [sb])
                         formula = expr_clean
                         if expr_clean.endswith(" of") or expr_clean.endswith(" for") or expr_clean.endswith(" with"):
                             formula = f"{expr_clean} [sth]"
@@ -1828,7 +1861,7 @@ class ExtractionPipelineMixin:
                             "phrase": expr_clean,
                             "type": "set phrase",
                             "pattern_formula": formula,
-                            "score": 50,
+                            "score": 78 if cls.is_attested_phrase(expr_clean.lower()) else 50,
                         }
                     else:
                         # Nominal/quantifier/partitive/idiomatic expressions (e.g. a piece of [sth], any type of [sth], show thanks to [sb], hats off to [sb])
@@ -1977,14 +2010,15 @@ class ExtractionPipelineMixin:
             "child", "time", "year", "day", "way", "thing", "life", "hand", "part",
             "eye", "place", "case", "week", "company", "system", "program", "question",
             "government", "number", "night", "point", "home", "water", "room", "mother",
-            "area", "money", "story", "fact", "month", "lot", "right", "study", "book",
+            "area", "money", "story", "fact", "month", "lot", "study", "book",
             "word", "business", "issue", "side", "kind", "head", "house", "service",
             "friend", "father", "power", "hour", "game", "line", "end", "member", "law",
             "car", "city", "community", "name", "president", "team", "minute", "idea",
             "kid", "body", "information", "back", "parent", "face", "others", "level",
-            "office", "door", "health", "person", "art", "war", "history", "party",
+            "office", "door", "health", "art", "war", "history", "party",
             "result", "change", "morning", "reason", "research", "girl", "guy", "moment",
-            "air", "teacher", "force", "education"
+            "air", "teacher", "force", "education",
+            "yesterday", "today", "tomorrow", "tonight", "later", "daily"
         })
 
         # Dependent adverbial connectives: these heads are grammatically incomplete
@@ -2009,6 +2043,16 @@ class ExtractionPipelineMixin:
                 continue
 
             doc = nlp(cls._strip_lexical_quotes(sent_clean))
+            # Mask out token spans belonging to PedLex-attested non-compositional idioms and set phrases
+            # (e.g. 'pros and cons', 'peace of mind', 'keep in touch with') so bound phrase constituents
+            # like 'cons' in "There are pros and cons in this change." are never decomposed into single words.
+            from ..expression_patterns import ExpressionPatternEngine
+            expr_engine = ExpressionPatternEngine.get_engine(nlp)
+            bound_phrase_token_indices: Set[int] = set()
+            for em in expr_engine.match_sentence(doc):
+                if em.get("type") in ("idiom", "set phrase"):
+                    bound_phrase_token_indices.update(em.get("token_indices") or [])
+
             # First pass: mine any attested hyphenated compounds in the sentence as intact units
             for m_hc in re.finditer(r"\b([a-zA-Z]+(?:-[a-zA-Z]+)+)\b", sent_clean):
                 hc = m_hc.group(1).lower()
@@ -2033,12 +2077,19 @@ class ExtractionPipelineMixin:
                 "where", "wherever", "when", "whenever", "why", "how", "however"
             })
             for token in doc:
+                if token.i in bound_phrase_token_indices:
+                    continue
                 # Never extract a severed sub-token that is attached to a hyphen (e.g. 'waste' or 'prone' in 'waste-prone')
                 if (token.i > 0 and doc[token.i - 1].text == "-" and not doc[token.i - 1].whitespace_) or (
                     token.i + 1 < len(doc) and doc[token.i + 1].text == "-" and not token.whitespace_
                 ):
                     continue
+                surf_low = token.text.lower().strip()
                 lemma = token.lemma_.lower().strip()
+                if token.dep_ == "amod" and surf_low.endswith(("ing", "ed")) and surf_low != lemma:
+                    surf_entry = cls.get_ldoce_entry(surf_low)
+                    if surf_entry and any("adj" in str(s.get("pos") or surf_entry.get("pos") or "").lower() for s in (surf_entry.get("senses") or [])):
+                        lemma = surf_low
                 if len(lemma) < 3 or lemma in seen_lemmas or not lemma.isalpha() or lemma in WH_AND_PRONOUN_STOPS:
                     continue
 
@@ -2132,9 +2183,15 @@ class ExtractionPipelineMixin:
                     seen_lemmas.add(phrase)
                     continue
 
-                # Scoring: B2/C1/C2 headwords get top priority, followed by B1 headwords, then word length
-                cefr_bonus = 25 if is_awl else (15 if is_b1 else 0)
-                score = cefr_bonus + min(len(lemma), 12)
+                # Scoring: B2/C1/C2 headwords get top priority, followed by B1 headwords, PedLex core_level (●●●/●●○/●○○), then word length
+                if lemma == "following" and re.search(r"\bthe\s+following\b", sent_clean, re.IGNORECASE):
+                    continue
+                l_entry = cls.get_ldoce_entry(lemma) or {}
+                core_lv = int(l_entry.get("core_level") or 0)
+                if bool(l_entry.get("is_awl")):
+                    is_awl = True
+                cefr_bonus = 25 if is_awl else (15 if is_b1 else (8 if core_lv >= 2 else 0))
+                score = cefr_bonus + (core_lv * 2) + min(len(lemma), 12)
 
                 ctx_pos = cls.determine_contextual_pos(lemma, sent_clean) or VALID_POS_MAP[token.pos_]
                 candidates.append({
@@ -2227,13 +2284,14 @@ class ExtractionPipelineMixin:
         word: str,
         quote: str,
         pos: Optional[str] = None,
-        k: int = 4,
+        k: int = 16,
         discourse_context: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Pure Symbolic Candidate Selection (NO Embedding Model).
-        Retrieves top-k (k <= 4) candidate senses from PedLex using:
-        1. POS gating
+        Morphology-Gated Full-Spectrum Cross-POS Candidate Selection (NO Embedding Model).
+        Retrieves top-k (k <= 16) candidate senses from PedLex across all morphologically
+        compatible parts of speech using:
+        1. Surface-token morphological POS compatibility (eliminating single-POS tagger lock-in)
         2. Syntactic valency / frame / particle agreement
         3. Simplified Lesk overlap, 2nd-order collocate projection, and discourse window cue scoring
         4. PedLex natural frequency order fallback
@@ -2241,10 +2299,10 @@ class ExtractionPipelineMixin:
         entry = cls.get_pedlex_entry(word)
         raw_senses = entry.get("senses", []) if entry else []
 
-        # Filter out morphological pointer senses ("the past participle of...", "the plural of...")
+        # Filter out morphological pointer senses ("the past participle of...", "the plural of...", "= a goodie")
         # whenever substantive semantic definitions exist in the entry
         _morph_ptr_re = re.compile(
-            r"^(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b",
+            r"^(?:(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b|=)",
             re.IGNORECASE
         )
         non_ptr_senses = [
@@ -2256,29 +2314,51 @@ class ExtractionPipelineMixin:
         target_pos = pos or (entry.get("pos") if entry else None)
         target_p = cls._pos_code(target_pos)
         q_low = (quote or "").lower()
-        has_pos_match = bool(target_p and any(cls._sense_matches_pos(s, target_p) for s in senses))
+        w_low_clean = (word or "").strip().lower()
+
+        # Determine morphologically compatible POS codes from the surface token(s) of `word` in `quote`
+        all_sense_poses = {cls._pos_code(s.get("pos")) for s in senses if s.get("pos")}
+        q_toks_raw = re.findall(r"\b[a-z]+(?:-[a-z]+)*\b", q_low)
+        matched_surf_toks = [t for t in q_toks_raw if t == w_low_clean or cls.form_matches(t, w_low_clean)]
+        morph_poses: Set[str] = set()
+        if not matched_surf_toks or w_low_clean in matched_surf_toks:
+            # Base uninflected form (e.g. 'trap', 'ride', 'stamp', 'present') is morphologically compatible with all entry POS
+            morph_poses = set(all_sense_poses) | ({target_p} if target_p else set())
+        else:
+            for st in matched_surf_toks:
+                if st.endswith("ed"):
+                    # An inflected -ed form of a non-ed base headword ('presented' != 'present') can ONLY inflect a verb
+                    morph_poses.add("v")
+                elif st.endswith("ing"):
+                    morph_poses.add("v")
+                elif st.endswith("s"):
+                    morph_poses.update({"n", "v"})
+                elif st.endswith(("er", "est")):
+                    morph_poses.update({"adj", "adv"})
+                else:
+                    morph_poses.update({"v", "n", "adj"})
+            if not (morph_poses & all_sense_poses) and target_p:
+                morph_poses.add(target_p)
+        if not morph_poses and target_p:
+            morph_poses = {target_p}
+
+        has_pos_match = bool(
+            (target_p and any(cls._sense_matches_pos(s, target_p) for s in senses))
+            or (morph_poses and any(cls._pos_code(s.get("pos")) in morph_poses for s in senses))
+        )
+        if entry and entry.get("kind") == "derived" and "-" in w_low_clean and senses:
+            has_pos_match = True
 
         if not senses:
             candidates = []
-        elif len(senses) == 1 and (not target_p or not senses[0].get("pos") or cls._sense_matches_pos(senses[0], target_p)):
-            s0 = senses[0]
-            candidates = [{
-                "definition": cls.format_ldoce_definition(s0) or s0.get("definition", ""),
-                "pos": pos or s0.get("pos", "noun"),
-                "sense_idx": 0,
-                "signpost": s0.get("signpost", ""),
-                "patterns": s0.get("patterns", []),
-                "examples": s0.get("examples", []),
-                "raw_sense": s0,
-                "score": 10.0,
-                "margin": 0.0,
-            }]
         else:
             entry_filtered = dict(entry, senses=senses) if senses is not raw_senses else entry
+            # Always pass target_pos=None so _lock_sense scores every sense under its own POS (`eff_p`),
+            # while `pos_filtered_trace` enforces `_sense_in_morph_poses`.
             res = cls._lock_sense(
                 entry_filtered,
                 quote=quote,
-                target_pos=target_pos,
+                target_pos=None,
                 return_scores=True,
                 discourse_context=discourse_context
             )
@@ -2289,10 +2369,15 @@ class ExtractionPipelineMixin:
                     return False
                 w_low = word.strip().lower()
                 s_defn_low = str(s_obj.get("definition") or "").strip().lower()
+                s_p = cls._pos_code(s_obj.get("pos")) or target_p
+                # If sense carries a core semantic signpost (e.g. [MAIL] on 'stamp' Sense 0) and is not a conditional/usage idiom,
+                # its unit (e.g. 'postage stamp') is an illustrative compound rather than an obligatory multi-word idiom.
+                if s_obj.get("signpost") and not s_defn_low.startswith(("if ", "used ")):
+                    return False
                 # If a verb sense explicitly declares [transitive], its prepositional unit (e.g. 'tend to sb/sth')
                 # is an optional prepositional variant, not an obligatory multi-word idiom
                 s_gram_low = str(s_obj.get("grammar") or "").lower()
-                if target_p == "v" and re.search(r"(?<!in)transitive", s_gram_low):
+                if s_p == "v" and re.search(r"(?<!in)transitive", s_gram_low):
                     return False
                 # Check if any unit phrase is attested or shares its grammatical preposition/frame with the quote
                 all_multi_unattested = True
@@ -2307,6 +2392,10 @@ class ExtractionPipelineMixin:
                         return bool(re.search(r"\b(?:get|gets|got|gotten|getting)\b", q_text))
                     if u_tok == "do":
                         return bool(re.search(r"\b(?:do|does|did|done|doing)\b", q_text))
+                    if u_tok in ("yourself", "oneself"):
+                        return bool(re.search(r"\b(?:myself|yourself|himself|herself|itself|ourselves|yourselves|themselves|oneself)\b", q_text))
+                    if u_tok == "your":
+                        return bool(re.search(r"\b(?:my|your|his|her|its|our|their|one's)\b", q_text))
                     return False
 
                 for u_it in u_list:
@@ -2316,6 +2405,10 @@ class ExtractionPipelineMixin:
                         continue
                     u_clean_no_slot = re.sub(r"\b(?:somebody's|someone's|something's|somebody|someone|something|sb's|sb|sth|one's|oneself|etc)\b\.?", "", u_clean).strip()
                     u_toks = [t for t in re.findall(r"[a-z]+", u_clean_no_slot) if t not in ("a", "an", "the", "some", "any", "doing")]
+                    # Preserve 2-word nominal compound <modifier> + <headword> or <headword> + <noun> (e.g. 'postage stamp', 'comic book')
+                    if s_p == "n" and len(u_toks) == 2 and (cls.form_matches(u_toks[0], w_low) or cls.form_matches(u_toks[-1], w_low)):
+                        all_multi_unattested = False
+                        break
                     # When extracting a single-word headword (e.g. 'likelihood'), do NOT allow a prepositional/adverbial idiom unit
                     # starting with another word (e.g. 'in all likelihood') to define the bare noun!
                     if " " not in w_low and len(u_toks) >= 2 and not cls.form_matches(u_toks[0], w_low):
@@ -2337,36 +2430,55 @@ class ExtractionPipelineMixin:
                         if f"{w_low} {u_toks[1]}" in q_low:
                             all_multi_unattested = False
                             break
-                    # Preserve unit sense if it is a 2-word nominal compound <headword> + <noun> (e.g. 'comic book')
-                    # whose definition defines the standalone headword rather than an opaque idiom
-                    if len(u_toks) == 2 and u_toks[0] == w_low and target_p == "n":
-                        all_multi_unattested = False
-                        break
                 if not all_multi_unattested:
                     return False
                 return True
 
+            def _sense_in_morph_poses(s_obj: Dict[str, Any]) -> bool:
+                sp_code = cls._pos_code(s_obj.get("pos"))
+                if not sp_code:
+                    return True
+                if target_p and target_p in all_sense_poses:
+                    if cls._sense_matches_pos(s_obj, target_p):
+                        return True
+                    # Allow cross-POS sense ONLY if it declares an explicit multi-word pattern/unit matching the quote
+                    for u_it in (s_obj.get("units") or []):
+                        u_phr = (u_it.get("phrase") if isinstance(u_it, dict) else str(u_it or "")).strip()
+                        if u_phr and " " in u_phr and cls.match_typed_slot_pattern(u_phr, quote, headword=w_low_clean):
+                            return True
+                    for p_it in (s_obj.get("patterns") or []):
+                        p_str = str(p_it or "").strip()
+                        if p_str and " " in p_str and cls.match_typed_slot_pattern(p_str, quote, headword=w_low_clean):
+                            return True
+                    return False
+                if not morph_poses:
+                    return not has_pos_match or cls._sense_matches_pos(s_obj, target_p)
+                return sp_code in morph_poses or any(cls._sense_matches_pos(s_obj, mp) for mp in morph_poses)
+
             if not res or len(res) < 5:
                 matched = [
                     s for s in senses
-                    if (not has_pos_match or cls._sense_matches_pos(s, target_p))
+                    if _sense_in_morph_poses(s)
                     and not _is_unattested_phrase_unit_sense(s)
-                ] or [s for s in senses if not has_pos_match or cls._sense_matches_pos(s, target_p)] or senses
+                ] or [s for s in senses if _sense_in_morph_poses(s)] or senses
                 candidates = [{
                     "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
-                    "pos": (pos if has_pos_match else (s.get("pos") or pos)) or s.get("pos", target_pos),
+                    "pos": s.get("pos") or pos or target_pos,
                     "sense_idx": i,
                     "signpost": s.get("signpost", ""),
                     "patterns": list(dict.fromkeys(list(s.get("patterns") or []) + list(s.get("units") or []))),
                     "examples": s.get("examples", []),
                     "raw_sense": s,
+                    "score": 0.0,
+                    "margin": 0.0,
+                    "confidence": "high",
                 } for i, s in enumerate(matched[:k])]
             else:
                 idx, score, margin, conf, score_trace = res
-                # Enforce POS hard gate and filter unattested multi-word idiom senses when standalone senses exist
+                # Enforce morphological POS compatibility gate and filter unattested multi-word idiom senses
                 pos_filtered_trace = [
                     (s_i, sc) for s_i, sc in score_trace
-                    if (not has_pos_match or cls._sense_matches_pos(senses[s_i], target_p))
+                    if _sense_in_morph_poses(senses[s_i])
                 ] or score_trace
                 non_idiom_trace = [
                     (s_i, sc) for s_i, sc in pos_filtered_trace
@@ -2380,15 +2492,23 @@ class ExtractionPipelineMixin:
                 target_w_clean_p = (entry.get("word") or word or "").strip().lower()
                 headword_tokens_p = set(re.findall(r"\b[a-z]+\b", target_w_clean_p))
 
+                _pv_slot_stop_p = {"something", "somebody", "someone", "sth", "sb", "<->", "\u2194", "oneself", "one's", "etc"}
                 pv_sense_map_p: Dict[int, List[str]] = {}
                 for pv in entry.get("phrasal_verbs") or []:
-                    phr = pv.get("phrase", "")
-                    p_words = [w for w in phr.lower().split() if w != target_w_clean_p]
+                    phr = re.sub(r"[\(\)\[\]]", " ", pv.get("phrase", ""))
+                    p_words = [
+                        w for w in phr.lower().split()
+                        if w != target_w_clean_p and not cls.form_matches(w, target_w_clean_p) and w not in _pv_slot_stop_p
+                    ]
                     if p_words:
                         for pvs in pv.get("senses") or []:
                             p_defn = pvs.get("definition")
                             for s_idx_p, s_cand_p in enumerate(senses):
-                                if s_cand_p.get("definition") == p_defn:
+                                if (
+                                    s_cand_p.get("definition") == p_defn
+                                    and not s_cand_p.get("sensenum")
+                                    and s_cand_p.get("homograph_num") in (None, 0)
+                                ):
                                     pv_sense_map_p[s_idx_p] = p_words
 
                 q_morph_num: List[str] = []
@@ -2426,7 +2546,7 @@ class ExtractionPipelineMixin:
                                 q_is_pred = True
                             elif mt.dep_ == "amod" and mt.head.pos_ in ("NOUN", "PROPN") and mt.i < mt.head.i:
                                 q_is_attr = True
-                            if mt.pos_ == "VERB" or target_p == "v":
+                            if mt.pos_ == "VERB" or "v" in morph_poses:
                                 q_is_passive = any(c.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for c in mt.children)
                                 q_has_dobj = any(c.dep_ in ("dobj", "obj") for c in mt.children) or q_is_passive
                                 q_has_adv_or_prep_comp = any(
@@ -2438,9 +2558,10 @@ class ExtractionPipelineMixin:
                         pass
 
                 def _is_grammatically_hard_pruned_sense(s_idx_c: int, sc_c: float) -> bool:
-                    if sc_c < 0:
+                    if sc_c <= -40.0:
                         return True
                     s_c = senses[s_idx_c]
+                    s_p_c = cls._pos_code(s_c.get("pos")) or target_p
                     s_gram_c = (s_c.get("grammar") or "").lower()
                     s_reg_c = (s_c.get("register") or "").lower()
                     s_sp_c = (s_c.get("signpost") or "").lower()
@@ -2449,28 +2570,42 @@ class ExtractionPipelineMixin:
                     # 1. Missing mandatory phrasal verb particle
                     if s_idx_c in pv_sense_map_p:
                         req_ps = pv_sense_map_p[s_idx_c]
-                        if not all(any(cls.form_matches(tok_q, rp) for tok_q in q_seq_prune) for rp in req_ps):
+                        if not all(
+                            any(cls.form_matches(tok_q, alt) for tok_q in q_seq_prune for alt in rp.split("/") if alt)
+                            for rp in req_ps
+                        ):
+                            return True
+                    elif s_p_c == "v":
+                        m_pv_def = re.match(
+                            rf"^if\s+[^,]+?\s+(?:{re.escape(target_w_clean_p)}[a-z]*)\s+(up|down|out|off|away|back|over|through|around|round|apart|aside|ahead|along|about)\b",
+                            s_defn_c.strip(),
+                        )
+                        if m_pv_def and not any(cls.form_matches(tok_q, m_pv_def.group(1)) for tok_q in q_seq_prune):
                             return True
 
-                    # 2. Noun countability & number hard clash
-                    if ("Plur" in q_morph_num or q_has_count_det) and "[uncountable]" in s_gram_c and "[countable]" not in s_gram_c:
-                        return True
-                    if "Plur" in q_morph_num and "[singular]" in s_gram_c and "[countable]" not in s_gram_c and "[plural]" not in s_gram_c:
-                        return True
-                    if ("Sing" in q_morph_num or q_has_count_det) and "[plural]" in s_gram_c and "[singular]" not in s_gram_c and "[countable]" not in s_gram_c:
-                        return True
+                    # 2. Noun countability & number hard clash (only for noun senses)
+                    if s_p_c == "n":
+                        if ("Plur" in q_morph_num or q_has_count_det) and "[uncountable]" in s_gram_c and "[countable]" not in s_gram_c:
+                            return True
+                        if "Plur" in q_morph_num and "[singular]" in s_gram_c and "[countable]" not in s_gram_c and "[plural]" not in s_gram_c:
+                            return True
+                        if ("Sing" in q_morph_num or q_has_count_det) and "[plural]" in s_gram_c and "[singular]" not in s_gram_c and "[countable]" not in s_gram_c:
+                            return True
 
-                    # 3. Adjective syntactic slot hard clash
-                    if q_is_pred and "[only before noun]" in s_gram_c:
-                        return True
-                    if q_is_attr and ("[not before noun]" in s_gram_c or "[never before noun]" in s_gram_c):
-                        return True
+                    # 3. Adjective syntactic slot hard clash (only for adjective senses)
+                    if s_p_c == "adj":
+                        if q_is_pred and "[only before noun]" in s_gram_c:
+                            return True
+                        if q_is_attr and ("[not before noun]" in s_gram_c or "[never before noun]" in s_gram_c):
+                            return True
 
-                    # 4. Verb transitivity & mandatory locative/prepositional complement clash
-                    if q_has_dobj and "[intransitive]" in s_gram_c and not re.search(r"(?<!in)transitive", s_gram_c):
-                        return True
-                    if "always + adverb/preposition" in s_gram_c and not q_has_adv_or_prep_comp:
-                        return True
+                    # 4. Verb transitivity & mandatory locative/prepositional complement clash (only for verb senses)
+                    if s_p_c == "v":
+                        if q_has_dobj and "[intransitive]" in s_gram_c and not re.search(r"(?<!in)transitive", s_gram_c):
+                            return True
+                        if "always + adverb/preposition" in s_gram_c and not q_has_adv_or_prep_comp:
+                            if not (q_has_dobj and re.search(r",\s*transitive\b", s_gram_c)):
+                                return True
 
                     # 5. Spoken register gate in non-dialogue narrative
                     if "spoken" in s_reg_c or "[spoken]" in s_gram_c:
@@ -2512,8 +2647,8 @@ class ExtractionPipelineMixin:
                     ):
                         return True
 
-                    # 7. Cross-reference inflection stub
-                    if re.match(r"^(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b", s_defn_c.strip()):
+                    # 7. Cross-reference inflection or variant stub
+                    if re.match(r"^(?:(?:the\s+)?(?:past\s+participle|past\s+tense|present\s+participle|plural|comparative|superlative)\s+of\b|=)", s_defn_c.strip()):
                         return True
 
                     return False
@@ -2523,18 +2658,58 @@ class ExtractionPipelineMixin:
                     if not _is_grammatically_hard_pruned_sense(s_i, sc)
                 ] or non_idiom_trace
 
+                # 8. Reflexive verb frame hard lock ('reverse myself' -> 'reverse yourself'):
+                if target_p == "v" and len(pruned_trace) > 1 and quote:
+                    surf_alts = "|".join(re.escape(t) for t in (matched_surf_toks or [w_low_clean]))
+                    if re.search(rf"\b(?:{surf_alts})\s+(?:myself|yourself|himself|herself|itself|ourselves|yourselves|themselves|oneself)\b", q_low):
+                        refl_trace = []
+                        for s_i, sc in pruned_trace:
+                            s_cand_r = senses[s_i]
+                            u_strs = [str(u.get("phrase") if isinstance(u, dict) else u).lower() for u in (s_cand_r.get("units") or [])]
+                            p_strs = [str(p).lower() for p in (s_cand_r.get("patterns") or [])]
+                            if any("yourself" in up or "oneself" in up for up in (u_strs + p_strs)):
+                                refl_trace.append((s_i, sc))
+                        if refl_trace:
+                            pruned_trace = refl_trace
+
                 sorted_trace = sorted(pruned_trace, key=lambda x: -x[1])
                 valid_idx_set = {s_i for s_i, _ in pruned_trace}
-                top_indices = [s_i for s_i, _ in sorted_trace[:k]]
+                ordered_indices = [s_i for s_i, _ in sorted_trace]
                 if idx is not None and idx in valid_idx_set:
-                    top_indices = ([idx] + [s_i for s_i in top_indices if s_i != idx])[:k]
-                elif not top_indices:
-                    top_indices = [0]
+                    ordered_indices = [idx] + [s_i for s_i in ordered_indices if s_i != idx]
+                elif not ordered_indices:
+                    ordered_indices = [0]
 
                 candidates = []
-                for s_i in top_indices:
+                seen_cand_keys = set()
+                for s_i in ordered_indices:
+                    if len(candidates) >= k:
+                        break
                     s = senses[s_i]
+                    cand_def = cls.format_ldoce_definition(s) or s.get("definition", "")
+                    cand_pos = s.get("pos") or pos or target_pos
+                    dedup_key = (
+                        str(cand_pos or "").strip().lower(),
+                        re.sub(r"[^a-z0-9]+", " ", str(s.get("definition") or cand_def).lower()).strip(),
+                    )
+                    if dedup_key[1] and dedup_key in seen_cand_keys:
+                        continue
+                    seen_cand_keys.add(dedup_key)
                     s_exs = list(s.get("examples") or [])
+                    if quote and len(s_exs) > 1:
+                        _ex_stop = set(cls._PATTERN_FUNCTION_WORDS) | set(cls._PATTERN_PREPS) | {
+                            "want", "they", "have", "from", "with", "that", "this", "what", "when", "where",
+                            "which", "their", "there", "also", "very", "more", "most", "some", "many", "much",
+                            "other", "such", "only", "just", "even", "into", "over", "after", "before", "about",
+                        }
+                        q_open_toks = {
+                            w for w in re.findall(r"[a-z]{4,}", q_low)
+                            if w not in _ex_stop and w != w_low_clean and w not in cls.inflected_forms(w_low_clean)
+                        }
+                        if q_open_toks:
+                            s_exs.sort(
+                                key=lambda ex_str: -sum(1 for qt in q_open_toks if re.search(rf"\b{re.escape(qt)}\b", str(ex_str).lower()))
+                            )
                     if quote and s.get("pattern_bundles"):
                         for pb in (s.get("pattern_bundles") or []):
                             if isinstance(pb, dict) and pb.get("pattern") and pb.get("example"):
@@ -2543,16 +2718,18 @@ class ExtractionPipelineMixin:
                                 if pb_ex and cls.match_typed_slot_pattern(pb_pat, quote, headword=(entry.get("word") or word)):
                                     s_exs = [pb_ex] + [e for e in s_exs if e != pb_ex]
                                     break
+                    s_unit_strs = [u.get("phrase") if isinstance(u, dict) else str(u or "") for u in (s.get("units") or [])]
                     candidates.append({
-                        "definition": cls.format_ldoce_definition(s) or s.get("definition", ""),
-                        "pos": (pos if has_pos_match else (s.get("pos") or pos)) or s.get("pos", target_pos),
+                        "definition": cand_def,
+                        "pos": cand_pos,
                         "sense_idx": s_i,
                         "signpost": s.get("signpost", ""),
-                        "patterns": list(dict.fromkeys(list(s.get("patterns") or []) + list(s.get("units") or []))),
+                        "patterns": list(dict.fromkeys([str(p) for p in (s.get("patterns") or []) if p] + [u for u in s_unit_strs if u])),
                         "examples": s_exs,
                         "raw_sense": s,
                         "score": next((sc for s_idx, sc in score_trace if s_idx == s_i), 0.0),
                         "margin": float(margin or 0.0),
+                        "confidence": conf or "high",
                     })
 
         # Cross-Lexicon Pool Fusion (WordNet oewn:2025+):
@@ -2562,15 +2739,46 @@ class ExtractionPipelineMixin:
         #    conditional subject ('if a piece of ...'), so neutral/academic senses attested in WordNet with
         #    authentic examples can enter the pool for Stage 2 1-token LLM arbitration.
         sole_pedlex_restricted = False
-        if len(candidates) == 1 and has_pos_match:
-            c0_def = str(candidates[0].get("definition") or "").lower()
-            c0_raw = candidates[0].get("raw_sense") if isinstance(candidates[0].get("raw_sense"), dict) else {}
-            c0_reg = str(c0_raw.get("register") or "").lower()
-            c0_gram = str(c0_raw.get("grammar") or "").lower()
-            if (
-                any(tag in c0_def or tag in c0_reg or tag in c0_gram for tag in ("disapproving", "spoken", "informal", "humorous", "old-fashioned"))
-                or c0_def.startswith(("if a piece of ", "if a chemical substance "))
-            ):
+        if candidates and has_pos_match:
+            q_content_toks = set(re.findall(r"[a-z]{3,}", q_low))
+            if re.search(r"\b(?:myself|yourself|himself|herself|itself|ourselves|yourselves|themselves|oneself)\b", q_low):
+                q_content_toks.update({"yourself", "oneself"})
+            _pat_meta = {"somebody", "something", "sb", "sth", "your", "one", "etc", "and", "or", "with", "for", "from", "into", "about", "over", "under", "between", "among", "against", "towards", "toward", "upon", "within", "without", "doing", "that", "what", "where", "when", "whether", "how", "adjective", "noun", "verb", "adverb"}
+            all_restricted_or_mismatched = True
+            for c_item in candidates:
+                c0_def = str(c_item.get("definition") or "").lower()
+                c0_raw = c_item.get("raw_sense") if isinstance(c_item.get("raw_sense"), dict) else {}
+                c0_reg = str(c0_raw.get("register") or "").lower()
+                c0_gram = str(c0_raw.get("grammar") or "").lower()
+                is_restr = (
+                    any(tag in c0_def or tag in c0_reg or tag in c0_gram for tag in ("disapproving", "humorous"))
+                    or c0_def.startswith(("if a piece of ", "if a chemical substance "))
+                )
+                c0_pats = [str(p) for p in (c0_raw.get("patterns") or []) if isinstance(p, str) and str(p).strip()]
+                has_explicit_colloc_mismatch = False
+                if c0_pats and target_p == "v":
+                    q_lemmas = q_content_toks | {
+                        lem for qw in q_content_toks for lem in (cls._surface_lemma(qw),) if lem
+                    }
+                    w_lemma = cls._surface_lemma(word) or word.lower()
+                    all_pats_mismatched = True
+                    for p_str in c0_pats:
+                        p_collocs = set()
+                        for pw in re.findall(r"[a-z]{4,}", p_str.lower()):
+                            pw_lem = cls._surface_lemma(pw)
+                            if pw != word.lower() and (pw_lem or pw) != w_lemma and pw not in _pat_meta:
+                                p_collocs.add(pw)
+                                if pw_lem:
+                                    p_collocs.add(pw_lem)
+                        if not p_collocs or (p_collocs & q_lemmas):
+                            all_pats_mismatched = False
+                            break
+                    if all_pats_mismatched:
+                        has_explicit_colloc_mismatch = True
+                if not is_restr and not has_explicit_colloc_mismatch:
+                    all_restricted_or_mismatched = False
+                    break
+            if all_restricted_or_mismatched:
                 sole_pedlex_restricted = True
 
         needs_wn_fallback = (
@@ -2612,24 +2820,27 @@ class ExtractionPipelineMixin:
                         scored_syns.sort(key=lambda x: -x[0])
                         if not has_pos_match and scored_syns:
                             candidates = []
-                        wn_slots = min(2, len(scored_syns)) if (candidates and has_pos_match) else min(k, len(scored_syns))
-                        if candidates and has_pos_match and len(candidates) + wn_slots > k:
+                        is_wn_sentinel = bool(candidates and has_pos_match)
+                        wn_slots = min(2, len(scored_syns)) if is_wn_sentinel else min(k, len(scored_syns))
+                        if is_wn_sentinel and len(candidates) + wn_slots > k:
                             candidates = candidates[:max(1, k - wn_slots)]
                         for _ov, _syn, s_def, s_exs, s_norm in scored_syns[:wn_slots]:
                             if len(candidates) >= k:
                                 break
                             if target_p == "v" and not s_def.lower().startswith("to "):
                                 s_def = f"to {s_def}"
+                            cand_exs = [] if is_wn_sentinel else s_exs
                             candidates.append({
                                 "definition": s_def,
                                 "pos": target_pos or pos or "noun",
                                 "sense_idx": -1,
                                 "signpost": "",
                                 "patterns": [],
-                                "examples": s_exs,
-                                "raw_sense": {"definition": s_def, "pos": target_pos or pos or "noun", "examples": s_exs},
+                                "examples": cand_exs,
+                                "raw_sense": {"definition": s_def, "pos": target_pos or pos or "noun", "examples": cand_exs},
                                 "score": 0.0,
                                 "margin": 0.0,
+                                "confidence": "high",
                             })
             except Exception:
                 pass
@@ -2641,7 +2852,7 @@ class ExtractionPipelineMixin:
         cls,
         expr_word: str,
         quote: str,
-        k: int = 4,
+        k: int = 12,
         expr_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
@@ -2672,7 +2883,13 @@ class ExtractionPipelineMixin:
         def _add_cand(df_str: str, pos_str: str, src_str: str, ex_list: List[str], raw_s: Optional[Dict[str, Any]], is_attested: bool = True):
             if not df_str:
                 return
-            norm_d = re.sub(r"[^a-z0-9]+", " ", df_str.lower()).strip()
+            df_for_norm = re.sub(r"^(?:\s*\[[^\]]+\]\s*)+", "", df_str.strip())
+            m_colloc_pref = re.match(r"^([a-z0-9\s/()'-]{2,40}):\s*(.+)$", df_for_norm, re.I)
+            if m_colloc_pref:
+                pref_uk = cls._unit_key(m_colloc_pref.group(1))
+                if pref_uk and (pref_uk in (u_key, clean) or u_key in pref_uk or clean in pref_uk):
+                    df_for_norm = m_colloc_pref.group(2)
+            norm_d = re.sub(r"[^a-z0-9]+", " ", df_for_norm.lower()).strip()
             if not norm_d or norm_d in seen_defs:
                 return
             # Guard against 'be there (for somebody)' when 'for' is absent from both formula and sentence
@@ -2709,15 +2926,28 @@ class ExtractionPipelineMixin:
                 'examples': cleaned_exs,
                 'raw_sense': raw_s,
                 'attested': is_attested,
+                'signpost': (raw_s.get('signpost', '') if isinstance(raw_s, dict) else ''),
+                'patterns': list(dict.fromkeys(
+                    list((raw_s.get('patterns') if isinstance(raw_s, dict) else None) or [])
+                    + list((raw_s.get('units') if isinstance(raw_s, dict) else None) or [])
+                )),
             })
 
         # 1. Phrasal verb blocks & direct multi-word PedLex headword entries (e.g. 'stuffed animal', 'comic book')
         u_key = cls._unit_key(clean)
         lem_u_key = cls._unit_key(" ".join(lem_tokens)) if lem_tokens else u_key
         unit_keys = []
+        if re.search(r"\boneself\b", expr_word, re.I) and lem_0:
+            for refl_uk in (f"{lem_0} yourself", f"{lem_0} oneself"):
+                if refl_uk not in unit_keys:
+                    unit_keys.append(refl_uk)
         for uk_cand in (u_key, lem_u_key, clean, " ".join(lem_tokens)):
             if uk_cand and uk_cand not in unit_keys:
                 unit_keys.append(uk_cand)
+            if uk_cand and (" around" in uk_cand or " round" in uk_cand):
+                alt_uk = re.sub(r"\baround\b", "round", uk_cand) if " around" in uk_cand else re.sub(r"\bround\b", "around", uk_cand)
+                if alt_uk not in unit_keys:
+                    unit_keys.append(alt_uk)
             uk_parts = uk_cand.split() if uk_cand else []
             if (
                 len(uk_parts) == 3
@@ -2727,6 +2957,23 @@ class ExtractionPipelineMixin:
                 vp2 = f"{uk_parts[0]} {uk_parts[1]}"
                 if vp2 not in unit_keys:
                     unit_keys.append(vp2)
+            elif (
+                len(uk_parts) == 4
+                and uk_parts[0] in {"be", "keep", "stay", "get", "lose", "remain", "fall", "come", "go", "put", "make", "take"}
+                and uk_parts[1] in {"in", "on", "at", "out", "off", "under", "beyond", "within"}
+                and uk_parts[3] in {"with", "to", "of", "from", "for", "in", "on", "at"}
+            ):
+                for sub_uk in (f"{uk_parts[0]} {uk_parts[1]} {uk_parts[2]}", f"{uk_parts[1]} {uk_parts[2]} {uk_parts[3]}", f"{uk_parts[1]} {uk_parts[2]}"):
+                    if sub_uk not in unit_keys:
+                        unit_keys.append(sub_uk)
+            elif (
+                len(uk_parts) == 3
+                and uk_parts[0] in {"make", "take", "have", "do", "give", "get", "keep", "put", "set", "hold", "pay"}
+                and uk_parts[1] not in {"in", "on", "at", "out", "off", "up", "down", "away", "back", "over", "through", "to", "for", "with", "of", "from", "a", "an", "the"}
+            ):
+                for sub_vn in (f"{uk_parts[0]} {uk_parts[2]}", f"{uk_parts[0]} {cls._surface_lemma(uk_parts[2])}"):
+                    if sub_vn not in unit_keys:
+                        unit_keys.append(sub_vn)
 
         def _unit_key_matches(cand_raw_or_uk: str, uk_target: str, allow_prefix: bool = False) -> bool:
             cand_uk = cls._unit_key(cand_raw_or_uk)
@@ -2759,11 +3006,11 @@ class ExtractionPipelineMixin:
                 return True
             return False
 
-        if len(tokens) >= 2:
-            is_verb_expr = (
-                locked_expr_type == "phrasal verb"
-                or (tokens and cls.determine_contextual_pos(tokens[0], quote) == "verb")
-            )
+        is_verb_expr = (
+            locked_expr_type == "phrasal verb"
+            or (tokens and cls.determine_contextual_pos(tokens[0], quote) == "verb")
+        )
+        if len(tokens) >= 2 or any(" " in uk for uk in unit_keys):
             # Check phrasal verb blocks FIRST so verbal expressions ('wind up') never get hijacked by hyphenated noun entries ('wind-up')
             for uk in unit_keys:
                 for block in cls._unit_blocks(uk):
@@ -2785,6 +3032,21 @@ class ExtractionPipelineMixin:
                             ]
                             if non_speech:
                                 b_senses = non_speech
+                        # Filter out fixed-pronoun imperative senses (e.g. 'cut it/that out' = stop doing sth annoying)
+                        # when the quote does not contain 'V it/that P'
+                        if not re.search(rf"\b{re.escape(base_v)}\s+(?:it|that)\s+{re.escape(part_w)}\b", q_low):
+                            non_fixed_imp = [
+                                s for s in b_senses
+                                if not (
+                                    s.get("patterns")
+                                    and all(
+                                        re.match(rf"^{re.escape(base_v)}\s+(?:it|that)(?:/(?:it|that))?\s+{re.escape(part_w)}$", str(p).strip().lower())
+                                        for p in s.get("patterns", [])
+                                    )
+                                )
+                            ]
+                            if non_fixed_imp:
+                                b_senses = non_fixed_imp
                         prep_b = [dict(s, patterns=list(s.get("patterns") or []) + ([uk] if uk not in (s.get("patterns") or []) else [])) for s in b_senses]
                         res_b = cls._lock_sense({"word": base_v, "senses": prep_b}, quote=quote, target_pos="verb", return_scores=True)
                         if res_b and len(res_b) >= 5 and res_b[4]:
@@ -2801,12 +3063,25 @@ class ExtractionPipelineMixin:
                             continue
                         df = cls.format_ldoce_definition(s)
                         _add_cand(df, locked_expr_type, f"{mw_cand} #{s_i}", s.get("examples", []), s, True)
+                for _host_p, row_p in cls._unit_phrase_rows(mw_cand):
+                    if not isinstance(row_p, dict) or row_p.get("resolved_via") == "sense_example":
+                        continue
+                    res_w = str(row_p.get("resolved_word") or row_p.get("target_word") or "").strip().lower()
+                    res_s_idx = row_p.get("resolved_sense_idx")
+                    if res_w and isinstance(res_s_idx, int) and res_s_idx >= 0:
+                        res_ent = cls.get_pedlex_entry(res_w)
+                        res_senses = (res_ent.get("senses") or []) if res_ent else []
+                        if 0 <= res_s_idx < len(res_senses):
+                            s_res = res_senses[res_s_idx]
+                            df_res = cls.format_ldoce_definition(s_res)
+                            exs_res = list(row_p.get("examples") or s_res.get("examples") or [])
+                            _add_cand(df_res, locked_expr_type, f"{res_w} #{res_s_idx}", exs_res, s_res, True)
 
         is_passive_frame = len(tokens) >= 3 and tokens[0] in ("be", "feel", "get") and tokens[1].endswith("ed")
 
         # 2. PedLex phrase index candidates (exact or slash-expanded unit_key match first, prefix fallback if empty)
         query_list = []
-        for q_s in [clean, u_key, " ".join(lem_tokens), lem_u_key]:
+        for q_s in [clean, u_key, " ".join(lem_tokens), lem_u_key] + list(unit_keys):
             if q_s and q_s not in query_list:
                 query_list.append(q_s)
         for allow_pref in (False, True):
@@ -2825,9 +3100,41 @@ class ExtractionPipelineMixin:
                         continue
                     h_entry = cls.get_pedlex_entry(host)
                     if h_entry:
+                        if tier == "colloc_phrase":
+                            matched_colloc_gloss = False
+                            for _c_sec, c_items in (h_entry.get("collocations") or {}).items():
+                                for c_it in (c_items or []):
+                                    if not isinstance(c_it, dict):
+                                        continue
+                                    c_raw = str(c_it.get("phrase") or c_it.get("collocation") or "").strip()
+                                    c_gloss = re.sub(r"^[\(\s=]+|[\)\s]+$", "", str(c_it.get("gloss") or "")).strip()
+                                    if c_raw and c_gloss and any(_unit_key_matches(c_raw, uk, allow_prefix=allow_pref) for uk in unit_keys):
+                                        c_ex = str(c_it.get("example") or "").strip()
+                                        c_exs = [c_ex] if c_ex else []
+                                        s_colloc = {"definition": c_gloss, "examples": c_exs, "pos": locked_expr_type}
+                                        _add_cand(c_gloss, locked_expr_type, f"{host}:colloc", c_exs, s_colloc, True)
+                                        matched_colloc_gloss = True
+                            if matched_colloc_gloss:
+                                continue
                         senses = h_entry.get('senses', [])
                         if s_idx is not None and s_idx < len(senses):
                             s = senses[s_idx]
+                            if not cls.format_ldoce_definition(s) and s.get("crossrefs"):
+                                for xref in (s.get("crossrefs") or []):
+                                    if not isinstance(xref, dict):
+                                        continue
+                                    x_target = str(xref.get("target_word") or "").strip().lower()
+                                    x_entry = cls.get_pedlex_entry(x_target) if x_target else None
+                                    if x_entry:
+                                        for x_i, x_s in enumerate(x_entry.get("senses") or []):
+                                            if cls.format_ldoce_definition(x_s) and any(
+                                                _unit_key_matches(u.get("phrase", "") if isinstance(u, dict) else str(u), uk, allow_prefix=allow_pref)
+                                                for u in (x_s.get("units") or [])
+                                                for uk in unit_keys
+                                            ):
+                                                exact_uk_prio = 1 if any(cls._unit_key(raw_p) == uk for uk in unit_keys) else 0
+                                                p_matched_senses.append((exact_uk_prio, x_target, x_i, x_s))
+                                continue
                             exact_uk_prio = 1 if any(cls._unit_key(raw_p) == uk for uk in unit_keys) else 0
                             p_matched_senses.append((exact_uk_prio, host, s_idx, s))
             if len(p_matched_senses) >= 2 and quote:
@@ -2836,14 +3143,33 @@ class ExtractionPipelineMixin:
                 sc_p = dict(res_p[4]) if (res_p and len(res_p) >= 5 and res_p[4]) else {}
                 p_matched_senses.sort(key=lambda x: (-x[0], -sc_p.get(mock_ps.index(x[3]), 0.0), x[2]))
             for _prio, host, s_idx, s in p_matched_senses:
-                df = cls._compose_collocation_definition(u_key, None, host, s, cls.format_ldoce_definition(s), quote)
-                _add_cand(df, locked_expr_type, f"{host} #{s_idx}", s.get('examples', []), s, True)
+                df = cls._compose_collocation_definition(u_key, locked_expr_type, host, s, cls.format_ldoce_definition(s), quote)
+                s_exs = list(s.get('examples', []) or [])
+                for u_obj in (s.get('units') or []):
+                    if isinstance(u_obj, dict) and u_obj.get('examples'):
+                        for u_e in u_obj['examples']:
+                            if u_e and u_e not in s_exs:
+                                s_exs.append(u_e)
+                for pb in (s.get('pattern_bundles') or []):
+                    if isinstance(pb, dict) and pb.get('example') and pb['example'] not in s_exs:
+                        s_exs.append(pb['example'])
+                for arb_e in cls._arbitrated_example_pool(host, s, u_key):
+                    if arb_e and arb_e not in s_exs:
+                        s_exs.append(arb_e)
+                m_ex = (
+                    cls._unit_example(u_key, s_exs, allow_modifier=False)
+                    or cls._unit_example(u_key, s_exs, allow_modifier=True)
+                    or cls._relaxed_unit_example(u_key, s_exs)
+                )
+                if m_ex:
+                    s_exs = [m_ex] + [e for e in s_exs if e != m_ex]
+                _add_cand(df, locked_expr_type, f"{host} #{s_idx}", s_exs, s, True)
 
         # 3. Constituent headword senses:
         # Pass 3A-1 scans all senses of each constituent token strictly for attested multi-word `units` matches.
         stop_func = {
             "a", "an", "the", "to", "of", "in", "on", "at", "by", "for", "with", "from",
-            "into", "onto", "upon", "over", "under", "up", "down", "off", "away",
+            "into", "onto", "upon", "over", "under", "up", "down", "off", "away", "around", "round", "back",
             "not", "no", "be", "do", "have", "one", "ones", "it", "that", "this", "as", "or", "and"
         }
         LIGHT_OR_MODAL_TOKS = {
@@ -2886,12 +3212,19 @@ class ExtractionPipelineMixin:
             for v_stem_1 in ([cls._surface_lemma(tokens[1])] + cls._headword_candidates(tokens[1])):
                 if v_stem_1:
                     head_candidates.add(v_stem_1)
+        if len(tokens) >= 2 and not (len(tokens) >= 3 and tokens[0] in ("be", "feel", "get") and tokens[1].endswith("ed")):
+            for ct in content_toks:
+                head_candidates.add(ct)
 
         is_passive_frame = len(tokens) >= 3 and tokens[0] in ("be", "feel", "get") and tokens[1].endswith("ed")
 
         def _sense_matches_head_pattern(c_tok: str, s_obj: Dict[str, Any]) -> bool:
             if tokens and c_tok in head_candidates:
-                if is_passive_frame and cls._pos_code(s_obj.get("pos")) == "n":
+                if is_passive_frame and cls._pos_code(s_obj.get("pos")) in ("n", "adv"):
+                    return False
+                if is_verb_expr and c_tok in (tokens[0], lem_0) and cls._pos_code(s_obj.get("pos")) in ("n", "adv"):
+                    return False
+                if s_obj.get("units") and not _sense_matches_unit_strictly(s_obj, allow_sub=True)[0] and not s_obj.get("patterns") and not s_obj.get("pattern_bundles"):
                     return False
                 excl_toks = {c_tok, "be", "feel", "get"}
                 if tokens[0] in ("be", "feel", "get") and len(tokens) >= 2 and c_tok != tokens[1]:
@@ -2914,6 +3247,17 @@ class ExtractionPipelineMixin:
                         pat_words = re.findall(r"[a-z]+", pat_str)
                         pat_word_set = set(pat_words) | {cls._surface_lemma(w) for w in pat_words}
                         if all(ot in pat_word_set for ot in other_tok_set):
+                            # Guard against compound 'out of' pattern matching bare 'of' when 'out' is absent
+                            if "of" in other_tok_set and "out" not in tokens and "out" in pat_words:
+                                non_out_of = [i for i, w in enumerate(pat_words) if w == "of" and (i == 0 or pat_words[i - 1] != "out")]
+                                if not non_out_of:
+                                    continue
+                            # Enforce token order when the expression starts with a preposition before the head noun/adj ('at first', 'in turn')
+                            if len(tokens) >= 2 and tokens[0] in other_tok_set and c_tok == tokens[-1] and tokens[0] != c_tok:
+                                p0_pos = [i for i, w in enumerate(pat_words) if w == tokens[0]]
+                                hd_pos = [i for i, w in enumerate(pat_words) if w == c_tok or cls._surface_lemma(w) == c_tok]
+                                if p0_pos and hd_pos and min(p0_pos) > max(hd_pos):
+                                    continue
                             if is_passive_frame and len(other_tok_set) == 1:
                                 p_prep = next(iter(other_tok_set))
                                 head_forms = {c_tok, tokens[1]} | set(cls._headword_candidates(tokens[1]))
@@ -2927,9 +3271,9 @@ class ExtractionPipelineMixin:
                                 if re.search(rf"\b(?:{'|'.join(re.escape(hf) for hf in head_forms)})\s+{re.escape(p_prep)}\s+(?:doing\s+|somebody\b|sb\b)", pat_str_flat):
                                     continue
                             return True
-                        # Directional preposition open-class pattern (e.g. 'move away/out/to/towards etc' covers 'move into')
-                        if not other_content and len(other_tok_set) == 1 and next(iter(other_tok_set)) in ("into", "onto", "towards", "toward", "across", "along", "through"):
-                            if "etc" in pat_words and any(dp in pat_words for dp in ("to", "towards", "toward", "away", "out", "in", "into", "down", "up")):
+                        # Directional preposition/particle open-class pattern (e.g. 'move away/out/to/towards etc' covers 'move into', 'turn into/onto/down etc' covers 'turn around')
+                        if not other_content and len(other_tok_set) == 1 and next(iter(other_tok_set)) in ("into", "onto", "towards", "toward", "across", "along", "through", "around", "round", "back", "away", "out", "up", "down"):
+                            if "etc" in pat_words and any(dp in pat_words for dp in ("to", "towards", "toward", "away", "out", "in", "into", "onto", "down", "up", "around", "round", "left", "right")):
                                 return True
                     if not other_content and s_obj.get("examples"):
                         uk_list = [uk for uk in unit_keys if len(uk.split()) >= 2]
@@ -2959,13 +3303,24 @@ class ExtractionPipelineMixin:
                 raw_df = cls.format_ldoce_definition(s)
                 if not raw_df:
                     continue
-                df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
-                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", matched_unit_ex or s.get('examples', []), s, True)
+                df = cls._compose_collocation_definition(u_key, locked_expr_type, c_tok, s, raw_df, quote) or raw_df
+                cand_exs = list(matched_unit_ex or s.get('examples', []) or [])
+                for arb_e in cls._arbitrated_example_pool(c_tok, s, u_key):
+                    if arb_e and arb_e not in cand_exs:
+                        cand_exs.append(arb_e)
+                m_ex = (
+                    cls._unit_example(u_key, cand_exs, allow_modifier=False)
+                    or cls._unit_example(u_key, cand_exs, allow_modifier=True)
+                    or cls._relaxed_unit_example(u_key, cand_exs)
+                )
+                if m_ex:
+                    cand_exs = [m_ex] + [e for e in cand_exs if e != m_ex]
+                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", cand_exs, s, True)
 
         # Pass 3A-2: Headword `patterns` / `pattern_bundles` match when no multi-word unit/phrase entry exists,
         # or when a verb + preposition frame (e.g. 'remind of') has competing main-entry pattern senses alongside phrasal-verb blocks.
         has_second_content = any(t not in head_candidates for t in content_toks) if tokens else False
-        if not candidates or (not has_second_content and len(candidates) < k) or len(candidates) < 2:
+        if not candidates or ((is_verb_expr or is_passive_frame) and not has_second_content and not re.search(r"\boneself\b", expr_word, re.I) and len(candidates) < k):
             pat_matched_senses = []
             for c_tok in content_toks:
                 c_entry = cls.get_pedlex_entry(c_tok)
@@ -2993,9 +3348,17 @@ class ExtractionPipelineMixin:
                             rank_prio = 1
                     elif len(tokens) == 2 and tokens[0] in ("make", "keep", "find", "leave", "remain", "stay", "fall") and c_tok == tokens[1]:
                         rank_prio = 2
-                    elif any(cls._unit_key(ps) in unit_keys for ps in all_p_strs):
+                    elif any(
+                        cls._unit_key(ps) in unit_keys
+                        or any(_unit_key_matches(ps, uk, allow_prefix=True) for uk in unit_keys)
+                        for ps in all_p_strs
+                    ):
                         rank_prio = 1
+                    if not is_passive_frame and any(cls._unit_example(uk, list(s.get("examples") or [])) for uk in unit_keys if len(uk.split()) >= 2):
+                        rank_prio = max(rank_prio, 2)
                     pat_matched_senses.append((rank_prio, c_tok, s_i, s, raw_df))
+            if not candidates and any(item[0] >= 1 for item in pat_matched_senses):
+                pat_matched_senses = [item for item in pat_matched_senses if item[0] >= 1]
             if len(pat_matched_senses) >= 2 and quote:
                 mock_s = [item[3] for item in pat_matched_senses]
                 res_pm = cls._lock_sense({"word": pat_matched_senses[0][1], "senses": mock_s}, quote=quote, target_pos="verb" if is_passive_frame else None, return_scores=True)
@@ -3004,10 +3367,26 @@ class ExtractionPipelineMixin:
             else:
                 pat_matched_senses.sort(key=lambda x: (-x[0], x[2]))
             for _prio, c_tok, s_i, s, raw_df in pat_matched_senses:
-                df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
-                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, True)
+                df = cls._compose_collocation_definition(u_key, locked_expr_type, c_tok, s, raw_df, quote) or raw_df
+                cand_exs = list(s.get('examples', []) or [])
+                for u_obj in (s.get('units') or []):
+                    if isinstance(u_obj, dict) and u_obj.get('examples'):
+                        for u_e in u_obj['examples']:
+                            if u_e and u_e not in cand_exs:
+                                cand_exs.append(u_e)
+                for pb in (s.get('pattern_bundles') or []):
+                    if isinstance(pb, dict) and pb.get('example') and pb['example'] not in cand_exs:
+                        cand_exs.append(pb['example'])
+                m_ex = (
+                    cls._unit_example(u_key, cand_exs, allow_modifier=False)
+                    or cls._unit_example(u_key, cand_exs, allow_modifier=True)
+                    or cls._relaxed_unit_example(u_key, cand_exs)
+                )
+                if m_ex:
+                    cand_exs = [m_ex] + [e for e in cand_exs if e != m_ex]
+                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", cand_exs, s, True)
 
-        # Pass 3B: WordNet (oewn:2025+) Multi-Word Synsets ONLY when PedLex has 0 attested phrase candidates
+        # Pass 3B: WordNet (oewn:2025+) Multi-Word Synsets & Unit-Example-Attested Synsets ONLY when PedLex has 0 attested phrase candidates
         if not candidates and len(tokens) >= 2:
             try:
                 wn = cls.get_wordnet()
@@ -3024,13 +3403,30 @@ class ExtractionPipelineMixin:
                                 s_def = f"to {s_def}"
                             s_exs = [str(e).strip().strip('"“”') for e in (syn.examples() or []) if e]
                             _add_cand(s_def, locked_expr_type, f"wn:{mw_q}", s_exs, {"definition": s_def, "examples": s_exs}, True)
+                    if not candidates:
+                        for c_tok in [t for t in content_toks if t not in LIGHT_OR_MODAL_TOKS]:
+                            for syn in (wn.synsets(c_tok) or []):
+                                s_def = (syn.definition() or "").strip()
+                                s_exs = [str(e).strip().strip('"“”') for e in (syn.examples() or []) if e]
+                                if not s_def or not s_exs:
+                                    continue
+                                m_wn_ex = cls._unit_example(u_key, s_exs)
+                                if m_wn_ex:
+                                    s_pos = getattr(syn, "pos", lambda: "")() if callable(getattr(syn, "pos", None)) else getattr(syn, "pos", "")
+                                    mock_wn_s = {"definition": s_def, "pos": s_pos, "examples": [m_wn_ex] + [e for e in s_exs if e != m_wn_ex]}
+                                    comp_def = cls._compose_collocation_definition(u_key, locked_expr_type, c_tok, mock_wn_s, s_def, quote) or s_def
+                                    _add_cand(comp_def, locked_expr_type, f"wn:{c_tok}", mock_wn_s["examples"], mock_wn_s, True)
             except Exception:
                 pass
 
         # Pass 3C: Constituent single-word fallback ONLY if NO phrase-attested candidates were found above
-        if not candidates:
-            is_verb_slot_frame = bool(re.search(r"[\[\(](?:sb|sth|oneself|one's)[\]\)]", expr_word, re.IGNORECASE)) and len(tokens) >= 1
+        is_verb_slot_frame = bool(re.search(r"[\[\(](?:sb|sth|oneself|one's)[\]\)]", expr_word, re.IGNORECASE)) and len(tokens) >= 1
+        if not candidates and (is_verb_slot_frame or cls.is_attested_phrase(clean)):
             non_light = [t for t in content_toks if t not in LIGHT_OR_MODAL_TOKS] or content_toks
+            # For nominal collocations (modifier + head noun, e.g. 'new generation', 'passenger plane'),
+            # prioritize the syntactic head noun (rightmost token) over pre-nominal modifiers.
+            if not is_verb_slot_frame and locked_expr_type == "collocation" and len(non_light) >= 2:
+                non_light = list(reversed(non_light))
             expect_verb = is_verb_slot_frame and tokens and non_light and non_light[0] in (tokens[0], lem_0)
             for c_tok in non_light:
                 c_entry = cls.get_pedlex_entry(c_tok)
@@ -3047,7 +3443,16 @@ class ExtractionPipelineMixin:
                         raw_df = cls.format_ldoce_definition(s)
                         if not raw_df:
                             continue
-                        df = cls._compose_collocation_definition(u_key, None, c_tok, s, raw_df, quote) or raw_df
+                        df = cls._compose_collocation_definition(u_key, locked_expr_type, c_tok, s, raw_df, quote) or raw_df
+                        if (
+                            not is_verb_slot_frame
+                            and locked_expr_type == "collocation"
+                            and len(tokens) == 2
+                            and c_tok in (tokens[-1], cls._surface_lemma(tokens[-1]))
+                            and cls._pos_code(s.get("pos")) == "n"
+                            and df == raw_df
+                        ):
+                            df = f"{clean}: {raw_df}"
                         _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, False)
                         if len(candidates) >= k - 2:
                             break
@@ -3080,6 +3485,68 @@ class ExtractionPipelineMixin:
                         pass
                 if len(candidates) >= k:
                     break
+
+        # Symbolic Post-Pruning for Reflexive & Pronoun-Bound Expression Frames:
+        # 1. Reflexive-bound expressions ('reverse (oneself)', 'devote (oneself) to', 'speak for themselves'):
+        #    When the expression or quote explicitly binds a reflexive pronoun, lock to candidate sense(s)
+        #    whose `units` or `patterns` explicitly specify 'yourself' / 'oneself' / 'itself' / 'themselves'.
+        if len(candidates) > 1 and (
+            re.search(r"\b(?:oneself|myself|yourself|himself|herself|itself|ourselves|yourselves|themselves)\b", expr_word, re.I)
+            or (lem_0 and re.search(rf"\b{re.escape(lem_0)}[a-z]*\s+(?:myself|yourself|himself|herself|itself|ourselves|yourselves|themselves|oneself)\b", q_low))
+        ):
+            refl_cands = []
+            for c_item in candidates:
+                rs = c_item.get("raw_sense") if isinstance(c_item.get("raw_sense"), dict) else {}
+                u_strs = [str(u.get("phrase") if isinstance(u, dict) else u).lower() for u in (rs.get("units") or [])]
+                p_strs = [str(p).lower() for p in (rs.get("patterns") or [])] + [
+                    str(pb.get("pattern") or "").lower() for pb in (rs.get("pattern_bundles") or []) if isinstance(pb, dict)
+                ]
+                if any(any(rk in up for rk in ("yourself", "oneself", "itself", "themselves")) for up in (u_strs + p_strs)):
+                    refl_cands.append(c_item)
+            if refl_cands:
+                candidates = refl_cands
+
+        # 2. Intransitive/pronoun-bound '<verb> <prep> it' phrasal frame ('kept at it' vs 'keep sb at sth'):
+        if len(candidates) > 1 and len(tokens) == 2 and lem_0 and re.search(
+            rf"\b(?:{re.escape(tokens[0])}|{re.escape(lem_0)})[a-z]*\s+{re.escape(tokens[1])}\s+it\b", q_low
+        ):
+            target_it_pat = f"{lem_0} {tokens[1]} it"
+            it_cands = []
+            for c_item in candidates:
+                rs = c_item.get("raw_sense") if isinstance(c_item.get("raw_sense"), dict) else {}
+                u_strs = [str(u.get("phrase") if isinstance(u, dict) else u).lower() for u in (rs.get("units") or [])]
+                p_strs = [str(p).lower() for p in (rs.get("patterns") or [])] + [
+                    str(pb.get("pattern") or "").lower() for pb in (rs.get("pattern_bundles") or []) if isinstance(pb, dict)
+                ]
+                if any(target_it_pat in up for up in (u_strs + p_strs)):
+                    it_cands.append(c_item)
+            if it_cands:
+                candidates = it_cands
+
+        # 3. Selectional Restriction ([sb] vs [sth]) Post-Pruning:
+        #    When the expression formula explicitly declares [sb]/somebody (without [sth]/something),
+        #    or declares [sth]/something (without [sb]/somebody), and competing candidates contrast
+        #    somebody-only vs something-only patterns/units (e.g. 'in touch (with somebody)' vs
+        #    'be/keep/stay etc in touch (with something)'), prune the mismatched selectional slot.
+        if len(candidates) > 1:
+            has_sb_slot = bool(re.search(r"[\[\(]?\b(?:sb|somebody|someone)\b[\]\)]?", expr_word, re.I))
+            has_sth_slot = bool(re.search(r"[\[\(]?\b(?:sth|something)\b[\]\)]?", expr_word, re.I))
+            if has_sb_slot != has_sth_slot:
+                def _cand_slot_flags(c_item: Dict[str, Any]) -> Tuple[bool, bool]:
+                    rs = c_item.get("raw_sense") if isinstance(c_item.get("raw_sense"), dict) else {}
+                    up_strs = [str(u.get("phrase") if isinstance(u, dict) else u).lower() for u in (rs.get("units") or [])] + [
+                        str(p).lower() for p in (rs.get("patterns") or [])
+                    ] + [
+                        str(pb.get("pattern") or "").lower() for pb in (rs.get("pattern_bundles") or []) if isinstance(pb, dict)
+                    ]
+                    c_sb = any(re.search(r"\b(?:sb|somebody|someone)\b", up) for up in up_strs)
+                    c_sth = any(re.search(r"\b(?:sth|something)\b", up) for up in up_strs)
+                    return c_sb, c_sth
+
+                if has_sb_slot and any(_cand_slot_flags(c)[0] and not _cand_slot_flags(c)[1] for c in candidates):
+                    candidates = [c for c in candidates if not (_cand_slot_flags(c)[1] and not _cand_slot_flags(c)[0])]
+                elif has_sth_slot and any(_cand_slot_flags(c)[1] and not _cand_slot_flags(c)[0] for c in candidates):
+                    candidates = [c for c in candidates if not (_cand_slot_flags(c)[0] and not _cand_slot_flags(c)[1])]
 
         return candidates[:k]
 
@@ -3123,8 +3590,13 @@ class ExtractionPipelineMixin:
                     # Reject singular noun false positives (e.g. 'a standard feature in' for 'be featured in')
                     if v_stem and v_stem != part_tok and re.search(rf"\b(?:a|an|the)\s+(?:\w+\s+)?{re.escape(v_stem)}\b", e_norm) and part_tok not in e_norm:
                         return False
-                if cls._unit_example(u_key, [ex_clean], allow_modifier=True):
+                if cls._unit_example(u_key, [ex_clean], allow_modifier=True) or cls._relaxed_unit_example(u_key, [ex_clean]):
                     return True
+                u_toks_ex = u_key.split()
+                if len(u_toks_ex) == 3 and u_toks_ex[0] in ("do", "make", "take", "give", "show", "have", "play", "pay", "put", "keep", "get"):
+                    vn_core_ex = f"{u_toks_ex[0]} {cls._surface_lemma(u_toks_ex[2]) or u_toks_ex[2]}"
+                    if cls._unit_example(vn_core_ex, [ex_clean], allow_modifier=True) or cls._unit_example(f"{u_toks_ex[0]} {u_toks_ex[2]}", [ex_clean], allow_modifier=True):
+                        return True
                 if u_key_no_cop:
                     if cls._unit_example(u_key_no_cop, [ex_clean], allow_modifier=True):
                         return True
@@ -3210,9 +3682,30 @@ class ExtractionPipelineMixin:
                             for cand_ex in cand_pool:
                                 if _is_valid_distinct(cand_ex, check_pos=False) and cls._unit_example(p_k, [cand_ex], allow_modifier=True):
                                     return cand_ex.strip().strip('"“”')
-            for exact_ex in (exact_pb_exs + matching_pb_exs):
+            for exact_ex in exact_pb_exs:
                 if _is_valid_distinct(exact_ex, check_pos=False):
                     return exact_ex.strip().strip('"“”')
+            # For copular/participial expressions ('be headed for [sth]'), prioritize examples from the locked sense
+            # that contain the exact inflected surface phrase ('headed for') ahead of lemmatized active variants ('heading for').
+            if u_key_no_cop:
+                for surf_ex in ([current_example] if current_example else []) + cand_pool:
+                    if surf_ex and _is_valid_distinct(surf_ex, check_pos=False) and re.search(rf"\b{re.escape(u_key_no_cop)}\b", str(surf_ex), re.I):
+                        return str(surf_ex).strip().strip('"“”')
+                sense_unit_strs = [
+                    (str(u.get("phrase") or u.get("unit") or "") if isinstance(u, dict) else str(u)).lower()
+                    for u in ((sense.get("units") or []) if isinstance(sense, dict) else [])
+                ]
+                u_cop_prefix = " ".join(u_key.split()[:2])
+                if any(u_cop_prefix in su for su in sense_unit_strs):
+                    for corp_ex in cls.search_corpus_examples(f"be {u_key_no_cop}", limit=10):
+                        if (
+                            _is_valid_distinct(corp_ex, check_pos=False)
+                            and re.search(rf"\b(?:be|am|is|are|was|were|been|being)\s+(?:[a-z]+\s+)?{re.escape(u_key_no_cop)}\b", corp_ex, re.I)
+                        ):
+                            return corp_ex.strip().strip('"“”')
+            for match_ex in matching_pb_exs:
+                if _is_valid_distinct(match_ex, check_pos=False):
+                    return match_ex.strip().strip('"“”')
 
         if _is_valid_distinct(current_example, check_pos=(sense is None)):
             return str(current_example).strip().strip('"“”')
@@ -3284,42 +3777,15 @@ class ExtractionPipelineMixin:
                     return ""
                 if not is_monosemous:
                     # If all senses on a derived entry are synthesized/projected ('wordnet' or 'derivational'),
-                    # allow corpus/WordNet example lookup for the derived headword itself if Sense-Anchored Rescue doesn't find a sense-specific hit.
+                    # allow corpus/WordNet example lookup for the derived headword itself.
                     is_derived_projected = bool(
                         entry and entry.get("kind") == "derived"
                         and all(s.get("is_derived_projected") or s.get("gloss_source") in ("wordnet", "derivational") for s in pos_senses)
                     )
-                    # Sense-Anchored Corpus Rescue: when a locked PedLex sense has 0 built-in examples (e.g. 'tablet' Sense 4),
-                    # search PedLex corpus examples ONLY if the example matches at least one distinctive content word
-                    # from this sense's definition/signpost AND has zero overlap with competing senses' distinctive keywords.
-                    _stop_ex = {
-                        "the", "and", "for", "with", "that", "this", "from", "into", "over", "under", "about",
-                        "used", "make", "made", "something", "somebody", "someone", "person", "people", "thing",
-                        "things", "small", "large", "piece", "type", "kind", "form", "flat", "round", "hard",
-                        "have", "having", "which", "when", "where", "your", "their", "other", "such", "especially"
-                    }
-                    s_kws = set(re.findall(r"[a-z]{4,}", (str(sense.get("definition") or "") + " " + str(sense.get("signpost") or "")).lower())) - _stop_ex
-                    other_kws: Set[str] = set()
-                    for ps in pos_senses:
-                        if ps is not sense and ps.get("definition") != sense.get("definition"):
-                            other_kws.update(re.findall(r"[a-z]{4,}", (str(ps.get("definition") or "") + " " + str(ps.get("signpost") or "")).lower()))
-                    s_distinct_kws = s_kws - other_kws
-                    other_distinct_kws = (other_kws - s_kws) - _stop_ex
-                    if s_distinct_kws:
-                        try:
-                            for ex in (cls.search_corpus_examples(clean_target, limit=30) or []):
-                                ex_s = str(ex).strip()
-                                if not ex_s or not _is_valid_distinct(ex_s):
-                                    continue
-                                ex_toks = set(re.findall(r"[a-z]{4,}", ex_s.lower()))
-                                if (ex_toks & s_distinct_kws) and not (ex_toks & other_distinct_kws):
-                                    return ex_s.strip('"“”')
-                        except Exception:
-                            pass
                     if is_derived_projected:
                         is_monosemous = True
                     else:
-                        # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense
+                        # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense or corpus
                         return ""
 
         # 2. Monosemous or unlocked entry-level & cross-entry corpus examples
@@ -3366,8 +3832,15 @@ class ExtractionPipelineMixin:
             except Exception:
                 pass
 
-        # 5. Check WordNet synset examples (only when monosemous in both PedLex and WordNet for target POS)
-        if not is_multi and is_monosemous:
+        # 5. Check WordNet synset examples (only for derived/WordNet-sourced entries or when PedLex is absent, and monosemous in WordNet for target POS)
+        allow_wn_examples = bool(
+            not entry
+            or not pos_senses
+            or entry.get("kind") == "derived"
+            or (sense and isinstance(sense, dict) and (sense.get("gloss_source") in ("wordnet", "derivational") or sense.get("is_derived_projected")))
+            or all(s.get("gloss_source") in ("wordnet", "derivational") or s.get("is_derived_projected") for s in pos_senses)
+        )
+        if not is_multi and is_monosemous and allow_wn_examples:
             try:
                 wn = cls.get_wordnet()
                 if wn:
@@ -3550,7 +4023,7 @@ class ExtractionPipelineMixin:
                     continue
                 if not cls.is_pedagogical_target(w):
                     continue
-                if any(cls.are_same_word_family(w, sw) for sw in seen_words):
+                if not cand.get("is_syllabus") and any(cls.are_same_word_family(w, sw) for sw in seen_words):
                     continue
 
                 matching_sent = cand.get("quote", "")
@@ -3558,6 +4031,7 @@ class ExtractionPipelineMixin:
 
                 # If sentence not already matched, search in sentence pool
                 anchor_quality = "quote" if matching_sent else "syllabus"
+                shown: List[Tuple[str, str]] = []
                 if not matching_sent and pool:
                     w_clean = re.sub(r'[^a-z0-9]', '', w)
                     shown = [(sid, sent) for sid, sent in pool.items() if cls.text_contains_form(sent, w)]
@@ -3572,13 +4046,20 @@ class ExtractionPipelineMixin:
                             # Otherwise check via spaCy whether all occurrences are mid-sentence PROPN / capitalized title-case compounds
                             _nlp = cls.get_spacy()
                             doc_s = _nlp(cls._strip_lexical_quotes(sent_s))
+                            alpha_s = [t_a for t_a in doc_s if t_a.is_alpha]
+                            is_title_heading = bool(alpha_s) and all(
+                                t_a.text[0].isupper() or t_a.pos_ in ("ADP", "DET", "CCONJ", "PART", "TO")
+                                for t_a in alpha_s
+                            )
                             has_valid_tok = False
                             for t_s in doc_s:
                                 if cls.form_matches(t_s.text, w) or cls.form_matches(t_s.lemma_, w):
                                     is_mid_cap = (
-                                        t_s.text and t_s.text[0].isupper() and t_s.i > 0
+                                        not is_title_heading
+                                        and t_s.text and t_s.text[0].isupper() and t_s.i > 0
+                                        and t_s.pos_ != "VERB"
                                         and doc_s[t_s.i - 1].text not in (".", "!", "?", ":", ";", '"', "\u201c", "'", "\u2018", "\u2014", "--")
-                                        and (t_s.pos_ == "PROPN" or doc_s[t_s.i - 1].text == "(" or doc_s[t_s.i - 1].text[0].isupper())
+                                        and (t_s.pos_ == "PROPN" or doc_s[t_s.i - 1].text == "(" or (t_s.i - 1 > 0 and doc_s[t_s.i - 1].text[0].isupper()))
                                     )
                                     if not is_mid_cap:
                                         has_valid_tok = True
@@ -3675,7 +4156,7 @@ class ExtractionPipelineMixin:
                         discourse_ctx = " ".join(nb_sents)
 
                 cand_pool = cls.build_top_k_vocab_candidates(
-                    w, matching_sent, pos=pos, k=4, discourse_context=discourse_ctx
+                    w, matching_sent, pos=pos, k=16, discourse_context=discourse_ctx
                 ) if matching_sent else []
                 if cand_pool:
                     if len(cand_pool) > 1 and enable_llm_disambiguation:
@@ -3685,24 +4166,25 @@ class ExtractionPipelineMixin:
                         chosen = cand_pool[0]
                     definition = chosen.get("definition", "")
                     locked_raw_sense = chosen.get("raw_sense")
-                    if not pos:
-                        chosen_pos = str(chosen.get("pos") or "").strip().lower()
-                        if chosen_pos:
-                            for k, v in (("adv", "adverb"), ("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
-                                if k in chosen_pos:
-                                    pos = v
-                                    break
+                    chosen_pos = str(chosen.get("pos") or "").strip().lower()
+                    if chosen_pos:
+                        for k_p, v_p in (("adv", "adverb"), ("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
+                            if k_p in chosen_pos:
+                                pos = v_p
+                                break
                     exs = chosen.get("examples") or []
                     if exs:
                         example = exs[0]
                     lock_score = chosen.get("score", 0.0)
+                    lock_margin = chosen.get("margin", 0.0)
+                    lock_confidence = chosen.get("confidence", "high")
 
-                if not definition:
+                if not definition and not (matching_sent and cls.get_pedlex_entry(w) and not cand_pool):
                     definition, example = cls.get_ldoce_definition_and_example(
                         w, target_pos=pos, context_sentence=matching_sent,
                         require_sense_confidence=False
                     )
-                if not definition:
+                if not definition and not (matching_sent and cls.get_pedlex_entry(w) and not cand_pool):
                     # Fallback to WordNet definition if PedLex headword missing
                     try:
                         best_s = cls.disambiguate_wordnet_synset(w, pos=pos, context_sentence=matching_sent)
@@ -3738,6 +4220,47 @@ class ExtractionPipelineMixin:
                 if not example and not locked_raw_sense:
                     example = cls.ldoce_sense_example(w, pos=pos, quote=matching_sent)
                 example = cls.ensure_distinct_example(w, pos, example, matching_sent, sense=locked_raw_sense)
+
+                # If the passage contains multiple attested sentences for `w` (`len(shown) > 1`) and the first picked sentence
+                # maps to an example-less sub-sense (e.g. 'log out' vs 'log in'), evaluate alternate attested sentences in `shown`
+                # before dropping the word at Gate 2.
+                if (not definition or cls.is_boilerplate_definition(definition) or not example) and len(shown) > 1:
+                    for alt_sid, alt_sent in shown:
+                        if alt_sent == matching_sent:
+                            continue
+                        if any(cls.are_same_word_family(w, sw) and alt_sent == sq for sw, sq in seen_word_quotes):
+                            continue
+                        alt_disc = ""
+                        if alt_sid and pool:
+                            m_alt_num = re.match(r"S-(\d+)", str(alt_sid))
+                            if m_alt_num:
+                                a_num = int(m_alt_num.group(1))
+                                alt_disc = " ".join(pool[f"S-{a_num + d}"] for d in (-2, -1, 1, 2) if f"S-{a_num + d}" in pool)
+                        alt_pool = cls.build_top_k_vocab_candidates(w, alt_sent, pos=cand.get("part_of_speech") or pos, k=16, discourse_context=alt_disc)
+                        if not alt_pool:
+                            continue
+                        alt_chosen = alt_pool[cls.disambiguate_via_llm(w, alt_sent, alt_pool, discourse_context=alt_disc)] if (len(alt_pool) > 1 and enable_llm_disambiguation) else alt_pool[0]
+                        alt_def = alt_chosen.get("definition", "")
+                        alt_raw = alt_chosen.get("raw_sense")
+                        alt_pos = pos
+                        alt_cpos = str(alt_chosen.get("pos") or "").strip().lower()
+                        for k_p, v_p in (("adv", "adverb"), ("noun", "noun"), ("verb", "verb"), ("adj", "adjective"), ("prep", "preposition"), ("conj", "conjunction")):
+                            if k_p in alt_cpos:
+                                alt_pos = v_p
+                                break
+                        alt_exs = alt_chosen.get("examples") or []
+                        alt_ex = cls.ensure_distinct_example(w, alt_pos, alt_exs[0] if alt_exs else "", alt_sent, sense=alt_raw)
+                        if alt_def and not cls.is_boilerplate_definition(alt_def) and alt_ex:
+                            matching_sent = alt_sent
+                            matching_sid = alt_sid
+                            definition = alt_def
+                            pos = alt_pos
+                            example = alt_ex
+                            locked_raw_sense = alt_raw
+                            lock_score = alt_chosen.get("score", 0.0)
+                            lock_margin = alt_chosen.get("margin", 0.0)
+                            lock_confidence = alt_chosen.get("confidence", "high")
+                            break
 
                 # Gate 2 (Evidence-Completeness Gate - 宁缺勿滥):
                 # Drop any candidate lacking a valid definition OR an authentic, non-duplicate dictionary example
@@ -3821,11 +4344,14 @@ class ExtractionPipelineMixin:
                 "across", "against", "between", "among", "be", "have", "do", "get", "make", "take", "go", "come"
             }
 
-            attested_sources = ("phrase_row", "unit_sense", "headword_entry", "phrasal_verb_block", "sense_pattern")
+            attested_sources = (
+                "phrase_row", "unit_sense", "headword_entry", "phrasal_verb_block",
+                "sense_pattern", "collocation", "crossref", "ldoce_entry", "wordnet"
+            )
             results: List[Dict[str, Any]] = []
             seen_formulas: Set[str] = set()
             for s in skeletons:
-                if len(results) >= target_count:
+                if len(results) >= target_count and not s.get("_is_syllabus", False):
                     break
                 phrase = s.get("phrase", "")
                 formula = s.get("pattern_formula", phrase)
@@ -3863,12 +4389,13 @@ class ExtractionPipelineMixin:
                     enable_llm_disambiguation=False
                 )
 
-                # Gate 1: Neuro-Symbolic Arbitration across Top-K (k=4) Expression Candidates
+                # Gate 1: Neuro-Symbolic Arbitration across Top-K (k=12) Expression Candidates
                 locked_expr_sense = None
                 if quote:
-                    pool = cls.build_top_k_expression_candidates(formula, quote, k=4, expr_type=expr_type)
+                    pool = cls.build_top_k_expression_candidates(formula, quote, k=12, expr_type=expr_type)
                     has_attested_pool = any(c.get("attested") for c in pool)
-                    if not is_syllabus_item and not has_attested_pool and def_source not in attested_sources:
+                    is_verb_slot_frame = bool(re.search(r"[\[\(](?:sb|sth|oneself|one's)[\]\)]", formula, re.IGNORECASE))
+                    if not has_attested_pool and def_source not in attested_sources and not is_verb_slot_frame:
                         continue
                     if defn and not has_attested_pool:
                         norm_defn = re.sub(r'[^a-z0-9]+', ' ', defn.lower()).strip()
@@ -3881,25 +4408,31 @@ class ExtractionPipelineMixin:
                                 "margin": 0.0,
                                 "attested": def_source in attested_sources,
                             })
-                    pool = pool[:4]
+                    pool = pool[:12]
                     if pool:
+                        chosen = None
                         if len(pool) > 1 and enable_llm_disambiguation:
                             chosen_idx = cls.disambiguate_via_llm(formula, quote, pool, discourse_context=discourse_ctx)
                             chosen = pool[chosen_idx] if 0 <= chosen_idx < len(pool) else pool[0]
-                            if chosen.get("definition"):
-                                defn = chosen["definition"]
-                                def_source = def_source or "phrase_row"
-                            locked_expr_sense = chosen.get("raw_sense")
-                            if chosen.get("examples"):
-                                ex = chosen["examples"][0]
-                        elif not defn or (has_attested_pool and def_source not in attested_sources):
+                        elif has_attested_pool or not defn or def_source not in attested_sources:
                             chosen = pool[0]
+                        if chosen is not None:
+                            prev_defn_norm = re.sub(r"[^a-z0-9]+", " ", (defn or "").lower()).strip()
+                            chosen_defn_norm = re.sub(r"[^a-z0-9]+", " ", (chosen.get("definition") or "").lower()).strip()
+                            sense_changed = bool(chosen_defn_norm and chosen_defn_norm != prev_defn_norm)
                             if chosen.get("definition"):
                                 defn = chosen["definition"]
                                 def_source = def_source or "phrase_row"
                             locked_expr_sense = chosen.get("raw_sense")
+                            if sense_changed:
+                                ex = ""
                             if chosen.get("examples"):
-                                ex = chosen["examples"][0]
+                                ex = (
+                                    cls._unit_example(formula, chosen["examples"], allow_modifier=False)
+                                    or cls._unit_example(formula, chosen["examples"], allow_modifier=True)
+                                    or cls._relaxed_unit_example(formula, chosen["examples"])
+                                    or (ex if ex and cls._unit_example(formula, [ex], allow_modifier=True) else chosen["examples"][0])
+                                )
                         elif locked_expr_sense is None:
                             locked_expr_sense = pool[0].get("raw_sense")
 
@@ -4113,7 +4646,7 @@ class ExtractionPipelineMixin:
             if "propositional_encapsulation_which" in profiles:
                 return _resolve_profile("propositional_encapsulation_which")
             return _resolve_profile("relative_clause_elaborative")
-        if "[np], which" in f_lower:
+        if "[np], which" in f_lower or "[np], who" in f_lower or "[np] , which" in f_lower or "[np] , who" in f_lower:
             return _resolve_profile("relative_clause_elaborative")
         if "shell noun" in f_lower or "that/of + [proposition" in f_lower or "fact + that" in f_lower or "[abstract np] + that" in f_lower:
             return _resolve_profile("appositive_complement_that")
@@ -4121,7 +4654,7 @@ class ExtractionPipelineMixin:
             return _resolve_profile("cleft_focus")
         if "evaluative adj" in f_lower or "it + [be] + [evaluative" in f_lower or "it is + [adj" in f_lower or "it was + [adj" in f_lower or "dummy_it" in f_lower:
             return _resolve_profile("dummy_it_extraposition")
-        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np], who", "[np] , which", "[np] , who", "[np] + [prep] + which", "[np] + [prep] + whom")):
+        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np] + [prep] + which", "[np] + [prep] + whom")):
             return _resolve_profile("relative_clause_restrictive")
 
         # 1. Cleft Focus vs Dummy-It Extraposition (check extraposition predicates FIRST even if formula says Focal Element)
@@ -4185,11 +4718,11 @@ class ExtractionPipelineMixin:
             if "propositional_encapsulation_which" in profiles:
                 return _resolve_profile("propositional_encapsulation_which")
             return _resolve_profile("relative_clause_elaborative")
-        if (", which" in q_lower and "fact + that" not in f_lower and "[shell noun]" not in f_lower) or "[np], which" in f_lower:
+        if (", which" in q_lower and "fact + that" not in f_lower and "[shell noun]" not in f_lower) or "[np], which" in f_lower or "[np], who" in f_lower or "[np] , which" in f_lower or "[np] , who" in f_lower:
             return _resolve_profile("relative_clause_elaborative")
 
         # 7. Restrictive & Human Relative Clauses: [NP] + which/that/who + [VP] or Prep + which/whom
-        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np], who", "[np] , which", "[np] , who", "[np] + [prep] + which", "[np] + [prep] + whom")):
+        if any(p in f_lower for p in ("[np] + which", "[np] + that", "[np] + who", "[np] + whom", "[np] + whose", "[np] + [prep] + which", "[np] + [prep] + whom")):
             return _resolve_profile("relative_clause_restrictive")
 
         # 8. Proportional Comparative & Equative Comparative (as ... as)
@@ -4328,11 +4861,13 @@ class ExtractionPipelineMixin:
         t_words = set(re.findall(r"[a-z]{3,}", (full_text or "").lower()))
 
         best_var = None
-        best_score = -1000
-        for var in variants:
+        best_score = -1000.0
+        for idx_v, var in enumerate(variants):
             kws = set(var.get("keywords", ()))
-            # Quote keyword match carries 5x weight; passage theme match carries 1x weight
-            score = len(kws & q_words) * 5 + len(kws & t_words)
+            # Quote keyword match carries 5x weight; passage theme match carries 1x weight;
+            # deterministic unit+quote CRC32 tie-breaker prevents cross-unit variant repetition when keyword overlap ties at 0.
+            tie_break = (zlib.crc32(f"{(full_text or '')[:240]}|{(quote or '')[:120]}|{idx_v}".encode("utf-8")) % 997) / 10000.0
+            score = float(len(kws & q_words) * 5 + len(kws & t_words)) + tie_break
             v_imit = var.get("imitation_example", default_imit)
             v_mist = var.get("common_mistakes", default_mist)
             if _instantiates_anchors(v_imit):
@@ -4450,6 +4985,7 @@ class ExtractionPipelineMixin:
                             seen_cands.add(tok)
                             ordered_candidates.append(tok)
 
+                    found_alert_pitfall = False
                     for aw in ordered_candidates:
                         alert = cls.get_ldoce_grammar_alert(aw, quote=quote)
                         if alert and ("Don't say" in alert.get("content", "") or "✗" in alert.get("content", "")):
@@ -4463,15 +4999,14 @@ class ExtractionPipelineMixin:
                                 cand_text = f"Grammar Warning ({alert.get('word', '').upper()}): {chosen}"
                                 if cand_text not in used_mistakes:
                                     clean_mistake = cand_text
+                                    found_alert_pitfall = True
                                     break
-                        if clean_mistake not in used_mistakes:
+                        if found_alert_pitfall:
                             break
-
-                used_imitations.add(imitation)
-                used_mistakes.add(clean_mistake)
             except Exception:
-                used_imitations.add(imitation)
-                used_mistakes.add(clean_mistake)
+                pass
+            used_imitations.add(imitation)
+            used_mistakes.add(clean_mistake)
 
             results.append({
                 "quote": quote,

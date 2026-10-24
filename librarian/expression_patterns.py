@@ -389,6 +389,44 @@ DECLARATIVE_EXPRESSION_PATTERNS: List[Dict[str, Any]] = [
                     "DEP": {"IN": ["pobj", "pcomp"]}}}
             ]
         ]
+    },
+    {
+        "id": "coordinated_binomial_phrase",
+        "type": "set phrase",
+        "priority": 91,
+        "name": "Coordinated Binomial Set Phrase / Idiom (pros and cons / ups and downs / trial and error)",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "head", "RIGHT_ATTRS": {"POS": {"IN": ["NOUN", "VERB", "ADJ", "ADV"]}}},
+                {"LEFT_ID": "head", "REL_OP": ">", "RIGHT_ID": "cc", "RIGHT_ATTRS": {
+                    "DEP": "cc",
+                    "LOWER": {"IN": ["and", "or"]}
+                }},
+                {"LEFT_ID": "head", "REL_OP": ">", "RIGHT_ID": "conj", "RIGHT_ATTRS": {
+                    "DEP": "conj"
+                }},
+            ]
+        ]
+    },
+    {
+        "id": "lexicalized_noun_of_noun_phrase",
+        "type": "set phrase",
+        "priority": 91,
+        "name": "Lexicalized N1 of N2 Set Phrase (peace of mind / point of view / way of life)",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "noun1", "RIGHT_ATTRS": {"POS": "NOUN"}},
+                {"LEFT_ID": "noun1", "REL_OP": ">", "RIGHT_ID": "prep", "RIGHT_ATTRS": {
+                    "POS": "ADP",
+                    "DEP": "prep",
+                    "LOWER": "of"
+                }},
+                {"LEFT_ID": "prep", "REL_OP": ">", "RIGHT_ID": "noun2", "RIGHT_ATTRS": {
+                    "POS": "NOUN",
+                    "DEP": "pobj"
+                }},
+            ]
+        ]
     }
 ]
 
@@ -819,5 +857,76 @@ class ExpressionPatternEngine:
                 "priority": priority,
                 "token_indices": extra_indices + [noun_tok.i, prep.i]
             }
+
+        # 11. Coordinated binomial set phrase / idiom (e.g. pros and cons, ups and downs, trial and error)
+        elif pattern_id == "coordinated_binomial_phrase":
+            if len(tokens) < 3:
+                return None
+            head_tok, cc_tok, conj_tok = tokens[0], tokens[1], tokens[2]
+            if cc_tok.i != head_tok.i + 1 or conj_tok.i != head_tok.i + 2:
+                return None
+            if not (head_tok.is_alpha and conj_tok.is_alpha):
+                return None
+            surf_cand = f"{head_tok.text.lower()} {cc_tok.text.lower()} {conj_tok.text.lower()}"
+            lem_cand = f"{head_tok.lemma_.lower()} {cc_tok.text.lower()} {conj_tok.lemma_.lower()}"
+            from librarian.linguistics import LinguisticEngine
+            for cand in (surf_cand, lem_cand):
+                if LinguisticEngine.is_attested_phrase(cand):
+                    defn, ex, src = LinguisticEngine.expression_definition_evidence(
+                        cand, "set phrase", context_sentence=doc.text, enable_llm_disambiguation=False
+                    )
+                    if defn and ex and src in ("phrase_row", "unit_sense", "headword_entry", "sense_pattern", "ldoce_entry"):
+                        return {
+                            "pattern_id": pattern_id,
+                            "phrase": cand,
+                            "pattern_formula": cand,
+                            "type": "set phrase",
+                            "priority": priority,
+                            "token_indices": [head_tok.i, cc_tok.i, conj_tok.i]
+                        }
+            return None
+
+        # 12. Lexicalized N1 of N2 set phrase (e.g. peace of mind, point of view, way of life, cost of living)
+        elif pattern_id == "lexicalized_noun_of_noun_phrase":
+            if len(tokens) < 3:
+                return None
+            n1_tok, prep_tok, n2_tok = tokens[0], tokens[1], tokens[2]
+            if prep_tok.i != n1_tok.i + 1 or n2_tok.i != prep_tok.i + 1:
+                return None
+            if not (n1_tok.is_alpha and n2_tok.is_alpha):
+                return None
+            n1_lem = n1_tok.lemma_.lower()
+            n2_lem = n2_tok.lemma_.lower()
+            # Exclude transparent quantifier/partitive/relational heads that take open-slot 'of + NP' complements
+            _TRANSPARENT_OF_HEADS = frozenset({
+                "lot", "kind", "type", "sort", "part", "piece", "bit", "number", "amount",
+                "group", "pair", "couple", "plenty", "variety", "range", "series", "member",
+                "majority", "minority", "rest", "half", "side", "end", "beginning", "middle",
+                "top", "bottom", "front", "back", "edge", "center", "centre", "form", "lack",
+                "use", "rise", "coming", "result", "cause", "effect", "source", "example"
+            })
+            if n1_lem in _TRANSPARENT_OF_HEADS or n1_tok.text.lower() in _TRANSPARENT_OF_HEADS:
+                return None
+            # Reject when N2 has a possessive or demonstrative determiner (e.g. 'the love of their family')
+            if any(c.dep_ in ("poss", "nummod") for c in n2_tok.children):
+                return None
+            surf_cand = f"{n1_tok.text.lower()} of {n2_tok.text.lower()}"
+            lem_cand = f"{n1_lem} of {n2_lem}"
+            from librarian.linguistics import LinguisticEngine
+            for cand in (surf_cand, lem_cand):
+                if LinguisticEngine.is_attested_phrase(cand):
+                    defn, ex, src = LinguisticEngine.expression_definition_evidence(
+                        cand, "set phrase", context_sentence=doc.text, enable_llm_disambiguation=False
+                    )
+                    if defn and ex and src in ("phrase_row", "unit_sense", "headword_entry", "sense_pattern", "ldoce_entry"):
+                        return {
+                            "pattern_id": pattern_id,
+                            "phrase": cand,
+                            "pattern_formula": cand,
+                            "type": "set phrase",
+                            "priority": priority,
+                            "token_indices": [n1_tok.i, prep_tok.i, n2_tok.i]
+                        }
+            return None
 
         return None

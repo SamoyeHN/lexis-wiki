@@ -561,6 +561,43 @@ class QuizGeneratorMixin:
                             setattr(q, "translated_sentence", healed_stem)
                     q_stem = healed_stem
 
+            # 3b. Redundant Finite Copula Auto-Healing before bare-infinitive 'be ...' phrase options:
+            if q_stem and options and all(str(opt).strip().lower().startswith("be ") for opt in options if str(opt).strip()):
+                def _heal_copula(m: re.Match) -> str:
+                    cop = m.group(1).lower()
+                    adv_mid = m.group(2) or ""
+                    blank_tok = m.group(3)
+                    is_cap = m.group(1)[0].isupper()
+                    is_past = cop in ("was", "were") or cop.startswith("had ")
+                    if adv_mid.strip():
+                        aux = ("Would" if is_cap else "would") if is_past else ("Can" if is_cap else "can")
+                    elif is_past:
+                        aux = "Seemed to" if is_cap else "seemed to"
+                    elif cop == "is" or cop.startswith("has "):
+                        aux = "Tends to" if is_cap else "tends to"
+                    else:
+                        aux = "Tend to" if is_cap else "tend to"
+                    return f"{aux} {adv_mid}{blank_tok}"
+
+                healed_cop_stem = re.sub(
+                    r"\b(am|is|are|was|were|(?:has|have|had)\s+been)\s+((?:(?:not|never|always|often|also|still|deeply|completely|fully|truly|quite|very|\w+ly)\s+)*)(_{2,})\b",
+                    _heal_copula,
+                    q_stem,
+                    flags=re.IGNORECASE,
+                )
+                if healed_cop_stem != q_stem:
+                    if "question" in q_dict:
+                        if isinstance(q, dict):
+                            q["question"] = healed_cop_stem
+                        else:
+                            setattr(q, "question", healed_cop_stem)
+                    elif "translated_sentence" in q_dict:
+                        if isinstance(q, dict):
+                            q["translated_sentence"] = healed_cop_stem
+                        else:
+                            setattr(q, "translated_sentence", healed_cop_stem)
+                    q_stem = healed_cop_stem
+
             declared_idx = q_dict.get("correct_answer_index")
             try:
                 declared_idx = int(declared_idx)
@@ -719,6 +756,9 @@ class QuizGeneratorMixin:
         Generates a quiz handout based on extracted wiki data.
         Optional audit_callback(stage, progress, message, extra=None) for live dashboard progress.
         """
+        if isinstance(count, str) and count.strip().lower() in ("vocabulary", "reading", "translation", "listening", "video"):
+            template_name = count.strip().lower()
+            count = 10 if template_name == "vocabulary" else 5
         # 1. Normalize unit_name to extract core unit folder name robustly
         parts = Path(unit_name).parts
         core_name = None
@@ -740,8 +780,23 @@ class QuizGeneratorMixin:
             if core_name.endswith(suffix):
                 core_name = core_name[:-len(suffix)]
 
+        # Pre-Flight LLM Availability Gate:
+        # Fail fast before running fresh extraction or quiz blueprint generation if LLM is offline.
+        try:
+            llm.ensure_available(
+                task_name=f"quiz_{template_name}_{core_name}",
+                prompt_summary=f"Quiz generation ({template_name}_quiz) pre-flight check for unit '{core_name}'.",
+            )
+        except Exception as pre_err:
+            logger.error(f"Pre-flight LLM check failed for quiz_{template_name}_{core_name}: {pre_err}")
+            return f"Error: {pre_err}"
+
         # 2. Resolve Data
-        data = self._load_wiki_data(core_name, template_name)
+        try:
+            data = self._load_wiki_data(core_name, template_name)
+        except Exception as load_err:
+            logger.error(f"Failed loading/extracting wiki data for {core_name} ({template_name}): {load_err}", exc_info=True)
+            return f"Error: Failed to prepare source data for {core_name} ({template_name}): {load_err}"
         if not data:
             return f"Error: Could not find extracted {template_name} data for {core_name}. If this is a fresh setup, please verify that Ollama or your LLM API is running, and check if the extraction pipeline ran successfully."
 
@@ -1265,6 +1320,7 @@ class QuizGeneratorMixin:
                             target_language=curr_tgt_lang,
                             cefr_level=kwargs.get("cefr_level", "B2"),
                             enforce_minimal_pair=bool(blueprint_specs),
+                            passage_text=source_context,
                         )
                     else:
                         is_cloze_mode = (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
@@ -1509,6 +1565,7 @@ class QuizGeneratorMixin:
                                         target_language=curr_tgt_lang,
                                         cefr_level=cure_cefr,
                                         enforce_minimal_pair=bool(blueprint_specs),
+                                        passage_text=source_context,
                                     )
                                     cure_item_failed = bool(cure_l1_flagged)
                                 else:

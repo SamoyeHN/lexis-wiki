@@ -741,6 +741,12 @@
                         </a>
                     `;
                 }
+            } else if (cleanPath.endsWith('.md')) {
+                buttonsHtml += `
+                    <button class="btn btn-sm btn-outline-success py-1 px-2.5" style="font-size: 0.75rem;" onclick="exportMarkdownPathAsHtml('${esc(cleanPath)}')">
+                        <i class="bi bi-filetype-html me-1"></i> Export .HTML
+                    </button>
+                `;
             }
 
             actions.innerHTML = `
@@ -969,13 +975,17 @@
             .catch(err => showToast(`Export failed: ${err.message}`, 'error'));
     }
 
-    function printActiveWorkspaceTab() {
+    function exportActiveWorkspaceTabHtml() {
         const cat = getActiveSubTabCategory();
-        if (cat === 'vocab') printActiveNode('subtab-vocab-viewer');
-        else if (cat === 'grammar') printActiveNode('subtab-grammar-viewer');
-        else if (cat === 'summary') printActiveNode('subtab-summary-viewer');
-        else if (cat === 'raw') printActiveNode('workspace-raw-file-content');
-        else showToast('Printing is not supported for this view.', 'info');
+        if (cat === 'mindmap') {
+            downloadMindmap();
+            return;
+        }
+        if (cat === 'raw') {
+            exportRawSourceHtml();
+            return;
+        }
+        exportActiveNodeHtml(cat);
     }
 
     function downloadActiveNode(category) {
@@ -1005,30 +1015,453 @@
             .catch(err => showToast(`Export failed: ${err.message}`, 'error'));
     }
 
-    function printActiveNode(containerId) {
-        const el = document.getElementById(containerId);
-        if (!el) return;
-        const printWin = window.open('', '_blank');
-        printWin.document.write(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Lexis Wiki Printable Export</title>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-                <style>
-                    body { font-family: sans-serif; padding: 2rem; color: #000; background: #fff; }
-                    pre { background: #f8fafc; padding: 1rem; border-radius: 4px; border: 1px solid #e2e8f0; }
-                </style>
-            </head>
-            <body>
-                <div>${el.innerHTML}</div>
-                <script>
-                    window.onload = function() { window.print(); window.close(); }
-                <\/script>
-            </body>
-            </html>
-        `);
-        printWin.document.close();
+    function triggerHtmlBlobDownload(htmlString, fileName) {
+        const blob = new Blob([htmlString], { type: 'text/html;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        showToast(`Exported ${fileName}`, 'success');
+    }
+
+    function exportActiveNodeHtml(category) {
+        if (!currentUnit) {
+            showToast('No active unit selected.', 'error');
+            return;
+        }
+        const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+        const filePath = `/wiki/${baseName}/extractions/${baseName}_${category}.md`;
+        exportMarkdownPathAsHtml(filePath, `${baseName}_${category}.html`, category);
+    }
+
+    function exportMarkdownPathAsHtml(filePath, customOutName = '', categoryHint = '') {
+        const rawFileName = filePath.split('/').pop() || 'handout.md';
+        const stem = rawFileName.replace(/\.md$/i, '');
+        const outFileName = customOutName || `${stem}.html`;
+        let inferredCat = categoryHint;
+        if (!inferredCat) {
+            const lower = stem.toLowerCase();
+            if (lower.endsWith('_vocabulary')) inferredCat = 'vocabulary';
+            else if (lower.endsWith('_grammar')) inferredCat = 'grammar';
+            else if (lower.endsWith('_summary')) inferredCat = 'summary';
+            else inferredCat = 'source';
+        }
+
+        fetch(filePath)
+            .then(res => {
+                if (!res.ok) throw new Error('Markdown file not found. Run extraction first.');
+                return res.text();
+            })
+            .then(mdContent => {
+                const htmlDoc = buildStandaloneExtractionHtml(mdContent, stem.replace(/_/g, ' '), inferredCat);
+                triggerHtmlBlobDownload(htmlDoc, outFileName);
+            })
+            .catch(err => showToast(`HTML export failed: ${err.message}`, 'error'));
+    }
+
+    function exportRawSourceHtml() {
+        if (!currentUnit) {
+            showToast('No active unit selected.', 'error');
+            return;
+        }
+        const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+        const fileName = currentUnit;
+        const filePath = `/wiki/${baseName}/sources/${fileName}`;
+
+        fetch(filePath)
+            .then(res => {
+                if (!res.ok) throw new Error('Source file not found');
+                return res.text();
+            })
+            .then(text => {
+                // Strip internal <syllabus> block from student-facing source reading handout if present
+                const cleanSource = text.replace(/<syllabus>[\s\S]*?<\/syllabus>/gi, '').trim();
+                const htmlDoc = buildStandaloneExtractionHtml(cleanSource, `${baseName.replace(/_/g, ' ')} — Source Text`, 'source');
+                triggerHtmlBlobDownload(htmlDoc, `${baseName}_source.html`);
+            })
+            .catch(err => showToast(`HTML export failed: ${err.message}`, 'error'));
+    }
+
+    function formatInlineLexisMarkdown(lineHtml) {
+        return lineHtml
+            .replace(/`\[([^\]]+)\]`/g, (_, inner) => {
+                return inner.split(/\s*,\s*/).map(tag => `<span class="lex-pill lex-pill-grammar">${tag.trim()}</span>`).join(' ');
+            })
+            .replace(/(?<!\[)\[((?:(?:especially\s+)?(?:British|American|Australian)\s+English|(?:formal|informal|spoken|written|literary|humorous|old-fashioned|technical|law|medical|business|computing)(?:\s+(?:formal|informal|spoken|written|literary|humorous))?))\](?!\])/gi, (match, inner) => {
+                const clean = inner.trim();
+                if (!clean) return match;
+                return `<span class="lex-pill lex-pill-register">${clean}</span>`;
+            })
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`([^`]+)`/g, '<code class="lex-inline-code">$1</code>')
+            .replace(/\[\[(.*?)\]\]/g, '<span class="lex-headword-link">$1</span>');
+    }
+
+    function buildStandaloneExtractionHtml(mdContent, fallbackTitle, category) {
+        let bodyContent = mdContent || '';
+        const meta = {
+            title: fallbackTitle || 'Lexis Wiki Handout',
+            cefr: '',
+            itemCount: '',
+            categoryLabel: (category || 'handout').charAt(0).toUpperCase() + (category || 'handout').slice(1)
+        };
+
+        const fmMatch = bodyContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        if (fmMatch) {
+            bodyContent = bodyContent.slice(fmMatch[0].length).trim();
+            const fmText = fmMatch[1];
+            const titleM = fmText.match(/^title:\s*"?([^"\r\n]+)"?/m);
+            const cefrM = fmText.match(/^overall_cefr_level:\s*"?([^"\r\n]+)"?/m);
+            const countM = fmText.match(/^item_count:\s*(\d+)/m);
+            if (titleM && titleM[1].trim()) meta.title = titleM[1].trim();
+            if (cefrM && cefrM[1].trim()) meta.cefr = cefrM[1].trim();
+            if (countM && countM[1].trim()) meta.itemCount = countM[1].trim();
+        }
+
+        const lines = bodyContent.split(/\r?\n/);
+        let docHeading = '';
+        const sections = [];
+        let currentCard = null;
+        let introLines = [];
+
+        const flushCard = () => {
+            if (currentCard) {
+                sections.push(`<section class="lex-entry-card">${currentCard.headerHtml}<div class="lex-entry-body">${currentCard.bodyLines.join('\n')}</div></section>`);
+                currentCard = null;
+            }
+        };
+
+        lines.forEach(rawLine => {
+            const trimmed = rawLine.trim();
+            const leadingSpaces = (rawLine.match(/^(\s*)/) || ['', ''])[1].replace(/\t/g, '    ').length;
+            const indentRem = leadingSpaces > 0 ? Math.min(leadingSpaces * 0.4, 5) : 0;
+            const indentStyle = indentRem > 0 ? `padding-left: ${indentRem.toFixed(2)}rem;` : '';
+
+            if (trimmed.startsWith('# ')) {
+                if (!docHeading) {
+                    docHeading = trimmed.substring(2).trim();
+                } else {
+                    flushCard();
+                    introLines.push(`<h2 class="lex-section-title">${formatInlineLexisMarkdown(esc(trimmed.substring(2).trim()))}</h2>`);
+                }
+                return;
+            }
+
+            if (trimmed.startsWith('## ')) {
+                flushCard();
+                const h2Body = trimmed.substring(3).trim();
+                const hwMatch = h2Body.match(/^\[\[(.*?)\]\](.*)$/);
+                let headerHtml = '';
+                if (hwMatch) {
+                    const hw = esc(hwMatch[1]);
+                    const tail = hwMatch[2].trim();
+                    let attrParts = [];
+                    if (tail) {
+                        const gramTags = [];
+                        const tailNoGram = tail.replace(/`\[([^\]]+)\]`/g, (_, inner) => {
+                            inner.split(/\s*,\s*/).forEach(t => {
+                                if (t.trim()) gramTags.push(`<span class="lex-pill lex-pill-grammar">${esc(t.trim())}</span>`);
+                            });
+                            return '';
+                        }).trim();
+                        let cefrBadge = '';
+                        const tailNoCefr = tailNoGram.replace(/\b(A1|A2|B1|B2|C1|C2)\b/g, (m) => {
+                            cefrBadge = `<span class="lex-pill lex-pill-cefr">${m}</span>`;
+                            return '';
+                        }).trim();
+                        const posBadge = tailNoCefr ? `<span class="lex-pill lex-pill-pos">${esc(tailNoCefr)}</span>` : '';
+                        attrParts = [posBadge, cefrBadge, ...gramTags].filter(Boolean);
+                    }
+                    headerHtml = `<h2 class="lex-entry-title"><span class="lex-headword">${hw}</span>${attrParts.length ? ' <span class="lex-badges">' + attrParts.join(' ') + '</span>' : ''}</h2>`;
+                } else {
+                    headerHtml = `<h2 class="lex-entry-title"><span class="lex-headword">${formatInlineLexisMarkdown(esc(h2Body))}</span></h2>`;
+                }
+                currentCard = { headerHtml, bodyLines: [] };
+                return;
+            }
+
+            if (trimmed === '' || trimmed === '&nbsp;') {
+                return;
+            }
+
+            let renderedLine = '';
+            if (trimmed.startsWith('### ')) {
+                renderedLine = `<h3 class="lex-subheading">${formatInlineLexisMarkdown(esc(trimmed.substring(4)))}</h3>`;
+            } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+                const bulletStyle = indentRem > 0 ? `style="padding-left: ${(0.25 + indentRem).toFixed(2)}rem;"` : '';
+                renderedLine = `<div class="lex-bullet-row" ${bulletStyle}><span class="lex-bullet-dot">&bull;</span><div class="lex-bullet-text">${formatInlineLexisMarkdown(esc(trimmed.substring(2)))}</div></div>`;
+            } else if (trimmed.startsWith('✗')) {
+                renderedLine = `<div class="lex-contrast-row lex-wrong" style="${indentStyle}"><span class="lex-mark-wrong">&#10007;</span><span>${formatInlineLexisMarkdown(esc(trimmed.substring(1).trim()))}</span></div>`;
+            } else if (trimmed.startsWith('✓')) {
+                renderedLine = `<div class="lex-contrast-row lex-right" style="${indentStyle}"><span class="lex-mark-right">&#10003;</span><span>${formatInlineLexisMarkdown(esc(trimmed.substring(1).trim()))}</span></div>`;
+            } else {
+                renderedLine = `<p class="lex-paragraph" style="${indentStyle}">${formatInlineLexisMarkdown(esc(trimmed))}</p>`;
+            }
+
+            if (currentCard) {
+                currentCard.bodyLines.push(renderedLine);
+            } else {
+                introLines.push(renderedLine);
+            }
+        });
+
+        flushCard();
+
+        const displayHeading = docHeading || `${meta.categoryLabel}: ${meta.title}`;
+        const metaBadges = [];
+        metaBadges.push(`<span class="meta-badge meta-cat">${esc(meta.categoryLabel)}</span>`);
+        if (meta.cefr) metaBadges.push(`<span class="meta-badge meta-cefr">CEFR ${esc(meta.cefr)}</span>`);
+        if (meta.itemCount) metaBadges.push(`<span class="meta-badge meta-count">${esc(meta.itemCount)} Items</span>`);
+
+        const introCardHtml = introLines.length
+            ? `<section class="lex-entry-card lex-prose-card"><div class="lex-entry-body">${introLines.join('\n')}</div></section>`
+            : '';
+
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${esc(displayHeading)}</title>
+    <style>
+        :root {
+            --bg-page: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #0f172a;
+            --text-secondary: #334155;
+            --text-muted: #64748b;
+            --border-card: #e2e8f0;
+            --accent-primary: #0284c7;
+            --accent-navy: #0369a1;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 2.25rem 1.25rem 3.5rem;
+            background-color: var(--bg-page);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+        .handout-container {
+            max-width: 880px;
+            margin: 0 auto;
+        }
+        .handout-header {
+            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+            border: 1px solid var(--border-card);
+            border-left: 5px solid var(--accent-primary);
+            border-radius: 12px;
+            padding: 1.4rem 1.75rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }
+        .handout-title {
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: -0.015em;
+        }
+        .handout-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .meta-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .meta-cat {
+            background: rgba(2, 132, 199, 0.1);
+            color: #0284c7;
+            border: 1px solid rgba(2, 132, 199, 0.25);
+        }
+        .meta-cefr {
+            background: rgba(5, 150, 105, 0.1);
+            color: #059669;
+            border: 1px solid rgba(5, 150, 105, 0.25);
+            font-family: var(--font-mono);
+        }
+        .meta-count {
+            background: #f1f5f9;
+            color: #475569;
+            border: 1px solid #cbd5e1;
+        }
+        .lex-entry-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 10px;
+            padding: 1.15rem 1.45rem;
+            margin-bottom: 0.9rem;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+        .lex-prose-card {
+            padding: 1.5rem 1.75rem;
+        }
+        .lex-entry-title {
+            margin: 0 0 0.65rem 0;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 1.12rem;
+            font-weight: 700;
+            color: var(--accent-navy);
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+        }
+        .lex-headword {
+            color: var(--accent-navy);
+        }
+        .lex-badges {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+        .lex-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.1rem 0.52rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            line-height: 1.35;
+            white-space: nowrap;
+            vertical-align: baseline;
+        }
+        .lex-pill-pos {
+            background: rgba(2, 132, 199, 0.09);
+            color: #0284c7;
+            border: 1px solid rgba(2, 132, 199, 0.25);
+            font-style: italic;
+        }
+        .lex-pill-cefr {
+            background: rgba(5, 150, 105, 0.1);
+            color: #059669;
+            border: 1px solid rgba(5, 150, 105, 0.25);
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+        }
+        .lex-pill-grammar {
+            background: rgba(109, 40, 217, 0.08);
+            color: #6d28d9;
+            border: 1px solid rgba(109, 40, 217, 0.24);
+        }
+        .lex-pill-register {
+            background: rgba(217, 119, 6, 0.1);
+            color: #b45309;
+            border: 1px solid rgba(217, 119, 6, 0.28);
+            font-size: 0.68rem;
+            margin-right: 0.25rem;
+        }
+        .lex-inline-code {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            padding: 0.08rem 0.38rem;
+            border-radius: 4px;
+            background: #f1f5f9;
+            color: #0369a1;
+            border: 1px solid #e2e8f0;
+        }
+        .lex-headword-link {
+            color: #0284c7;
+            font-weight: 600;
+        }
+        .lex-subheading {
+            margin: 0.75rem 0 0.35rem;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #0f766e;
+        }
+        .lex-bullet-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.45rem;
+            margin-bottom: 0.32rem;
+            font-size: 0.92rem;
+            color: var(--text-secondary);
+        }
+        .lex-bullet-dot {
+            color: var(--accent-primary);
+            font-weight: 700;
+            line-height: 1.5;
+            user-select: none;
+        }
+        .lex-bullet-text {
+            flex: 1;
+        }
+        .lex-bullet-text strong, .lex-paragraph strong {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+        .lex-contrast-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.4rem;
+            margin: 0.22rem 0;
+            font-size: 0.89rem;
+            color: var(--text-secondary);
+        }
+        .lex-mark-wrong {
+            color: #dc2626;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .lex-mark-right {
+            color: #16a34a;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .lex-paragraph {
+            margin: 0.35rem 0 0.55rem;
+            font-size: 0.93rem;
+            color: var(--text-secondary);
+        }
+        .lex-prose-card .lex-paragraph {
+            font-size: 0.98rem;
+            line-height: 1.72;
+            margin-bottom: 0.85rem;
+        }
+        @media print {
+            body { background: #ffffff; padding: 0; }
+            .handout-container { max-width: 100%; }
+            .handout-header, .lex-entry-card { box-shadow: none; }
+        }
+    </style>
+</head>
+<body>
+    <main class="handout-container">
+        <header class="handout-header">
+            <h1 class="handout-title">${esc(displayHeading)}</h1>
+            <div class="handout-meta">${metaBadges.join('')}</div>
+        </header>
+        ${introCardHtml}
+        ${sections.join('\n')}
+    </main>
+</body>
+</html>`;
     }
 
     function bundleStandaloneExe(htmlPath) {
@@ -1574,7 +2007,9 @@
             `;
                 
             let scoreBadgeHtml = `<span class="badge border ${badgeClass} font-monospace fs-6">${score}% Score</span>`;
-            if (audit.post_cure_score != null && audit.pre_cure_score != null) {
+            if (audit.status === 'FAILED') {
+                scoreBadgeHtml = `<span class="badge border hb-score-bad font-monospace fs-6"><i class="bi bi-x-octagon-fill me-1"></i>FAILED (0%)</span>`;
+            } else if (audit.post_cure_score != null && audit.pre_cure_score != null) {
                 const curedClass = audit.post_cure_score >= 80 ? 'hb-score-good' : 'hb-score-warn';
                 scoreBadgeHtml = `
                     <div class="d-flex align-items-center gap-1">
@@ -1794,6 +2229,47 @@
         }, 500);
     }
 
+    let lastLlmHealth = null;
+    function updateLlmHealthUI(health) {
+        if (!health) return;
+        lastLlmHealth = health;
+        const dotEl = document.getElementById('headbar-status-dot');
+        const askDotEl = document.getElementById('lexis-ask-status-dot');
+        const nameEl = document.getElementById('headbar-model-name');
+        const pillEl = document.getElementById('headbar-status-pill');
+
+        const activeModel = health.active_model || (appConfig && appConfig.model) || '';
+        let color = '#10b981'; // Green
+        let label = activeModel || 'Ready';
+        let tooltip = `LLM Online & Ready (${activeModel} @ ${health.api_url || 'local'})`;
+
+        if (!health.online) {
+            color = '#ef4444'; // Red
+            label = activeModel ? `LLM Offline (${activeModel})` : 'LLM Offline';
+            tooltip = health.error || `LLM server unreachable at ${health.api_url || 'configured endpoint'}`;
+        } else if (!health.model_ready) {
+            color = '#f59e0b'; // Amber
+            label = activeModel ? `${activeModel} (Missing)` : 'No Model Configured';
+            tooltip = health.error || `Model '${activeModel}' is not loaded on ${health.api_url}`;
+        }
+
+        if (dotEl) {
+            dotEl.style.backgroundColor = color;
+            dotEl.style.boxShadow = `0 0 8px ${color}`;
+        }
+        if (askDotEl) {
+            askDotEl.style.backgroundColor = color;
+            askDotEl.style.boxShadow = `0 0 8px ${color}`;
+        }
+        if (nameEl) {
+            nameEl.innerText = label;
+            nameEl.style.color = !health.online ? '#ef4444' : (!health.model_ready ? '#f59e0b' : '');
+        }
+        if (pillEl) {
+            pillEl.title = tooltip;
+        }
+    }
+
     function fetchModels(userTriggered = false) {
         // Send the engine/endpoint SELECTED in the dropdown so the backend lists models
         // for THAT engine (not just the saved one). This is what lets the list update live
@@ -1837,7 +2313,15 @@
                     opt.disabled = true;
                     opt.innerText = `(Offline - endpoint unreachable)`;
                     modelSelect.appendChild(opt);
-                    document.getElementById('headbar-model-name').innerText = activeModel || 'LLM offline';
+                    if (!endpointChanged) {
+                        updateLlmHealthUI({
+                            online: false,
+                            model_ready: false,
+                            active_model: activeModel,
+                            api_url: apiUrl || savedApiUrl,
+                            error: data.error || 'Endpoint unreachable'
+                        });
+                    }
                     return;
                 }
 
@@ -1851,7 +2335,15 @@
                     opt.disabled = true;
                     opt.innerText = `(No models found)`;
                     modelSelect.appendChild(opt);
-                    document.getElementById('headbar-model-name').innerText = activeModel || 'No models';
+                    if (!endpointChanged) {
+                        updateLlmHealthUI({
+                            online: true,
+                            model_ready: false,
+                            active_model: activeModel,
+                            api_url: apiUrl || savedApiUrl,
+                            error: 'No models found on endpoint'
+                        });
+                    }
                     return;
                 }
 
@@ -1916,11 +2408,26 @@
                     }
                 });
 
-                document.getElementById('headbar-model-name').innerText = effectiveActiveModel || 'Ready';
+                if (!endpointChanged) {
+                    const modelReady = !!(targetSelected || (!activeModel && modelsList.length > 0));
+                    updateLlmHealthUI({
+                        online: true,
+                        model_ready: modelReady,
+                        active_model: effectiveActiveModel,
+                        api_url: apiUrl || savedApiUrl,
+                        error: modelReady ? null : `Configured model '${activeModel}' is not loaded on ${apiUrl || savedApiUrl}`
+                    });
+                }
             })
             .catch(() => {
                 if (refreshIcon) refreshIcon.classList.remove('spin-icon');
-                document.getElementById('headbar-model-name').innerText = 'LLM offline';
+                updateLlmHealthUI({
+                    online: false,
+                    model_ready: false,
+                    active_model: (appConfig && appConfig.model) || '',
+                    api_url: apiUrl || savedApiUrl,
+                    error: 'Endpoint unreachable'
+                });
                 modelSelect.innerHTML = '';
                 const opt = document.createElement('option');
                 opt.value = '';
@@ -2360,6 +2867,9 @@
         fetch('/api/recent-jobs')
             .then(res => res.json())
             .then(data => {
+                if (data && data.llm_health) {
+                    updateLlmHealthUI(data.llm_health);
+                }
                 recentJobs = data.jobs || [];
                 const list = document.getElementById('recent-jobs-list');
                 if (!list) return;
@@ -2623,8 +3133,17 @@
                     }
                     
                     if (job.status === 'failed') {
+                        if (service === 'quiz') {
+                            const qp = document.getElementById('quiz-progress-section');
+                            if (qp) qp.style.display = 'none';
+                        }
+                        fetch('/api/llm-health')
+                            .then(r => r.json())
+                            .then(h => updateLlmHealthUI(h))
+                            .catch(() => {});
                         const lastLog = (job.logs && job.logs.length > 0) ? job.logs[job.logs.length - 1] : "Job encountered an unexpected error.";
-                        let errorMsg = lastLog;
+                        let errorMsg = `<div class="mb-2 text-danger fw-semibold">${esc(lastLog)}</div>` +
+                            `<div class="small text-muted">A failure record has been written to <code>logs/</code> and flagged in the <strong>LLM Hero Board &amp; QA Audit</strong> panel. Please check that your LLM server (Ollama / API) is online and the configured model is loaded.</div>`;
                         if (lastLog.includes("faster-whisper is not installed")) {
                             errorMsg = "<strong>faster-whisper is not installed.</strong><br><br>To transcribe local video/audio files, please run in your terminal:<br><pre class='p-2 bg-dark rounded border mt-2'>pip install faster-whisper</pre>";
                         }

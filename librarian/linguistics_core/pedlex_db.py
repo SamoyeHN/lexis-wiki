@@ -235,10 +235,13 @@ class PedlexDbMixin:
         w_clean = word.strip().lower()
         if w_clean in cls._ldoce_cache:
             return cls._ldoce_cache[w_clean]
+        if w_clean in cls._ldoce_in_progress:
+            return None
 
         if not cls._ensure_ldoce_conn():
             return None
 
+        cls._ldoce_in_progress.add(w_clean)
         try:
             for q_cand in cls._headword_candidates(w_clean):
                 fetched = cls._ldoce_raw_row(q_cand)
@@ -271,6 +274,8 @@ class PedlexDbMixin:
             return None
         except Exception:
             return None
+        finally:
+            cls._ldoce_in_progress.discard(w_clean)
 
     @classmethod
     def _resolve_hyphenated_compound_entry(cls, w_clean: str) -> Optional[Dict[str, Any]]:
@@ -288,6 +293,14 @@ class PedlexDbMixin:
                 host, sense, _source = owner
                 s_copy = dict(sense)
                 s_copy["pos"] = "adjective"
+                raw_d = str(s_copy.get("definition") or "").strip()
+                if re.match(rf"^if\s+you\s+do\s+something\s+{re.escape(open_w)},\s*you\s+go\s+somewhere\s+and\s+do\s+it\s+yourself\b", raw_d, flags=re.IGNORECASE):
+                    s_copy["definition"] = re.sub(
+                        rf"^if\s+you\s+do\s+something\s+{re.escape(open_w)},\s*you\s+go\s+somewhere\s+and\s+do\s+it\s+yourself",
+                        "involving a person's physical presence rather than communicating",
+                        raw_d,
+                        flags=re.IGNORECASE,
+                    )
                 # Find an example specifically containing the open phrase or hyphenated form
                 phrase_rows = cls._unit_phrase_rows(open_w, host)
                 row_exs = []
@@ -466,9 +479,13 @@ class PedlexDbMixin:
             b_pos_top = str(base_data.get("pos") or "").strip().lower()
             same_pos_family = bool(d_pos and b_pos_top and (d_pos == b_pos_top or d_pos[:3] == b_pos_top[:3]))
 
+            req_stem_probe = req_low[:max(3, len(req_low) - 2)] if req_low else ""
+
             def _attests_derived(t_str: Any) -> bool:
                 s = str(t_str or "").lower()
                 if not s or not req_low:
+                    return False
+                if req_stem_probe and req_stem_probe not in s and req_stem_probe.replace("-", " ") not in s and req_stem_probe.replace("-", "") not in s:
                     return False
                 if b_low and b_low != req_low:
                     s = re.sub(rf"\b{re.escape(b_low)}\b", "", s)
@@ -556,29 +573,29 @@ class PedlexDbMixin:
             if req_low:
                 for _sec, items in (data.get("collocations") or {}).items():
                     for it in items or []:
-                        if isinstance(it, dict) and it.get("example") and cls.text_contains_form(str(it["example"]), req_low):
+                        if isinstance(it, dict) and it.get("example") and _attests_derived(it["example"]):
                             ex_s = str(it["example"]).strip()
                             if ex_s not in own_exs:
                                 own_exs.append(ex_s)
                 for _sec, items in (base_data.get("collocations") or {}).items():
                     for it in items or []:
-                        if isinstance(it, dict) and it.get("example") and cls.text_contains_form(str(it["example"]), req_low):
+                        if isinstance(it, dict) and it.get("example") and _attests_derived(it["example"]):
                             ex_s = str(it["example"]).strip()
                             if ex_s not in own_exs:
                                 own_exs.append(ex_s)
                 for bs in (base_data.get("senses") or []):
                     for pb in (bs.get("pattern_bundles") or []):
-                        if isinstance(pb, dict) and pb.get("example") and cls.text_contains_form(str(pb["example"]), req_low):
+                        if isinstance(pb, dict) and pb.get("example") and _attests_derived(pb["example"]):
                             ex_s = str(pb["example"]).strip()
                             if ex_s not in own_exs:
                                 own_exs.append(ex_s)
                     for ex in (bs.get("examples") or []):
-                        if ex and cls.text_contains_form(str(ex), req_low):
+                        if ex and _attests_derived(ex):
                             ex_s = str(ex).strip()
                             if ex_s not in own_exs:
                                 own_exs.append(ex_s)
                 for ex in (base_data.get("other_dict_examples") or []) + (base_data.get("corpus_examples") or []):
-                    if ex and cls.text_contains_form(str(ex), req_low):
+                    if ex and _attests_derived(ex):
                         ex_s = str(ex).strip()
                         if ex_s not in own_exs:
                             own_exs.append(ex_s)
@@ -777,10 +794,10 @@ class PedlexDbMixin:
                         flags=re.IGNORECASE,
                     ).strip()
                     s0["definition"] = s0_def
-                if act_defs and (s0.get("gloss_source") == "wordnet" or not s0.get("definition")):
+                if act_defs and (s0.get("gloss_source") in ("wordnet", "bridged_parent") or not s0.get("definition")):
                     s0["definition"] = act_defs[0]
                     s0["gloss_source"] = "ldoce_activator"
-                elif s0_def:
+                elif s0_def and s0.get("gloss_source") not in ("bridged_parent", "ldoce_runon"):
                     fmt_s0 = str(cls.format_ldoce_definition(s0) or "").strip()
                     if fmt_s0 and fmt_s0 != s0_def:
                         s0["definition"] = fmt_s0
@@ -790,8 +807,12 @@ class PedlexDbMixin:
                     if synth_d:
                         s0["definition"] = synth_d
                         s0["gloss_source"] = "derivational"
-                if own_exs and not s0.get("examples"):
-                    s0["examples"] = own_exs
+                if own_exs:
+                    cur_exs = list(s0.get("examples") or [])
+                    for ox in own_exs:
+                        if ox not in cur_exs:
+                            cur_exs.append(ox)
+                    s0["examples"] = cur_exs
                 out_senses = [s0] + list(existing_senses[1:])
                 # If the derived entry only has a single fallback/synthesized sense and base_data is polysemous (>1 sense),
                 # append projected base senses so polysemous/domain-specific derived words (e.g. 'weightlessness', 'furiously')
@@ -1431,8 +1452,15 @@ class PedlexDbMixin:
         When allow_modifier is True, an intervening adverb/degree modifier (e.g. 'somewhat'
         in 'was somewhat taken aback') is permitted in the gap."""
         parts: List[str] = []
-        for token in tokens:
-            forms = {f for f in cls.inflected_forms(token) if f}
+        is_prep_noun_pair = (
+            len(tokens) == 2
+            and tokens[0] in ("in", "on", "at", "by", "for", "out", "under", "without", "beyond", "within")
+        )
+        for t_idx, token in enumerate(tokens):
+            if is_prep_noun_pair and t_idx == 1:
+                forms = {token}
+            else:
+                forms = {f for f in cls.inflected_forms(token) if f}
             if token == "a":
                 forms |= {"a", "an"}
             if not forms:
@@ -1441,7 +1469,7 @@ class PedlexDbMixin:
             # stated by the entry as 'keep in touch', so the token's own lemma is inflected
             # too.  Only a real word gets that treatment, so a typo cannot lemmatize its way
             # into a frame it was never part of.
-            lemma = cls._surface_lemma(token) if cls.is_attested_form(token) else None
+            lemma = cls._surface_lemma(token) if (not (is_prep_noun_pair and t_idx == 1) and cls.is_attested_form(token)) else None
             # spaCy reads 'embed' as the past tense of a non-word 'embe'.  A lemma that is
             # not itself an English word form may not widen the token's legal forms.
             if lemma and lemma != token and cls.is_attested_form(lemma):
@@ -1465,9 +1493,9 @@ class PedlexDbMixin:
         elem_parts = [slot_elem, particle_elem]
         if allow_modifier:
             # Allow intervening single modifier word (adverb / degree adverb, 2-15 letters)
-            # Particles are strictly excluded so a phrasal verb particle (e.g. 'up' in 'make up the time')
-            # cannot masquerade as an intervening modifier for a simpler frame ('make time').
-            mod_word = rf"(?!(?:{particles})\b)[a-z]{{2,15}}"
+            # Particles and gerunds (-ing) are strictly excluded so a phrasal verb particle or
+            # gerund complement (e.g. 'making' in 'in making advances') cannot masquerade as an intervening modifier.
+            mod_word = rf"(?!(?:{particles})\b)(?![a-z]+ing\b)[a-z]{{2,15}}"
             elem_parts.append(mod_word)
         elem = "(?:" + "|".join(elem_parts) + ")"
         gap_run = rf"{elem}(?:\s+{elem})*\s*"
@@ -1600,7 +1628,11 @@ class PedlexDbMixin:
                 add("phrasal_verb", block)
         for item in entry.get("phrases") or []:
             add("phrase", item)
+        for item in entry.get("crossrefs") or []:
+            add("phrase", item)
         for sense in entry.get("senses") or []:
+            for value in sense.get("units") or []:
+                add("phrase", value)
             for value in sense.get("patterns") or []:
                 add("pattern", value)
         for bucket in (entry.get("collocations") or {}).values():
@@ -2098,6 +2130,14 @@ class PedlexDbMixin:
         if cls._ensure_ldoce_conn() and cls._ldoce_conn is not None:
             try:
                 cur = cls._ldoce_conn.cursor()
+                if is_multi and (clean_q.lower() != u_key or any(t.endswith("ed") for t in key_tokens)):
+                    cur.execute(
+                        "SELECT word FROM ldoce WHERE data_json LIKE ? LIMIT 15",
+                        (f"%{clean_q.lower()}%",),
+                    )
+                    for (hw,) in cur.fetchall():
+                        if hw and hw not in anchor_words:
+                            anchor_words.insert(0, hw)
                 for tok in (key_tokens[:2] + sub_parts[:2]):
                     cur.execute(
                         "SELECT DISTINCT host_word FROM ldoce_sense_cue_index WHERE cue_word = ? ORDER BY weight DESC LIMIT 20",
@@ -2132,6 +2172,19 @@ class PedlexDbMixin:
                 for u_obj in (s.get("units") or []):
                     if isinstance(u_obj, dict):
                         pool.extend(u_obj.get("examples", []) or [])
+            for pv in entry.get("phrasal_verbs", []):
+                if isinstance(pv, dict):
+                    for pvs in (pv.get("senses") or []):
+                        if isinstance(pvs, dict):
+                            pool.extend(pvs.get("examples", []) or [])
+                            for pb in (pvs.get("pattern_bundles") or []):
+                                if isinstance(pb, dict) and pb.get("example"):
+                                    pool.append(pb["example"])
+            for ph in entry.get("phrases", []):
+                if isinstance(ph, dict):
+                    for phs in (ph.get("senses") or []):
+                        if isinstance(phs, dict):
+                            pool.extend(phs.get("examples", []) or [])
             for gb in entry.get("grammar_boxes", []):
                 pool.extend(gb.get("examples", []) or [])
             for _cat_k, items in entry.get("collocations", {}).items():
@@ -2175,13 +2228,14 @@ class PedlexDbMixin:
 
         def _pedagogical_ex_rank(ex: str) -> tuple:
             ex_l = ex.lower()
+            exact_surf_miss = 0 if (is_multi and clean_q.lower() in ex_l) else 1
             gritty_penalty = 1 if re.search(
                 r"\b(?:sleazy|corpse|murder|sex|sexy|bastard|damn|hell|suicide|prostitute|whore|bitch|shit|fuck|piss|rape|cocaine|heroin)\b",
                 ex_l,
             ) else 0
             q_penalty = 1 if ex.endswith("?") or not ex.endswith((".", "!", "\"", "'")) else 0
             len_dist = 0 if 40 <= len(ex) <= 135 else abs(len(ex) - 85)
-            return (gritty_penalty, q_penalty, len_dist)
+            return (exact_surf_miss, gritty_penalty, q_penalty, len_dist)
 
         unit_matches = sorted(
             [c for c in res if cls._unit_example(u_key or clean_q, [c], allow_modifier=True)],
@@ -2210,6 +2264,8 @@ class PedlexDbMixin:
             return None
         w_clean = word.strip().lower()
         entry = cls.get_ldoce_entry(w_clean)
+        if not entry and " " in w_clean:
+            entry = cls.get_ldoce_entry(w_clean.split()[0])
         if not entry:
             return None
 
@@ -2218,7 +2274,9 @@ class PedlexDbMixin:
             return None
 
         p_norm = (pos or "").strip().lower()
-        if p_norm.startswith("n"):
+        if "phrasal" in p_norm:
+            p_norm = "verb"
+        elif p_norm.startswith("n"):
             p_norm = "noun"
         elif p_norm.startswith("v"):
             p_norm = "verb"
@@ -2227,11 +2285,25 @@ class PedlexDbMixin:
         elif p_norm.startswith("adv") or p_norm == "r":
             p_norm = "adverb"
 
+        all_senses = entry.get("senses") or []
         best_box = None
         for b in boxes:
+            b_pv = (b.get("phrasal_verb") or "").strip().lower()
+            if b_pv:
+                if " " not in w_clean and b_pv != w_clean:
+                    continue
+                if " " in w_clean and b_pv != w_clean and not w_clean.startswith(b_pv):
+                    continue
+            elif " " in w_clean:
+                continue
             gb_senses = b.get("sense_indices")
             if sense_index is not None and gb_senses and sense_index not in gb_senses:
                 continue
+            if sense_index is not None and not gb_senses and 0 <= sense_index < len(all_senses):
+                s_hom = all_senses[sense_index].get("homograph_num")
+                b_hom = b.get("homograph_num")
+                if s_hom and b_hom and s_hom != b_hom:
+                    continue
             title = b.get("title", "")
             content = b.get("content", "")
             bad_exs = b.get("bad_examples", [])
@@ -2240,7 +2312,29 @@ class PedlexDbMixin:
             if not has_alert:
                 continue
 
-            if p_norm in ("noun", "verb") and len(boxes) > 1:
+            if p_norm:
+                b_pos = (b.get("pos") or "").strip().lower()
+                if b_pos and b_pos != "other":
+                    b_pos_norm = (
+                        "noun" if b_pos.startswith("n")
+                        else "verb" if b_pos.startswith("v")
+                        else "adjective" if (b_pos.startswith("adj") or b_pos == "a")
+                        else "adverb" if (b_pos.startswith("adv") or b_pos == "r")
+                        else b_pos
+                    )
+                    if b_pos_norm != p_norm:
+                        # Also verify whether any linked sense matches p_norm
+                        linked_match = False
+                        for s_i in (gb_senses or []):
+                            if 0 <= s_i < len(all_senses):
+                                sp = (all_senses[s_i].get("pos") or "").lower()
+                                if sp.startswith(p_norm[:3]):
+                                    linked_match = True
+                                    break
+                        if not linked_match:
+                            continue
+
+            if p_norm in ("noun", "verb"):
                 c_low = content.lower()
                 forb = (b.get("syntactic_constraints") or {}).get("forbidden_frames") or []
                 is_noun_box = bool(

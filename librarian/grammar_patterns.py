@@ -718,6 +718,9 @@ class GrammarPatternEngine:
                 if not has_to_or_comp:
                     continue
 
+            if string_id == "causative_bare_infinitive" and re.search(r"\bwhat\s+makes?\s+(?:you|me|us|them|him|her)\s+think\b", doc.text, re.I):
+                continue
+
             if string_id == "complex_transitive_adj_complement":
                 tokens = [doc[i] for i in token_indices]
                 if len(tokens) >= 3:

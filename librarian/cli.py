@@ -7,6 +7,12 @@ from .processor import processor
 from .llm import llm
 
 def main():
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     parser = argparse.ArgumentParser(description="Lexis Wiki CLI Manager")
     parser.add_argument("--version", "-v", action="version", version=f"lexis v{__version__}")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -152,17 +158,28 @@ def main():
         if args.show:
             for k, v in config.data.items():
                 print(f"{k}: {v}")
+            health = llm.check_health(force=True)
+            if health.get("online") and health.get("model_ready"):
+                print(f"llm_health: 🟢 ONLINE & READY ({health.get('model')} @ {health.get('api_url')})")
+            elif health.get("online"):
+                print(f"llm_health: 🟡 MODEL MISSING — {health.get('error')}")
+            else:
+                print(f"llm_health: 🔴 OFFLINE — {health.get('error')}")
         
         if args.list_models:
-            print("Fetching models from Ollama...")
-            models = llm.list_models()
+            print("Fetching models from LLM service...")
+            health = llm.check_health(force=True)
+            if not health.get("online"):
+                print(f"❌ Error: {health.get('error')}")
+                sys.exit(1)
+            models = health.get("available_models") or llm.list_models()
             if models:
                 print("\nAvailable Ollama Models:")
                 for m in models:
                     current = " (current)" if m == config.get("model") else ""
                     print(f"  - {m}{current}")
             else:
-                print("No models found or Ollama is not running.")
+                print("No models found on the LLM service.")
         
         if args.set_model:
             success, message = config.update_model(args.set_model)
@@ -223,10 +240,15 @@ def main():
         print(f"Compiling {args.filename} via modular pipeline (categories: {cats or 'all'})...")
         status, saved_files = processor.run_pipeline(args.filename, categories=cats)
         
-        if "Error" in status and not saved_files:
-            print(status)
+        if "Error" in status or "failed tasks:" in status:
+            print(f"\n❌ {status}")
+            if saved_files:
+                print("Partially saved files before/outside failure:")
+                for path in saved_files:
+                    print(f"  - {path}")
             if "timeout" in status.lower():
                 print("\nTip: If you experience timeouts, you can increase the timeout in 'librarian/llm.py'.")
+            sys.exit(1)
         else:
             print(f"\n{status}")
             if saved_files:
@@ -234,6 +256,7 @@ def main():
                     print(f"  - {path}")
             else:
                 print("No files were saved. Check the LLM output for formatting issues.")
+                sys.exit(1)
 
     elif args.command == "quiz":
         target_count = args.count
@@ -249,7 +272,8 @@ def main():
         result = processor.generate_quiz(args.filename, count=target_count, template_name=args.template)
         
         if "Error" in result:
-            print(result)
+            print(f"\n❌ {result}")
+            sys.exit(1)
         else:
             print(f"\nSuccessfully generated quiz handout:")
             print(f"  - {result}")
@@ -260,6 +284,8 @@ def main():
         print("\n" + "="*50)
         print(answer)
         print("="*50 + "\n")
+        if isinstance(answer, str) and answer.startswith("Error"):
+            sys.exit(1)
 
     elif args.command == "dashboard":
         import socketserver
@@ -642,22 +668,43 @@ def main():
             print("\n==========================================")
             print("         LLM HERO BOARD LEADERBOARD       ")
             print("==========================================\n")
-            board = res["hero_board"]
-            if not board:
+            board = res.get("hero_board", [])
+            audits = res.get("audits", [])
+            if not board and not audits:
                 print("No log files found to evaluate in logs/ directory.")
             else:
                 for idx, item in enumerate(board, 1):
                     badge = f"#{idx}"
+                    failed_runs = item.get("failed_runs", 0)
                     print(f"Rank {badge}: {item['model']}")
                     print(f"   * Composite Quality Score: {item['composite_score']}%")
                     print(f"   * Schema Adherence:       {item['schema_adherence_avg']}%")
                     print(f"   * Verbatim Faithfulness:  {item['verbatim_faithfulness_avg']}%")
                     print(f"   * Pedagogical Quality:    {item['pedagogical_quality_avg']}%")
                     print(f"   * Uniqueness / No Dups:   {item['uniqueness_avg']}%")
-                    print(f"   * Total Evaluated Runs:   {item['runs']}\n")
+                    print(f"   * Total Evaluated Runs:   {item['runs']} (Failed/Aborted: {failed_runs})\n")
+
+                failed_logs = [
+                    r for r in audits
+                    if r.get("status") == "FAILED" or r.get("composite_score") == 0.0
+                ]
+                if failed_logs:
+                    print("⚠️  RECENT LLM EXECUTION FAILURES (0.0% AUDIT ALERT):")
+                    for fl in failed_logs[:10]:
+                        flags = "; ".join(fl.get("flags") or [])
+                        print(f"   - {fl.get('log_name')} [{fl.get('task')}]: {flags}")
+                    print()
 
     elif args.command == "re-audit":
         from .audit_batch import run_batch, format_summary
+        from .llm import LLMError
+        try:
+            judge_m = config.get("judge_model") or config.get("model")
+            llm.ensure_available(task_name="re_audit_batch", model_override=judge_m)
+        except LLMError as e:
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+
         print("Re-auditing quiz handouts (Level-2 expert audit, read-only)…")
 
         def _progress(done, total, row):
@@ -680,6 +727,8 @@ def main():
             print(json.dumps(summary, indent=2, ensure_ascii=False))
         else:
             print(format_summary(summary))
+        if summary.get("errors", 0) > 0:
+            sys.exit(1)
 
     else:
         parser.print_help()

@@ -118,8 +118,10 @@ def background_compile_worker(job_id, filename, categories=None):
         
         status, saved_files = processor.run_pipeline(filename, categories=categories)
         
-        if "Error" in status and not saved_files:
-            DashboardState.update_job(job_id, progress=100, status="failed", log=f"❌ Compilation failed: {status}")
+        if "Error" in status or "failed tasks:" in status or "Pipeline failed" in status:
+            DashboardState.update_job(job_id, progress=100, status="failed", log=f"❌ {status}", saved_files=saved_files)
+            for path in saved_files:
+                DashboardState.update_job(job_id, log=f"⚠️ Partial node saved before failure: {os.path.basename(path)}")
         else:
             DashboardState.update_job(job_id, progress=100, status="completed", log=f"✨ Finished compiling{cats_str}!", saved_files=saved_files)
             for path in saved_files:
@@ -130,7 +132,8 @@ def background_compile_worker(job_id, filename, categories=None):
 
 def background_quiz_worker(job_id, filename, count, template):
     try:
-        DashboardState.update_job(job_id, progress=30, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'...")
+        DashboardState.update_job(job_id, progress=20, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'...")
+        DashboardState.update_job(job_id, progress=40, stage="generating", log=f"[QUIZ] Auto-syncing deterministic Vocabulary & Grammar extractions for '{filename}'...")
         DashboardState.update_job(job_id, progress=60, stage="generating", log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count})...")
         
         processor = WikiProcessor()
@@ -162,7 +165,7 @@ def background_quiz_worker(job_id, filename, count, template):
                 status="completed",
                 stage="completed",
                 audit_progress=100,
-                log="[QUIZ] Quiz generation completed successfully!",
+                log="[QUIZ] Vocabulary & Grammar nodes synced and Quiz generation completed successfully!",
                 saved_files=[web_path]
             )
             DashboardState.update_job(job_id, log=f"[QUIZ] Handout saved to: {os.path.basename(result)}")
@@ -649,7 +652,13 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             response_data = {"units": units_dict}
 
         elif path == "/api/recent-jobs":
-            response_data = {"jobs": DashboardState.get_recent_jobs()}
+            response_data = {
+                "jobs": DashboardState.get_recent_jobs(),
+                "llm_health": llm.check_health(force=False),
+            }
+
+        elif path == "/api/llm-health":
+            response_data = llm.check_health(force=True)
 
         elif path == "/api/logs":
             logs_dir = Path(config.project_root) / "logs"

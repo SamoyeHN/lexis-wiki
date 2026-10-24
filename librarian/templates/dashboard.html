@@ -69,9 +69,9 @@
 
         <div class="d-flex gap-3 align-items-center ms-auto">
             <!-- Pulsing Model Active Status -->
-            <div class="d-flex align-items-center gap-2" style="font-size: 0.8rem;">
-                <span class="pulsing-dot" aria-hidden="true"></span>
-                <span id="headbar-model-name" class="font-monospace text-truncate text-on-surface-variant fw-medium" style="max-width: 200px;">Loading Model...</span>
+            <div id="headbar-status-pill" class="d-flex align-items-center gap-2" style="font-size: 0.8rem; cursor: pointer;" onclick="openSettingsModal()" title="Checking LLM status...">
+                <span id="headbar-status-dot" class="pulsing-dot" aria-hidden="true"></span>
+                <span id="headbar-model-name" class="font-monospace text-truncate text-on-surface-variant fw-medium" style="max-width: 240px;">Loading Model...</span>
             </div>
             <!-- Hero Board & Audit Button -->
             <button class="header-action-btn btn-hero" onclick="openHeroBoardModal()" title="LLM Hero Board & QA Audit">
@@ -374,8 +374,8 @@
                                         <li><a class="dropdown-item py-1.5" href="#" onclick="openSourceEditorForCurrentUnit(); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Source &amp; Syllabus</a></li>
                                         <li><hr class="dropdown-divider my-1"></li>
                                         <li><a class="dropdown-item py-1.5" href="#" onclick="copyActiveWorkspaceTab(); return false;"><i class="bi bi-clipboard me-2 text-info"></i>Copy Content</a></li>
-                                        <li><a class="dropdown-item py-1.5" href="#" onclick="downloadActiveWorkspaceTab(); return false;"><i class="bi bi-download me-2 text-info"></i>Save File</a></li>
-                                        <li><a class="dropdown-item py-1.5" href="#" onclick="printActiveWorkspaceTab(); return false;"><i class="bi bi-printer me-2 text-info"></i>Print PDF</a></li>
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="downloadActiveWorkspaceTab(); return false;"><i class="bi bi-markdown me-2 text-info"></i>Save Markdown (.md)</a></li>
+                                        <li><a class="dropdown-item py-1.5" href="#" onclick="exportActiveWorkspaceTabHtml(); return false;"><i class="bi bi-filetype-html me-2 text-success"></i>Export HTML (.html)</a></li>
                                     </ul>
                                 </div>
                             </div>
@@ -439,7 +439,7 @@
                                 <div class="text-center py-5 text-muted" id="subtab-vocab-empty">
                                     <i class="bi bi-translate fs-1 opacity-50 mb-3 d-block"></i>
                                     <h5>Vocabulary Uncompiled</h5>
-                                    <p class="small">Click "Compile" on the left column to extract vocabularies.</p>
+                                    <p class="small">Click "Compile" or "Generate Quiz" to automatically extract and update vocabularies.</p>
                                 </div>
                                 <div id="subtab-vocab-wrapper" class="d-none">
                                     <div id="subtab-vocab-viewer"></div>
@@ -451,7 +451,7 @@
                                 <div class="text-center py-5 text-muted" id="subtab-grammar-empty">
                                     <i class="bi bi-diagram-2 fs-1 opacity-50 mb-3 d-block"></i>
                                     <h5>Grammar Node Uncompiled</h5>
-                                    <p class="small">Click "Compile" on the left column to extract grammar patterns.</p>
+                                    <p class="small">Click "Compile" or "Generate Quiz" to automatically extract and update grammar patterns.</p>
                                 </div>
                                 <div id="subtab-grammar-wrapper" class="d-none">
                                     <div id="subtab-grammar-viewer"></div>
@@ -927,7 +927,7 @@
             onclick="toggleLexisAsk(true)">
         <span style="position: relative; display: inline-flex; align-items: center;">
             🧠
-            <span class="pulsing-dot" style="position: absolute; bottom: -2px; right: -2px; width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; box-shadow: 0 0 8px #10b981;"></span>
+            <span id="lexis-ask-status-dot" class="pulsing-dot" style="position: absolute; bottom: -2px; right: -2px; width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; box-shadow: 0 0 8px #10b981;"></span>
         </span>
         <span>Lexis Ask</span>
     </button>

@@ -30,6 +30,7 @@ class CefrAndMorphologyMixin:
     _cefr_analyzer = None
     _ldoce_conn = None
     _ldoce_cache: Dict[str, Any] = {}
+    _ldoce_in_progress: Set[str] = set()
     _surface_lemma_cache: Dict[str, Optional[str]] = {}
     _attested_form_cache: Dict[str, bool] = {}
     _plural_form_cache: Dict[str, str] = {}
@@ -559,10 +560,24 @@ class CefrAndMorphologyMixin:
 
     @classmethod
     def get_spacy(cls):
-        """Lazy-loads the spaCy English model (~12MB)."""
+        """Lazy-loads the spaCy English model (~12MB) with a bounded LRU Doc cache."""
         if cls._spacy_nlp is None:
             import spacy
-            cls._spacy_nlp = spacy.load("en_core_web_sm")
+            nlp = spacy.load("en_core_web_sm")
+            orig_call = nlp.__class__.__call__
+
+            @lru_cache(maxsize=4096)
+            def _cached_doc(text: str):
+                return orig_call(nlp, text)
+
+            class _CachedLanguage(nlp.__class__):
+                def __call__(self, text, *args, **kwargs):
+                    if isinstance(text, str) and not args and not kwargs:
+                        return _cached_doc(text)
+                    return orig_call(self, text, *args, **kwargs)
+
+            nlp.__class__ = _CachedLanguage
+            cls._spacy_nlp = nlp
         return cls._spacy_nlp
 
     @classmethod
@@ -1109,9 +1124,42 @@ class CefrAndMorphologyMixin:
         if tag in ("VB", "VBP"):
             return w
         irregular = cls._IRREGULAR_VERB_FORMS.get(w)
+        if not irregular:
+            for _pref in ("with", "over", "under", "out", "up", "re", "un", "mis", "fore", "for", "be"):
+                if len(w) > len(_pref) + 2 and w.startswith(_pref):
+                    _stem = w[len(_pref):]
+                    _stem_irr = cls._IRREGULAR_VERB_FORMS.get(_stem)
+                    if _stem_irr:
+                        irregular = tuple(_pref + f for f in _stem_irr)
+                        break
         if irregular:
             idx = {"VBD": 0, "VBN": 1, "VBG": 2, "VBZ": 3}.get(tag)
             return irregular[idx] if idx is not None else None
+        # Consult authoritative PedLex verb_table if available (using raw row / cache to avoid derived-entry recursion)
+        try:
+            _vt_entry = cls._ldoce_cache.get(w)
+            if _vt_entry is None and cls._ensure_ldoce_conn():
+                _raw_row = cls._ldoce_raw_row(w)
+                _vt_entry = _raw_row[0] if _raw_row else None
+            _vt = (_vt_entry or {}).get("verb_table") if isinstance(_vt_entry, dict) else None
+            if isinstance(_vt, dict) and (_vt.get("lemma") or "").strip().lower() == w:
+                for _row in _vt.get("forms") or []:
+                    _grp = str(_row.get("group") or "")
+                    _tns = str(_row.get("tense") or "")
+                    _per = str(_row.get("person") or "")
+                    _fms = [str(x).strip().lower() for x in (_row.get("forms") or []) if str(x).strip() and " " not in str(x).strip()]
+                    if not _fms:
+                        continue
+                    if tag == "VBD" and _grp == "Simple Form" and _tns == "Past":
+                        return _fms[0]
+                    if tag == "VBN" and _grp == "Simple Form" and _tns == "Present perfect":
+                        return _fms[0]
+                    if tag == "VBG" and _grp == "Continuous Form":
+                        return _fms[0]
+                    if tag == "VBZ" and _grp == "Simple Form" and "he, she, it" in _per and _tns in ("", "Present"):
+                        return _fms[0]
+        except Exception:
+            pass
         if tag == "VBD":
             if w.endswith("ie"):
                 return w[:-2] + "ied"
@@ -1216,6 +1264,20 @@ class CefrAndMorphologyMixin:
             if plural:
                 forms.add(plural)
 
+            # Hyphenated prefix spelling variant (e.g. 're-schedule' <-> 'reschedule', 'co-operate' <-> 'cooperate')
+            if "-" in w and " " not in w:
+                closed_w = w.replace("-", "")
+                if len(closed_w) >= 4:
+                    forms.add(closed_w)
+                    if is_verb_eligible:
+                        for tag in ("VBZ", "VBD", "VBN", "VBG"):
+                            inf_c = cls._inflect_verb(closed_w, tag)
+                            if inf_c:
+                                forms.add(inf_c)
+                    pl_c = cls.pluralize_noun(closed_w)
+                    if pl_c:
+                        forms.add(pl_c)
+
         if p in ("", "adjective", "adj", "a", "s") and " " not in w:
             if len(w) > 3:
                 forms.update({w + "er", w + "est"})
@@ -1224,7 +1286,7 @@ class CefrAndMorphologyMixin:
                 elif w.endswith("y") and len(w) > 2 and w[-2] not in "aeiou":
                     forms.update({w[:-1] + "ier", w[:-1] + "iest"})
 
-        # US/UK -or / -our spelling equivalence (e.g. vigor/vigour, labor/labour, favor/favour, honor/honour, color/colour, behavior/behaviour)
+        # US/UK -or / -our and -gram / -gramme spelling equivalence
         for f_cand in list(forms):
             if len(f_cand) >= 5 and f_cand.endswith("or") and not f_cand.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior", "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor", "mirror", "error", "terror", "horror", "sensor")):
                 uk_f = f_cand[:-2] + "our"
@@ -1234,6 +1296,14 @@ class CefrAndMorphologyMixin:
                 us_f = f_cand[:-3] + "or"
                 forms.add(us_f)
                 forms.add(us_f + "s")
+            elif f_cand == "gram" or f_cand.endswith(("program", "kilogram", "milligram")):
+                uk_m = f_cand + "me"
+                forms.add(uk_m)
+                forms.add(uk_m + "s")
+            elif f_cand == "gramme" or f_cand.endswith(("programme", "kilogramme", "milligramme")):
+                us_m = f_cand[:-2]
+                forms.add(us_m)
+                forms.add(us_m + "s")
 
         forms = {f for f in forms if f}
         cls._inflected_forms_cache[key] = set(forms)
@@ -1325,6 +1395,12 @@ class CefrAndMorphologyMixin:
                 pat_open = rf"(?<![a-zA-Z0-9\-]){re.escape(open_f)}(?![a-zA-Z0-9\-])"
                 if re.search(pat_open, body):
                     return True
+                if " " not in f:
+                    closed_f = f.replace("-", "")
+                    if len(closed_f) >= 4:
+                        pat_closed = rf"(?<![a-zA-Z0-9\-])\b{re.escape(closed_f)}\b(?![a-zA-Z0-9\-])"
+                        if re.search(pat_closed, body):
+                            return True
             elif standalone:
                 pat = rf"(?<![a-zA-Z0-9\-])\b{re.escape(f)}\b(?![a-zA-Z0-9\-])"
                 if re.search(pat, body):
@@ -1692,7 +1768,9 @@ class CefrAndMorphologyMixin:
             tok_lower = tok.text.lower()
             tok_lem = tok.lemma_.lower()
             if True:
-                # Special contextual overrides for degree/directional adverbs
+                # Special contextual overrides for degree/directional adverbs and compound prepositions
+                if clean_w in ("outside", "inside") and tok.i + 1 < len(doc) and doc[tok.i + 1].lower_ == "of":
+                    return "preposition"
                 if clean_w == "way" and "way too" in sent_text.lower():
                     return "adverb"
                 if clean_w in ("clockwise", "counterclockwise", "anticlockwise"):
@@ -1793,6 +1871,7 @@ class CefrAndMorphologyMixin:
                         c.dep_ in ("aux", "auxpass", "agent", "ccomp", "xcomp", "prt")
                         or (c.dep_ == "advmod" and tok.dep_ not in ("amod", "acomp", "oprd"))
                         or (c.dep_ in ("dobj", "obj", "iobj", "oprd") and tok.dep_ != "amod")
+                        or (c.dep_ in ("nsubj", "nsubjpass", "csubj") and not any(ch.dep_ in ("det", "poss") for ch in tok.children))
                         for c in tok.children
                     )
                     or (
@@ -1852,11 +1931,33 @@ class CefrAndMorphologyMixin:
                     else:
                         cand_verb_lem_trimmed = cand_verb_lem
                     lem_ld = cls.get_ldoce_entry(cand_verb_lem_trimmed) or (cls.get_ldoce_entry(tok_lem) if tok_lem != clean_w else None)
+                    lem_v_senses = [
+                        s for s in ((lem_ld.get("senses") or []) if lem_ld else [])
+                        if isinstance(s, dict) and "verb" in str(s.get("pos") or lem_ld.get("pos") or "").lower()
+                    ]
+                    lem_is_strictly_intransitive = bool(
+                        lem_v_senses
+                        and all(
+                            "intransitive" in str(s.get("grammar") or "").lower()
+                            and not re.search(r"(?<!in)transitive", str(s.get("grammar") or "").lower())
+                            for s in lem_v_senses
+                        )
+                    )
                     lem_has_verb = bool(
                         (lem_ld and any("verb" in str(p).lower() and "adverb" not in str(p).lower() for p in (lem_ld.get("all_poses") or [lem_ld.get("pos", "")])))
                         or (wn and (wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v") or wn.synsets(cand_verb_lem_trimmed, pos="v")))
                     )
-                    if lem_has_verb and (clean_w == tok_lem or has_verbal_frame):
+                    eff_verbal_frame = has_verbal_frame
+                    if (
+                        eff_verbal_frame
+                        and lem_is_strictly_intransitive
+                        and tok.tag_ == "VBG"
+                        and not has_contracted_s_ing_frame
+                        and not any(c.dep_ in ("aux", "auxpass", "agent", "ccomp", "xcomp", "prt", "nsubj", "advmod", "prep") for c in tok.children)
+                    ):
+                        # Strictly [intransitive] base verb cannot take a direct object ('with persevering industry')
+                        eff_verbal_frame = False
+                    if lem_has_verb and (clean_w == tok_lem or eff_verbal_frame):
                         dict_poses.add("verb")
                         if has_contracted_s_ing_frame or has_post_paren_main_verb:
                             return "verb"
@@ -2387,9 +2488,19 @@ class CefrAndMorphologyMixin:
                             return "verb"
 
                         quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
-                        quote_followed = (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars)) or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
+                        raw_quote_followed = bool(
+                            re.search(
+                                rf"(?<!['\"“”‘’])\b{re.escape(tok.text)}\s*,?\s+[\"“‘'«`]\s*[A-Za-z]",
+                                quoted_sentence or "",
+                            )
+                        )
+                        quote_followed = (
+                            raw_quote_followed
+                            or (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars))
+                            or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
+                        )
                         is_nominal_obj = tok.dep_ in ("dobj", "obj", "pobj", "compound", "appos", "nmod") and tok.head.pos_ in ("VERB", "AUX", "ADP")
-                        if quote_followed and not is_nominal_obj:
+                        if quote_followed and not has_det_or_poss and not is_nominal_obj:
                             has_coord_verb = any(t.pos_ == "VERB" for t in doc if t.i != tok.i)
                             if has_coord_verb:
                                 return "verb"
@@ -2912,7 +3023,15 @@ class CefrAndMorphologyMixin:
             if m2:
                 w1_phrase, w2 = m2.group(1), m2.group(2)
                 w1_words = w1_phrase.split()
-                if not (w2.lower() in _parallel_preps and w1_words and w1_words[-1].lower() in _parallel_preps):
+                _allowed_m2_lead = {
+                    "any", "no", "a", "an", "the", "some", "in", "on", "at",
+                    "by", "for", "of", "to", "out", "up", "down"
+                }
+                if (
+                    w1_words
+                    and w1_words[0].lower() in _allowed_m2_lead
+                    and not (w2.lower() in _parallel_preps and w1_words[-1].lower() in _parallel_preps)
+                ):
                     prefix = b[:m2.start(1)]
                     suffix = b[m2.end(2):]
                     raw_names.append((prefix + w1_phrase + suffix).strip())
@@ -3269,12 +3388,15 @@ class CefrAndMorphologyMixin:
         plural_tantum = {
             "goods", "customs", "clothes", "belongings", "surroundings",
             "fireworks", "premises", "congratulations", "people", "men",
-            "women", "children", "feet", "teeth", "mice", "criteria",
-            "phenomena", "data", "analyses", "crises", "theses", "bases", "foci"
+            "women", "children", "feet", "teeth", "mice", "lice", "geese", "oxen",
+            "criteria", "phenomena", "data", "media", "bacteria", "curricula",
+            "strata", "memoranda", "analyses", "crises", "theses", "bases",
+            "foci", "alumni", "stimuli", "fungi", "cacti", "nuclei", "syllabi",
+            "radii", "larvae", "antennae", "formulae", "vertebrae", "algae",
         }
         if w in plural_tantum:
             return True
-        if w.endswith(("ss", "us", "is")):
+        if not w.endswith("s") or w.endswith(("ss", "us", "is")):
             return False
         nlp = cls.get_spacy()
         doc = nlp(f"these {w}")

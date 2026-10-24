@@ -1081,8 +1081,9 @@ class SyllabusAndMarkdownMixin:
             except Exception:
                 pass
 
-        def _extract_fresh_vocab_items(src_path: Path) -> Tuple[List[VocabularyItem], str, str]:
-            """Runs fresh deterministic vocabulary + expression extraction with F12 atom suppression/recovery, returning structured items."""
+        def _extract_and_persist_fresh_nodes(src_path: Path, need_vocab: bool = True, need_grammar: bool = True) -> Tuple[List[VocabularyItem], List[GrammarItem], str, str]:
+            """Runs fresh deterministic vocabulary + expression + grammar extraction, automatically persists/updates
+            extractions/<Unit>_vocabulary.md and extractions/<Unit>_grammar.md, and returns structured items."""
             with open(src_path, "r", encoding="utf-8") as f:
                 src_text = f.read()
             src_text = LinguisticEngine.sanitize_source_markdown(src_text, source_path=src_path)
@@ -1092,172 +1093,227 @@ class SyllabusAndMarkdownMixin:
             resolved_cefr = det_c or cefr
 
             _, sent_pool = LinguisticEngine.tokenize_and_index_sentences(clean_p)
-            f12_suppressed: List[Tuple[str, str]] = []
-            filtered_syl_v = list(syl_v) if syl_v else []
-            if syl_v and syl_e:
-                f12_parent: Dict[str, str] = {}
-                for expr in syl_e:
-                    for atom in self.expression_constituent_atoms(expr):
-                        f12_parent.setdefault(atom, expr)
-                pending_v: List[str] = []
-                for w in syl_v:
-                    w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
-                    parent_expr = f12_parent.get(w_clean)
-                    if parent_expr:
-                        f12_suppressed.append((w, parent_expr))
-                        continue
-                    pending_v.append(w)
-                filtered_syl_v = pending_v
-
             compile_defaults = self.config.get("compile_defaults") or {}
             v_default_k = compile_defaults.get("vocabulary", 20)
             e_default_k = compile_defaults.get("expressions", 5)
+            g_default_k = compile_defaults.get("grammar", 5)
 
-            with LinguisticEngine.wsd_log_session(core_name):
-                target_k = v_default_k
-                det_v = LinguisticEngine.extract_deterministic_vocabulary(
-                    clean_p,
-                    syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
-                    target_count=target_k,
-                    exclude_words={w for w, _ in f12_suppressed} if f12_suppressed else None
-                )
-                v_items = [
-                    VocabularyItem(
-                        word=it['word'],
-                        part_of_speech=it.get('part_of_speech', 'noun'),
-                        definition=it.get('definition', ''),
-                        quoted_sentence=it.get('quoted_sentence', ''),
-                        example_usage=it.get('example_usage', ''),
-                        design_audit=it.get('design_audit', '')
+            all_v_items: List[VocabularyItem] = []
+            g_items: List[GrammarItem] = []
+
+            if need_vocab:
+                with LinguisticEngine.wsd_log_session(core_name):
+                    target_e_k = e_default_k
+                    det_e = LinguisticEngine.extract_deterministic_expressions(
+                        clean_p,
+                        target_count=target_e_k,
+                        syllabus_expressions=syl_e
                     )
-                    for it in (det_v or [])
-                ]
+                    shipped_parent_by_atom: Dict[str, str] = {}
+                    e_items = []
+                    for it in (det_e or []):
+                        if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
+                            continue
+                        expr_word = it.get("word", "")
+                        for atom in self.expression_constituent_atoms(expr_word):
+                            shipped_parent_by_atom.setdefault(atom, expr_word)
+                        e_items.append(
+                            VocabularyItem(
+                                word=it['word'],
+                                part_of_speech=it.get('part_of_speech', 'collocation'),
+                                definition=it.get('definition', ''),
+                                quoted_sentence=it.get('quoted_sentence', ''),
+                                example_usage=it.get('example_usage', ''),
+                                design_audit=it.get('design_audit', '')
+                            )
+                        )
 
-                target_e_k = e_default_k
-                det_e = LinguisticEngine.extract_deterministic_expressions(
-                    clean_p,
-                    target_count=target_e_k,
-                    syllabus_expressions=syl_e
-                )
-                shipped_atoms: Set[str] = set()
-                e_items = []
-                for it in (det_e or []):
-                    if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
-                        continue
-                    shipped_atoms |= self.expression_constituent_atoms(it.get("word", ""))
-                    e_items.append(
+                    f12_suppressed: List[Tuple[str, str]] = []
+                    filtered_syl_v = list(syl_v) if syl_v else []
+                    if syl_v and shipped_parent_by_atom:
+                        pending_v: List[str] = []
+                        for w in syl_v:
+                            w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
+                            parent_expr = shipped_parent_by_atom.get(w_clean)
+                            if parent_expr:
+                                has_indep_sent = any(
+                                    LinguisticEngine.text_contains_form(s, w_clean, standalone=True)
+                                    and not LinguisticEngine.text_contains_form(
+                                        s, re.sub(r'\[.*?\]|\(.*?\)', '', parent_expr).strip().lower(), standalone=False
+                                    )
+                                    for s in (sent_pool or {}).values()
+                                )
+                                if not has_indep_sent:
+                                    f12_suppressed.append((w, parent_expr))
+                                    continue
+                            pending_v.append(w)
+                        filtered_syl_v = pending_v
+
+                    total_budget = v_default_k + e_default_k
+                    target_k = max(len(filtered_syl_v), total_budget - len(e_items)) if (syl_v or syl_e) else v_default_k
+                    det_v = LinguisticEngine.extract_deterministic_vocabulary(
+                        clean_p,
+                        syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
+                        target_count=target_k,
+                        exclude_words={w for w, _ in f12_suppressed} if f12_suppressed else None
+                    )
+                    v_items = [
                         VocabularyItem(
                             word=it['word'],
-                            part_of_speech=it.get('part_of_speech', 'collocation'),
+                            part_of_speech=it.get('part_of_speech', 'noun'),
                             definition=it.get('definition', ''),
                             quoted_sentence=it.get('quoted_sentence', ''),
                             example_usage=it.get('example_usage', ''),
                             design_audit=it.get('design_audit', '')
                         )
-                    )
-
-                if f12_suppressed and len(v_items) < target_k:
-                    rescued_raw = [
-                        w for (w, _parent) in f12_suppressed
-                        if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in shipped_atoms
+                        for it in (det_v or [])
                     ]
-                    rescued = [
-                        w for w in rescued_raw
-                        if not sent_pool or any(
-                            LinguisticEngine.text_contains_form(s, re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower(), standalone=True)
-                            for s in sent_pool.values()
+
+                    # Expression Backfill when vocabulary drops occur
+                    total_shipped = len(v_items) + len(e_items)
+                    if total_shipped < total_budget:
+                        shortfall = total_budget - total_shipped
+                        expanded_e_k = len(e_items) + shortfall + 3
+                        det_e_more = LinguisticEngine.extract_deterministic_expressions(
+                            clean_p,
+                            target_count=expanded_e_k,
+                            syllabus_expressions=syl_e
+                        )
+                        existing_e_keys = {re.sub(r'\s+', ' ', it.word.strip().lower()) for it in e_items}
+                        for it in (det_e_more or []):
+                            if len(v_items) + len(e_items) >= total_budget:
+                                break
+                            if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
+                                continue
+                            norm_key = re.sub(r'\s+', ' ', it.get("word", "").strip().lower())
+                            if norm_key in existing_e_keys:
+                                continue
+                            existing_e_keys.add(norm_key)
+                            expr_word = it.get("word", "")
+                            for atom in self.expression_constituent_atoms(expr_word):
+                                shipped_parent_by_atom.setdefault(atom, expr_word)
+                            e_items.append(
+                                VocabularyItem(
+                                    word=it['word'],
+                                    part_of_speech=it.get('part_of_speech', 'collocation'),
+                                    definition=it.get('definition', ''),
+                                    quoted_sentence=it.get('quoted_sentence', ''),
+                                    example_usage=it.get('example_usage', ''),
+                                    design_audit=it.get('design_audit', '')
+                                )
+                            )
+
+                # Delexical Light Verb Suppression
+                delexical_light_verbs = {
+                    'make', 'take', 'have', 'give', 'do', 'get', 'set', 'put', 'pay', 'keep', 'hold', 'go', 'come'
+                }
+                if shipped_parent_by_atom and v_items:
+                    v_items = [
+                        it for it in v_items
+                        if not (
+                            re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower() in delexical_light_verbs
+                            and re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower() in shipped_parent_by_atom
                         )
                     ]
-                    if rescued:
-                        existing_v_words = {v.word.strip().lower() for v in v_items}
-                        rescued = [w for w in rescued if re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower() not in existing_v_words]
-                    if rescued:
-                        remaining_slots = max(0, target_k - len(v_items))
-                        for it in LinguisticEngine.extract_deterministic_vocabulary(
-                            clean_p,
-                            syllabus_vocab=rescued,
-                            target_count=min(len(rescued), remaining_slots)
-                        ):
-                            if len(v_items) >= target_k:
-                                break
-                            if it['word'].strip().lower() not in existing_v_words:
-                                existing_v_words.add(it['word'].strip().lower())
-                                v_items.append(
-                                    VocabularyItem(
-                                        word=it['word'],
-                                        part_of_speech=it.get('part_of_speech', 'noun'),
-                                        definition=it.get('definition', ''),
-                                        quoted_sentence=it.get('quoted_sentence', ''),
-                                        example_usage=it.get('example_usage', ''),
-                                        design_audit=it.get('design_audit', '')
-                                    )
-                                )
 
-            all_v_items = v_items + e_items
-            return all_v_items, resolved_cefr, clean_p
+                all_v_items = v_items + e_items
+
+                # Word-family deduplication (matching extraction_runner.py)
+                if len(all_v_items) > 1:
+                    deduped_family_vocab: List[VocabularyItem] = []
+                    seen_families: List[str] = []
+                    for it in all_v_items:
+                        clean_w = re.sub(r'\[.*?\]|\(.*?\)', '', str(it.word)).strip().lower()
+                        if not clean_w:
+                            continue
+                        is_family_duplicate = False
+                        is_multiword = len(clean_w.split()) > 1
+                        for existing_w in seen_families:
+                            existing_is_multi = len(existing_w.split()) > 1
+                            if is_multiword or existing_is_multi:
+                                if clean_w == existing_w:
+                                    is_family_duplicate = True
+                                    break
+                            else:
+                                if LinguisticEngine.are_same_word_family(clean_w, existing_w):
+                                    is_family_duplicate = True
+                                    break
+                        if is_family_duplicate:
+                            continue
+                        seen_families.append(clean_w)
+                        deduped_family_vocab.append(it)
+                    all_v_items = deduped_family_vocab
+
+                if all_v_items:
+                    v_data = VocabularyExtraction(
+                        title=f"{core_name.replace('_', ' ')} Vocabulary",
+                        vocabulary=all_v_items
+                    )
+                    self._save_extraction_results(v_data, f"{core_name}.md", category_override="vocabulary")
+
+            if need_grammar:
+                det_g = LinguisticEngine.extract_deterministic_grammar(
+                    clean_p,
+                    sentence_pool=sent_pool,
+                    target_count=g_default_k,
+                    syllabus_grammar=syl_g
+                )
+                g_items = []
+                for it in (det_g or []):
+                    g_item = GrammarItem(
+                        quote=it['quote'],
+                        pattern_formula=it['pattern_formula'],
+                        pedagogical_function=it['pedagogical_function'],
+                        design_audit=it.get('design_audit', ''),
+                        imitation_example=it['imitation_example'],
+                        common_mistakes=it['common_mistakes']
+                    )
+                    setattr(g_item, "category", it.get("category", "Information Packaging"))
+                    if "syntax_topic" in it:
+                        setattr(g_item, "syntax_topic", it["syntax_topic"])
+                    g_items.append(g_item)
+                if g_items:
+                    g_data = GrammarExtraction(
+                        title=f"{core_name.replace('_', ' ')} Grammar",
+                        grammar_patterns=g_items
+                    )
+                    self._save_extraction_results(g_data, f"{core_name}.md", category_override="grammar")
+
+            return all_v_items, g_items, resolved_cefr, clean_p
 
         if quiz_type in ("vocabulary", "vocabulary_quiz"):
             # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items,
-            # never downstream markdown extraction files.
+            # and automatically syncs extractions/<Unit>_vocabulary.md and <Unit>_grammar.md on disk.
             if not source_path or not source_path.exists():
                 return None
-            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            fresh_v_items, _, cefr, _ = _extract_and_persist_fresh_nodes(source_path, need_vocab=True, need_grammar=True)
             if not fresh_v_items:
                 return None
             return {"content": fresh_v_items, "cefr_level": cefr}
 
         elif quiz_type == "reading":
             if not source_path or not source_path.exists(): return None
+            _, _, cefr, clean_passage = _extract_and_persist_fresh_nodes(source_path, need_vocab=True, need_grammar=True)
             with open(source_path, "r", encoding="utf-8") as f: passage = f.read()
-            # Clean syllabus sections (e.g. ## Syllabus Vocabulary, ## Syllabus Grammar) so only pure passage text is supplied
-            clean_passage, _, _, _ = self.parse_syllabus_sections(passage)
-            self._last_source_content = clean_passage or passage
-            det_cefr = LinguisticEngine.calculate_text_cefr(clean_passage) if clean_passage else cefr
-            if det_cefr:
-                cefr = det_cefr
             return {"passage": clean_passage.strip() if clean_passage else passage, "cefr_level": cefr}
 
         elif quiz_type == "translation":
-            # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items.
+            # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items,
+            # and automatically syncs extractions/<Unit>_vocabulary.md and <Unit>_grammar.md on disk.
             if not source_path or not source_path.exists():
                 return None
-            with open(source_path, "r", encoding="utf-8") as f:
-                source_text = f.read()
-            clean_passage, syl_v, syl_g, syl_e = self.parse_syllabus_sections(source_text)
-            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            fresh_v_items, g_items, cefr, _ = _extract_and_persist_fresh_nodes(source_path, need_vocab=True, need_grammar=True)
             if not fresh_v_items:
                 return None
-
-            indexed_text, pool = LinguisticEngine.tokenize_and_index_sentences(clean_passage)
-            compile_defaults = self.config.get("compile_defaults") or {}
-            target_k_g = compile_defaults.get("grammar", 5)
-            det_g = LinguisticEngine.extract_deterministic_grammar(
-                clean_passage,
-                sentence_pool=pool,
-                target_count=target_k_g,
-                syllabus_grammar=syl_g
-            )
-            g_items = [
-                GrammarItem(
-                    quote=it['quote'],
-                    pattern_formula=it['pattern_formula'],
-                    pedagogical_function=it['pedagogical_function'],
-                    design_audit=it.get('design_audit', ''),
-                    imitation_example=it['imitation_example'],
-                    common_mistakes=it['common_mistakes']
-                )
-                for it in (det_g or [])
-            ]
             return {"vocab_list": fresh_v_items, "grammar_list": g_items, "cefr_level": cefr}
 
         elif quiz_type == "listening":
             if not source_path or not source_path.exists():
                 return None
-            fresh_v_items, cefr, _ = _extract_fresh_vocab_items(source_path)
+            fresh_v_items, _, cefr, clean_source = _extract_and_persist_fresh_nodes(source_path, need_vocab=True, need_grammar=True)
             if not fresh_v_items:
                 return None
             source_content = source_path.read_text(encoding="utf-8")
-            clean_source, _, _, _ = self.parse_syllabus_sections(source_content)
             return {
                 "vocab_list": fresh_v_items,
                 "summary_content": "",

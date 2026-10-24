@@ -10,7 +10,7 @@ import dataclasses
 import base64
 import logging
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Set
+from typing import List, Tuple, Dict, Any, Set, Optional
 from concurrent.futures import ThreadPoolExecutor
 from ..config import config
 from ..llm import llm
@@ -133,6 +133,40 @@ class QuizIntegrityGatesMixin:
                             elif dataclasses.is_dataclass(q):
                                 if hasattr(q, "question"): setattr(q, "question", stem)
                                 elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
+
+                # Auto-heal redundant finite copula before bare-infinitive 'be ...' phrase options
+                # (e.g., 'was ____' + 'be filled with' -> 'seemed to ____' + 'be filled with')
+                if options and all(str(opt).strip().lower().startswith("be ") for opt in options if str(opt).strip()):
+                    def _repl_copula_gate(m: re.Match) -> str:
+                        cop = m.group(1).lower()
+                        adv_mid = m.group(2) or ""
+                        blank_tok = m.group(3)
+                        is_cap = m.group(1)[0].isupper()
+                        is_past = cop in ("was", "were") or cop.startswith("had ")
+                        if adv_mid.strip():
+                            aux = ("Would" if is_cap else "would") if is_past else ("Can" if is_cap else "can")
+                        elif is_past:
+                            aux = "Seemed to" if is_cap else "seemed to"
+                        elif cop == "is" or cop.startswith("has "):
+                            aux = "Tends to" if is_cap else "tends to"
+                        else:
+                            aux = "Tend to" if is_cap else "tend to"
+                        return f"{aux} {adv_mid}{blank_tok}"
+
+                    healed_cop_stem = re.sub(
+                        r"\b(am|is|are|was|were|(?:has|have|had)\s+been)\s+((?:(?:not|never|always|often|also|still|deeply|completely|fully|truly|quite|very|\w+ly)\s+)*)(_{2,})\b",
+                        _repl_copula_gate,
+                        stem,
+                        flags=re.IGNORECASE,
+                    )
+                    if healed_cop_stem != stem:
+                        stem = healed_cop_stem
+                        if isinstance(q, dict):
+                            if "question" in q: q["question"] = stem
+                            elif "translated_sentence" in q: q["translated_sentence"] = stem
+                        elif dataclasses.is_dataclass(q):
+                            if hasattr(q, "question"): setattr(q, "question", stem)
+                            elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
 
                 blank_matches = re.findall(r'_{2,}', stem)
                 if len(blank_matches) > 1:
@@ -684,6 +718,7 @@ class QuizIntegrityGatesMixin:
         target_language: str = "Chinese",
         cefr_level: str = "B2",
         enforce_minimal_pair: bool = False,
+        passage_text: str = "",
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Target-to-English Translation Quiz.
@@ -715,10 +750,11 @@ class QuizIntegrityGatesMixin:
         cefr_upper = (cefr_level or "B2").upper()
 
         headword_whitelist = cls._expand_headword_whitelist(unit_headwords)
+        clean_passage_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", passage_text.lower())) if passage_text else set()
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
             "sentence", "translation", "english", "chinese", "option", "correct", "flawed", "idiomatic"
-        } | headword_whitelist
+        } | headword_whitelist | clean_passage_words
 
         # Determine target language regex pattern
         lang_str = (target_language or "Chinese").lower()

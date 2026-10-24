@@ -253,6 +253,10 @@ Any pull request or modification touching dictionary lookup must satisfy:
      - 将 Stage 1 筛出的 Top-$K$ ($K \le 4$) 合法词典义项（附带 `(pos)`、`[<gram>]`、完整 `definition`、`[Pattern: ...]` 及典型例句 `(e.g. "...")`）与 `Target Sentence`、`Surrounding Context`（前后各 1 句篇章语境）组装为 ~100 Token 的单项选择 Prompt（选项 `A`/`B`/`C`/`D`）。
      - 本地 LLM 仅受控输出 **1 个选项字母 Token**（`temperature=0.0`，耗时 ~0.28s–0.40s），**零自由生成权限**，100% 锚定于 `pedlex.db` 权威义项。
      - 内置 SHA-1 持久化内存缓存（`_wsd_llm_cache`）与单元级聚合审计日志（`wsd_log_session` $\rightarrow$ `logs/<timestamp>_wsd_arbitration_<unit>.log`）。
+  3. **Zero-Fallback WSD Contract (`WSDArbitrationError`) & Two-Layer LLM Circuit Breaker (零静默降级契约与双层熔断机制)**:
+     - **严禁静默退回 `candidates[0]` (`Zero-Fallback Invariant`)**: 在 `disambiguate_via_llm` 中，若本地 LLM 服务离线、连接超时或重试后仍返回无法解析为合法选项字母的输出，立即抛出 `WSDArbitrationError`（继承自 `LLMServiceUnavailableError`），**严禁静默退回 `candidates[0]` 掩盖故障或产生错误词义落盘**。
+     - **Layer 1 — Pre-Flight 预检拦截 (`LLMClient.ensure_available()` in `processor.py`)**: 在 `process_unit` 启动任何耗时提取或题目生成前，以 `2.0s` 超时探活本地 Ollama `/api/tags` 端点；若本地模型服务未启动，在 `< 5ms` 内立即失败并向 Web Dashboard / CLI 返回清晰的诊断提示，零半成品写入。
+     - **Layer 2 — Mid-Flight 盘中熔断 (`except LLMServiceUnavailableError` in `processor.py`)**: 若在 WSD 消歧或后续题目生成中途发生模型服务掉线，`WSDArbitrationError` 向上冒泡至 `processor.py`，立即中止当前单元任务并阻止污染文件写入 `extractions/` 或 `handouts/`。
 
 ```text
 [课文原句 (Quoted Sentence) + 前后句篇章语境 (Discourse Context) + 目标词]
@@ -372,6 +376,76 @@ Any pull request or modification touching dictionary lookup must satisfy:
      - 首选义项（`s_idx == 0`）携带 `[technical]` 标签时不施加偏门语域惩罚，并扩充 `technology`/`scientific` 等触发词；同时当首选义项未显式声明 `patterns` 数组但其原生 `examples` 中已证实 `<headword> <prep>`（如 `paradigm of`）时，赋予与显式 pattern 同等的 $+40$ 框架加分。
   5. **贬义语用标签 (`used to show disapproval`) 与建设性使能语境门禁 (`commercialize`)**:
      - 当义项释义带有 `used to show disapproval` 或 `care more about making money/profits`，而课文原句处于建设性使能框架（`help/enable/allow ... design, produce, and commercialize new technologies`）且无负面线索时，对该贬义义项施加 $-40$ 惩罚，并对中性商业化义项（`make something available to buyers`）奖励 $+35$ 分。
+
+### 7.16 Phrasal Verb Sense Isolation & Subsense/Signpost Unpacking in Database Ingestion (短语动词义项与主词条隔离、单次词消歧防串味及子义项/路标完整展开)
+- **Status**: Implemented (已落地 — 阶段一/二修复闭环)
+- **Location**: [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.py) (`parse_ldoce_entry` & `extract_phrasal_verbs`), [`librarian/linguistics_core/extraction_pipeline.py`](../librarian/linguistics_core/extraction_pipeline.py) (`_unit_senses` / `build_top_k_expression_candidates`), & [`librarian/linguistics_core/wsd_engine.py`](../librarian/linguistics_core/wsd_engine.py) (`_lock_sense` & `build_top_k_vocab_candidates`)
+- **Root Cause & Findings**:
+  1. **`phrasal_verbs` 与主词条 `signpost` 局部命名空间冲突**:
+     - 在 LDOCE6 HTML 中，每个 `<span class="phrvbentry">`（如 `go down`, `go off`, `go on`, `go out`, `go up`）拥有独立编号（`1..N`）与独立 `<span class="signpost">`。其 `signpost` 名称与主词条及其他短语动词大量重复（例如 `[happen]`, `[leave]`, `[time]`, `[be sent]`, `[relationship]`），因此**严禁用 `signpost` 字符串跨块反查关联**，必须在各自的 `phrvbentry` 块内独立解析。
+  2. **主词条 `senses` 误吞嵌套的 `<span class="phrvbentry">` 义项（全库 1,299 个动词词条受影响，共混入 8,668 个短语动词义项）**:
+     - `<span class="phrvbentry">` 在 HTML DOM 中嵌套于动词 `<span class="entry">` 内部且不含 `class="entry"`。`build_ldoce_db.py` 第 1640 行仅检查 `s.find_parent(class_='entry') == entry`，未排除 `s.find_parent(class_='phrvbentry') is not None`，导致 `go` 下属 40 个短语动词的 171 个义项（如 `go off` 爆炸、`go under` 沉没、`go on` 唠叨）无词头标记地混入主词条 `go['senses'][56..226]`。
+  3. **`extract_phrasal_verbs` 漏提取 `signpost` 且未展开 `subsense` (`1a)`/`1b)`)**:
+     - `extract_phrasal_verbs` 在构建 `data['phrasal_verbs']` 时未提取 `<span class="signpost">`（如 `go on` Sense 8 的 `[TIME]`），且只遍历顶层 `<span class="sense">` 而未展开 `<span class="subsense">`（导致 `go on` 的 `1b) [CONTINUE] to continue without stopping` 及其例句 `"The screaming went on and on"` 在 `phrasal_verbs` 中丢失，诱发 `Book_1_Unit_3_Section_A` 将 *"the wonder-plants went on and on"* 误选为 `8. to pass`）。
+  4. **单次词（Single-Word）消歧 `_lock_sense` 中的两个短语动词防御漏洞**:
+     - **漏洞 A — `pv_sense_map` 被 `1b)`/`2b)` 子义项绕过（全库 336 个混入子义项完全失防）**:
+       - `wsd_engine.py` 第 3183–3209 行通过 `(definition, example[0])` 反查 `entry['phrasal_verbs']` 构建 `pv_sense_map` 以惩罚混入主词条的短语动词义项（$-80$ 分）。但由于 `entry['phrasal_verbs']` 未展开 `1b)`/`2b)` 子义项，主词条 `entry['senses']` 中所有来自短语动词的 `b/c/d` 子义项（共 336 个，如 `go on` 1b、6b、10b、21b）无法命中 `pv_sense_map`，在查单次词 `go` 时被当成普通动词义项零惩罚放行。
+     - **漏洞 B — 整句 `q_seq` 介词/小品词巧合触发 $+45$ 反向误奖**:
+       - `wsd_engine.py` 第 3440 行检查 `if all(pt in q_seq for pt in pv_Phrase.split())` 时，`q_seq` 是**整句原句的词元集合**而非动词邻近窗口。当查单次词 `go`（如 *"Why didn't you go to the store with Mary on Tuesday?"*）时，句末介词 `on` 巧合满足 `{"go", "on"} <= set(q_seq)`，不仅免除了 $-80$ 惩罚，反而给 `go on` 的所有短语动词义项错误奖励 $+45$ 分。
+  5. **Book 1 Section A 单次词 WSD 典型边界案例记录**:
+     - **动植物领域同源词义区分 (`domesticated`, `offspring`)**: `domesticated` 在 *"Today's peanut plants are domesticated versions of wild peanut plants"* 中指代植物驯化，但主词条 `domesticate` 仅收录动物驯化义项，形容词词条 `domesticated` 才区分 `1. (of animals)` 与 `2. (of plants)`；`offspring` 在杂交植物语境下需区分 `1. someone's child` 与 `2. the young of an animal or plant`。
+     - **反语/习语框架 (`an embarrassment of riches`)**: `embarrassment` 在 *"what might be called an embarrassment of riches"* 中需识别习语隐喻用法而非普通社交尴尬义项。
+- **Implemented Remedy & Verification (已落地修复与全量验证)**:
+  1. **主词条 `senses` 与 `phrvbentry` 物理隔离**: 在 `build_ldoce_db.py` 主词条 `senses` 收集中增加 `and s.find_parent(class_='phrvbentry') is None`，全库 1,299 个动词词条彻底剥离 8,668 个短语动词义项（0 跨块混入），并为保留在 `phrasal_verbs` 中的每个义项显式打上 `phrasal_verb_head` 标记。
+  2. **`extract_phrasal_verbs` 子义项与路标完整展开**: 复用 `_parse_sense_item` 的 `subsense` 展开与 `signpost` 提取逻辑，使 `data['phrasal_verbs']` 自带完整的 `1a)`/`1b)` 子义项与 `[SIGNPOST]` 标记（例如 `go on` 完整展开 `1b) [CONTINUE] to continue without stopping` 及例句 `"The screaming went on and on"`）。
+  3. **单次词 `_lock_sense` 局部窗口粒子门禁 (`±3` tokens)**: 将短语动词小品词检测限制在目标动词右侧局部依存/邻近窗口（$\le 3$ tokens），彻底消除整句 `q_seq` 远端介词巧合触发的 $+45$ 分误奖。
+
+### 7.17 Sub-Article & Box Isolation in Database Ingestion (`grammar_boxes`, `collocations`, `thesaurus`, `language_activator`, `phrases`) (词典附属专栏与语法/搭配/同义词框的跨词性/跨义项隔离修复)
+- **Status**: Implemented (已落地 — 阶段三/四修复闭环)
+- **Location**: [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.py) (`parse_rich_grambox`, `_sensenum_matches`, `_resolve_element_homograph`, `extract_sense_collocations`, `parse_ldoce_entry`), [`scripts/upgrade_pedlex_db.py`](../scripts/upgrade_pedlex_db.py), [`librarian/linguistics_core/pedlex_db.py`](../librarian/linguistics_core/pedlex_db.py) (`get_ldoce_grammar_alert`), & [`librarian/linguistics_core/collocations_and_cards.py`](../librarian/linguistics_core/collocations_and_cards.py) (`get_vocab_card_enrichment`, `_semantic_discriminator_note`)
+- **Audit Summary Across All Sub-Articles in `pedlex.db` (48,960 LDOCE Entries)**:
+  1. **`grammar_boxes` (`parse_rich_grambox` — 全库共 611 个语法框，存在 4 处结构性串味缺陷)**:
+     - **缺陷 A — `sn.startswith(bn)` 前缀碰撞漏洞（27 个语法框受影响）**:
+       - `build_ldoce_db.py` 第 1476 行使用 `any(sn.startswith(bn) for bn in box_sense_nums)` 匹配子义项（原意为使 `bn="1"` 匹配 `1a`/`1b`）。但由于未要求后续字符为字母（`re.match(rf"^{re.escape(bn)}[a-z]?$", sn)`），导致归属第 `1` 义项的语法框错误绑定到第 **`10..19`** 义项（归属第 `2` 义项则错误绑定到 **`20..29`** 义项）。
+     - **缺陷 B — 跨同形异义词 (`homograph`) 与跨短语动词 (`phrvbentry`) 的 `sensenum` 碰撞（58 个语法框跨词性串味，3 个短语动词语法框污染主词条）**:
+       - `soup.find_all(class_='grambox')`（第 1903 行）在整篇 HTML 全局搜索语法框，并在全量 `senses` 中仅按 `sensenum` 匹配，未校验所属 `<span class="entry">` 的 `homograph_num`/`pos` 或是否位于 `<span class="phrvbentry">` 内。
+       - 典型案例如 `go`：位于短语动词 `go together` Sense 1 下的语法框（*"In this meaning, go together is not used in the progressive."*）因 `sensenum="1"`，同时污染了动词 `go` 的 `1a/1b/1c` 与 `10..19`、名词 `go` 的 Sense 1（`idx=56`）、`go about` Sense 1（`idx=68`）及 `go after` Sense 1（`idx=69`）。
+     - **缺陷 C — 短语动词语法框误触发主词条 `no_progressive` / `no_passive` 句法禁令**:
+       - 第 1432 行 `any(p.startswith(headword.lower() + ' ') for p in owner_parts)` 将 `"go together"` 判定为主词条 `"go"` 自身（`is_self = True`），导致 `"go together is not used in the progressive"` 将主词条 `go` 错误打上 `no_progressive = True`。
+     - **缺陷 D — 未命中义项编号时盲目回退至 `matched_sense_indices = [0]`（第 1486 行）**:
+       - 当词条级或第二词性（如名词 homograph 2）的语法框未显式写出 `"meaning N"` 时，第 1486 行强制赋予 `sense_indices = [0]`，导致在运行时 `get_ldoce_grammar_alert(..., sense_index=locked_s_idx)` 中：要么在 `sense_index=0` 时误报其他词性的语法框，要么在 `sense_index > 0` 时漏掉全词条通用的语法框。
+  2. **`collocations` & `cross_collocations`（全库 13,858 个主搭配词条、7,595 个跨词条搭配，存在跨词性混桶与字段断层）**:
+     - **缺陷 A — 义项级 `s_dict['collocations']` 建库丢弃导致运行时空读**:
+       - `_parse_sense_item`（第 1715–1764 行）解析了义项内的 `collo` / `colloexa` 并存入 `s['patterns']` 与 `s['pattern_bundles']`，但在组装入库字典 `s_dict`（第 1843–1865 行）时**未写入 `collocations` 键**。导致运行时 [`wsd_engine.py` 第 4281 行](../librarian/linguistics_core/wsd_engine.py#L4281)（LLM 消歧 prompt 读取 `raw_s.get("collocations")`）与 [`collocations_and_cards.py` 第 1431 行](../librarian/linguistics_core/collocations_and_cards.py#L1431)（词汇卡读取 `locked_sense.get("collocations")`）恒为 `None`。
+     - **缺陷 B — 全局 `extract_sense_collocations(soup)` 与 `popcollo` 丢失词性 (`pos`) 与义项 (`sense_idx`) 归属（3,759 个多词性词条混桶）**:
+       - `extract_sense_collocations(soup)`（第 1291 行）和 `popcollo` 解析（第 1984 行）跨越所有 homograph（如 `work_1` 动词与 `work_2` 名词）及 `phrvbentry` 将搭配压平到同一个 `data['collocations']` 桶中，未记录 `pos`、`homograph_num` 或 `sense_idx`，迫使运行时 `get_rich_collocations` 依赖数百行正则启发式去猜测某个搭配属于名词还是动词。
+  3. **`thesaurus` & `language_activator`（全库 4,543 个 `thesaurus` 词条、9,467 个 `language_activator` 词条，存在多框压平与短语混入）**:
+     - **缺陷 A — `thesbox` 丢失所属词性 (`pos`)、义项索引 (`sense_idx`) 与框标题 (`topic`)（1,690 个多词性词条受影响）**:
+       - `build_ldoce_db.py` 第 1860 行虽临时检测了 `_has_thesref`，但在第 1975 行直接将其删除（`s.pop('_has_thesref', None)`），并将词条内所有的 `thesbox` 压平为单一列表 `data['thesaurus']`（截断至前 16 条）。当多义词/兼类词（如 `work` 动词 vs 名词、`hard` 坚硬 vs 困难）拥有多个不同主题的 `THESAURUS` 框时，所有近义词被混在同一列表中，且丢失了每个框对应的 `sense_idx` 与概念标题。
+     - **缺陷 B — `get_ldoce_thesaurus` 无过滤拼接 `language_activator` 中的多词短语**:
+       - [`pedlex_db.py` 第 2295–2334 行](../librarian/linguistics_core/pedlex_db.py#L2295-L2334) 将 `language_activator` 中的所有条目（含 `"form": "phrase"` 的搭配短语如 `"do some/more etc work"`, `"somebody's studies"`）无视目标词性和义项直接追加到 `get_ldoce_thesaurus(word)` 返回列表中。
+  4. **`phrases` (`extract_phrases` — 全库 5,380 个词条)**:
+     - `build_ldoce_db.py` 第 1268–1288 行提取的 `data['phrases']` 实为 LDOCE 词条底部的跨词条短语索引框（仅含 `phrase` 名称、`examples` 与高亮词形 `node_words`，如 `go` 下的 `"be going to do something"`, `"go around (something)"`，**无释义 `definition` 且无 `sense_idx` 关联**）。目前仅在 `_collocation_texts` 与 `search_corpus_examples` 中作为附加例句池使用，严禁将其误作带释义的独立习语词条消费。
+- **Implemented Remedy & Verification (已落地修复与全量验证)**:
+  1. **`grammar_boxes`**: `_sensenum_matches` 严格限定为字母子义项匹配 `re.match(rf"^{re.escape(bn)}[a-z]?$", sn)`；`parse_rich_grambox` 完整校验父级 `<span class="entry">` 的 `homograph_num`/`pos` 并隔离 `<span class="phrvbentry">` 内的语法框；词条级语法框记录 `scope="entry"` 与 `pos` 而非硬编码 `[0]`。
+  2. **`collocations`**: 在 `_parse_sense_item` 的 `s_dict` 中写入义项级 `collocations` 列表（供 WSD prompt 与词汇卡直接读取）；在 `extract_sense_collocations` 与 `popcollo` 条目上记录所属 `pos`、`homograph_num`、`sense_idx` 及括号内 `gloss` 释义。
+  3. **`thesaurus` & `language_activator`**: 为每个 `thesbox` 保留框标题 `topic`/`concept`、所属 `pos`/`homograph_num` 与关联的 `sense_indices`；`get_ldoce_thesaurus` 默认过滤 `"form": "phrase"` 条目，并在 `_semantic_discriminator_note` 中按 `sense_indices` 和 `pos` 精准筛选同义词框。
+  4. **DOM 子节点标签泄漏隔离 (`recursive=False`)**: 在提取义项级 `variety` (`<span class="geo">`) 与 `register` (`<span class="registerlab">`) 时严格限制为义项头部直接子节点，彻底消除将 `trick-or-treating` 变体上的 `"British English"` 污染至整个 `trick or treat` 义项的缺陷。
+
+### 7.18 Direct `sense_idx` Pointer Linking, Collocation `gloss` Promotion, Cross-Entry `crossrefs` & Multi-POS `licensed_poses` (直连义项索引、搭配框内嵌释义提升、跨词条习语跳转与兼类词多词性授权)
+- **Status**: Implemented (已落地 — 新库属性全链路应用闭环)
+- **Location**: [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.py), [`scripts/build_ldoce_fts.py`](../scripts/build_ldoce_fts.py), [`librarian/linguistics_core/pedlex_db.py`](../librarian/linguistics_core/pedlex_db.py) (`_unit_owning_sense`, `ldoce_phrase_hits`, `lookup_ldoce_phrase_candidates`), [`librarian/linguistics_core/wsd_engine.py`](../librarian/linguistics_core/wsd_engine.py) (`expression_definition_evidence`, `_lock_sense`), & [`librarian/linguistics_core/extraction_pipeline.py`](../librarian/linguistics_core/extraction_pipeline.py) (`_unit_senses`, `extract_deterministic_expressions`)
+- **Root Cause Cases & New Database Attributes**:
+  1. **搭配框内嵌习语 (`peace of mind` in `Book_1_Unit_1_Passage_A`) — `colloc_phrase` + `sense_idx` + `gloss`**:
+     - 在 LDOCE6 中，像 `peace of mind` (*= a feeling of calm and not being worried*)、`inner peace`、`keep the peace` 这类核心短语存储在 `peace` 词条的 `COLLOCATIONS` 框内（带内嵌 `gloss` 释义与 `examples`），而非顶层 `<span class="sense">`。
+     - **建库增强**: `build_ldoce_db.py` 将每个搭配项精确绑定所属 `sense_idx` 并提取括号内 `(= ...)` 为 `gloss`；`build_ldoce_fts.py` 将带 `gloss` 或例句的多词搭配以 `tier='colloc_phrase'` 写入 `pedlex_phrase_index`（新增 2,740 条高价值搭配短语）。
+     - **运行时直连消费**: `lookup_ldoce_phrase_candidates`、`ldoce_phrase_hits`、`_unit_owning_sense` 与 `expression_definition_evidence` 直接读取 `c.get("sense_idx")`（O(1) 定位宿主 Sense，告别脆弱的字符串启发式扫描），并将 `c.get("gloss")` 直接提升为该搭配短语的权威词典释义（例如 `peace of mind` 锁定为 `"a feeling of calm and not being worried"`，配对例句 *"You need the peace of mind that your documents are safe."*）。
+  2. **跨词条跳转习语 (`pros and cons` under `pro_1` $\rightarrow$ `the pros and cons` under `con_3`) — `crossrefs` 跨词条追索**:
+     - 在 LDOCE6 中，`pro_1` 的 Sense 1 仅是一个无释义的跳转指针（`crossrefs: [{"target": "con_3", "sense_num": "1", "label": "the pros and cons"}]`），其真实释义（*"the advantages and disadvantages of something"*）与例句存储在 `con_3` 下。
+     - **建库与运行时增强**: `build_ldoce_db.py` 解析 `<span class="crossref">` 生成结构化 `crossrefs` 列表；运行时 `_unit_owning_sense`、`ldoce_phrase_hits`、`_unit_senses` 与 `expression_definition_evidence` 自动沿 `crossrefs` 追索目标词条与目标义项，使 `pros and cons` 无论含不含冠词 `the` 均 100% 锁定至 `"the advantages and disadvantages of something"`。
+  3. **兼类词条多词性授权 (`half-price` `adjective, adverb` / `offline` `adjective, adverb`) — `licensed_poses`**:
+     - `build_ldoce_db.py` 将 `<span class="pos">adjective, adverb</span>` 解析为 `licensed_poses: ["adjective", "adverb"]`。
+     - 运行时 `determine_contextual_pos` 与 `_lock_sense` 检查 `licensed_poses`，确保在 *"tickets are sold half-price"*（副词用法）或 *"half-price tickets"*（形容词用法）中均零误杀通过 POS 硬门禁。
 
 ---
 

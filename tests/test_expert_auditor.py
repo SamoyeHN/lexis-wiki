@@ -13,10 +13,11 @@ class TestExpertAuditor(unittest.TestCase):
     def test_schema_generation(self):
         schema = get_json_schema(QuizQualityAuditReport)
         self.assertEqual(schema["type"], "object")
-        self.assertIn("overall_quality_score", schema["properties"])
-        self.assertIn("pass_audit", schema["properties"])
-        self.assertIn("blind_solve_accuracy", schema["properties"])
         self.assertIn("questions", schema["properties"])
+        self.assertIn("summary_verdict", schema["properties"])
+        self.assertNotIn("overall_quality_score", schema["properties"])
+        self.assertNotIn("pass_audit", schema["properties"])
+        self.assertNotIn("blind_solve_accuracy", schema["properties"])
 
     def test_format_quiz_for_blind_audit(self):
         source = "Henry dedicated his life to preventing animal suffering."
@@ -48,10 +49,6 @@ class TestExpertAuditor(unittest.TestCase):
 
         # Simulate expert model audit response
         mock_report = QuizQualityAuditReport(
-            quiz_title="Henry Spira Reading Quiz",
-            overall_quality_score=92,
-            pass_audit=True,
-            blind_solve_accuracy=1.0,
             questions=[
                 QuestionAuditItem(
                     item_index=0,
@@ -65,7 +62,8 @@ class TestExpertAuditor(unittest.TestCase):
                         DistractorAuditItem(option_letter="D", option_text="To direct gangster movies", trap_type="Speaker / Entity Misattribution", plausibility_rating="Medium", elimination_rationale="Blunt speech sounded like movie character, but he did not direct them.")
                     ],
                     pedagogical_score=95,
-                    diagnostic_feedback="Excellent item design."
+                    diagnostic_feedback="Excellent item design.",
+                    triage_action="PASS"
                 )
             ],
             summary_verdict="High quality assessment."
@@ -759,7 +757,7 @@ class TestIntegrityGate(unittest.TestCase):
             report = ExpertAuditor.audit_quiz("Passage text", quiz_data)
             self.assertIsNotNone(report)
             self.assertEqual(report.get("blind_solve_comparable"), 1)
-            self.assertEqual(report.get("blind_solve_accuracy"), 1.0)
+            self.assertEqual(report.get("blind_solve_accuracy"), 0.5)
             self.assertEqual(report.get("blind_solve_unsolvable_count"), 1)
             self.assertEqual(report.get("blind_solve_confident_divergences"), 0)
             self.assertFalse(report.get("pass_audit"))

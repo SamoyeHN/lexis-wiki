@@ -645,7 +645,7 @@ def _detect_task_type(task: str, parsed: Any) -> str:
     # Turn 1 prose drafting is an intermediate natural language stage, not a final JSON output
     if "turn1_prose" in t or "prose_draft" in t:
         return "intermediate_prose"
-    if "wsd_arbitration" in t or "chat_text_mode" in t:
+    if "extract_wsd" in t or "wsd_arbitration" in t or "chat_text_mode" in t:
         return "wsd_arbitration"
     if "expert_audit" in t or "quality_audit" in t:
         return "expert_audit"
@@ -2257,7 +2257,7 @@ class LogEvaluator:
     def parse_log_file(cls, log_path: Path) -> Optional[Dict[str, Any]]:
         """Parses a single .log file and extracts metadata, status, prompt content, and JSON response."""
         try:
-            content = log_path.read_text(encoding="utf-8", errors="ignore")
+            content = log_path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
         except Exception:
             return None
 
@@ -2284,19 +2284,19 @@ class LogEvaluator:
 
         # Extract SYSTEM PROMPT content block (fallback context)
         system_prompt = ""
-        system_prompt_match = re.search(r"--- SYSTEM PROMPT ---\n(.*?)(?=\n--- USER PROMPT ---|\n--- RAW RESPONSE ---|\n===|\Z)", content, re.DOTALL)
+        system_prompt_match = re.search(r"--- SYSTEM PROMPT ---\n(.*?)(?=\n--- USER PROMPT ---|\n--- RAW RESPONSE ---|\n=== END OF LOG ===|\Z)", content, re.DOTALL)
         if system_prompt_match:
             system_prompt = system_prompt_match.group(1).strip()
 
         # Extract USER PROMPT content block
         user_prompt = ""
-        user_prompt_match = re.search(r"--- USER PROMPT ---\n(.*?)(?=\n--- RAW RESPONSE ---|\n===|\Z)", content, re.DOTALL)
+        user_prompt_match = re.search(r"--- USER PROMPT ---\n(.*?)(?=\n--- RAW RESPONSE ---|\n=== END OF LOG ===|\Z)", content, re.DOTALL)
         if user_prompt_match:
             user_prompt = user_prompt_match.group(1).strip()
 
         # Extract RAW RESPONSE
         raw_response = ""
-        response_match = re.search(r"--- RAW RESPONSE ---\n(.*?)(?=\n===|\Z)", content, re.DOTALL)
+        response_match = re.search(r"--- RAW RESPONSE ---\n(.*?)(?=\n=== END OF LOG ===|\Z)", content, re.DOTALL)
         if response_match:
             raw_response = response_match.group(1).strip()
 
@@ -2336,6 +2336,87 @@ class LogEvaluator:
         raw_response = log_data.get("raw_response", "")
         task_type = _detect_task_type(task, parsed)
         items = _extract_items(parsed, task_type)
+
+        # 0. Immediate Gate for WSD Arbitration Logs & Explicit LLM Execution Failures
+        if task_type == "wsd_arbitration":
+            n_err = int(parsed.get("errors") or 0) if isinstance(parsed, dict) else (1 if status == "FAILED" else 0)
+            n_tot = int(parsed.get("total_arbitrated") or 0) if isinstance(parsed, dict) else 0
+            if status == "FAILED" or n_err > 0:
+                first_err = ""
+                if isinstance(parsed, dict):
+                    for dec in (parsed.get("decisions") or []):
+                        if isinstance(dec, dict) and dec.get("error"):
+                            first_err = str(dec.get("error"))
+                            break
+                if not first_err:
+                    first_err = next((ln.strip() for ln in (raw_response or "").splitlines() if ln.strip()), "LLM unreachable or timed out")
+                first_err = re.sub(r"^\[LLM_[A-Z_]+\]\s*", "", first_err)
+                return {
+                    "log_name": log_name,
+                    "task": task,
+                    "task_type": task_type,
+                    "model": model,
+                    "status": "FAILED",
+                    "failure_category": failure_category or "WSD_ARBITRATION_FAILED",
+                    "n_items": n_tot,
+                    "composite_score": 0.0,
+                    "pre_cure_score": pre_cure_score,
+                    "post_cure_score": post_cure_score,
+                    "scores": {
+                        "schema_adherence": 0.0,
+                        "verbatim_faithfulness": 0.0,
+                        "pedagogical_quality": 0.0,
+                        "uniqueness": 0.0,
+                    },
+                    "flags": [
+                        f"❌ CRITICAL [LLM_EXECUTION_FAILED]: WSD sense arbitration failed ({n_err}/{max(n_tot, 1)} error(s), zero-fallback enforced) — {first_err[:180]}"
+                    ],
+                }
+            return {
+                "log_name": log_name,
+                "task": task,
+                "task_type": task_type,
+                "model": model,
+                "status": "SUCCESS",
+                "failure_category": None,
+                "n_items": n_tot,
+                "composite_score": 100.0,
+                "pre_cure_score": pre_cure_score,
+                "post_cure_score": post_cure_score,
+                "scores": {
+                    "schema_adherence": W_SCHEMA,
+                    "verbatim_faithfulness": W_VERBATIM,
+                    "pedagogical_quality": W_PEDAGOGY,
+                    "uniqueness": W_UNIQUENESS,
+                },
+                "flags": [f"✅ [WSD_ARBITRATION] {n_tot} polysemous item(s) disambiguated via LLM with 0 errors"],
+            }
+
+        if status == "FAILED":
+            err_line = next((ln.strip() for ln in (raw_response or "").splitlines() if ln.strip()), "LLM request failed")
+            err_line = re.sub(r"^\[LLM_[A-Z_]+\]\s*", "", err_line)
+            cat_label = failure_category or "API_ERROR"
+            return {
+                "log_name": log_name,
+                "task": task,
+                "task_type": task_type,
+                "model": model,
+                "status": "FAILED",
+                "failure_category": cat_label,
+                "n_items": 0,
+                "composite_score": 0.0,
+                "pre_cure_score": pre_cure_score,
+                "post_cure_score": post_cure_score,
+                "scores": {
+                    "schema_adherence": 0.0,
+                    "verbatim_faithfulness": 0.0,
+                    "pedagogical_quality": 0.0,
+                    "uniqueness": 0.0,
+                },
+                "flags": [
+                    f"❌ CRITICAL [LLM_EXECUTION_FAILED]: {cat_label} — {err_line[:180]}"
+                ],
+            }
 
         flags: List[str] = []
         schema_score, f1 = _score_schema(parsed, raw_response, task_type=task_type)
@@ -2532,7 +2613,7 @@ class LogEvaluator:
             if not parsed:
                 return None
             evaluation = cls.evaluate_log(parsed)
-            if evaluation.get("task_type") in ("intermediate_prose", "wsd_arbitration"):
+            if evaluation.get("task_type") == "intermediate_prose":
                 return None
             return evaluation
 
@@ -2545,6 +2626,9 @@ class LogEvaluator:
                 continue
 
             audits.append(evaluation)
+
+            if evaluation.get("task_type") == "wsd_arbitration" and evaluation.get("status") != "FAILED":
+                continue
 
             model = evaluation["model"]
             if model not in model_stats:

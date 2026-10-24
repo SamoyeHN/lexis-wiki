@@ -423,5 +423,86 @@ class TestVocabularyWSD:
         for c in cands_conduct:
             assert "always + adverb/preposition" not in (c["raw_sense"].get("grammar") or "").lower()
 
+    def test_disambiguate_via_llm_zero_fallback_and_session_logging(self, monkeypatch, tmp_path):
+        """Step 3: disambiguate_via_llm must never silently fall back to index 0 (Candidate A)
+        when LLM times out or returns unparseable text, and wsd_log_session must flush a FAILED log."""
+        from librarian.llm import llm, LLMError
+        from librarian.evaluator import LogEvaluator
+        import librarian.logger as lib_logger
+
+        monkeypatch.setattr(lib_logger.config, "project_root", tmp_path)
+
+        candidates = [
+            {"definition": "Candidate A sense", "example_usage": "Example A."},
+            {"definition": "Candidate B sense", "example_usage": "Example B."},
+        ]
+
+        # Case 1: LLM raises connection timeout -> raises LLMError (never returns 0) and writes FAILED WSD log
+        def _mock_timeout(*args, **kwargs):
+            raise TimeoutError("Read timed out after 30s")
+
+        monkeypatch.setattr(llm, "chat", _mock_timeout)
+        with pytest.raises(LLMError, match="WSD LLM arbitration failed"):
+            with LinguisticEngine.wsd_log_session("Unit_Test_Timeout"):
+                LinguisticEngine.disambiguate_via_llm(
+                    item_name="compromise",
+                    sentence="We reached a compromise.",
+                    candidates=candidates,
+                )
+
+        log_files = list((tmp_path / "logs").glob("*extract_wsd_Unit_Test_Timeout*.log"))
+        assert len(log_files) == 1
+        parsed = LogEvaluator.parse_log_file(log_files[0])
+        assert parsed["status"] == "FAILED"
+        assert parsed["failure_category"] == "CONNECTION_TIMEOUT"
+        eval_res = LogEvaluator.evaluate_log(parsed)
+        assert eval_res["status"] == "FAILED"
+        assert eval_res["composite_score"] == 0.0
+        assert any("LLM_EXECUTION_FAILED" in f for f in eval_res["flags"])
+
+        # Case 2: LLM returns unparseable response -> raises LLMError (never returns 0)
+        monkeypatch.setattr(llm, "chat", lambda *a, **kw: "I am not sure which sense fits.")
+        with pytest.raises(LLMError, match="unparseable"):
+            LinguisticEngine.disambiguate_via_llm(
+                item_name="compromise",
+                sentence="We reached a compromise.",
+                candidates=candidates,
+            )
+
+    def test_llm_preflight_ensure_available_circuit_breaker(self, monkeypatch, tmp_path):
+        """Step 3: llm.ensure_available fails fast and logs LLM_OFFLINE / MODEL_NOT_FOUND when service or model is unavailable."""
+        from librarian.llm import llm, LLMError
+        from librarian.evaluator import LogEvaluator
+        import librarian.logger as lib_logger
+
+        monkeypatch.setattr(lib_logger.config, "project_root", tmp_path)
+
+        monkeypatch.setattr(
+            llm,
+            "check_health",
+            lambda force=False, model_override=None: {
+                "online": False,
+                "model_ready": False,
+                "model": "qwen2.5:7b",
+                "active_model": "qwen2.5:7b",
+                "available_models": [],
+                "api_type": "ollama",
+                "api_url": "http://localhost:11434",
+                "error": "Connection refused",
+            },
+        )
+        with pytest.raises(LLMError, match="LLM service is unreachable"):
+            llm.ensure_available(task_name="pipeline_Unit_1", prompt_summary="Pre-flight check")
+
+        log_files = list((tmp_path / "logs").glob("*pipeline_Unit_1*.log"))
+        assert len(log_files) == 1
+        parsed = LogEvaluator.parse_log_file(log_files[0])
+        assert parsed["status"] == "FAILED"
+        assert parsed["failure_category"] == "LLM_OFFLINE"
+        eval_res = LogEvaluator.evaluate_log(parsed)
+        assert eval_res["status"] == "FAILED"
+        assert eval_res["composite_score"] == 0.0
+
+
 
 

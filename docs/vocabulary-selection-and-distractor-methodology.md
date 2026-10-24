@@ -15,7 +15,9 @@ Candidate words and multi-word expressions extracted from authentic lesson passa
 ┌───────────────────────────────────────────────────────────┐
 │ Gate 1: Sense Locking (Top-K Symbolic + 1-Token LLM WSD)  │
 │ - Locks the exact contextual Sense in pedlex.db           │
-│ - Enforces POS hard gate, homograph resolution, & syntax  │
+│ - Enforces POS hard gate (incl. licensed_poses),          │
+│   direct sense_idx pointers, collocation gloss promotion, │
+│   cross-entry crossrefs, & Zero-Fallback LLM arbitration  │
 └───────────────────────────────────────────────────────────┘
                       │
                       ▼
@@ -44,8 +46,9 @@ Candidate words and multi-word expressions extracted from authentic lesson passa
    - Rather than fabricating examples in Python code—which forces downstream quizzes to test anchor-less words and invites synonym double-key collisions (`crossbreed` vs. `hybridize`)—genuinely example-less items are deterministically dropped (`[DROP_INCOMPLETE_LEXICON]`) and replaced by fully attested candidates from the passage.
 2. **Transparent Free Word Combinations (🗑️ Drop & Replace)**:
    - Compositional phrases lacking a lexicalized multi-word entry in `pedlex.db` (e.g., `passenger plane`, `new generation`, `family member`, `put into the atmosphere`) are rejected at the expression gate.
-3. **Inflected Multi-Word & Cross-Entry Corpus Items (✅ Recovered via Algorithmic Retrieval)**:
+3. **Inflected Multi-Word, Collocation-Box Idioms & Cross-Entry Corpus Items (✅ Recovered via Algorithmic Retrieval)**:
    - Authentic idioms and phrasal verbs whose examples in `pedlex.db` or WordNet appear in inflected surface forms (e.g., `pass away` $\rightarrow$ *"passed away"*, `stand for` $\rightarrow$ *"stood for"*, `show up` $\rightarrow$ *"showed up"*) or across other entries (`considerably`) are retrieved automatically via inflection-aware `search_corpus_examples` and multi-word WordNet synset lookup.
+   - Multi-word idioms stored inside `COLLOCATIONS` boxes with inline `gloss` definitions (e.g., `peace of mind` under `peace` via `tier='colloc_phrase'` and direct `sense_idx` pointers) or via cross-entry `crossrefs` pointers (`pros and cons` under `pro_1` $\rightarrow$ `con_3`) are resolved directly to their authentic sense definitions and examples without heuristic string guessing.
 4. **Polysemous Sense-Example Desynchronization (✅ Prevented via Strict Sense Isolation)**:
    - If a polysemous word's contextual sense lacks an example in `pedlex.db` (e.g., `compromise` in the transitive *"harm/weaken"* sense), `ensure_distinct_example` is strictly barred from stealing an example from another sense (*"compromise with the bosses"*). Without an authentic example for its locked sense, the item is cleanly dropped.
 5. **Textual & CEFR Gates**:
@@ -255,7 +258,7 @@ To execute all Eight Construction Families with **zero hardcoded word lists or b
      - After `Step 0 (_lock_sense)` and `Step 1 (pick_atomic_pattern_bundle)` match the passage `Quoted Sentence` to its exact dictionary pattern (e.g., matching *"It is hard for children to understand"* to `"it is hard (for somebody) to do something"`), the bundle's `cxn_spec` automatically activates **Family 1B** (`It is ____ (for [sb]) to do [sth]`).
      - Conversely, when the passage quote is *"Brick is a hard material"*, `pick_atomic_pattern_bundle` selects an attributive noun-modifier bundle (`cxn_spec = null`), cleanly routing to standard `modified_noun` collocation anchoring.
 2. **Reverse Subcategorization Set-Difference for Zero-Collision Distractors (`subcat_group`)**:
-   - During offline compilation (`build_pedlex_db.py`), `pedlex.db` scans `senses[].patterns` and `<gram>` across all 48,960 consolidated entries to populate 2,635 rows in `pedlex_cxn_index`, partitioning words into mutually exclusive syntactic equivalence classes (`ADJ_IT_EXTRAPOS` vs. `ADJ_ANIMATE_CONTROL`; `V_GERUND_ONLY` vs. `V_INF_ONLY`; `N_SHELL_TO_DO` vs. `N_SHELL_OF_DOING` vs. `N_SHELL_THAT_ONLY`; `PHR_FRONTED_INV` vs. `PHR_NON_INV_PP`).
+   - During offline compilation ([`scripts/upgrade_pedlex_db.py`](../scripts/upgrade_pedlex_db.py)), `pedlex.db` scans `senses[].patterns` and `<gram>` across all 48,960 consolidated entries to populate 2,635 rows in `pedlex_cxn_index`, partitioning words into mutually exclusive syntactic equivalence classes (`ADJ_IT_EXTRAPOS` vs. `ADJ_ANIMATE_CONTROL`; `V_GERUND_ONLY` vs. `V_INF_ONLY`; `N_SHELL_TO_DO` vs. `N_SHELL_OF_DOING` vs. `N_SHELL_THAT_ONLY`; `PHR_FRONTED_INV` vs. `PHR_NON_INV_PP`).
    - At runtime (<0.2ms), `LinguisticEngine.get_word_cxn_specs` and `LinguisticEngine.query_cxn_contrast_distractors` query `pedlex_cxn_index` for words belonging to the target's `contrast_groups` while excluding `ban_groups` ($\text{Contrast} \setminus \text{Ban}$), filtered by `cefrpy` level and WordNet synset disjointness—guaranteeing 100% syntactic elimination of distractors and 0 double-key collisions.
 
 

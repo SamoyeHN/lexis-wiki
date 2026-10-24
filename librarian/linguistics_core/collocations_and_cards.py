@@ -1161,10 +1161,22 @@ class CollocationsAndCardsMixin:
     @staticmethod
     def _definition_overlap_ratio(text_a: Optional[str], text_b: Optional[str]) -> float:
         """Overlap between two definition texts, used to detect self-referential notes."""
-        ta = set(re.findall(r"[a-z]+", (text_a or "").lower()))
-        tb = set(re.findall(r"[a-z]+", (text_b or "").lower()))
-        if not ta or not tb:
+        _DEF_STOP = {
+            "a", "an", "the", "to", "of", "in", "on", "at", "by", "for", "with", "from",
+            "into", "onto", "upon", "about", "as", "or", "and", "that", "which", "who",
+            "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+            "do", "does", "did", "can", "could", "will", "would", "way", "used", "especially",
+            "someone", "something", "somebody", "things", "person", "people", "your", "you",
+            "their", "them", "they", "it", "its", "not", "very", "more", "most", "much", "many"
+        }
+        raw_a = set(re.findall(r"[a-z]+", (text_a or "").lower()))
+        raw_b = set(re.findall(r"[a-z]+", (text_b or "").lower()))
+        if not raw_a or not raw_b:
             return 0.0
+        ta = raw_a - _DEF_STOP
+        tb = raw_b - _DEF_STOP
+        if not ta or not tb:
+            ta, tb = raw_a, raw_b
         return len(ta & tb) / float(min(len(ta), len(tb)))
 
     @staticmethod
@@ -1222,13 +1234,19 @@ class CollocationsAndCardsMixin:
             "grammar_usage": "",
             "thesaurus_note": "",
         }
-        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip().lower()
+        raw_w = str(word or "").strip()
+        if " " in raw_w:
+            return out
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", raw_w).strip().lower()
         if not w_clean or " " in w_clean:
             return out
 
         entry = cls.get_ldoce_entry(w_clean)
         if not entry:
             return out
+
+        out["core_dots"] = str(entry.get("core_dots") or "")
+        out["freq_tags"] = " ".join(entry.get("freq_tags") or [])
 
         senses = entry.get("senses") or []
         t_s_idx = None
@@ -1394,9 +1412,11 @@ class CollocationsAndCardsMixin:
             if is_multi_pos and p_code == "v" and "n" in all_poses and c_words and c_words[0] == w_clean:
                 if len(c_words) >= 2 and c_words[1] in noun_only_preps:
                     return
-            if check_cross_sense and other_sense_kws:
-                c_toks = {w for w in re.findall(r"[a-z]{4,}", c_low) if w != w_clean}
+            if check_cross_sense and (other_sense_kws or (len(senses) > 1 and t_s_idx is not None and t_s_idx > 0)):
+                c_toks = {w for w in re.findall(r"[a-z]{4,}", c_low) if w != w_clean and not cls.form_matches(w, w_clean)}
                 if c_toks & other_sense_kws and not (c_toks & locked_def_kws):
+                    return
+                if len(senses) > 1 and t_s_idx is not None and t_s_idx > 0 and not (c_toks & locked_def_kws):
                     return
             for idx_e, ex_item in enumerate(colloc_items):
                 ex_low = ex_item.lower()
@@ -1427,7 +1447,7 @@ class CollocationsAndCardsMixin:
             or entry_p_code == p_code
             or not is_multi_pos
         )
-        if len(colloc_items) < 5 and colloc_box_pos_ok:
+        if len(colloc_items) < 5:
             raw_collocs = entry.get("collocations")
             if isinstance(raw_collocs, dict):
                 allowed_cats = ("phrases", "verbs", "adjectives", "nouns", "adverbs")
@@ -1443,10 +1463,23 @@ class CollocationsAndCardsMixin:
                     for it_c in (raw_collocs.get(cat_k) or []):
                         if not isinstance(it_c, dict) or it_c.get("source") == "corpus":
                             continue
+                        it_p_code = cls._pos_code(str(it_c.get("pos") or ""))
+                        if p_code and it_p_code in ("n", "v", "adj", "adv"):
+                            if it_p_code != p_code:
+                                continue
+                        elif not colloc_box_pos_ok:
+                            continue
+                        it_s_indices = it_c.get("sense_indices")
+                        if isinstance(it_s_indices, list) and it_s_indices and t_s_idx is not None:
+                            if t_s_idx not in it_s_indices:
+                                continue
+                            has_direct_sense_link = True
+                        else:
+                            has_direct_sense_link = False
                         c_val = _clean_pattern_text(str(it_c.get("collocation") or ""))
                         if not c_val or " " not in c_val:
                             continue
-                        _add_colloc(c_val, check_cross_sense=True)
+                        _add_colloc(c_val, check_cross_sense=not has_direct_sense_link)
                         if len(colloc_items) >= 5:
                             break
                     if len(colloc_items) >= 5:
@@ -1467,13 +1500,14 @@ class CollocationsAndCardsMixin:
                     break
 
         # Tier D: Entry-level fixed phrases & cross-referenced dictionary collocations (when单POS or needed)
-        if len(colloc_items) < 5 and colloc_box_pos_ok:
+        is_ed_adj = (p_code == "adj" and w_clean.endswith("ed"))
+        if len(colloc_items) < 5 and colloc_box_pos_ok and not is_ed_adj:
             for ph_obj in (entry.get("phrases") or []):
                 ph_str = ph_obj.get("phrase") or ph_obj.get("title") if isinstance(ph_obj, dict) else str(ph_obj or "")
                 _add_colloc(str(ph_str or ""), check_cross_sense=True)
                 if len(colloc_items) >= 5:
                     break
-        if len(colloc_items) < 5 and not is_multi_pos:
+        if len(colloc_items) < 5 and not is_multi_pos and not is_ed_adj:
             for cr_obj in (entry.get("cross_collocations") or []):
                 if isinstance(cr_obj, dict):
                     _add_colloc(str(cr_obj.get("collocation") or ""), check_cross_sense=True)
@@ -1489,6 +1523,9 @@ class CollocationsAndCardsMixin:
             def _thes_item_matches_pos(t_obj: Dict[str, Any]) -> bool:
                 if not is_multi_pos or not p_code:
                     return True
+                t_pos_code = cls._pos_code(str(t_obj.get("pos") or ""))
+                if t_pos_code in ("n", "v", "adj", "adv") and t_pos_code != p_code:
+                    return False
                 tw_low = str(t_obj.get("word") or "").strip().lower()
                 tg_low = str(t_obj.get("grammar") or "").lower()
                 td_low = re.sub(r"^[:\s]+", "", str(t_obj.get("distinction") or "")).strip().lower()
@@ -1522,10 +1559,27 @@ class CollocationsAndCardsMixin:
                 # Verify that at least one peer matches the requested POS
                 if not any(_thes_item_matches_pos(t) for t in thes_list):
                     box_matches_sense = False
-            if self_exp and locked_def and len(senses) > 1:
-                self_dist = re.sub(r"^[:\s]+", "", str(self_exp.get("distinction") or "")).strip()
-                if self_dist and cls._definition_overlap_ratio(self_dist, locked_def) < 0.25:
-                    box_matches_sense = False
+            if locked_def and len(senses) > 1:
+                if self_exp:
+                    self_dist = re.sub(r"^[:\s]+", "", str(self_exp.get("distinction") or "")).strip()
+                    if self_dist and cls._definition_overlap_ratio(self_dist, locked_def) < 0.25:
+                        box_matches_sense = False
+                thes_blob = " ".join(
+                    re.sub(r"^[:\s]+", "", str(t.get("distinction") or "")).strip()
+                    for t in thes_list if _thes_item_matches_pos(t)
+                ).strip()
+                if thes_blob:
+                    locked_ov = cls._definition_overlap_ratio(thes_blob, locked_def)
+                    if not self_exp and locked_ov < 0.20:
+                        box_matches_sense = False
+                    elif t_s_idx is not None:
+                        for s_i_o, s_other in enumerate(senses):
+                            if s_i_o == t_s_idx or not _sense_pos_matches(s_other):
+                                continue
+                            o_def = (cls.format_ldoce_definition(s_other) or "").strip()
+                            if o_def and cls._definition_overlap_ratio(thes_blob, o_def) > locked_ov + 0.08:
+                                box_matches_sense = False
+                                break
             if box_matches_sense:
                 # Reference text combines the locked definition and the target's own thesaurus distinction(s)
                 ref_texts = [locked_def] if locked_def else []
@@ -1534,6 +1588,12 @@ class CollocationsAndCardsMixin:
                     if s_dist:
                         ref_texts.append(s_dist)
                 ref_combined = " ".join(ref_texts)
+
+                ld_low = locked_def.lower()
+                is_nonhuman_object_def = (
+                    ("for something" in ld_low or "in something" in ld_low or "about something" in ld_low)
+                    and not any(k in ld_low for k in ("someone", "somebody", "person", "people", "sexual", "romantic"))
+                )
 
                 scored_peers: List[Tuple[float, int, str]] = []
                 seen_peer_words: Set[str] = set()
@@ -1549,6 +1609,10 @@ class CollocationsAndCardsMixin:
                     # Never list the target headword itself in Thesaurus Note (already defined above)
                     if cls._thesaurus_variant_matches(ew, w_clean) or ew.lower() == w_clean:
                         continue
+                    if is_nonhuman_object_def:
+                        ed_low = ed.lower()
+                        if any(k in ed_low for k in ("sexually attracted", "wife, husband", "boyfriend", "girlfriend", "romantic")):
+                            continue
                     ew_key = ew.lower()
                     if ew_key in seen_peer_words:
                         continue
@@ -1717,7 +1781,7 @@ class CollocationsAndCardsMixin:
                         break
 
         # 3. Target-side sense-locked Grammar Box rule (if any)
-        gb_alert = cls.get_ldoce_grammar_alert(tw, quote=quote or "", sense_index=sense_index)
+        gb_alert = cls.get_ldoce_grammar_alert(tw, quote=quote or "", sense_index=sense_index, pos=pos or "")
         if gb_alert:
             rules = []
             for r in (gb_alert.get("rules") or []):
@@ -2099,6 +2163,15 @@ class CollocationsAndCardsMixin:
 
         # Resolve locked_sense once if not passed in (only when definition or quote provides context)
         senses = entry.get("senses", [])
+        locked_s_idx: Optional[int] = None
+        if locked_sense is not None and senses:
+            for idx_s, s_cand in enumerate(senses):
+                if s_cand is locked_sense or (
+                    s_cand.get("definition") == locked_sense.get("definition")
+                    and s_cand.get("pos") == locked_sense.get("pos")
+                ):
+                    locked_s_idx = idx_s
+                    break
         if locked_sense is None and senses and (definition or quote):
             target_pos_norm = (
                 "adj" if (p_low.startswith("adj") or p_low == "a") else
@@ -2143,12 +2216,21 @@ class CollocationsAndCardsMixin:
                 sense_lemmas = set()
 
         def _score_colloc_item(it_c: Dict[str, Any]) -> int:
+            it_s_indices = it_c.get("sense_indices")
+            if isinstance(it_s_indices, list) and it_s_indices and locked_s_idx is not None:
+                return 100 if locked_s_idx in it_s_indices else 0
             if not sense_lemmas:
                 return 0
             try:
                 nlp = cls.get_spacy()
                 self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
-                c_text = ((it_c.get("collocation") or "") + " " + (it_c.get("example") or "")).lower()
+                c_text = (
+                    (it_c.get("collocation") or "")
+                    + " "
+                    + (it_c.get("gloss") or "")
+                    + " "
+                    + (it_c.get("example") or "")
+                ).lower()
                 c_lems = {
                     t.lemma_.lower()
                     for t in nlp(c_text)

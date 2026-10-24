@@ -1470,7 +1470,12 @@ class QuizSkeletonsMixin:
                     distractors = q_cands[:3]
                     dist_meta = {d: "quantifier_collocation_contrast" for d in distractors}
                 else:
-                    p_dists = cls.generate_phrase_distractors(w_lower, count=3, exclude_words=used_distractors)
+                    p_dists = cls.generate_phrase_distractors(
+                        w_lower,
+                        pos=raw_pos or canonical_pos,
+                        count=3,
+                        exclude_words=used_distractors,
+                    )
                     distractors = p_dists
                     dist_meta = {d: "phrase_contrast" for d in p_dists}
             elif canonical_pos == "idiom_slot" and w_lower == "granted":
@@ -2172,9 +2177,16 @@ class QuizSkeletonsMixin:
                 if not any(re.search(rf"\b{re.escape(f)}\b", best_pattern, re.IGNORECASE) for f in target_forms if f):
                     best_pattern = None
 
+            is_be_led_phrase = (
+                canonical_pos == "phrase"
+                and (inflection_desc or "base form") == "base form"
+                and bool(final_target.split())
+                and final_target.split()[0].lower() == "be"
+            )
             is_base_verb_slot = (
                 (inflection_desc or "base form") == "base form"
                 and not is_plural_noun
+                and not is_be_led_phrase
                 and (
                     canonical_pos == "verb"
                     or (
@@ -2185,6 +2197,11 @@ class QuizSkeletonsMixin:
                         and bool(cls._wordnet_pos(final_target.split()[0]) & {"v"})
                     )
                 )
+            )
+            be_led_slot_hint = (
+                " (Bare-infinitive 'be' phrase slot required: precede '____' with infinitive 'to ____' "
+                "or a modal verb 'can/will/would/should/must/may/might ____' — NEVER place '____' after "
+                "finite 'am/is/are/was/were/been' or directly after a bare subject without a modal)."
             )
 
             if cloze_slot_frame:
@@ -2201,6 +2218,8 @@ class QuizSkeletonsMixin:
                         stem_core += " (Attributive pre-noun slot required: place '____' directly before a modified noun; NEVER use after a linking verb)."
                 elif m_adj_noun and m_adj_noun.group(1).lower() not in {"to", "in", "on", "at", "for", "with", "of", "from", "by", "about", "that"}:
                     stem_core += f" (You MUST include the modified noun '{m_adj_noun.group(1)}' immediately after '____' as in '____ {m_adj_noun.group(1)}')."
+                elif is_be_led_phrase:
+                    stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
             elif best_pattern:
@@ -2211,6 +2230,8 @@ class QuizSkeletonsMixin:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb; NEVER place before a noun)."
                 elif is_attributive_only_adj:
                     stem_core += " (Attributive pre-noun slot required: place '____' directly before a modified noun; NEVER use after a linking verb)."
+                elif is_be_led_phrase:
+                    stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
             else:
@@ -2221,6 +2242,8 @@ class QuizSkeletonsMixin:
                     stem_core += " (Complete predicate required: stem MUST include a linking/copular verb; NEVER place before a noun)."
                 elif is_attributive_only_adj:
                     stem_core += " (Attributive pre-noun slot required: place '____' directly before a modified noun; NEVER use after a linking verb)."
+                elif is_be_led_phrase:
+                    stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
 
@@ -2506,16 +2529,65 @@ class QuizSkeletonsMixin:
                 matched_pats = [p for p in sense_pats if p.lower() in q_low]
                 bundle_pat = matched_pats[0] if matched_pats else sense_pats[0]
 
-        model_example = bundle_ex or example_usage or quote or ""
+        # Filter out conversational speech-act formulas, personal deictic phrases,
+        # or noisy proper-noun exemplar strings so narrative sentences are clean.
+        _dialogic_deictic_re = re.compile(
+            r"\b(?:thanks|thank\s+you|hello|hi|sorry|please|excuse\s+me|pardon|your|my|our|you're|i'm|i\s+am|don't\s+worry|having\s+us)\b",
+            re.IGNORECASE,
+        )
+        if bundle_pat and (
+            _dialogic_deictic_re.search(bundle_pat)
+            or "/" in bundle_pat and any(c.isupper() for c in bundle_pat)
+            or len(bundle_pat.split()) > 5
+        ):
+            bundle_pat = ""
+
+        # Ensure model_example actually contains the target word stem and is not a dialogic greeting/thanks formula
+        w_stem = w_clean.lower()[: max(3, min(len(w_clean), 5))]
+        candidate_examples = [bundle_ex, example_usage, quote]
+        if isinstance(locked_sense, dict):
+            candidate_examples.extend(str(ex) for ex in (locked_sense.get("examples") or []) if str(ex).strip())
+        model_example = ""
+        for cand_ex in candidate_examples:
+            cand_s = str(cand_ex or "").strip()
+            if not cand_s:
+                continue
+            if w_stem in cand_s.lower() and not _dialogic_deictic_re.search(cand_s):
+                model_example = cand_s
+                break
+        if not model_example:
+            for cand_ex in candidate_examples:
+                cand_s = str(cand_ex or "").strip()
+                if cand_s and not _dialogic_deictic_re.search(cand_s):
+                    model_example = cand_s
+                    break
+
+        # For nouns, do not force a bare generic genitive 'Noun + of' frame (e.g. 'emblem of', 'population of')
+        # as Required Lexical Frame, since standalone modified nouns ('its official emblem', 'the growing population')
+        # would otherwise force the LLM to invent tautological 'of + NP' tails ('population of residents').
+        _generic_noun_of_re = re.compile(
+            rf"^(?:the\s+|a\s+|an\s+)?{re.escape(w_clean)}\s+of(?:\s+\[?(?:sth|something|sb|somebody)\]?)?$",
+            re.IGNORECASE,
+        )
+        if pos_str.lower() in ("noun", "n") and bundle_pat and _generic_noun_of_re.match(bundle_pat.strip()):
+            bundle_pat = ""
+
         if not bundle_pat:
             ctx_sample = f"{model_example} {quote} {definition}"
-            if pos_str.lower() == "noun" and re.search(rf"\bthe\s+{re.escape(w_clean)}\s+of\b", ctx_sample, re.IGNORECASE):
-                bundle_pat = f"the {w_clean} of [sth]"
-            elif pos_str.lower() == "verb":
+            if pos_str.lower() == "verb":
                 m_vp = re.search(rf"\b{re.escape(w_clean)}(?:s|ed|ing|med|ming)?\s+(into|in|on|to|with|from|for|of)\b", ctx_sample, re.IGNORECASE)
                 if m_vp:
                     bundle_pat = f"{w_clean} {m_vp.group(1).lower()} [sth]"
         required_frame = bundle_pat or w_clean
+
+        # Helper to build canonical uncountable pluralization form (e.g. hospitality -> hospitalities)
+        def _pluralize_uncountable_noun(noun_str: str) -> str:
+            n_low = noun_str.strip()
+            if re.search(r"[^aeiou]y$", n_low, re.IGNORECASE):
+                return n_low[:-1] + "ies"
+            if re.search(r"(?:s|x|z|ch|sh)$", n_low, re.IGNORECASE):
+                return n_low + "es"
+            return n_low + "s"
 
         # 2. Query pedlex_error_traps with strict POS and sense_idx isolation
         traps = cls.get_word_error_traps(w_clean, pos=pos_str or None, sense_idx=s_idx)
@@ -2535,27 +2607,58 @@ class QuizSkeletonsMixin:
                 "CLAUSE_PREP_CONFUSION": 7,
                 "GRAM_PROPERTY_TRAP": 8,
             }
+            def _is_invalid_prep_or_dialogic_trap(t_obj: Dict[str, Any]) -> bool:
+                t_type = str(t_obj.get("trap_type") or "")
+                cf = str(t_obj.get("correct_frame") or "").strip()
+                cf_low = cf.lower()
+                wf_low = str(t_obj.get("wrong_frame") or "").strip().lower()
+                if _dialogic_deictic_re.search(cf):
+                    return True
+                if t_type != "PREP_COLLOC_TRAP":
+                    return False
+                # Reject generic nominal 'Noun + of' preposition traps (e.g. 'emblem of' vs '*emblem from*',
+                # 'population of' vs '*population from*'), which force artificial tautologies on standalone nouns.
+                if pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(cf):
+                    return True
+                if not re.search(r"\bto\b", cf_low):
+                    return False
+                # If 'to' is at the end of the frame (e.g. 'Is it possible to', 'able to') or followed by a bare verb ('to do', 'to be'),
+                # it is an infinitive marker rather than a preposition governing a noun phrase.
+                if re.search(r"\bto\s*$", cf_low) or re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", cf_low):
+                    return True
+                if ("for/with" in wf_low or "for" in wf_low) and pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", cf_low):
+                    return True
+                return False
+
             valid_traps = [
                 t for t in traps
-                if str(t.get("trap_type") or "") in priority_order
+                if str(t.get("trap_type") or "") in priority_order and not _is_invalid_prep_or_dialogic_trap(t)
             ]
             if valid_traps:
                 sorted_traps = sorted(
                     valid_traps,
                     key=lambda t: priority_order.get(str(t.get("trap_type") or ""), 99)
                 )
-                best_trap = sorted_traps[0]
+                best_trap = dict(sorted_traps[0])
+                if str(best_trap.get("trap_type") or "") == "GRAM_UNCOUNTABLE":
+                    pl_form = _pluralize_uncountable_noun(w_clean)
+                    best_trap["wrong_frame"] = f"*{pl_form}* (uncountable pluralization)"
                 c_f = str(best_trap.get("correct_frame") or "").strip()
+                t_type_sel = str(best_trap.get("trap_type") or "")
                 if (
                     c_f
                     and required_frame == w_clean
-                    and not c_f.startswith("[")
+                    and t_type_sel in ("PREP_COLLOC_TRAP", "SYNTAX_COMP_TRAP")
+                    and "[" not in c_f
                     and not c_f.endswith((".", "!", "?"))
+                    and not _dialogic_deictic_re.search(c_f)
+                    and not (pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(c_f))
                     and len(c_f.split()) <= 6
                 ):
                     required_frame = c_f
-                if best_trap.get("model_example") and not model_example:
-                    model_example = str(best_trap["model_example"]).strip()
+                trap_mod_ex = str(best_trap.get("model_example") or "").strip()
+                if trap_mod_ex and not model_example and not _dialogic_deictic_re.search(trap_mod_ex):
+                    model_example = trap_mod_ex
 
         # 3. Deterministic fallback for explicit <gram> properties or bound prepositions
         if not best_trap:
@@ -2568,11 +2671,12 @@ class QuizSkeletonsMixin:
                     "pedagogical_note": f"'{w_clean}' is an attributive-only adjective ([only before noun]) and cannot be used as a predicate after a linking verb.",
                 }
             elif "[uncountable]" in def_low and pos_str.lower() in ("noun", "n", ""):
+                pl_form = _pluralize_uncountable_noun(w_clean)
                 best_trap = {
                     "trap_type": "GRAM_UNCOUNTABLE",
                     "correct_frame": f"[uncountable] ({w_clean})",
-                    "wrong_frame": f"*a {w_clean} / {w_clean}s* (uncountable pluralization)",
-                    "pedagogical_note": f"'{w_clean}' is an uncountable noun and must not take 'a/an' or a plural '-s' suffix.",
+                    "wrong_frame": f"*{pl_form}* (uncountable pluralization)",
+                    "pedagogical_note": f"'{w_clean}' is an uncountable noun and must not be pluralized as '*{pl_form}*'.",
                 }
             else:
                 # Check common bound-preposition collocation frames
@@ -2606,13 +2710,24 @@ class QuizSkeletonsMixin:
                     m_prep = re.search(rf"\b{re.escape(w_low)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\b", bundle_pat.lower())
                     if m_prep:
                         prep_tok = m_prep.group(1)
-                        alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
-                        best_trap = {
-                            "trap_type": "PREP_COLLOC_TRAP",
-                            "correct_frame": bundle_pat,
-                            "wrong_frame": f"*{w_clean} {alt_prep}*",
-                            "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
-                        }
+                        bp_low = bundle_pat.strip().lower()
+                        is_inf_to = (
+                            prep_tok == "to"
+                            and (
+                                bp_low.endswith(" to")
+                                or bool(re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", bp_low))
+                                or (pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", bp_low))
+                            )
+                        )
+                        is_generic_noun_of = pos_str.lower() in ("noun", "n") and prep_tok == "of"
+                        if not is_inf_to and not is_generic_noun_of:
+                            alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
+                            best_trap = {
+                                "trap_type": "PREP_COLLOC_TRAP",
+                                "correct_frame": bundle_pat,
+                                "wrong_frame": f"*{w_clean} {alt_prep}*",
+                                "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
+                            }
 
         # Format human-readable lexical flaw label and corruption instruction
         lex_flaw_label = ""
@@ -2628,7 +2743,13 @@ class QuizSkeletonsMixin:
             elif t_type == "SYNTAX_COMP_TRAP":
                 lex_flaw_label = f"Subcategorization Complement Trap (`{c_frame}` vs `{w_frame}`)"
                 lex_corruption_step = f"replacing the required complement frame `{c_frame}` with `{w_frame}`"
-            elif t_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN", "GRAM_UNCOUNTABLE", "GRAM_INTRANSITIVE", "GRAM_PROPERTY_TRAP"):
+            elif t_type == "GRAM_UNCOUNTABLE":
+                pl_form = _pluralize_uncountable_noun(w_clean)
+                lex_flaw_label = f"Uncountable Noun Pluralization Trap (`{c_frame}` -> `*{pl_form}*`)"
+                lex_corruption_step = (
+                    f"pluralizing the uncountable noun `{w_clean}` into `*{pl_form}*` while keeping all surrounding words and determiners identical"
+                )
+            elif t_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN", "GRAM_INTRANSITIVE", "GRAM_PROPERTY_TRAP"):
                 lex_flaw_label = f"Lexical Grammar Property Violation (`{c_frame}` -> `{w_frame}`)"
                 lex_corruption_step = f"violating `{c_frame}` by using `{w_frame}`"
             elif t_type in ("GRAM_BOX_DONTSAY", "GRAMBOX_BADEXA", "GRAMBOX_RULE_TRAP"):
@@ -2659,6 +2780,7 @@ class QuizSkeletonsMixin:
         m_topic = re.search(r"(?:Grammar\s+Warning\s*)?\(([^)]+)\)", mistakes, re.IGNORECASE)
         warn_topic = m_topic.group(1).strip() if m_topic else ""
         header_low = f"{name} {formula} {warn_topic}".lower()
+        name_form_low = f"{name} {formula}".lower()
         form_low = formula.lower()
 
         if any(k in header_low for k in ("although", "even though", "though")) and "despite" not in header_low:
@@ -2676,8 +2798,20 @@ class QuizSkeletonsMixin:
                 "zh_cue": "尽管...，...",
             }
         if (
-            "passive" in header_low
-            or "unaccusative" in header_low
+            "resultative particip" in name_form_low
+            or "post-positioned present particip" in name_form_low
+            or "comma splice" in header_low
+            or bool(re.search(r"\[vp\]\s*,\s*\[v-ing", form_low))
+        ):
+            return {
+                "flaw_label": "Resultative Participle vs. Comma Splice / Voice Trap (replacing `, [V-ing]` with passive `*, V-ed*` or an uncoordinated finite verb)",
+                "corruption_step": "replacing the post-positioned present participle `, [V-ing]` with a passive participle `*, V-ed*` or a bare finite verb (comma splice)",
+                "constraint_note": "attach `, [V-ing Phrase]` directly after the main clause without a conjunction",
+                "zh_cue": "……，从而造成了/象征着……",
+            }
+        if (
+            "passive" in name_form_low
+            or "unaccusative" in name_form_low
             or "be/modal be" in form_low
             or bool(re.search(r"\[be[^\]]*\]\s*\+\s*\[v(?:-ed|3)\]", form_low))
         ):
@@ -2698,18 +2832,6 @@ class QuizSkeletonsMixin:
                 "corruption_step": "inserting ungrammatical `*to*` before the infinitive verb after causative `let / make / have` (e.g., `*let sb. to do*`)",
                 "constraint_note": "use a bare infinitive (NO 'to') after `let / make / have + Object`",
                 "zh_cue": "让/使某人做……",
-            }
-        if (
-            "resultative particip" in header_low
-            or "post-positioned present particip" in header_low
-            or "comma splice" in header_low
-            or bool(re.search(r"\[vp\]\s*,\s*\[v-ing", form_low))
-        ):
-            return {
-                "flaw_label": "Resultative Participle vs. Comma Splice Trap (replacing `, [V-ing]` with an uncoordinated finite verb `*, V-ed*`)",
-                "corruption_step": "replacing the post-positioned present participle `, [V-ing]` with a bare finite past/present verb (comma splice) or passive participle",
-                "constraint_note": "attach `, [V-ing Phrase]` directly after the main clause without a conjunction",
-                "zh_cue": "……，从而造成了/使得……",
             }
         if (
             any(k in header_low for k in ("inversion", "negative adv", "seldom", "rarely", "never", "little", "only when", "only by", "only after"))
@@ -2749,6 +2871,17 @@ class QuizSkeletonsMixin:
                 "constraint_note": "use `, which` + singular verb",
                 "zh_cue": "……，这意味着/表明……",
             }
+        if (
+            "restrictive relative" in name_form_low
+            or "relative clause" in name_form_low
+            or bool(re.search(r"\[np\]\s*\+\s*(?:that|who|which)\s*\+\s*\[vp\]", form_low))
+        ):
+            return {
+                "flaw_label": "Relative Clause Verb Agreement Trap (mismatching verb number agreement with the antecedent `[NP]` inside the `that/who/which` clause)",
+                "corruption_step": "mismatching singular/plural verb agreement inside the relative clause (`that/who/which + *singular/plural verb mismatch*`) against the antecedent `[NP]`",
+                "constraint_note": "strictly match relative-clause verb number agreement to the antecedent `[NP]` in `[NP] + that/who/which + [VP]`",
+                "zh_cue": "……的（定语从句）",
+            }
         if any(k in header_low for k in ("conditional", "unless", "as long as", "provided that", "stipulative")) or form_low.startswith("if "):
             return {
                 "flaw_label": "Conditional Tense / Modal Trap (inserting modal `*will / would*` inside the conditional clause)",
@@ -2763,16 +2896,37 @@ class QuizSkeletonsMixin:
                 "constraint_note": "preserve `It is ... that/to` frame",
                 "zh_cue": "正是/……是必要的",
             }
+        if (
+            any(k in header_low for k in ("preparatory", "object complement", "complex-transitive", "complex transitive"))
+            or bool(re.search(r"\b(?:find|make|keep|consider|think|deem)\s*\+\s*\[(?:np|it|object)\]\s*\+\s*\[adj", form_low))
+        ):
+            return {
+                "flaw_label": "Complex-Transitive / Preparatory-It Trap (omitting dummy object `it` before `[adj] + to-V` or using an `*-ly*` adverb instead of `[adj]`)",
+                "corruption_step": "omitting dummy object `it` in `find/make it + [adj] + to do` (e.g., `*find hard to do*`) or replacing the object-complement adjective `[adj]` with an `*-ly*` adverb",
+                "constraint_note": "keep `find/make + [NP / dummy it] + [adj]` intact",
+                "zh_cue": "觉得/发现……是……的",
+            }
 
         clean_warn = re.sub(r"^(?:Grammar\s+Warning\s*)?\([^)]*\)\s*:?\s*", "", mistakes, flags=re.IGNORECASE).strip()
         if clean_warn:
-            # Split at sentence boundary or example markers without splitting on 'sb.', 'sth.', 'vs.', 'e.g.'
-            parts = re.split(r"(?<!\bvs)(?<!\bsb)(?<!\bsth)(?<!\be\.g)(?<!\bi\.e)\.\s+|\n|\[INCORRECT:|✗", clean_warn)
-            short_warn = parts[0].strip().rstrip(":")
+            # Split at sentence boundary, colon+quote example, or example markers without splitting on 'sb.', 'sth.', 'vs.', 'e.g.'
+            parts = re.split(
+                r"(?<!\bvs)(?<!\bsb)(?<!\bsth)(?<!\be\.g)(?<!\bi\.e)\.\s+|:\s*[\"'\u201c\u2018]|\s+;\s+|\n|\[INCORRECT:|✗",
+                clean_warn,
+            )
+            short_warn = parts[0].strip().rstrip(":;,.")
+            # Strip trailing ', or ...' clause if it pushes the label past 100 chars
+            if len(short_warn) > 95 and ", or " in short_warn:
+                short_warn = short_warn.split(", or ")[0].strip()
             topic_label = f"{warn_topic}: {short_warn}" if warn_topic and warn_topic.lower() not in short_warn.lower() else short_warn
+            if len(topic_label) > 120:
+                topic_label = topic_label[:120].rsplit(" ", 1)[0].rstrip(",;:")
+            # Balance any unclosed parentheses or quotes
+            if topic_label.count("(") > topic_label.count(")"):
+                topic_label += ")" * (topic_label.count("(") - topic_label.count(")"))
             return {
-                "flaw_label": f"Syntactic Structure Trap ({topic_label[:110]})",
-                "corruption_step": f"violating the `{name}` rule ({topic_label[:110]})",
+                "flaw_label": f"Syntactic Structure Trap ({topic_label})",
+                "corruption_step": f"violating the `{name}` rule ({topic_label})",
                 "constraint_note": f"strictly follow `{formula}`",
                 "zh_cue": "",
             }
@@ -2804,7 +2958,13 @@ class QuizSkeletonsMixin:
         denom = max(min(len(t1), len(t2)), 1)
         multiset_overlap = shared / denom
         seq_ratio = difflib.SequenceMatcher(None, t1, t2).ratio()
-        return round(min(1.0, max(multiset_overlap, seq_ratio)), 4)
+        raw_sim = round(min(1.0, max(multiset_overlap, seq_ratio)), 4)
+        # In short A1/A2 sentences (4-6 words), a strict single-word minimal-pair edit
+        # (e.g. 5/6 shared = 0.8333) has only 1 unshared token and is a valid Minimal Pair.
+        max_len = max(len(t1), len(t2))
+        if min(len(t1), len(t2)) >= 4 and (max_len - shared) <= 1 and abs(len(t1) - len(t2)) <= 1:
+            return max(0.86, raw_sim)
+        return raw_sim
 
     @classmethod
     def build_translation_micro_task_blueprints(
@@ -2899,14 +3059,14 @@ class QuizSkeletonsMixin:
                 }
             ]
 
-        # Classify registers on all vocabulary and grammar candidates
-        for vit in vocab_items:
+        effective_count = min(max(1, target_count), len(vocab_items))
+        selected_vocab = vocab_items[:effective_count]
+
+        # Classify registers on selected vocabulary and grammar candidates
+        for vit in selected_vocab:
             vit["register"] = cls._classify_vocab_register(vit["word"], vit["pos"], vit["definition"])
         for git in grammar_items:
             git["register"] = cls._classify_grammar_register(git["name"], git["formula"], git["pedagogical_function"])
-
-        effective_count = min(max(1, target_count), len(vocab_items))
-        selected_vocab = vocab_items[:effective_count]
 
         # 3. Step 1: Register-Aligned Lexical & Syntactic Pairing (Symbolic Pair Matching)
         gram_usage_counts = [0] * len(grammar_items)
