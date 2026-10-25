@@ -12,6 +12,7 @@ boundary-accurate phrase extraction, canonical lemmatization, and zero-collision
 import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,6 +22,8 @@ from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+
+logger = logging.getLogger("librarian.linguistics")
 
 
 
@@ -4139,7 +4142,7 @@ class WsdEngineMixin:
                                 for s_i in top_indices
                             ]
                             chosen_sub = cls.disambiguate_via_llm(key, context_sentence, top_cand_dicts)
-                            idx = top_indices[chosen_sub]
+                            idx = top_indices[chosen_sub] if 0 <= chosen_sub < len(top_indices) else None
                         else:
                             idx = _idx
 
@@ -4657,6 +4660,8 @@ class WsdEngineMixin:
                 "cached": False,
             })
         if err_msg is not None or chosen_idx is None:
-            from librarian.llm import LLMError
-            raise LLMError(f"WSD LLM arbitration failed for '{item_name}': {err_msg or 'No valid option selected'}")
+            logger.warning(
+                f"WSD LLM arbitration rejected/failed for '{item_name}' (skipping candidate): {err_msg or 'No valid option selected'}"
+            )
+            return -1
         return chosen_idx

@@ -152,15 +152,12 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
     n_llm = n_total - n_cached
     n_errors = sum(1 for r in records if r.get("error") or r.get("chosen_idx") is None)
 
-    status_str = "FAILED" if n_errors > 0 else "SUCCESS"
     first_err = next((str(r.get("error")) for r in records if r.get("error")), "")
+    is_timeout = "timeout" in first_err.lower() or "timed out" in first_err.lower()
+    status_str = "FAILED" if (n_errors > 0 and (n_errors == n_total or is_timeout)) else "SUCCESS"
     fail_cat = None
     if status_str == "FAILED":
-        fail_cat = (
-            "CONNECTION_TIMEOUT"
-            if ("timeout" in first_err.lower() or "timed out" in first_err.lower())
-            else "API_ERROR"
-        )
+        fail_cat = "CONNECTION_TIMEOUT" if is_timeout else "API_ERROR"
 
     content = []
     content.append(f"=== TASK: {task_name} ===")
@@ -202,7 +199,7 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
         if rec.get("cached"):
             status_tag = f"CACHED (0.00s, raw={rec.get('raw_reply', '')!r})"
         elif err_msg or chosen_letter is None:
-            status_tag = f"ERROR ({rec.get('duration', 0.0):.2f}s, aborted_no_fallback, err={err_msg!r})"
+            status_tag = f"SKIPPED ({rec.get('duration', 0.0):.2f}s, next_candidate_fallback, err={err_msg!r})"
         else:
             status_tag = f"LLM ({rec.get('duration', 0.0):.2f}s, raw={rec.get('raw_reply', '')!r})"
 
@@ -238,7 +235,7 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
         if chosen_letter is not None:
             content.append(f"👉 Selected: {chosen_letter} -> ({chosen_pos}) {chosen_def}")
         else:
-            content.append(f"❌ Selected: NONE (WSD Arbitration Failed - No Fallback: {err_msg})")
+            content.append(f"⚠️ Selected: NONE (Candidate Rejected/Skipped — Advancing to Next Candidate: {err_msg})")
         content.append("")
 
     content.append("--- RAW RESPONSE ---")

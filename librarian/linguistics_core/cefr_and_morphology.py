@@ -232,61 +232,200 @@ class CefrAndMorphologyMixin:
         except Exception:
             return default
 
+    # Closed-class function words / grammar stopwords excluded from passage CEFR lexical density
+    # so function-word dilution (~55-60% of running tokens at A1=1.0) never artificially caps
+    # technical/academic C1 passages (e.g. IELTS reading) at B2.
+    _CEFR_FUNCTION_WORDS = {
+        "a", "an", "the", "this", "that", "these", "those", "my", "your", "his", "her", "its",
+        "our", "their", "mine", "yours", "hers", "ours", "theirs", "i", "you", "he", "she",
+        "it", "we", "they", "me", "him", "us", "them", "myself", "yourself", "himself",
+        "herself", "itself", "ourselves", "themselves", "who", "whom", "whose", "which", "what",
+        "where", "when", "why", "how", "be", "am", "is", "are", "was", "were", "been", "being",
+        "have", "has", "had", "having", "do", "does", "did", "doing", "done", "will", "would",
+        "shall", "should", "can", "cannot", "could", "may", "might", "must", "ought", "in", "on", "at",
+        "to", "for", "of", "with", "by", "from", "up", "down", "out", "off", "over", "under",
+        "into", "onto", "upon", "about", "above", "below", "between", "among", "through",
+        "during", "before", "after", "since", "until", "till", "around", "along", "across",
+        "behind", "beyond", "within", "without", "against", "toward", "towards", "near",
+        "and", "but", "or", "nor", "so", "yet", "if", "because", "as", "than", "then",
+        "while", "whilst", "although", "though", "whether", "unless", "not", "no", "yes", "very", "too",
+        "also", "just", "only", "even", "still", "already", "always", "never", "often",
+        "sometimes", "usually", "again", "here", "there", "now", "well", "much", "many",
+        "more", "most", "some", "any", "all", "both", "each", "every", "other", "another",
+        "such", "same", "own", "one", "ones", "two", "three", "four", "five", "six", "seven",
+        "eight", "nine", "ten", "first", "second", "third",
+    }
+
+    # Measurement units, era markers, and common initialisms that carry arbitrary C1/C2 noise in cefrpy
+    _CEFR_NOISE_ABBREVS = {
+        "cm", "mm", "km", "kg", "mg", "ml", "bc", "ad", "am", "pm", "uv", "led", "cfl",
+        "ioc", "dna", "uk", "us", "tv", "pc", "id", "ok", "mr", "mrs", "ms", "dr", "st", "etc",
+    }
+
+    # Cached reverse map from irregular verb forms ('went', 'taken', 'led') -> base lemma
+    _IRREGULAR_SURFACE_TO_BASE: Optional[Dict[str, str]] = None
+
+    @classmethod
+    def _fast_cefr_lemma_and_score(cls, w: str, analyzer: Any) -> Tuple[str, Optional[float]]:
+        """
+        Zero-spaCy (<0.01ms) morphological de-inflection for passage CEFR calculation.
+        Maps inflected surface forms ('electrodes', 'diodes', 'emitting', 'compared') to their
+        canonical base lemma without invoking spaCy pipelines.
+        """
+        if cls._IRREGULAR_SURFACE_TO_BASE is None:
+            cls._IRREGULAR_SURFACE_TO_BASE = {
+                f: base
+                for base, forms in cls._IRREGULAR_VERB_FORMS.items()
+                for f in forms
+                if f
+            }
+        if w in cls._IRREGULAR_SURFACE_TO_BASE:
+            base = cls._IRREGULAR_SURFACE_TO_BASE[w]
+            return base, analyzer.get_average_word_level_float(base)
+
+        cands = cls._headword_candidates(w)
+        w_lvl = analyzer.get_average_word_level_float(w)
+        if len(cands) == 1:
+            return w, w_lvl
+
+        best_lem: Optional[str] = None
+        best_lvl: Optional[float] = None
+        for c in cands[1:]:
+            if len(c) < 3:
+                continue
+            if c in cls._CEFR_FUNCTION_WORDS:
+                return c, 1.0
+            clvl = analyzer.get_average_word_level_float(c)
+            if clvl is not None and (best_lvl is None or clvl < best_lvl):
+                best_lem = c
+                best_lvl = clvl
+
+        if best_lem is not None and best_lvl is not None:
+            if w_lvl is None or best_lvl <= w_lvl:
+                return best_lem, best_lvl
+            if w.endswith("s") and not w.endswith(("ss", "us", "is", "as", "os")) and best_lvl <= 5.95:
+                return best_lem, best_lvl
+        return w, w_lvl
+
     @classmethod
     def calculate_text_cefr(cls, text_or_words: Union[str, List[str]], default: str = "B1") -> str:
         """
         Statistically computes the authentic, objective CEFR level ('A1'..'C2') of a passage
-        or word collection using offline CEFR-J + Cambridge frequency scores (<1ms, zero token cost).
-        Scale mapping:
-          < 1.70  -> A1
-          1.70 - 2.50 -> A2
-          2.50 - 3.40 -> B1
-          3.40 - 4.30 -> B2
-          4.30 - 5.10 -> C1
-          >= 5.10 -> C2
+        or word collection using offline CEFR-J + Cambridge frequency scores (<5ms, zero token cost).
+
+        Key Psychometric & Corpus Calibration Principles:
+        1. Function-Word Exclusion (`_CEFR_FUNCTION_WORDS`):
+           Excludes closed-class grammatical stopwords ('the', 'is', 'of', 'to', 'and', pronouns,
+           prepositions, auxiliaries) which account for ~55-60% of English running text at score 1.0
+           and would otherwise mathematically crush simple-syntax/high-terminology C1 passages (e.g. IELTS
+           science/history texts) down to ~1.9-2.0.
+        2. Proper-Noun & Unit Filtering:
+           Excludes mid-sentence capitalized proper nouns (person/place names like 'Beijing', 'Rosetta',
+           'Bonaparte'), contractions, and measurement units/initialisms ('cm', 'kg', 'bc', 'led', 'cfl')
+           so beginner texts are never falsely inflated by recurring proper names.
+        3. Lemma-Normalized Content-Word Type Distribution (`typ_vals`):
+           Evaluates unique content-word lemmas via mean (`typ_avg`), 80th/90th percentiles (`p80`, `p90`),
+           and advanced lexical type ratios (`B2+ >= 3.5`, `C1+ >= 4.5`). When the 90th percentile of
+           content types crosses above the B2 line (`p90 >= 4.35`) with `C1+ >= 9.5%`, the passage
+           resolves to C1 even when everyday framing syntax keeps `typ_avg` around ~2.55-2.60.
         """
         analyzer = cls.get_cefr_analyzer()
         if not analyzer:
             return default
 
+        type_scores: Dict[str, List[float]] = {}
+        fallback_scores: List[float] = []
+
         if isinstance(text_or_words, str):
-            words = re.findall(r"[a-zA-Z]+", text_or_words.lower())
+            for m in re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", text_or_words):
+                raw_tok = m.group(0)
+                start = m.start()
+                if raw_tok.lower().endswith(("'s", "\u2019s")):
+                    raw_tok = raw_tok[:-2]
+                if not raw_tok or "'" in raw_tok or "\u2019" in raw_tok:
+                    continue
+                w = raw_tok.lower()
+                lvl = analyzer.get_average_word_level_float(w)
+                if lvl is not None:
+                    fallback_scores.append(lvl)
+                if len(w) <= 2 or w in cls._CEFR_FUNCTION_WORDS or w in cls._CEFR_NOISE_ABBREVS:
+                    continue
+
+                prefix = text_or_words[max(0, start - 4):start]
+                is_sent_start = (start == 0) or bool(re.search(r"[.!?:\n\r\"'\u201c\u2018(\[]\s*$", prefix))
+                if not is_sent_start and raw_tok[0].isupper():
+                    continue
+
+                lem, score = cls._fast_cefr_lemma_and_score(w, analyzer)
+                if lem in cls._CEFR_FUNCTION_WORDS or lem in cls._CEFR_NOISE_ABBREVS or score is None:
+                    continue
+                type_scores.setdefault(lem, []).append(score)
         else:
-            words = [re.sub(r"[^a-zA-Z]", "", w).lower() for w in text_or_words if w]
-            words = [w for w in words if w]
+            for item in text_or_words:
+                if not item:
+                    continue
+                w = re.sub(r"[^a-zA-Z]", "", str(item)).lower()
+                if not w:
+                    continue
+                lvl = analyzer.get_average_word_level_float(w)
+                if lvl is not None:
+                    fallback_scores.append(lvl)
+                if len(w) <= 2 or w in cls._CEFR_FUNCTION_WORDS or w in cls._CEFR_NOISE_ABBREVS:
+                    continue
+                lem, score = cls._fast_cefr_lemma_and_score(w, analyzer)
+                if lem in cls._CEFR_FUNCTION_WORDS or lem in cls._CEFR_NOISE_ABBREVS or score is None:
+                    continue
+                type_scores.setdefault(lem, []).append(score)
 
-        if not words:
-            return default
+        if not type_scores:
+            if not fallback_scores:
+                return default
+            avg_fb = sum(fallback_scores) / len(fallback_scores)
+            if avg_fb <= 1.60:
+                return "A1"
+            elif avg_fb <= 2.10:
+                return "A2"
+            elif avg_fb <= 2.75:
+                return "B1"
+            elif avg_fb <= 3.50:
+                return "B2"
+            elif avg_fb <= 4.35:
+                return "C1"
+            return "C2"
 
-        scores: List[float] = []
-        for w in words:
-            lvl = analyzer.get_average_word_level_float(w)
-            if lvl is not None:
-                scores.append(lvl)
+        typ_vals = sorted(sum(v) / len(v) for v in type_scores.values())
+        n_typ = len(typ_vals)
+        typ_avg = sum(typ_vals) / n_typ
 
-        if not scores:
-            return default
+        # Short sentence / small wordlist fast path (< 8 unique content lemmas)
+        if n_typ < 8:
+            if typ_avg <= 1.80:
+                return "A1"
+            elif typ_avg <= 2.25:
+                return "A2"
+            elif typ_avg <= 2.85:
+                return "B1"
+            elif typ_avg <= 3.60:
+                return "B2"
+            elif typ_avg <= 4.50:
+                return "C1"
+            return "C2"
 
-        avg = sum(scores) / len(scores)
-        sorted_scores = sorted(scores)
-        p80 = sorted_scores[int(len(sorted_scores) * 0.8)]
-        p90 = sorted_scores[int(len(sorted_scores) * 0.9)]
-        # Count fraction of tokens rated B2+ (>= 3.5) and C1+ (>= 4.5)
-        b2_plus_ratio = sum(1 for s in scores if s >= 3.5) / len(scores)
-        c1_plus_ratio = sum(1 for s in scores if s >= 4.5) / len(scores)
+        p80 = typ_vals[int(n_typ * 0.80)]
+        p90 = typ_vals[int(n_typ * 0.90)]
+        b2_typ = sum(1 for s in typ_vals if s >= 3.5) / n_typ
+        c1_typ = sum(1 for s in typ_vals if s >= 4.5) / n_typ
 
-        # Pedagogical Text CEFR Rating combining baseline average, 80th/90th percentile ceiling,
-        # and academic/advanced lexical density (preventing high-frequency narrative function words
-        # from falsely depressing B2/C1 texts down to A2).
-        if avg <= 1.55 and p80 <= 2.0 and p90 <= 2.5 and b2_plus_ratio < 0.04:
+        # Content-Word Type Calibration across CEFR A1..C2:
+        if typ_avg <= 1.82 and p80 <= 2.5 and b2_typ < 0.05:
             return "A1"
-        elif avg <= 1.95 and p80 <= 2.5 and p90 <= 3.0 and b2_plus_ratio < 0.06 and c1_plus_ratio < 0.025:
+        elif typ_avg <= 2.14 and p80 <= 3.0 and p90 <= 3.6 and b2_typ < 0.13 and c1_typ < 0.04:
             return "A2"
-        elif avg <= 2.60 and p80 <= 3.5 and p90 <= 4.2 and c1_plus_ratio < 0.05:
+        elif typ_avg <= 2.47 and p80 <= 3.5 and p90 <= 4.1 and c1_typ < 0.082:
             return "B1"
-        elif avg <= 3.40 and c1_plus_ratio < 0.12:
+        elif typ_avg < 2.55 or p90 < 4.35 or c1_typ < 0.095:
             return "B2"
-        elif avg <= 4.30:
+        elif typ_avg <= 3.40 and c1_typ < 0.25:
             return "C1"
         else:
             return "C2"
@@ -2031,6 +2170,52 @@ class CefrAndMorphologyMixin:
                         and any(c.dep_ in ("dobj", "obj") for c in tok.children)
                     ):
                         return "noun"
+                    # Plural-Noun Subject + Reduced Relative / Downstream Subjectless Predicate Invariant
+                    # (e.g. "issued the joint declaration that 'objects acquired in earlier times must be viewed...'"):
+                    # When spaCy mis-tags a plural noun ('objects', 'results', 'claims', 'records') after 'that' as VBZ ('relcl'),
+                    # attaching its reduced-relative passive participle ('acquired') as 'xcomp' and stranding the true clause
+                    # predicate ('must be viewed') as a subjectless, conjunctionless verb.
+                    if "noun" in dict_poses and tok.tag_ == "VBZ":
+                        _vbn_catenatives = {
+                            "be", "get", "have", "become", "seem", "look", "feel", "remain", "stay",
+                            "keep", "leave", "make", "find", "see", "hear", "watch", "notice",
+                            "want", "need", "like", "prefer", "consider", "deem", "declare", "prove", "render",
+                        }
+                        _has_bare_vbn_mod = (
+                            clean_w not in _vbn_catenatives
+                            and any(
+                                c.tag_ == "VBN"
+                                and c.dep_ in ("xcomp", "acl", "amod", "dep")
+                                and c.i > tok.i
+                                for c in tok.children
+                            )
+                        )
+                        _has_stranded_modal_or_plural_pred = False
+                        for _k in range(tok.i + 1, len(doc)):
+                            _tk = doc[_k]
+                            if _tk.text in (";", ":", ".", "!", "?"):
+                                break
+                            if _tk.pos_ in ("VERB", "AUX") and (
+                                any(ch.dep_ in ("aux", "auxpass") or ch.tag_ == "MD" for ch in _tk.children)
+                                or _tk.tag_ in ("VBP", "MD")
+                            ):
+                                _has_pred_subj = any(
+                                    ch.dep_ in ("nsubj", "nsubjpass", "csubj", "csubjpass", "expl")
+                                    for ch in _tk.children
+                                )
+                                _has_pred_cc = (
+                                    any(ch.dep_ == "cc" for ch in _tk.children)
+                                    or (_k > 0 and doc[_k - 1].lower_ in ("and", "or", "but"))
+                                )
+                                if not _has_pred_subj and not _has_pred_cc:
+                                    _has_stranded_modal_or_plural_pred = True
+                                    break
+                        if _has_bare_vbn_mod or (
+                            _has_stranded_modal_or_plural_pred
+                            and tok.i > 0
+                            and doc[tok.i - 1].lower_ in ("that", "whether", "if", "although", "though", "because", "while", "since", "as")
+                        ):
+                            return "noun"
                     has_v = ("verb" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v")))
                     if not has_v:
                         if dict_poses:
@@ -2487,25 +2672,30 @@ class CefrAndMorphologyMixin:
                         if (has_plural_compound_subj and has_verb_conj_child) or is_conj_of_verb or is_followed_by_coord_verb:
                             return "verb"
 
-                        quote_chars = {chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217), chr(96), chr(171), chr(187)}
                         raw_quote_followed = bool(
                             re.search(
                                 rf"(?<!['\"“”‘’])\b{re.escape(tok.text)}\s*,?\s+[\"“‘'«`]\s*[A-Za-z]",
                                 quoted_sentence or "",
                             )
                         )
-                        quote_followed = (
-                            raw_quote_followed
-                            or (tok.i + 1 < len(doc) and any(c in doc[tok.i + 1].text for c in quote_chars))
-                            or any(any(c in ch.text for c in quote_chars) for ch in tok.children)
+                        quote_followed = raw_quote_followed
+                        is_nominal_arg = (
+                            tok.dep_ in ("nsubj", "nsubjpass", "csubj", "csubjpass", "dobj", "obj", "pobj", "compound", "appos", "nmod", "attr")
+                            and tok.head != tok
+                            and tok.head.pos_ in ("VERB", "AUX", "ADP", "NOUN", "PROPN")
                         )
-                        is_nominal_obj = tok.dep_ in ("dobj", "obj", "pobj", "compound", "appos", "nmod") and tok.head.pos_ in ("VERB", "AUX", "ADP")
-                        if quote_followed and not has_det_or_poss and not is_nominal_obj:
+                        if quote_followed and not has_det_or_poss and not is_nominal_arg and tok.tag_ != "NNS":
                             has_coord_verb = any(t.pos_ == "VERB" for t in doc if t.i != tok.i)
                             if has_coord_verb:
                                 return "verb"
 
-                        if (tok.i > 0 and doc[tok.i - 1].text == ",") and (quote_followed or any(c.dep_ in ("acl", "ccomp", "xcomp") and c.pos_ in ("VERB", "AUX") for c in tok.children)):
+                        if (
+                            (tok.i > 0 and doc[tok.i - 1].text == ",")
+                            and not has_det_or_poss
+                            and not is_nominal_arg
+                            and tok.tag_ != "NNS"
+                            and (quote_followed or any(c.dep_ in ("ccomp", "xcomp") and c.pos_ in ("VERB", "AUX") for c in tok.children))
+                        ):
                             has_coord_action = any(t.text.lower() in ("then", "and", "next") or t.pos_ == "VERB" for t in doc[tok.i+1:])
                             if has_coord_action:
                                 return "verb"

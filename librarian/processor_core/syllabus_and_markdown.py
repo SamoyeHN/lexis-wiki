@@ -393,15 +393,26 @@ class SyllabusAndMarkdownMixin:
                 payload_dict.pop("_qa_audit", None)
                 src_ctx = getattr(self, "_last_source_content", "") or ""
                 if not src_ctx:
-                    src_md = unit_dir / "sources" / f"{filename_stem}.md"
-                    if src_md.exists():
-                        src_ctx = src_md.read_text(encoding="utf-8", errors="ignore")
+                    for ext in (".md", ".txt"):
+                        src_cand = unit_dir / "sources" / f"{filename_stem}{ext}"
+                        if src_cand.exists():
+                            src_ctx = src_cand.read_text(encoding="utf-8", errors="ignore")
+                            break
+                    if not src_ctx and (unit_dir / "sources").exists():
+                        for src_cand in sorted((unit_dir / "sources").iterdir()):
+                            if src_cand.is_file() and src_cand.suffix.lower() in (".md", ".txt"):
+                                src_ctx = src_cand.read_text(encoding="utf-8", errors="ignore")
+                                break
+                wrapped_src_ctx = (
+                    src_ctx if ("### SOURCE TEXT ###" in src_ctx or "### PASSAGE" in src_ctx)
+                    else f"### SOURCE TEXT ###\n{src_ctx}"
+                ) if src_ctx else ""
                 qa_audit = LogEvaluator.evaluate_log({
                     "task": f"extract_{category}_{filename_stem}",
                     "parsed_json": payload_dict,
                     "response": _json.dumps(payload_dict, ensure_ascii=False),
-                    "user_prompt": src_ctx,
-                    "context_prompt": src_ctx,
+                    "user_prompt": wrapped_src_ctx,
+                    "context_prompt": wrapped_src_ctx,
                 })
                 if dataclasses.is_dataclass(data):
                     object.__setattr__(data, "_qa_audit", qa_audit)
@@ -1249,7 +1260,7 @@ class SyllabusAndMarkdownMixin:
                         title=f"{core_name.replace('_', ' ')} Vocabulary",
                         vocabulary=all_v_items
                     )
-                    self._save_extraction_results(v_data, f"{core_name}.md", category_override="vocabulary")
+                    self._save_extraction_results(v_data, src_path.name, category_override="vocabulary")
 
             if need_grammar:
                 det_g = LinguisticEngine.extract_deterministic_grammar(
@@ -1277,7 +1288,7 @@ class SyllabusAndMarkdownMixin:
                         title=f"{core_name.replace('_', ' ')} Grammar",
                         grammar_patterns=g_items
                     )
-                    self._save_extraction_results(g_data, f"{core_name}.md", category_override="grammar")
+                    self._save_extraction_results(g_data, src_path.name, category_override="grammar")
 
             return all_v_items, g_items, resolved_cefr, clean_p
 

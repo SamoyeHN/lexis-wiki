@@ -1298,8 +1298,18 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                     except Exception:
                                         pass
                     
-                    with open(target_file, "wb") as f:
-                        f.write(file_bytes)
+                    if target_file.suffix.lower() in (".md", ".txt"):
+                        try:
+                            from .linguistics import LinguisticEngine
+                            raw_text = file_bytes.decode("utf-8-sig", errors="replace")
+                            cleaned_text = LinguisticEngine.sanitize_source_markdown(raw_text)
+                            target_file.write_text(cleaned_text, encoding="utf-8")
+                        except Exception:
+                            with open(target_file, "wb") as f:
+                                f.write(file_bytes)
+                    else:
+                        with open(target_file, "wb") as f:
+                            f.write(file_bytes)
                     
                     if unit_existed and not source_existed:
                         msg = f"Successfully added {filename} as the source material for the existing unit '{unit_name}'!"

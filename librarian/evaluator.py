@@ -512,10 +512,23 @@ def _extract_source_content(user_prompt: str) -> str:
         if match_sec:
             content = match_sec.group(1).strip()
         else:
-            # 3. Tertiary: Raw markdown source with optional YAML frontmatter and section heading
-            match_md = re.search(r"(?:^|\n)(?:---\s*\n.*?\n---\s*\n)?(?:##\s+[^\n]+\n+)(.*)", user_prompt, re.DOTALL)
+            # 3. Tertiary: Raw markdown source with optional YAML frontmatter and section heading (# or ##)
+            match_md = re.search(r"(?:^|\n)(?:---\s*\n.*?\n---\s*\n)?(?:#{1,3}\s+[^\n]+\n+)(.*)", user_prompt, re.DOTALL)
             if match_md:
                 content = match_md.group(1).strip()
+            else:
+                # 4. Plain-text / headingless raw source fallback (when no LLM instruction boilerplate is present)
+                stripped_raw = re.sub(r"^\s*---\s*\n.*?\n---\s*\n?", "", user_prompt, count=1, flags=re.DOTALL).strip()
+                if (
+                    stripped_raw
+                    and len(stripped_raw.split()) >= 20
+                    and not re.search(
+                        r"(?:You are an expert|###\s*(?:OUTPUT|INSTRUCTIONS|TASK|SCHEMA)|JSON\s+SCHEMA|Return\s+ONLY\s+valid\s+JSON)",
+                        stripped_raw,
+                        re.IGNORECASE,
+                    )
+                ):
+                    content = stripped_raw
     
     if content:
         # Strictly strip any trailing task blocks, target lists, skeletons, draft blocks, or retry critique blocks

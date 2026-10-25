@@ -47,8 +47,11 @@ class ExtractionPipelineMixin:
         """
         Normalizes OCR / copy-paste typography defects on a single prose line:
           - Repairs mojibake em-dash ('\\ufffdC') -> '—'
-          - Normalizes spaced ellipsis ('. . .') -> '...'
-          - Normalizes curly quote spacing ('“ word ”' -> '“word”')
+          - Normalizes ellipsis ('…', '. . .') -> '...'
+          - Converts full-width CJK punctuation ('！', '？', '，', '；', '：', '（', '）', '［', '］')
+            to standard ASCII punctuation with canonical English spacing
+          - Normalizes curly double quotes ('“', '”', '„', '‟', '＂', '«', '»') -> '"'
+            and curly single quotes / apostrophes ('‘', '’', '‚', '‛', '′', '＇') -> "'"
           - When a line has balanced straight double quotes ('"'), uses quote parity
             (even = opening quote, odd = closing quote) to deterministically fix
             stuck quotes ('me."Pose' -> 'me. "Pose') and inverted quote spaces
@@ -57,17 +60,47 @@ class ExtractionPipelineMixin:
         """
         if not s:
             return s
-        # 1. Mojibake GBK em-dash repair and spaced ellipsis normalization
+        # 0. Invisible / full-width whitespace normalization
+        s = s.replace("\u3000", " ").replace("\u00a0", " ").replace("\u200b", "").replace("\ufeff", "")
+
+        # 1. Mojibake GBK em-dash repair and ellipsis normalization
         s = s.replace("\ufffdC", "—")
+        s = s.replace("…", "...")
         s = re.sub(r"\.\s+\.\s+\.", "...", s)
 
-        # 2. Curly quote spacing normalization
-        s = re.sub(r"([“«])\s+", r"\1", s)
-        s = re.sub(r"\s+([”»])", r"\1", s)
-        s = re.sub(r"(\w|[.!?,:;])([“«])", r"\1 \2", s)
-        s = re.sub(r"([”»])(\w)", r"\1 \2", s)
+        # 2. Full-width punctuation -> ASCII punctuation with canonical spacing
+        if any(ch in s for ch in ("！", "？", "，", "；", "：", "（", "）", "［", "］", "。")):
+            s = re.sub(r"\s*（\s*", " (", s)
+            s = re.sub(r"\s*）\s*", ") ", s)
+            s = re.sub(r"\s*［\s*", " [", s)
+            s = re.sub(r"\s*］\s*", "] ", s)
+            s = re.sub(r"\s*！\s*", "! ", s)
+            s = re.sub(r"\s*？\s*", "? ", s)
+            s = re.sub(r"\s*，\s*", ", ", s)
+            s = re.sub(r"\s*；\s*", "; ", s)
+            s = re.sub(r"\s*：\s*", ": ", s)
+            s = re.sub(r"([A-Za-z0-9'\"”’\)\]])\s*。\s*", r"\1. ", s)
+            # Clean up space before closing punctuation or between closing paren and punctuation
+            s = re.sub(r"\)\s+([.,!?;:])", r")\1", s)
+            s = re.sub(r"\]\s+([.,!?;:])", r"]\1", s)
 
-        # 3. Parity-based straight double-quote ('"') spacing repair (only when '"' count is even > 0)
+        # 3. Curly quote spacing normalization (while directional open/close distinction is still intact)
+        s = re.sub(r"([“«„‟])\s+", r"\1", s)
+        s = re.sub(r"\s+([”»])", r"\1", s)
+        s = re.sub(r"(\w|[.!?,:;])([“«„‟])", r"\1 \2", s)
+        s = re.sub(r"([”»])(\w)", r"\1 \2", s)
+        s = re.sub(r"(^|[\s(\[{])‘\s+", r"\1‘", s)
+        s = re.sub(r"\s+’(?=[\s.,!?;:)\]}]|$)", r"’", s)
+
+        # 4. Unify curly quotes / apostrophes to straight ASCII '"' and "'"
+        for ch in ("“", "”", "„", "‟", "″", "＂", "«", "»"):
+            if ch in s:
+                s = s.replace(ch, '"')
+        for ch in ("‘", "’", "‚", "‛", "′", "＇"):
+            if ch in s:
+                s = s.replace(ch, "'")
+
+        # 5. Parity-based straight double-quote ('"') spacing repair (only when '"' count is even > 0)
         q_count = s.count('"')
         if q_count >= 2 and q_count % 2 == 0:
             parts = s.split('"')
@@ -86,11 +119,23 @@ class ExtractionPipelineMixin:
                 # Outside span after a closing quote (if i > 0):
                 if i > 0:
                     cur_out = parts[i].lstrip()
-                    if cur_out and cur_out[0] not in (".", ",", "!", "?", ";", ":", ")", "]", "}", "—", "–", "'", "’"):
+                    if cur_out and cur_out[0] not in (".", ",", "!", "?", ";", ":", ")", "]", "}", "—", "–", "'"):
                         parts[i] = " " + cur_out
                     else:
                         parts[i] = cur_out
             s = '"'.join(parts)
+
+        # 6. OCR / copy-paste glued number-unit tokens ('15minute' -> '15-minute', '30minutes' -> '30 minutes')
+        s = re.sub(
+            r"\b(\d+)(minute|second|hour|day|week|month|year|page|word|step|foot|inch|mile)\b",
+            r"\1-\2",
+            s,
+        )
+        s = re.sub(
+            r"\b(\d+)(minutes|seconds|hours|days|weeks|months|years|pages|words|steps|feet|inches|miles)\b",
+            r"\1 \2",
+            s,
+        )
 
         return re.sub(r" {2,}", " ", s).strip()
 
@@ -118,9 +163,10 @@ class ExtractionPipelineMixin:
         if not text:
             return text
 
-        fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)", text, re.DOTALL)
+        text_norm = text.replace("\r\n", "\n").replace("\r", "\n")
+        fm_match = re.match(r"^(---\s*\n.*?\n---\s*\n)(.*)", text_norm, re.DOTALL)
         frontmatter = fm_match.group(1) if fm_match else ""
-        body = fm_match.group(2) if fm_match else text
+        body = fm_match.group(2) if fm_match else text_norm
 
         syllabus_suffix = ""
         m_appendix = re.search(r"(?mi)^(?:#+\s*(?:Syllabus\s+Vocabulary|Appendix)\b.*)$", body)
@@ -130,32 +176,311 @@ class ExtractionPipelineMixin:
 
         nlp = cls.get_spacy()
         raw_lines = body.split("\n")
-        cleaned_lines: List[str] = []
+        norm_lines: List[str] = []
 
-        for idx, line in enumerate(raw_lines):
-            # Normalize non-breaking spaces and tabs, collapse multiple inline spaces
+        for line in raw_lines:
             s = line.replace("\u00a0", " ").replace("\t", " ")
             s = re.sub(r" {2,}", " ", s).strip()
             if not s:
-                cleaned_lines.append("")
+                norm_lines.append("")
+                continue
+            if s.startswith("#"):
+                m_h = re.match(r"^(#+\s*)(.*)", s)
+                if m_h:
+                    s = m_h.group(1) + cls._normalize_inline_quotes_and_dashes(m_h.group(2))
+            elif not re.match(r"^[-*_]{3,}\s*$", s):
+                s = cls._normalize_inline_quotes_and_dashes(s)
+            norm_lines.append(s)
+
+        def _is_structural_line(line_str: str) -> bool:
+            if not line_str:
+                return True
+            if line_str.startswith("#") or re.match(r"^[-*_]{3,}\s*$", line_str):
+                return True
+            if re.match(r"^(?:[\u2022\u00b7\u25aa\u25ab\*\-]\s+|\(?\d+[\.\)]\s+|\(?[a-zA-Z][\.\)]\s+)", line_str):
+                return True
+            if cls._is_byline_or_meta_line(line_str):
+                return True
+            return False
+
+        def _is_standalone_title_line(line_str: str, prev_is_break: bool, next_str: str) -> bool:
+            if not prev_is_break or not line_str or _is_structural_line(line_str):
+                return False
+            if re.match(
+                r"^(?:Paragraph\s+|Para\.?\s+|Section\s+)?[\(\[]?(?:[A-Z]|\d{1,2})[\)\]\.]?$",
+                line_str,
+                re.IGNORECASE,
+            ):
+                return False
+            if line_str.endswith((".", "!", "?", ",", ";", ":", "—", "–", "-", "…", '"', "”", "’", "'")):
+                return False
+            words = line_str.split()
+            if not (1 <= len(words) <= 10 and len(line_str) <= 75):
+                return False
+            if next_str and not re.match(r'^[“"‘\'\(\[]?[A-Z0-9]', next_str):
+                return False
+            alpha_4 = [re.sub(r"^[^a-zA-Z]+|[^a-zA-Z]+$", "", w) for w in words]
+            alpha_4 = [w for w in alpha_4 if len(w) >= 4 and w.isalpha()]
+            cap_ratio = (
+                sum(1 for w in alpha_4 if w[0].isupper()) / len(alpha_4)
+                if alpha_4 else 1.0
+            )
+            if cap_ratio >= 0.60:
+                return True
+            doc_t = nlp(line_str)
+            has_fv = any(
+                t.pos_ in ("VERB", "AUX") and t.tag_ in ("VBD", "VBP", "VBZ", "MD", "VB")
+                for t in doc_t
+            )
+            return not has_fv
+
+        def _ends_with_sentence_terminal(line_str: str) -> bool:
+            s_strip = line_str.strip()
+            if not re.search(r'(?:\.|\!|\?|\.\.\.)["\'”’\)\]]*$', s_strip):
+                return False
+            if re.search(r'\b(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|e\.g|i\.e|Fig|No)\.$', s_strip, re.IGNORECASE):
+                return False
+            return True
+
+        def _join_wrapped_lines(prev_text: str, next_text: str) -> str:
+            if re.search(r"[a-zA-Z]-$", prev_text) and re.match(r"^[a-z]", next_text):
+                m_w1 = re.search(r"([a-zA-Z]+)-$", prev_text)
+                m_w2 = re.match(r"^([a-z]+)", next_text)
+                if m_w1 and m_w2:
+                    merged_word = (m_w1.group(1) + m_w2.group(1)).lower()
+                    if cls.get_ldoce_entry(merged_word):
+                        return prev_text[:-1] + next_text
+            m_pref = re.search(
+                r"(?:^|\s)(dis|un|pre|mis|sub|inter|counter|anti|non|semi|trans|hyper|ultra|infra|intra|multi|micro|macro|auto)$",
+                prev_text,
+                re.IGNORECASE,
+            )
+            if m_pref and re.match(r"^[a-z]{3,}", next_text):
+                m_w2 = re.match(r"^([a-z]+)", next_text)
+                if m_w2:
+                    merged_word = (m_pref.group(1) + m_w2.group(1)).lower()
+                    if cls.get_ldoce_entry(merged_word):
+                        return prev_text + next_text
+            return f"{prev_text} {next_text}"
+
+        # Pre-scan body prose lines (after any leading headings/standalone title) to detect
+        # column-wrap width and whether explicit blank lines already separate paragraphs.
+        first_prose_idx = 0
+        for idx_scan, s_scan in enumerate(norm_lines):
+            if not s_scan or _is_structural_line(s_scan):
+                continue
+            nxt_scan = next((x for x in norm_lines[idx_scan + 1:] if x), "")
+            if idx_scan == 0 or all(not x or _is_structural_line(x) for x in norm_lines[:idx_scan]):
+                if _is_standalone_title_line(s_scan, True, nxt_scan):
+                    first_prose_idx = idx_scan + 1
+                    break
+            first_prose_idx = idx_scan
+            break
+
+        # Detect and strip sequential paragraph labels ('A', 'B', 'C'... or '1', '2', '3'...)
+        # across candidate paragraph-start positions (inline 'A Memory...', '1. Memory...', '(A) Memory...'
+        # or standalone lines 'A', '1', 'Paragraph A', 'Paragraph 1').
+        def _match_para_marker(line_str: str) -> Optional[Tuple[str, int, str]]:
+            m_stand = re.match(
+                r"^(?:Paragraph\s+|Para\.?\s+|Section\s+)?[\(\[]?([A-Z]|\d{1,2})[\)\]\.:]?$",
+                line_str,
+                re.IGNORECASE,
+            )
+            if m_stand:
+                tok = m_stand.group(1)
+                if tok.isdigit():
+                    val = int(tok)
+                    if 1 <= val <= 50:
+                        return ("num", val, "")
+                elif len(tok) == 1 and tok.isupper():
+                    return ("alpha", ord(tok) - ord("A") + 1, "")
+            m_inl = re.match(
+                r"^(?:(?:Paragraph|Para\.?|Section)\s+([A-Z]|\d{1,2})[\.\):\-]?\s+|[\(\[]([A-Z]|\d{1,2})[\)\]]\s+|([A-Z]|\d{1,2})[\.\)]\s+|([A-Z]|\d{1,2})\s+)((?:[A-Z][a-z]+|[A-Z]{2,}|['\"“‘\(\[][A-Z0-9]).*)$",
+                line_str,
+            )
+            if m_inl:
+                tok = m_inl.group(1) or m_inl.group(2) or m_inl.group(3) or m_inl.group(4)
+                rem = m_inl.group(5).strip()
+                if tok.isdigit():
+                    val = int(tok)
+                    if 1 <= val <= 50:
+                        return ("num", val, rem)
+                elif len(tok) == 1 and tok.isupper():
+                    return ("alpha", ord(tok) - ord("A") + 1, rem)
+            return None
+
+        cand_markers: List[Tuple[int, str, int, str]] = []
+        for idx_m in range(first_prose_idx, len(norm_lines)):
+            s_m = norm_lines[idx_m]
+            if not s_m:
+                continue
+            prev_non_empty_idx = -1
+            for p_idx in range(idx_m - 1, first_prose_idx - 1, -1):
+                if norm_lines[p_idx]:
+                    prev_non_empty_idx = p_idx
+                    break
+            is_para_start_cand = (
+                prev_non_empty_idx == -1
+                or (prev_non_empty_idx < idx_m - 1)
+                or _ends_with_sentence_terminal(norm_lines[prev_non_empty_idx])
+                or _is_structural_line(norm_lines[prev_non_empty_idx])
+                or bool(
+                    re.match(
+                        r"^(?:Paragraph\s+|Para\.?\s+|Section\s+)?[\(\[]?(?:[A-Z]|\d{1,2})[\)\]\.:]?$",
+                        norm_lines[prev_non_empty_idx],
+                        re.IGNORECASE,
+                    )
+                )
+            )
+            if not is_para_start_cand:
+                continue
+            parsed_m = _match_para_marker(s_m)
+            if parsed_m:
+                cand_markers.append((idx_m, parsed_m[0], parsed_m[1], parsed_m[2]))
+
+        labeled_para_starts: Set[int] = set()
+        for scheme in ("alpha", "num"):
+            seq_chain: List[Tuple[int, str]] = []
+            expected_ord = 1
+            for idx_m, sc, ord_val, rem in cand_markers:
+                if sc == scheme and ord_val == expected_ord:
+                    seq_chain.append((idx_m, rem))
+                    expected_ord += 1
+            if len(seq_chain) >= 2:
+                for idx_m, rem in seq_chain:
+                    norm_lines[idx_m] = rem
+                    if rem:
+                        labeled_para_starts.add(idx_m)
+                    else:
+                        for nxt_i in range(idx_m + 1, len(norm_lines)):
+                            if norm_lines[nxt_i]:
+                                labeled_para_starts.add(nxt_i)
+                                break
+                break
+
+        body_prose_Slice = norm_lines[first_prose_idx:]
+        body_blank_breaks = 0
+        seen_prose_in_body = False
+        in_blank_run = False
+        for s_scan in body_prose_Slice:
+            if not s_scan:
+                if seen_prose_in_body:
+                    in_blank_run = True
+            elif not _is_structural_line(s_scan):
+                if in_blank_run:
+                    body_blank_breaks += 1
+                    in_blank_run = False
+                seen_prose_in_body = True
+
+        non_term_lens = [
+            len(s_scan)
+            for s_scan in body_prose_Slice
+            if s_scan and not _is_structural_line(s_scan) and not _ends_with_sentence_terminal(s_scan) and len(s_scan) >= 40
+        ]
+        global_wrap = sorted(non_term_lens)[int(len(non_term_lens) * 0.5)] if non_term_lens else 80
+
+        # Unwrap manual mid-sentence line breaks within paragraphs while preserving real paragraph breaks
+        unwrapped_lines: List[str] = []
+        para_buf: List[str] = []
+
+        def _flush_para_buf() -> None:
+            if not para_buf:
+                return
+            merged = para_buf[0]
+            for seg in para_buf[1:]:
+                merged = _join_wrapped_lines(merged, seg)
+            merged = cls._normalize_inline_quotes_and_dashes(merged)
+            # Check if an accidental blank line split a single sentence in half
+            if (
+                len(unwrapped_lines) >= 2
+                and unwrapped_lines[-1] == ""
+                and unwrapped_lines[-2]
+                and not _is_structural_line(unwrapped_lines[-2])
+                and not unwrapped_lines[-2].endswith((".", "!", "?", '"', "”", "’", "'", ":", ";", ")", "]", "…"))
+                and (unwrapped_lines[-2].endswith(",") or re.match(r"^[a-z]", merged))
+            ):
+                prev_para = unwrapped_lines[-2]
+                unwrapped_lines.pop()  # remove blank line
+                unwrapped_lines[-1] = cls._normalize_inline_quotes_and_dashes(
+                    _join_wrapped_lines(prev_para, merged)
+                )
+            else:
+                unwrapped_lines.append(merged)
+            para_buf.clear()
+
+        for idx, s in enumerate(norm_lines):
+            if not s:
+                _flush_para_buf()
+                if not unwrapped_lines or unwrapped_lines[-1] != "":
+                    unwrapped_lines.append("")
                 continue
 
-            # Skip headings and horizontal rules
-            if s.startswith("#") or re.match(r"^[-*_]{3,}\s*$", s):
+            next_non_empty = ""
+            for nxt in norm_lines[idx + 1:]:
+                if nxt:
+                    next_non_empty = nxt
+                    break
+            prev_is_break = (not para_buf) and (not unwrapped_lines or unwrapped_lines[-1] == "" or _is_structural_line(unwrapped_lines[-1]))
+
+            if _is_structural_line(s):
+                _flush_para_buf()
+                unwrapped_lines.append(s)
+                continue
+
+            if _is_standalone_title_line(s, prev_is_break, next_non_empty):
+                _flush_para_buf()
+                unwrapped_lines.append(s)
+                if idx + 1 < len(norm_lines) and norm_lines[idx + 1] != "":
+                    unwrapped_lines.append("")
+                continue
+
+            if idx in labeled_para_starts and para_buf:
+                _flush_para_buf()
+                if unwrapped_lines and unwrapped_lines[-1] != "":
+                    unwrapped_lines.append("")
+
+            para_buf.append(s)
+
+            # Check if this terminal-punctuated line ends a paragraph in a document without blank lines
+            if (
+                idx + 1 < len(norm_lines)
+                and norm_lines[idx + 1] != ""
+                and next_non_empty
+                and not _is_structural_line(next_non_empty)
+                and _ends_with_sentence_terminal(s)
+                and re.match(r'^[\'"“‘\(\[]?[A-Z0-9]', next_non_empty)
+            ):
+                if labeled_para_starts:
+                    if (idx + 1) in labeled_para_starts:
+                        _flush_para_buf()
+                        unwrapped_lines.append("")
+                elif not non_term_lens:
+                    _flush_para_buf()
+                elif body_blank_breaks == 0:
+                    nxt_words = next_non_empty.split()
+                    first_chunk = nxt_words[0]
+                    if len(first_chunk) == 1 and len(nxt_words) > 1:
+                        first_chunk = nxt_words[0] + " " + nxt_words[1]
+                    buf_non_term = [len(x) for x in para_buf[:-1] if len(x) >= 40]
+                    local_wrap = sorted(buf_non_term)[int(len(buf_non_term) * 0.5)] if buf_non_term else global_wrap
+                    if len(s) + 1 + len(first_chunk) <= local_wrap:
+                        _flush_para_buf()
+                        unwrapped_lines.append("")
+
+        _flush_para_buf()
+
+        cleaned_lines: List[str] = []
+        for idx, s in enumerate(unwrapped_lines):
+            if not s or _is_structural_line(s):
                 cleaned_lines.append(s)
                 continue
 
-            # Repair quote spacing, mojibake em-dashes, and spaced ellipses
-            s = cls._normalize_inline_quotes_and_dashes(s)
-
-            # Check if a standalone prose paragraph line is missing a terminal period:
-            # Must not be a byline, heading, short subheading/caption, or already end with punctuation.
             next_non_empty = ""
-            for nxt in raw_lines[idx + 1:]:
+            for nxt in unwrapped_lines[idx + 1:]:
                 if nxt.strip():
                     next_non_empty = nxt.strip()
                     break
-            is_para_end = (idx == len(raw_lines) - 1) or (not raw_lines[idx + 1].strip()) or next_non_empty.startswith("#")
+            is_para_end = (idx == len(unwrapped_lines) - 1) or (not unwrapped_lines[idx + 1].strip()) or next_non_empty.startswith("#")
 
             if (
                 is_para_end
@@ -164,7 +489,6 @@ class ExtractionPipelineMixin:
                 and re.match(r'^[A-Z“"‘\']', s)
             ):
                 words = s.split()
-                # Exclude Title-Case headings (where >65% of 4+ letter words are capitalized)
                 alpha_4 = [re.sub(r"^[^a-zA-Z]+|[^a-zA-Z]+$", "", w) for w in words]
                 alpha_4 = [w for w in alpha_4 if len(w) >= 4 and w.isalpha()]
                 cap_ratio = (
@@ -4159,9 +4483,33 @@ class ExtractionPipelineMixin:
                     w, matching_sent, pos=pos, k=16, discourse_context=discourse_ctx
                 ) if matching_sent else []
                 if cand_pool:
+                    chosen = None
                     if len(cand_pool) > 1 and enable_llm_disambiguation:
                         chosen_idx = cls.disambiguate_via_llm(w, matching_sent, cand_pool, discourse_context=discourse_ctx)
-                        chosen = cand_pool[chosen_idx]
+                        if 0 <= chosen_idx < len(cand_pool):
+                            chosen = cand_pool[chosen_idx]
+                        elif pos:
+                            cand_pool_all = cls.build_top_k_vocab_candidates(
+                                w, matching_sent, pos=None, k=8, discourse_context=discourse_ctx
+                            )
+                            alt_pool = [
+                                c for c in cand_pool_all
+                                if str(c.get("pos") or "").strip().lower() != str(pos).strip().lower()
+                            ] or cand_pool_all
+                            if alt_pool and alt_pool != cand_pool:
+                                if len(alt_pool) == 1:
+                                    chosen = alt_pool[0]
+                                else:
+                                    retry_idx = cls.disambiguate_via_llm(
+                                        w, matching_sent, alt_pool, discourse_context=discourse_ctx
+                                    )
+                                    if 0 <= retry_idx < len(alt_pool):
+                                        chosen = alt_pool[retry_idx]
+                        if chosen is None:
+                            logger.info(
+                                f"  [DROP_WSD_REJECTED] '{w}' rejected by WSD arbitration in [{matching_sid}], advancing to next candidate."
+                            )
+                            continue
                     else:
                         chosen = cand_pool[0]
                     definition = chosen.get("definition", "")
@@ -4413,7 +4761,13 @@ class ExtractionPipelineMixin:
                         chosen = None
                         if len(pool) > 1 and enable_llm_disambiguation:
                             chosen_idx = cls.disambiguate_via_llm(formula, quote, pool, discourse_context=discourse_ctx)
-                            chosen = pool[chosen_idx] if 0 <= chosen_idx < len(pool) else pool[0]
+                            if 0 <= chosen_idx < len(pool):
+                                chosen = pool[chosen_idx]
+                            else:
+                                logger.info(
+                                    f"  [DROP_WSD_REJECTED] Expression '{formula}' rejected by WSD arbitration in [{sid}], advancing to next candidate."
+                                )
+                                continue
                         elif has_attested_pool or not defn or def_source not in attested_sources:
                             chosen = pool[0]
                         if chosen is not None:

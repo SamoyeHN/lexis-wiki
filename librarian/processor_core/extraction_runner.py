@@ -221,6 +221,16 @@ class ExtractionRunnerMixin:
             content = f.read()
         content = LinguisticEngine.sanitize_source_markdown(content, source_path=source_path)
 
+        # Ensure unit's sources/ directory holds the sanitized canonical source when imported from an external path
+        existing_unit_sources = [
+            f for f in sources_dir.iterdir() if f.is_file() and f.suffix.lower() in (".md", ".txt")
+        ]
+        if not existing_unit_sources:
+            ext = source_path.suffix if source_path.suffix.lower() in (".md", ".txt") else ".md"
+            unit_source_file = sources_dir / f"{unit_folder_name}{ext}"
+            unit_source_file.write_text(content, encoding="utf-8")
+            source_path = unit_source_file
+
         # Plan 1 (Single Source): Parse optional syllabus sections directly from source markdown
         clean_content, syllabus_vocab, syllabus_grammar, syllabus_expressions = self.parse_syllabus_sections(content)
         self._last_source_content = clean_content or content
