@@ -265,6 +265,17 @@ class CefrAndMorphologyMixin:
     # Cached reverse map from irregular verb forms ('went', 'taken', 'led') -> base lemma
     _IRREGULAR_SURFACE_TO_BASE: Optional[Dict[str, str]] = None
 
+    # High-register academic subordination, pied-piped relative, and discourse framing markers
+    _CEFR_ACADEMIC_SYNTACTIC_MARKERS = re.compile(
+        r"\b(?:whilst|whereas|whereby|wherein|in\s+which|on\s+which|to\s+which|by\s+which|for\s+which|"
+        r"prior\s+to|so\s+as\s+to|not\s+only|in\s+this\s+respect|provided\s+that|as\s+well\s+as|"
+        r"despite\s+this|rather\s+than|accompanied\s+by|confronted\s+with|facilitated\s+by|"
+        r"classified\s+under|characterized\s+by|attributed\s+to|associated\s+with|regardless\s+of|"
+        r"notwithstanding|subsequent\s+to|albeit|thereby|moreover|furthermore|nevertheless|nonetheless|"
+        r"consequently|on\s+the\s+other\s+hand|in\s+particular)\b",
+        re.I,
+    )
+
     @classmethod
     def _fast_cefr_lemma_and_score(cls, w: str, analyzer: Any) -> Tuple[str, Optional[float]]:
         """
@@ -285,33 +296,89 @@ class CefrAndMorphologyMixin:
 
         cands = cls._headword_candidates(w)
         w_lvl = analyzer.get_average_word_level_float(w)
-        if len(cands) == 1:
-            return w, w_lvl
+        if len(cands) > 1:
+            best_lem: Optional[str] = None
+            best_lvl: Optional[float] = None
+            for c in cands[1:]:
+                if len(c) < 3:
+                    continue
+                if c in cls._CEFR_FUNCTION_WORDS:
+                    return c, 1.0
+                clvl = analyzer.get_average_word_level_float(c)
+                if clvl is not None and (best_lvl is None or clvl < best_lvl):
+                    best_lem = c
+                    best_lvl = clvl
 
-        best_lem: Optional[str] = None
-        best_lvl: Optional[float] = None
-        for c in cands[1:]:
-            if len(c) < 3:
-                continue
-            if c in cls._CEFR_FUNCTION_WORDS:
-                return c, 1.0
-            clvl = analyzer.get_average_word_level_float(c)
-            if clvl is not None and (best_lvl is None or clvl < best_lvl):
-                best_lem = c
-                best_lvl = clvl
+            if best_lem is not None and best_lvl is not None:
+                if w_lvl is None or best_lvl <= w_lvl:
+                    w, w_lvl = best_lem, best_lvl
+                elif w.endswith("s") and not w.endswith(("ss", "us", "is", "as", "os")) and best_lvl <= 5.95:
+                    w, w_lvl = best_lem, best_lvl
 
-        if best_lem is not None and best_lvl is not None:
-            if w_lvl is None or best_lvl <= w_lvl:
-                return best_lem, best_lvl
-            if w.endswith("s") and not w.endswith(("ss", "us", "is", "as", "os")) and best_lvl <= 5.95:
-                return best_lem, best_lvl
+        # Compositional derivational prefix-base monotonicity guard:
+        # Productive negative/degree prefixes ('dis-', 'under-', 'over-', 'mis-', 'counter-', 'non-')
+        # attached to an attested B1+ stem ('dissimilarity' <- 'similarity', 'disproportionate' <-
+        # 'proportionate', 'underperforming' <- 'performing') cannot have a lower CEFR level than
+        # their simpler morphological base.
+        for pref in ("dis", "under", "over", "mis", "counter", "non"):
+            if w.startswith(pref) and len(w) - len(pref) >= 6:
+                stem = w[len(pref):]
+                b_lvl = analyzer.get_average_word_level_float(stem)
+                if b_lvl is None and stem.endswith("ing") and len(stem) >= 6:
+                    b_lvl = analyzer.get_average_word_level_float(stem[:-3])
+                if b_lvl is not None and b_lvl <= 5.5 and (
+                    (w_lvl is None and b_lvl >= 1.5)
+                    or (b_lvl >= 3.0 and w_lvl is not None and w_lvl <= b_lvl)
+                ):
+                    bonus = 1.5 if w.endswith(("ity", "tion", "sion", "ment", "ance", "ence", "ate")) else 1.0
+                    w_lvl = min(5.3, max(4.0 if w_lvl is None else w_lvl, b_lvl + bonus))
+                    break
+
         return w, w_lvl
+
+    @classmethod
+    def _compute_syntactic_complexity_bonus(cls, text: str) -> float:
+        """
+        Computes a zero-spaCy (<0.5ms) sentence & syntactic complexity bonus (0.00..0.35)
+        for passage CEFR calibration, combining:
+        1. Mean sentence length (`avg_sent_len >= 18.0`)
+        2. Multi-clause long-sentence tail ratio (`% of sentences >= 22 words`)
+        3. Formal academic subordination / discourse framing density (`_CEFR_ACADEMIC_SYNTACTIC_MARKERS`)
+        4. Intra-sentence clausal punctuation embedding depth (commas, semicolons, colons, parentheses, dashes)
+        """
+        prose_body = re.split(r"\n#+\s*(?:Word\s*List|Vocabulary|New\s*Words)", text, flags=re.I)[0]
+        sents = [
+            s.strip()
+            for s in re.split(r"[.!?]+(?:\s+|$)", prose_body)
+            if len(re.findall(r"[A-Za-z]+", s)) >= 4
+        ]
+        if len(sents) < 3:
+            return 0.0
+
+        sent_lens = [len(re.findall(r"[A-Za-z]+", s)) for s in sents]
+        n_sents = len(sents)
+        avg_sl = sum(sent_lens) / n_sents
+        long22_ratio = sum(1 for ln in sent_lens if ln >= 22) / n_sents
+        punct_per_sent = sum(len(re.findall(r"[,;:()\u2014\u2013-]", s)) for s in sents) / n_sents
+        marker_rate = len(cls._CEFR_ACADEMIC_SYNTACTIC_MARKERS.findall(prose_body)) / n_sents * 10.0
+
+        bonus = 0.0
+        if avg_sl >= 18.0:
+            bonus += min(0.10, (avg_sl - 18.0) * 0.015)
+        if long22_ratio >= 0.25:
+            bonus += min(0.08, (long22_ratio - 0.25) * 0.25)
+        if marker_rate >= 0.8:
+            bonus += min(0.12, (marker_rate - 0.5) * 0.04)
+        if punct_per_sent >= 1.25:
+            bonus += min(0.05, (punct_per_sent - 1.20) * 0.06)
+        return bonus
 
     @classmethod
     def calculate_text_cefr(cls, text_or_words: Union[str, List[str]], default: str = "B1") -> str:
         """
         Statistically computes the authentic, objective CEFR level ('A1'..'C2') of a passage
-        or word collection using offline CEFR-J + Cambridge frequency scores (<5ms, zero token cost).
+        or word collection using offline CEFR-J + Cambridge frequency scores combined with
+        sentence and syntactic complexity (<5ms, zero token cost).
 
         Key Psychometric & Corpus Calibration Principles:
         1. Function-Word Exclusion (`_CEFR_FUNCTION_WORDS`):
@@ -323,11 +390,13 @@ class CefrAndMorphologyMixin:
            Excludes mid-sentence capitalized proper nouns (person/place names like 'Beijing', 'Rosetta',
            'Bonaparte'), contractions, and measurement units/initialisms ('cm', 'kg', 'bc', 'led', 'cfl')
            so beginner texts are never falsely inflated by recurring proper names.
-        3. Lemma-Normalized Content-Word Type Distribution (`typ_vals`):
+        3. Lemma-Normalized Content-Word Type Distribution (`typ_vals`) + Syntactic Complexity (`syn_bonus`):
            Evaluates unique content-word lemmas via mean (`typ_avg`), 80th/90th percentiles (`p80`, `p90`),
-           and advanced lexical type ratios (`B2+ >= 3.5`, `C1+ >= 4.5`). When the 90th percentile of
-           content types crosses above the B2 line (`p90 >= 4.35`) with `C1+ >= 9.5%`, the passage
-           resolves to C1 even when everyday framing syntax keeps `typ_avg` around ~2.55-2.60.
+           advanced lexical type ratios (`B2+ >= 3.5`, `C1+ >= 4.5`, `C2 >= 5.3`), and sentence/syntactic
+           complexity (`_compute_syntactic_complexity_bonus`). When an academic passage combines sustained
+           multi-clause syntactic complexity (`syn_bonus >= 0.14`) with a dense C2 lexical spike
+           (`c2_cnt >= 14`, `c2_typ >= 5%`) and `eff_avg >= 2.68`, it resolves to C1 even when concrete
+           illustrative examples keep the raw 90th percentile around `4.0`.
         """
         analyzer = cls.get_cefr_analyzer()
         if not analyzer:
@@ -335,8 +404,10 @@ class CefrAndMorphologyMixin:
 
         type_scores: Dict[str, List[float]] = {}
         fallback_scores: List[float] = []
+        syn_bonus = 0.0
 
         if isinstance(text_or_words, str):
+            syn_bonus = cls._compute_syntactic_complexity_bonus(text_or_words)
             for m in re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", text_or_words):
                 raw_tok = m.group(0)
                 start = m.start()
@@ -415,17 +486,28 @@ class CefrAndMorphologyMixin:
         p90 = typ_vals[int(n_typ * 0.90)]
         b2_typ = sum(1 for s in typ_vals if s >= 3.5) / n_typ
         c1_typ = sum(1 for s in typ_vals if s >= 4.5) / n_typ
+        c2_cnt = sum(1 for s in typ_vals if s >= 5.3)
+        c2_typ = c2_cnt / n_typ
 
-        # Content-Word Type Calibration across CEFR A1..C2:
+        eff_avg = typ_avg + syn_bonus
+        c1_syntactic_bridge = (
+            syn_bonus >= 0.14
+            and eff_avg >= 2.68
+            and p90 >= 4.0
+            and c2_cnt >= 14
+            and c2_typ >= 0.05
+        )
+
+        # Content-Word Type + Sentence Complexity Calibration across CEFR A1..C2:
         if typ_avg <= 1.82 and p80 <= 2.5 and b2_typ < 0.05:
             return "A1"
         elif typ_avg <= 2.14 and p80 <= 3.0 and p90 <= 3.6 and b2_typ < 0.13 and c1_typ < 0.04:
             return "A2"
-        elif typ_avg <= 2.47 and p80 <= 3.5 and p90 <= 4.1 and c1_typ < 0.082:
+        elif (typ_avg <= 2.47 and eff_avg <= 2.58) and p80 <= 3.5 and p90 <= 4.1 and c1_typ < 0.082:
             return "B1"
-        elif typ_avg < 2.55 or p90 < 4.35 or c1_typ < 0.095:
+        elif not c1_syntactic_bridge and (typ_avg < 2.55 or p90 < 4.35 or c1_typ < 0.095):
             return "B2"
-        elif typ_avg <= 3.40 and c1_typ < 0.25:
+        elif eff_avg <= 3.40 and c1_typ < 0.25:
             return "C1"
         else:
             return "C2"

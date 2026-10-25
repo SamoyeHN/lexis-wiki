@@ -875,6 +875,8 @@ class QuizSkeletonsMixin:
             # Lock the authoritative Pedagogical Sense BEFORE anchor selection or distractor generation.
             target_p_code = cls._pos_code(canonical_pos)
             entry_base = cls.get_ldoce_entry(w_lower)
+            if entry_base and entry_base.get("kind") == "derived":
+                continue
             target_entry = entry_base
             locked_sense = None
             t_s_idx = None

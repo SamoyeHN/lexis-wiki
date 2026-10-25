@@ -211,13 +211,19 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
         if verbatim_prompt:
             content.append(verbatim_prompt)
         else:
-            content.append(f"Select the single best dictionary sense for '{item_name}' as used in this sentence:")
-            content.append(f"\"{sentence}\"")
             ctx_clean = str(rec.get("discourse_context") or "").strip()
-            if ctx_clean:
+            if ctx_clean and ">>" in ctx_clean and "<<" in ctx_clean:
+                content.append(f"Select the single best dictionary sense for '{item_name}'.")
                 content.append("")
-                content.append("Surrounding Context:")
+                content.append("Passage Context (target sentence in >>...<<):")
                 content.append(f"\"{ctx_clean}\"")
+            else:
+                content.append(f"Select the single best dictionary sense for '{item_name}' as used in this sentence:")
+                content.append(f"\"{sentence}\"")
+                if ctx_clean:
+                    content.append("")
+                    content.append("Surrounding Context:")
+                    content.append(f"\"{ctx_clean}\"")
             content.append("")
             content.append("Candidate Senses:")
             opts = rec.get("options_text") or []

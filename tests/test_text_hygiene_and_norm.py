@@ -184,3 +184,17 @@ def test_paragraph_labels_with_single_letter_sentence_start_and_expr_dedup():
             assert not LinguisticEngine.are_same_word_family(w1, w2), f"Collision: {w1} vs {w2}"
 
 
+def test_syntactic_complexity_and_derivational_cefr_calibration():
+    analyzer = LinguisticEngine.get_cefr_analyzer()
+    _, dissim_sc = LinguisticEngine._fast_cefr_lemma_and_score("dissimilarity", analyzer)
+    assert dissim_sc is not None and dissim_sc >= 4.5
+    _, disprop_sc = LinguisticEngine._fast_cefr_lemma_and_score("disproportionate", analyzer)
+    assert disprop_sc is not None and disprop_sc >= 4.5
+
+    with open("wiki/Recalling_it/sources/Recalling_it.txt", encoding="utf-8") as fh:
+        recalling_txt = fh.read()
+    assert LinguisticEngine.calculate_text_cefr(recalling_txt) == "C1"
+    assert LinguisticEngine._compute_syntactic_complexity_bonus(recalling_txt) >= 0.14
+
+
+

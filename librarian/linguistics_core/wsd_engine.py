@@ -826,6 +826,20 @@ class WsdEngineMixin:
                 if not has_tech_trigger:
                     score -= 50
 
+            is_grammar_sense = (
+                s_reg in ("grammar", "linguistics")
+                or "[grammar]" in s_gram_str
+                or s_signpost in ("grammar", "linguistics")
+            )
+            if is_grammar_sense:
+                has_grammar_trigger = any(w in q_low_all for w in (
+                    "grammar", "grammatical", "sentence", "verb", "noun", "adjective", "adverb",
+                    "pronoun", "preposition", "clause", "phrase", "tense", "plural", "singular",
+                    "syntax", "linguistic", "linguistics", "conjugat", "inflect"
+                ))
+                if not has_grammar_trigger:
+                    score -= 60
+
             # 0e. Pejorative / Disapproval Stance Gate:
             # Senses explicitly marked 'used to show disapproval' (e.g. 'commercialize' sense 0: 'to be more concerned
             # with making money from something than about its quality – used to show disapproval') require a critical/pejorative
@@ -912,12 +926,11 @@ class WsdEngineMixin:
             if (
                 second_order_domain_tokens
                 and s_def_tokens
-                and (eff_p == "n" or s.get("gloss_source") == "derivational")
+                and eff_p == "n"
                 and (
                     bool(m_genus)
                     or (sp and sp not in ("controlled by a computer", "computer", "machine"))
                     or bool(convergent_domain_tokens)
-                    or s.get("gloss_source") == "derivational"
                 )
             ):
                 _tech_bio_dom = second_order_domain_tokens & {
@@ -4495,10 +4508,16 @@ class WsdEngineMixin:
         active_model = str(model or config.get("model") or "").strip()
 
         letters = [chr(ord("A") + i) for i in range(min(len(candidates), 20))]
+        unique_poses = {
+            str(c.get("pos") or "").strip()
+            for c in candidates[:len(letters)]
+            if str(c.get("pos") or "").strip()
+        }
+        shared_pos = next(iter(unique_poses)) if len(unique_poses) == 1 else ""
         options_text = []
         cand_sig_parts = []
         for idx, cand in enumerate(candidates[:len(letters)]):
-            pos_str = f"({cand.get('pos', '')}) " if cand.get('pos') else ""
+            pos_str = f"({cand.get('pos', '')}) " if (cand.get("pos") and not shared_pos) else ""
             raw_s = cand.get("raw_sense") if isinstance(cand.get("raw_sense"), dict) else {}
             defn_str = cand.get('definition', '').strip()
             signpost_raw = str(cand.get("signpost") or raw_s.get("signpost") or "").strip()
@@ -4545,22 +4564,32 @@ class WsdEngineMixin:
             cand_sig_parts.append(f"{cand.get('pos', '')}:{signpost_str}{gram_str}{defn_str}:{pat_str}")
 
         ctx_clean = str(discourse_context or "").strip()
-        ctx_block = f"Surrounding Context:\n\"{ctx_clean}\"\n\n" if ctx_clean else ""
+        pos_header = f" ({shared_pos})" if shared_pos else ""
+        if ctx_clean and ">>" in ctx_clean and "<<" in ctx_clean:
+            context_section = (
+                f"Select the single best dictionary sense for '{item_name}'{pos_header}.\n\n"
+                f"Passage Context (target sentence in >>...<<):\n"
+                f"\"{ctx_clean}\"\n\n"
+            )
+        else:
+            ctx_block = f"Surrounding Context:\n\"{ctx_clean}\"\n\n" if (ctx_clean and ctx_clean != sentence.strip()) else ""
+            context_section = (
+                f"Select the single best dictionary sense for '{item_name}'{pos_header} as used in this sentence:\n"
+                f"\"{sentence}\"\n\n"
+                f"{ctx_block}"
+            )
+
         prompt = (
-            f"Select the single best dictionary sense for '{item_name}' as used in this sentence:\n"
-            f"\"{sentence}\"\n\n"
-            f"{ctx_block}"
+            f"{context_section}"
             f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
             f"Instructions:\n"
-            f"- First verify the grammatical part of speech (noun, verb, adjective, adverb) of '{item_name}' in the sentence (e.g., whether it acts as the clause's verb or as a noun/modifier), and strictly eliminate any candidate with an incompatible part of speech.\n"
-            f"- Match the exact contextual meaning, subject/object domain, and syntactic frame in the sentence (if a sense's [Pattern: ...] is restricted to reflexive pronouns or moral/ethical objects like 'principles/standards/integrity', do not select it when the object is health, safety, security, or performance — select the sense about exposing to danger/risk/harm instead; similarly, if a noun sense's [Pattern: ...] requires demographic/professional classifiers like 'the ethnic/religious/scientific/business community', do not select it for bare locative/neighborhood contexts like 'at/in our/the community').\n"
-            f"- Pay close attention to sense signposts (e.g. [SYSTEM] vs [BUILDING] vs [FOLD], [GREAT AND SUDDEN] for 'dramatic change'), attitude/register labels (e.g. [disapproving], [technical], [spoken]), and 'if a [subject] {item_name}s' selectional conditions: if the sentence subject is a sound/voice/words (e.g. 'words resounded in the office') rather than a place ('a place resounds with a sound'), select the sense whose subject is a sound rather than a place or abstract fame/folklore.\n"
-            f"- Check appositive or colon lists after '{item_name}' (e.g. 'resources: students, faculty, library, facilities' refers to useful institutional assets/possessions rather than natural minerals/land; 'put aside our/their plan(s)/work' means putting down or setting aside what you were working with in order to start doing something else, rather than saving money or resolving an argument/disagreement).\n"
-            f"- Avoid narrow technical, legal, medical, '[disapproving]', or '[spoken]' interjection senses unless the sentence explicitly carries that domain or negative connotation.\n"
-            f"Reply with ONLY the letter of the correct sense (e.g. A):"
+            f"- Match the candidate whose definition, [SIGNPOST], and [Pattern: ...] best fit how '{item_name}' is used in the target sentence.\n"
+            f"- Respect selectional restrictions (e.g., 'if a [subject] ...', animate vs. inanimate arguments) and register/domain tags ([formal], [informal], [spoken], [technical], [disapproving]).\n"
+            f"- Prefer core general senses over narrow technical, legal, medical, or [spoken]/[informal] senses unless the context clearly requires them.\n"
+            f"Reply with ONLY the single capital letter ({letters[0]}-{letters[-1]}):"
         )
 
-        cache_raw = f"{active_model}|v3|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
+        cache_raw = f"{active_model}|v4|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
         cache_key = hashlib.sha1(cache_raw.encode("utf-8")).hexdigest()
 
         active_session = getattr(cls._wsd_session_local, "session", None)

@@ -437,37 +437,110 @@ class TestVocabularyWSD:
             {"definition": "Candidate B sense", "example_usage": "Example B."},
         ]
 
-        # Case 1: LLM raises connection timeout -> raises LLMError (never returns 0) and writes FAILED WSD log
+        # Case 1: LLM raises connection timeout -> returns -1 (never returns 0) and records error in WSD log
         def _mock_timeout(*args, **kwargs):
             raise TimeoutError("Read timed out after 30s")
 
         monkeypatch.setattr(llm, "chat", _mock_timeout)
-        with pytest.raises(LLMError, match="WSD LLM arbitration failed"):
-            with LinguisticEngine.wsd_log_session("Unit_Test_Timeout"):
-                LinguisticEngine.disambiguate_via_llm(
-                    item_name="compromise",
-                    sentence="We reached a compromise.",
-                    candidates=candidates,
-                )
-
-        log_files = list((tmp_path / "logs").glob("*extract_wsd_Unit_Test_Timeout*.log"))
-        assert len(log_files) == 1
-        parsed = LogEvaluator.parse_log_file(log_files[0])
-        assert parsed["status"] == "FAILED"
-        assert parsed["failure_category"] == "CONNECTION_TIMEOUT"
-        eval_res = LogEvaluator.evaluate_log(parsed)
-        assert eval_res["status"] == "FAILED"
-        assert eval_res["composite_score"] == 0.0
-        assert any("LLM_EXECUTION_FAILED" in f for f in eval_res["flags"])
-
-        # Case 2: LLM returns unparseable response -> raises LLMError (never returns 0)
-        monkeypatch.setattr(llm, "chat", lambda *a, **kw: "I am not sure which sense fits.")
-        with pytest.raises(LLMError, match="unparseable"):
-            LinguisticEngine.disambiguate_via_llm(
+        with LinguisticEngine.wsd_log_session("Unit_Test_Timeout"):
+            res_timeout = LinguisticEngine.disambiguate_via_llm(
                 item_name="compromise",
                 sentence="We reached a compromise.",
                 candidates=candidates,
             )
+        assert res_timeout == -1
+
+        log_files = list((tmp_path / "logs").glob("*extract_wsd_Unit_Test_Timeout*.log"))
+        assert len(log_files) == 1
+
+        # Case 2: LLM returns unparseable response -> returns -1 (never returns 0)
+        monkeypatch.setattr(llm, "chat", lambda *a, **kw: "I am not sure which sense fits.")
+        res_unparseable = LinguisticEngine.disambiguate_via_llm(
+            item_name="compromise",
+            sentence="We reached a compromise.",
+            candidates=candidates,
+        )
+        assert res_unparseable == -1
+
+    def test_wsd_prompt_hygiene_and_derived_sense_pruning(self, monkeypatch):
+        """Verify uniform POS hoisting, coherent >>...<< passage context, derived sense projection filtering, and [GRAMMAR] meta-sense pruning."""
+        from librarian.llm import llm
+
+        captured_prompts = []
+
+        def _capture_chat(messages, **kwargs):
+            captured_prompts.append(messages[0]["content"])
+            return "B"
+
+        monkeypatch.setattr(llm, "chat", _capture_chat)
+        LinguisticEngine._wsd_llm_cache.clear()
+
+        # 1. Uniform POS hoisting + coherent >>...<< passage context + clean instructions
+        cands_get_back = [
+            {
+                "pos": "phrasal verb",
+                "definition": "to return to a place after you have been somewhere else",
+                "patterns": ["get back (to sth)"],
+                "examples": ["Have you just got back from holiday?"],
+            },
+            {
+                "pos": "phrasal verb",
+                "definition": "to have something again after you lost it or someone took it from you",
+                "patterns": ["get sth <-> back"],
+                "examples": ["Did you get your books back?"],
+            },
+        ]
+        target_sent = "That changed when the victorious British defeated the French and, through a peace treaty, got the stone back."
+        ctx_window = (
+            "French scholars and military men had guarded the Rosetta Stone, refusing to let the British see it. "
+            f">> {target_sent} << "
+            "One of the earliest scholars to study the stone was a Frenchman named Jean-François Champollion."
+        )
+        idx = LinguisticEngine.disambiguate_via_llm(
+            item_name="get [sb/sth] back",
+            sentence=target_sent,
+            candidates=cands_get_back,
+            discourse_context=ctx_window,
+        )
+        assert idx == 1
+        assert len(captured_prompts) == 1
+        p_text = captured_prompts[0]
+        assert "Select the single best dictionary sense for 'get [sb/sth] back' (phrasal verb)." in p_text
+        assert "Passage Context (target sentence in >>...<<):" in p_text
+        assert "Surrounding Context:" not in p_text
+        assert "A. (phrasal verb)" not in p_text
+        assert "A. to return to a place" in p_text
+        assert "First verify the grammatical part of speech" not in p_text
+        assert "get [sb/sth] backs" not in p_text
+
+        # 2. Run-on 'derived' entries without independent dictionary definitions/examples (e.g. 'greatness') are completely excluded
+        cands_greatness = LinguisticEngine.build_top_k_vocab_candidates(
+            "greatness",
+            "He felt a thrill of greatness as he deciphered the royal cartouche.",
+            pos="noun",
+            k=6,
+        )
+        assert cands_greatness == []
+        extracted_with_syl = LinguisticEngine.extract_deterministic_vocabulary(
+            "He felt a thrill of greatness as he deciphered the ancient royal inscription.",
+            syllabus_vocab=["greatness", "decipher", "ancient"],
+            target_count=5,
+            enable_llm_disambiguation=False,
+        )
+        assert "greatness" not in [it["word"] for it in extracted_with_syl]
+        assert "decipher" in [it["word"] for it in extracted_with_syl]
+
+        # 3. 'object' in non-grammar context prunes [GRAMMAR] meta-senses ('direct object', 'indirect object')
+        cands_object = LinguisticEngine.build_top_k_vocab_candidates(
+            "object",
+            "They uncovered a strange stone object buried in the wall.",
+            pos="noun",
+            k=6,
+        )
+        assert len(cands_object) >= 1
+        for c in cands_object:
+            sp_low = str(c.get("signpost") or (c.get("raw_sense") or {}).get("signpost") or "").lower()
+            assert sp_low != "grammar"
 
     def test_llm_preflight_ensure_available_circuit_breaker(self, monkeypatch, tmp_path):
         """Step 3: llm.ensure_available fails fast and logs LLM_OFFLINE / MODEL_NOT_FOUND when service or model is unavailable."""

@@ -2438,6 +2438,37 @@ class ExtractionPipelineMixin:
         candidates: List[Dict[str, Any]] = []
         seen_lemmas: Set[str] = set()
 
+        cand_map: Dict[str, Dict[str, Any]] = {}
+
+        def _add_or_update_candidate(
+            word_key: str,
+            sid_val: str,
+            quote_val: str,
+            pos_val: str,
+            is_awl_val: bool,
+            score_val: float,
+            is_connective_val: bool = False,
+        ) -> None:
+            if word_key in cand_map:
+                existing_occs = cand_map[word_key]["occurrences"]
+                if all(o[0] != sid_val for o in existing_occs):
+                    existing_occs.append((sid_val, quote_val, pos_val))
+                if score_val > cand_map[word_key]["score"]:
+                    cand_map[word_key]["score"] = score_val
+                return
+            entry_dict: Dict[str, Any] = {
+                "sid": sid_val,
+                "quote": quote_val,
+                "word": word_key,
+                "part_of_speech": pos_val,
+                "is_awl": is_awl_val,
+                "score": score_val,
+                "occurrences": [(sid_val, quote_val, pos_val)],
+            }
+            if is_connective_val:
+                entry_dict["is_connective"] = True
+            cand_map[word_key] = entry_dict
+
         for sid, sentence in pool.items():
             sent_clean = sentence.strip()
             if len(sent_clean.split()) < 5:
@@ -2457,21 +2488,13 @@ class ExtractionPipelineMixin:
             # First pass: mine any attested hyphenated compounds in the sentence as intact units
             for m_hc in re.finditer(r"\b([a-zA-Z]+(?:-[a-zA-Z]+)+)\b", sent_clean):
                 hc = m_hc.group(1).lower()
-                if hc in seen_lemmas:
-                    continue
                 hc_entry = cls.get_ldoce_entry(hc)
-                if hc_entry and hc_entry.get("senses"):
+                if hc_entry and hc_entry.get("kind") != "derived" and hc_entry.get("senses"):
                     hc_pos_raw = (hc_entry.get("pos") or "adjective").lower()
                     hc_pos = "noun" if "noun" in hc_pos_raw else ("verb" if "verb" in hc_pos_raw else ("adverb" if "adverb" in hc_pos_raw else "adjective"))
-                    candidates.append({
-                        "sid": sid,
-                        "quote": sent_clean,
-                        "word": hc,
-                        "part_of_speech": hc_pos,
-                        "is_awl": False,
-                        "score": 12 + min(len(hc), 12)
-                    })
-                    seen_lemmas.add(hc)
+                    _add_or_update_candidate(
+                        hc, sid, sent_clean, hc_pos, True, round(30.0 + min(len(hc), 10) * 0.3, 2)
+                    )
 
             WH_AND_PRONOUN_STOPS = frozenset({
                 "what", "whatever", "who", "whoever", "whom", "whose", "which", "whichever",
@@ -2487,11 +2510,13 @@ class ExtractionPipelineMixin:
                     continue
                 surf_low = token.text.lower().strip()
                 lemma = token.lemma_.lower().strip()
+                if (lemma == "accord" and surf_low == "according") or (lemma == "depend" and surf_low == "depending"):
+                    continue
                 if token.dep_ == "amod" and surf_low.endswith(("ing", "ed")) and surf_low != lemma:
                     surf_entry = cls.get_ldoce_entry(surf_low)
-                    if surf_entry and any("adj" in str(s.get("pos") or surf_entry.get("pos") or "").lower() for s in (surf_entry.get("senses") or [])):
+                    if surf_entry and surf_entry.get("kind") != "derived" and any("adj" in str(s.get("pos") or surf_entry.get("pos") or "").lower() for s in (surf_entry.get("senses") or [])):
                         lemma = surf_low
-                if len(lemma) < 3 or lemma in seen_lemmas or not lemma.isalpha() or lemma in WH_AND_PRONOUN_STOPS:
+                if len(lemma) < 3 or not lemma.isalpha() or lemma in WH_AND_PRONOUN_STOPS:
                     continue
 
                 # 1. Academic Closed-Paradigm Function Word Gate:
@@ -2519,18 +2544,8 @@ class ExtractionPipelineMixin:
                     assigned_pos = "preposition" if stype == "prepositional" else ("conjunction" if stype == "clausal" else "adverb")
                     w_cefr = cls.get_word_cefr(lemma)
                     is_awl = w_cefr in ("B2", "C1", "C2")
-                    score = (14 if is_awl else 6) + min(len(lemma), 8)
-
-                    candidates.append({
-                        "sid": sid,
-                        "quote": sent_clean,
-                        "word": lemma,
-                        "part_of_speech": assigned_pos,
-                        "is_awl": is_awl,
-                        "is_connective": True,
-                        "score": score
-                    })
-                    seen_lemmas.add(lemma)
+                    score = (24.0 if is_awl else 12.0) + min(len(lemma), 8) * 0.3
+                    _add_or_update_candidate(lemma, sid, sent_clean, assigned_pos, is_awl, round(score, 2), is_connective_val=True)
                     continue
 
                 # 2. Open-Class Content Words (Noun, Verb, Adjective, Adverb)
@@ -2544,22 +2559,13 @@ class ExtractionPipelineMixin:
                         continue
                 if not cls.is_pedagogical_target(lemma, ent_type=token.ent_type_):
                     continue
-
-                w_cefr = cls.get_word_cefr(lemma)
-                is_awl = w_cefr in ("B2", "C1", "C2")
-                is_b1 = (w_cefr == "B1")
-
-                # If not B1/B2/C1/C2 and is trivial or very short, skip
-                if not is_awl and (lemma in TRIVIAL_WORDS or len(lemma) < 5):
+                if lemma in TRIVIAL_WORDS:
                     continue
 
+                w_cefr = cls.get_word_cefr(lemma) or "B1"
+                is_awl = w_cefr in ("B2", "C1", "C2")
+
                 # Dependent-connective gate (extraction-stage quality, Pillar 0).
-                # A connective head like 'regardless' is only valid as its fixed
-                # 'head + of' form. When the obligatory preposition is present in the
-                # parsed sentence, complete the head to the fixed phrase and re-label
-                # it as a preposition; otherwise drop it — a bare dependent connective
-                # is never a valid single-blank target and must not leak out as an
-                # adverb (which is the root cause of the 'regardless of' double-key).
                 if token.pos_ == "ADV" and lemma in DEPENDENT_CONNECTIVES:
                     required_prep = DEPENDENT_CONNECTIVES[lemma]
                     has_prep = (
@@ -2567,115 +2573,213 @@ class ExtractionPipelineMixin:
                         or (token.i + 1 < len(doc) and doc[token.i + 1].text.lower() == required_prep)
                     )
                     if not has_prep:
-                        seen_lemmas.add(lemma)  # gate: never leak a bare dependent connective
                         continue
                     phrase = f"{lemma} {required_prep}"
-                    score = (18 if is_awl else 8) + min(len(phrase), 10)
-                    candidates.append({
-                        "sid": sid,
-                        "quote": sent_clean,
-                        "word": phrase,
-                        "part_of_speech": "preposition",
-                        "is_awl": is_awl,
-                        "is_connective": True,
-                        "score": score
-                    })
-                    seen_lemmas.add(lemma)
-                    seen_lemmas.add(phrase)
+                    score = (28.0 if is_awl else 16.0) + min(len(phrase), 10) * 0.3
+                    _add_or_update_candidate(phrase, sid, sent_clean, "preposition", is_awl, round(score, 2), is_connective_val=True)
                     continue
 
-                # Scoring: B2/C1/C2 headwords get top priority, followed by B1 headwords, PedLex core_level (●●●/●●○/●○○), then word length
                 if lemma == "following" and re.search(r"\bthe\s+following\b", sent_clean, re.IGNORECASE):
                     continue
                 l_entry = cls.get_ldoce_entry(lemma) or {}
-                core_lv = int(l_entry.get("core_level") or 0)
-                if bool(l_entry.get("is_awl")):
-                    is_awl = True
-                cefr_bonus = 25 if is_awl else (15 if is_b1 else (8 if core_lv >= 2 else 0))
-                score = cefr_bonus + (core_lv * 2) + min(len(lemma), 12)
+                # Comparative/Superlative Adjective De-inflection Fallback:
+                # If spaCy leaves a comparative/superlative surface form un-lemmatized (e.g. 'plumper' -> 'plump'),
+                # resolve to the attested base adjective entry in PedLex.
+                if not l_entry and token.pos_ == "ADJ" and lemma.endswith(("er", "est")) and len(lemma) >= 6:
+                    stem_cands = [lemma[:-2], lemma[:-1], lemma[:-3] + "y"] if lemma.endswith("er") else [lemma[:-3], lemma[:-2], lemma[:-4] + "y"]
+                    for sc_w in stem_cands:
+                        if len(sc_w) >= 3:
+                            sc_ld = cls.get_ldoce_entry(sc_w)
+                            if sc_ld and sc_ld.get("kind") != "derived" and sc_ld.get("senses"):
+                                lemma = sc_w
+                                l_entry = sc_ld
+                                break
+                if l_entry.get("kind") == "derived":
+                    continue
+                if cls._ldoce_conn is not None and not l_entry.get("senses"):
+                    continue
+                # Bound Idiom Constituent Gate:
+                if (
+                    token.pos_ == "NOUN"
+                    and token.dep_ in ("dobj", "obj", "pobj", "attr")
+                    and not any(ch.dep_ in ("det", "poss", "amod", "nummod") for ch in token.children)
+                    and token.head is not token
+                ):
+                    head_lem = token.head.lemma_.lower()
+                    pair_forms = {f"{head_lem} {lemma}", f"{head_lem} {surf_low}"}
+                    is_bound_verbal_unit = False
+                    for s_u in (l_entry.get("senses") or []):
+                        u_list_s = s_u.get("units") or []
+                        s_def_u = str(s_u.get("definition") or "").strip().lower()
+                        if u_list_s and s_def_u.startswith(("to ", "if ", "used ")):
+                            for u_raw in u_list_s:
+                                u_str = (u_raw.get("phrase") if isinstance(u_raw, dict) else str(u_raw or "")).strip().lower()
+                                u_clean_p = re.sub(r"\[.*?\]|\(.*?\)", "", u_str).strip()
+                                if u_clean_p in pair_forms:
+                                    is_bound_verbal_unit = True
+                                    break
+                        if is_bound_verbal_unit:
+                            break
+                    if is_bound_verbal_unit:
+                        continue
+
+                # Comprehension-First Tri-Factor Lexical Ranking (Longman Core 3000/1000 + CEFR + AWL):
+                # Balances:
+                #   1. Longman Core 3000 (`core_level == 1` [2001-3000] & `core_level == 2` [1001-2000])
+                #   2. Academic Word List (`is_awl`)
+                #   3. Beyond-3000 Comprehension Blockers (`core_level == 0`) & CEFR (`B1`..`C2`)
+                #   4. Top-1000 Everyday Filter (`core_level == 3` [1-1000]: filters out A1/A2 everyday words
+                #      like 'science', 'language', 'section', 'similar', 'establish', 'reveal', and dampens
+                #      B1/B2 Top-1000 words like 'object', 'defeat' so they never crowd out Core 2000/3000 or AWL).
+                core_raw = l_entry.get("core_level")
+                core_lv = 0 if core_raw is None else int(core_raw)
+                pedlex_awl = bool(l_entry.get("is_awl"))
+
+                # Transparent Gerund / Verbal Noun De-inflation:
+                # If a '-ing' noun (e.g. 'learning', 'understanding', 'finding', 'opening') derives from an
+                # A1/A2 Top-1000 (`core_level == 3`) base verb, align its difficulty to its base verb.
+                if lemma.endswith("ing") and len(lemma) > 5:
+                    for b_cand in (lemma[:-3], lemma[:-4], lemma[:-3] + "e"):
+                        if len(b_cand) >= 3:
+                            b_ld = cls.get_ldoce_entry(b_cand)
+                            if b_ld and int(b_ld.get("core_level") or 0) == 3 and (cls.get_word_cefr(b_cand) or "A1") in ("A1", "A2"):
+                                core_lv = 3
+                                w_cefr = "A2"
+                                break
+
+                # Compositional Closed Compound De-inflation:
+                # If a `core_level == 0` word splits cleanly into two `core_level == 3` (Top-1000) halves
+                # AND its primary definition explicitly contains one of those halves (e.g. 'birthplace' -> 'birth' + 'place'),
+                # treat its frequency band as `core_level = 2` rather than an opaque beyond-3000 root.
+                if core_lv == 0 and len(lemma) >= 8:
+                    first_def = str(((l_entry.get("senses") or [{}])[0]).get("definition") or "").lower()
+                    for split_i in range(4, len(lemma) - 3):
+                        p1, p2 = lemma[:split_i], lemma[split_i:]
+                        ld1, ld2 = cls.get_ldoce_entry(p1), cls.get_ldoce_entry(p2)
+                        if (
+                            ld1 and ld2
+                            and int(ld1.get("core_level") or 0) == 3
+                            and int(ld2.get("core_level") or 0) == 3
+                            and (p1 in first_def or p2 in first_def)
+                        ):
+                            core_lv = 2
+                            break
+
+                # Filter out elementary A1 Top-1000 words ('science', 'language', 'famous', etc.) and short A1/A2 non-AWL words;
+                # keep A2 / AWL Top-1000 words at negative base score (-6.0) only as last-resort fallback for A1/A2 beginner texts.
+                if core_lv == 3 and w_cefr == "A1" and not pedlex_awl:
+                    continue
+                if w_cefr in ("A1", "A2") and core_lv >= 2 and not pedlex_awl and len(lemma) < 5:
+                    continue
 
                 ctx_pos = cls.determine_contextual_pos(lemma, sent_clean) or VALID_POS_MAP[token.pos_]
-                candidates.append({
-                    "sid": sid,
-                    "quote": sent_clean,
-                    "word": lemma,
-                    "part_of_speech": ctx_pos,
-                    "is_awl": is_awl,
-                    "score": score
-                })
-                seen_lemmas.add(lemma)
+                reg_tags = [str(r).lower() for r in (l_entry.get("register_tags") or [])]
+                is_informal = any("informal" in r or "spoken" in r or "slang" in r for r in reg_tags)
 
-        if not candidates:
+                if core_lv == 0:
+                    if is_informal:
+                        core_pts = 4.0
+                    elif ctx_pos in ("verb", "adjective", "adverb"):
+                        core_pts = 16.0
+                    else:
+                        core_pts = 15.0
+                elif core_lv == 1:
+                    core_pts = 16.0
+                elif core_lv == 2:
+                    core_pts = 12.0
+                else:
+                    core_pts = -6.0
+
+                raw_cefr_pts = {
+                    "C2": 22.0 if (core_lv >= 1 or ctx_pos in ("verb", "adjective")) else 20.0,
+                    "C1": 20.0,
+                    "B2": 16.0,
+                    "B1": 12.0 if core_lv <= 2 else 6.0,
+                    "A2": 6.0 if core_lv <= 2 else 0.0,
+                    "A1": 0.0,
+                }.get(w_cefr, 8.0)
+                # Cross-calibrate cefrpy under-ratings using Longman frequency scarcity floor:
+                # Beyond-3000 (`core=0`, e.g. 'unearth', 'rightful') and Core 2001-3000 (`core=1`, e.g. 'legacy', 'proclaim') floor at 16.0 (B2).
+                core_floor_pts = {0: 16.0 if not is_informal else 8.0, 1: 16.0, 2: 6.0, 3: 0.0}.get(core_lv, 0.0)
+                cefr_pts = max(raw_cefr_pts, core_floor_pts)
+
+                # Intra-Tier AWL Priority ("同级加分，不能越级加分"):
+                # Adjacent tiers of `core_pts` (16 vs 12) and `cefr_pts` (22 / 20 / 16 / 12 / 6) are separated by >= 4.0 pts.
+                # Keeping `awl_pts` at +2.0 (strictly < 4.0) ensures AWL words always win within their own (core_level, CEFR) tier,
+                # while never leapfrogging across tiers over higher-difficulty `core=0/1` or higher-CEFR targets.
+                if pedlex_awl:
+                    awl_pts = 2.0 if core_lv <= 2 else (1.0 if w_cefr not in ("A1", "A2") else 0.0)
+                else:
+                    awl_pts = 0.0
+
+                score = round(core_pts + cefr_pts + awl_pts + min(len(lemma), 10) * 0.2, 2)
+                is_awl_flag = bool(pedlex_awl or w_cefr in ("B2", "C1", "C2") or core_lv <= 1)
+
+                _add_or_update_candidate(lemma, sid, sent_clean, ctx_pos, is_awl_flag, score)
+
+        if not cand_map:
             return []
 
-        # Sort descending by score
+        candidates = list(cand_map.values())
         candidates.sort(key=lambda x: x["score"], reverse=True)
 
         selected: List[Dict[str, Any]] = []
         selected_words: Set[str] = set()
-        selected_sids: Set[str] = set()
+        sid_counts: Dict[str, int] = {}
 
         def _get_sid_index(sid_str: str) -> int:
             m = re.search(r'\d+', sid_str)
             return int(m.group(0)) if m else -999
 
-        # Pass 1: Select diverse items across different sentences with word-family and sentence stride gating
-        for item in candidates:
-            w = item["word"]
-            sid = item["sid"]
-            sid_num = _get_sid_index(sid)
+        # Dynamic Sentence-Load Selection:
+        # Balances intrinsic word comprehension value (`score`) against sentence density (`sid_counts[sid]`).
+        # A 2nd word in the same sentence incurs a -2.5 pt intra-tier penalty (spreading same-tier words across
+        # sentences first, while never forcing a higher-tier word to lose to a lower-tier word from another sentence);
+        # 3rd+ words in the same sentence incur a steep -14.0 * cnt penalty.
+        while len(selected) < target_count:
+            best_cand: Optional[Dict[str, Any]] = None
+            best_occ: Optional[Tuple[str, str, str]] = None
+            best_eff_score = -999.0
 
-            # 1. Morphological Word Family Gate: strictly reject items from an already selected word family
-            if any(cls.are_same_word_family(w, sw) for sw in selected_words):
-                continue
-
-            # 2. Hard Anti-Clustering Gate (Pass 1): prefer 1 target word per sentence
-            if sid in selected_sids:
-                continue
-
-            # 3. Soft Anti-Clustering Stride Gate: avoid immediately adjacent sentences (|sid - selected_sid| <= 1)
-            # if we have enough distinct sentences to reach target_count
-            has_adjacent_clash = any(
-                abs(sid_num - _get_sid_index(ssid)) <= 1
-                for ssid in selected_sids
-            )
-            if has_adjacent_clash:
-                distinct_available_sids = {c["sid"] for c in candidates if not any(cls.are_same_word_family(c["word"], sw) for sw in selected_words)}
-                if len(selected) + len(distinct_available_sids - selected_sids) >= target_count:
+            for item in candidates:
+                w = item["word"]
+                if w in selected_words or any(cls.are_same_word_family(w, sw) for sw in selected_words):
                     continue
+                occs = item.get("occurrences") or [(item["sid"], item["quote"], item["part_of_speech"])]
 
-            selected.append(item)
-            selected_words.add(w)
-            selected_sids.add(sid)
-            if len(selected) >= target_count:
+                def _occ_penalty(occ: Tuple[str, str, str]) -> float:
+                    s_id = occ[0]
+                    cnt = sid_counts.get(s_id, 0)
+                    s_num = _get_sid_index(s_id)
+                    adj_clash = (
+                        cnt == 0
+                        and any(abs(s_num - _get_sid_index(ssid)) <= 1 for ssid, c_v in sid_counts.items() if c_v > 0)
+                    )
+                    density_pen = 2.5 * cnt if cnt <= 1 else 14.0 * cnt
+                    return density_pen + (0.8 if adj_clash else 0.0)
+
+                chosen_occ = min(occs, key=_occ_penalty)
+                eff_score = item["score"] - _occ_penalty(chosen_occ)
+                if eff_score > best_eff_score:
+                    best_eff_score = eff_score
+                    best_cand = item
+                    best_occ = chosen_occ
+
+            if best_cand is None or best_occ is None:
                 break
 
-        # Pass 2: If target_count not reached, fill from remaining distinct sentences (still 1 per sentence)
-        if len(selected) < target_count:
-            for item in candidates:
-                w = item["word"]
-                sid = item["sid"]
-                if w in selected_words or any(cls.are_same_word_family(w, sw) for sw in selected_words):
-                    continue
-                if sid in selected_sids:
-                    continue
-                selected.append(item)
-                selected_words.add(w)
-                selected_sids.add(sid)
-                if len(selected) >= target_count:
-                    break
-
-        # Pass 3: If target_count still not reached (short passages with few sentences), fill remaining slots
-        # while strictly maintaining the Morphological Word Family Gate
-        if len(selected) < target_count:
-            for item in candidates:
-                w = item["word"]
-                if w in selected_words or any(cls.are_same_word_family(w, sw) for sw in selected_words):
-                    continue
-                selected.append(item)
-                selected_words.add(w)
-                if len(selected) >= target_count:
-                    break
+            chosen_sid, chosen_quote, chosen_pos = best_occ
+            selected.append({
+                "sid": chosen_sid,
+                "quote": chosen_quote,
+                "word": best_cand["word"],
+                "part_of_speech": chosen_pos,
+                "is_awl": best_cand["is_awl"],
+                "score": best_cand["score"],
+                **({"is_connective": True} if best_cand.get("is_connective") else {}),
+            })
+            selected_words.add(best_cand["word"])
+            sid_counts[chosen_sid] = sid_counts.get(chosen_sid, 0) + 1
 
         return selected[:target_count]
 
@@ -2698,6 +2802,8 @@ class ExtractionPipelineMixin:
         4. PedLex natural frequency order fallback
         """
         entry = cls.get_pedlex_entry(word)
+        if entry and entry.get("kind") == "derived":
+            return []
         raw_senses = entry.get("senses", []) if entry else []
 
         # Filter out morphological pointer senses ("the past participle of...", "the plural of...", "= a goodie")
@@ -2747,8 +2853,6 @@ class ExtractionPipelineMixin:
             (target_p and any(cls._sense_matches_pos(s, target_p) for s in senses))
             or (morph_poses and any(cls._pos_code(s.get("pos")) in morph_poses for s in senses))
         )
-        if entry and entry.get("kind") == "derived" and "-" in w_low_clean and senses:
-            has_pos_match = True
 
         if not senses:
             candidates = []
@@ -2771,9 +2875,14 @@ class ExtractionPipelineMixin:
                 w_low = word.strip().lower()
                 s_defn_low = str(s_obj.get("definition") or "").strip().lower()
                 s_p = cls._pos_code(s_obj.get("pos")) or target_p
+                # When extracting a single-word noun, any unit sense with a verbal/clausal/pragmatic definition
+                # ('to ...', 'if ...', 'used ...', e.g. 'make sense' -> 'to be a sensible thing to do') defines
+                # the multi-word idiom rather than the standalone noun.
+                if " " not in w_low and s_p == "n" and s_defn_low.startswith(("to ", "if ", "used ")):
+                    return True
                 # If sense carries a core semantic signpost (e.g. [MAIL] on 'stamp' Sense 0) and is not a conditional/usage idiom,
                 # its unit (e.g. 'postage stamp') is an illustrative compound rather than an obligatory multi-word idiom.
-                if s_obj.get("signpost") and not s_defn_low.startswith(("if ", "used ")):
+                if s_obj.get("signpost") and not s_defn_low.startswith(("to ", "if ", "used ")):
                     return False
                 # If a verb sense explicitly declares [transitive], its prepositional unit (e.g. 'tend to sb/sth')
                 # is an optional prepositional variant, not an obligatory multi-word idiom
@@ -2807,7 +2916,18 @@ class ExtractionPipelineMixin:
                     u_clean_no_slot = re.sub(r"\b(?:somebody's|someone's|something's|somebody|someone|something|sb's|sb|sth|one's|oneself|etc)\b\.?", "", u_clean).strip()
                     u_toks = [t for t in re.findall(r"[a-z]+", u_clean_no_slot) if t not in ("a", "an", "the", "some", "any", "doing")]
                     # Preserve 2-word nominal compound <modifier> + <headword> or <headword> + <noun> (e.g. 'postage stamp', 'comic book')
-                    if s_p == "n" and len(u_toks) == 2 and (cls.form_matches(u_toks[0], w_low) or cls.form_matches(u_toks[-1], w_low)):
+                    if (
+                        s_p == "n"
+                        and not s_defn_low.startswith(("to ", "if ", "used "))
+                        and len(u_toks) == 2
+                        and (
+                            cls.form_matches(u_toks[0], w_low)
+                            or (
+                                cls.form_matches(u_toks[-1], w_low)
+                                and u_toks[0] not in ("in", "on", "at", "by", "for", "of", "to", "with", "from", "under", "out", "beyond", "without", "within")
+                            )
+                        )
+                    ):
                         all_multi_unattested = False
                         break
                     # When extracting a single-word headword (e.g. 'likelihood'), do NOT allow a prepositional/adverbial idiom unit
@@ -2984,8 +3104,10 @@ class ExtractionPipelineMixin:
                         if m_pv_def and not any(cls.form_matches(tok_q, m_pv_def.group(1)) for tok_q in q_seq_prune):
                             return True
 
-                    # 2. Noun countability & number hard clash (only for noun senses)
+                    # 2. Noun countability, number & verbal idiom unit hard clash (only for noun senses)
                     if s_p_c == "n":
+                        if " " not in target_w_clean_p and s_c.get("units") and s_defn_c.strip().startswith(("to ", "if ", "used ")):
+                            return True
                         if ("Plur" in q_morph_num or q_has_count_det) and "[uncountable]" in s_gram_c and "[countable]" not in s_gram_c:
                             return True
                         if "Plur" in q_morph_num and "[singular]" in s_gram_c and "[countable]" not in s_gram_c and "[plural]" not in s_gram_c:
@@ -3039,6 +3161,17 @@ class ExtractionPipelineMixin:
                         "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
                         "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound",
                         "technology", "technological", "scientific", "science", "engineering"
+                    )):
+                        return True
+                    is_grammar_meta = (
+                        s_reg_c in ("grammar", "linguistics")
+                        or "[grammar]" in s_gram_c
+                        or s_sp_c in ("grammar", "linguistics")
+                    )
+                    if is_grammar_meta and not any(w in q_low for w in (
+                        "grammar", "grammatical", "sentence", "verb", "noun", "adjective", "adverb",
+                        "pronoun", "preposition", "clause", "phrase", "tense", "plural", "singular",
+                        "syntax", "linguistic", "linguistics", "conjugat", "inflect"
                     )):
                         return True
 
@@ -4118,15 +4251,12 @@ class ExtractionPipelineMixin:
 
         # Determine whether the entry (or multi-word unit) is monosemous under the target POS
         entry = cls.get_ldoce_entry(clean_target)
+        if entry and entry.get("kind") == "derived":
+            return ""
         target_p = cls._pos_code(pos_low)
         entry_senses = (entry.get("senses") or []) if entry else []
         pos_senses = [s for s in entry_senses if not target_p or cls._sense_matches_pos(s, target_p)]
-        is_derived_projected = bool(
-            entry and entry.get("kind") == "derived"
-            and pos_senses
-            and all(s.get("is_derived_projected") or s.get("gloss_source") in ("wordnet", "derivational") for s in pos_senses)
-        )
-        is_monosemous = len(pos_senses) <= 1 or (sense is None and is_derived_projected)
+        is_monosemous = len(pos_senses) <= 1
 
         u_blocks = cls._unit_blocks(u_key) if is_multi else []
         u_rows = cls._unit_phrase_rows(u_key) if is_multi else []
@@ -4177,17 +4307,8 @@ class ExtractionPipelineMixin:
                 if pos_senses and not in_pedlex:
                     return ""
                 if not is_monosemous:
-                    # If all senses on a derived entry are synthesized/projected ('wordnet' or 'derivational'),
-                    # allow corpus/WordNet example lookup for the derived headword itself.
-                    is_derived_projected = bool(
-                        entry and entry.get("kind") == "derived"
-                        and all(s.get("is_derived_projected") or s.get("gloss_source") in ("wordnet", "derivational") for s in pos_senses)
-                    )
-                    if is_derived_projected:
-                        is_monosemous = True
-                    else:
-                        # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense or corpus
-                        return ""
+                    # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense or corpus
+                    return ""
 
         # 2. Monosemous or unlocked entry-level & cross-entry corpus examples
         if entry and is_monosemous:
@@ -4233,14 +4354,8 @@ class ExtractionPipelineMixin:
             except Exception:
                 pass
 
-        # 5. Check WordNet synset examples (only for derived/WordNet-sourced entries or when PedLex is absent, and monosemous in WordNet for target POS)
-        allow_wn_examples = bool(
-            not entry
-            or not pos_senses
-            or entry.get("kind") == "derived"
-            or (sense and isinstance(sense, dict) and (sense.get("gloss_source") in ("wordnet", "derivational") or sense.get("is_derived_projected")))
-            or all(s.get("gloss_source") in ("wordnet", "derivational") or s.get("is_derived_projected") for s in pos_senses)
-        )
+        # 5. Check WordNet synset examples (only when PedLex is absent or has no senses for target POS, and monosemous in WordNet)
+        allow_wn_examples = bool(not entry or not pos_senses)
         if not is_multi and is_monosemous and allow_wn_examples:
             try:
                 wn = cls.get_wordnet()
@@ -4425,6 +4540,9 @@ class ExtractionPipelineMixin:
                     continue
                 if not cls.is_pedagogical_target(w):
                     continue
+                w_ld_check = cls.get_ldoce_entry(w)
+                if w_ld_check and w_ld_check.get("kind") == "derived":
+                    continue
                 if not cand.get("is_syllabus") and any(cls.are_same_word_family(w, sw) for sw in seen_words):
                     continue
 
@@ -4508,29 +4626,6 @@ class ExtractionPipelineMixin:
                 if any(cls.are_same_word_family(w, sw) and matching_sent == sq for sw, sq in seen_word_quotes):
                     continue
 
-                # Passage-First Derived Promotion:
-                # If a base headword (e.g. 'enlighten', 'persevere') does NOT appear verbatim in matching_sent,
-                # check the actual surface token in matching_sent (e.g. 'enlightening', 'persevering').
-                # When the surface token's contextual POS in matching_sent (e.g. 'adjective' in
-                # "an enlightening publication" or "They are more persevering") is absent from the base
-                # headword's PedLex POS list while the verbatim surface token has its own PedLex entry
-                # for that POS, promote `w` to the verbatim passage word so Gate 1 & Gate 2 evaluate the true passage form.
-                if matching_sent and " " not in w and not re.search(rf"\b{re.escape(w)}\b", matching_sent, flags=re.IGNORECASE):
-                    w_ent = cls.get_ldoce_entry(w)
-                    w_poses = {pc for s in (w_ent.get("senses") or []) for pc in cls._sense_pos_codes(s)} if w_ent else set()
-                    for surf_m in re.finditer(r"\b([a-zA-Z]{4,})\b", matching_sent):
-                        surf_low = surf_m.group(1).lower()
-                        if surf_low != w and cls.form_matches(surf_low, w):
-                            surf_ctx_pos = cls.determine_contextual_pos(surf_low, matching_sent)
-                            surf_p_code = cls._pos_code(surf_ctx_pos)
-                            if surf_p_code and surf_p_code not in w_poses:
-                                surf_ent = cls.get_ldoce_entry(surf_low)
-                                surf_poses = {pc for s in (surf_ent.get("senses") or []) for pc in cls._sense_pos_codes(s)} if surf_ent else set()
-                                if surf_p_code in surf_poses and surf_low not in seen_words:
-                                    w = surf_low
-                                    cand["part_of_speech"] = surf_ctx_pos
-                                    break
-
                 # Infer contextual POS
                 pos = cand.get("part_of_speech")
                 if (not pos or pos == "function_word") and matching_sent:
@@ -4554,11 +4649,13 @@ class ExtractionPipelineMixin:
                     m_sid_num = re.match(r"S-(\d+)", str(matching_sid))
                     if m_sid_num:
                         s_num = int(m_sid_num.group(1))
-                        nb_sents = [pool[f"S-{s_num + d}"] for d in (-2, -1, 1, 2) if f"S-{s_num + d}" in pool]
-                        discourse_ctx = " ".join(nb_sents)
+                        prev_s = str(pool.get(f"S-{s_num - 1}") or "").strip()
+                        next_s = str(pool.get(f"S-{s_num + 1}") or "").strip()
+                        if prev_s or next_s:
+                            discourse_ctx = " ".join(p for p in (prev_s, f">> {matching_sent} <<", next_s) if p)
 
                 cand_pool = cls.build_top_k_vocab_candidates(
-                    w, matching_sent, pos=pos, k=16, discourse_context=discourse_ctx
+                    w, matching_sent, pos=pos, k=6, discourse_context=discourse_ctx
                 ) if matching_sent else []
                 if cand_pool:
                     chosen = None
@@ -4622,7 +4719,8 @@ class ExtractionPipelineMixin:
                 if pos == "adjective" and definition and re.match(r"^to\s+be\s+", definition.strip(), flags=re.IGNORECASE):
                     definition = re.sub(r"^to\s+be\s+", "", definition.strip(), flags=re.IGNORECASE)
                 if definition and re.match(r"^to\s+[a-z]+\b", definition.strip().lower()) and pos in ("noun", "adjective", "adverb", "function_word"):
-                    pos = "verb"
+                    if not locked_raw_sense or not locked_raw_sense.get("pos"):
+                        pos = "verb"
                 if pos == "function_word":
                     pos = "adverb"
                 # Dictionary-First Canonical Headword Normalization:
@@ -4819,8 +4917,10 @@ class ExtractionPipelineMixin:
                     m_sid_num = re.match(r"S-(\d+)", str(sid))
                     if m_sid_num:
                         s_num = int(m_sid_num.group(1))
-                        nb_sents = [sent_pool[f"S-{s_num + d}"] for d in (-2, -1, 1, 2) if f"S-{s_num + d}" in sent_pool]
-                        discourse_ctx = " ".join(nb_sents)
+                        prev_s = str(sent_pool.get(f"S-{s_num - 1}") or "").strip()
+                        next_s = str(sent_pool.get(f"S-{s_num + 1}") or "").strip()
+                        if prev_s or next_s:
+                            discourse_ctx = " ".join(p for p in (prev_s, f">> {quote} <<", next_s) if p)
 
                 # Primary: Ground multi-word expressions in authoritative PedLex expression evidence tiers
                 # (Disable inner LLM disambiguation here since Gate 1 below arbitrates across the full unified pool)
@@ -4831,10 +4931,10 @@ class ExtractionPipelineMixin:
                     enable_llm_disambiguation=False
                 )
 
-                # Gate 1: Neuro-Symbolic Arbitration across Top-K (k=12) Expression Candidates
+                # Gate 1: Neuro-Symbolic Arbitration across Top-K (k=6) Expression Candidates
                 locked_expr_sense = None
                 if quote:
-                    pool = cls.build_top_k_expression_candidates(formula, quote, k=12, expr_type=expr_type)
+                    pool = cls.build_top_k_expression_candidates(formula, quote, k=6, expr_type=expr_type)
                     has_attested_pool = any(c.get("attested") for c in pool)
                     is_verb_slot_frame = bool(re.search(r"[\[\(](?:sb|sth|oneself|one's)[\]\)]", formula, re.IGNORECASE))
                     if not has_attested_pool and def_source not in attested_sources and not is_verb_slot_frame:
@@ -4850,7 +4950,7 @@ class ExtractionPipelineMixin:
                                 "margin": 0.0,
                                 "attested": def_source in attested_sources,
                             })
-                    pool = pool[:12]
+                    pool = pool[:6]
                     if pool:
                         chosen = None
                         if len(pool) > 1 and enable_llm_disambiguation:
