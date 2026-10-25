@@ -242,13 +242,30 @@ class ExtractionPipelineMixin:
                 return False
             return True
 
+        def _is_valid_merged_word(w_low: str) -> bool:
+            if cls.get_ldoce_entry(w_low):
+                return True
+            try:
+                from wordfreq import zipf_frequency
+                if zipf_frequency(w_low, "en") >= 1.5:
+                    return True
+            except Exception:
+                pass
+            try:
+                wn = cls.get_wordnet()
+                if wn and wn.words(w_low):
+                    return True
+            except Exception:
+                pass
+            return False
+
         def _join_wrapped_lines(prev_text: str, next_text: str) -> str:
             if re.search(r"[a-zA-Z]-$", prev_text) and re.match(r"^[a-z]", next_text):
                 m_w1 = re.search(r"([a-zA-Z]+)-$", prev_text)
                 m_w2 = re.match(r"^([a-z]+)", next_text)
                 if m_w1 and m_w2:
                     merged_word = (m_w1.group(1) + m_w2.group(1)).lower()
-                    if cls.get_ldoce_entry(merged_word):
+                    if _is_valid_merged_word(merged_word):
                         return prev_text[:-1] + next_text
             m_pref = re.search(
                 r"(?:^|\s)(dis|un|pre|mis|sub|inter|counter|anti|non|semi|trans|hyper|ultra|infra|intra|multi|micro|macro|auto)$",
@@ -259,9 +276,23 @@ class ExtractionPipelineMixin:
                 m_w2 = re.match(r"^([a-z]+)", next_text)
                 if m_w2:
                     merged_word = (m_pref.group(1) + m_w2.group(1)).lower()
-                    if cls.get_ldoce_entry(merged_word):
+                    if _is_valid_merged_word(merged_word):
                         return prev_text + next_text
             return f"{prev_text} {next_text}"
+
+        # Heal inline broken prefix splits (e.g. 'dis orientate' -> 'disorientate') produced by prior unwraps
+        _pref_rx = re.compile(
+            r"\b(dis|un|pre|mis|sub|inter|counter|anti|non|semi|trans|hyper|ultra|infra|intra|multi|micro|macro|auto)\s+([a-z]{4,})\b"
+        )
+        for idx_p, s_p in enumerate(norm_lines):
+            if not s_p or _is_structural_line(s_p):
+                continue
+            def _heal_pref_match(m: re.Match) -> str:
+                merged_w = (m.group(1) + m.group(2)).lower()
+                if _is_valid_merged_word(merged_w):
+                    return m.group(1) + m.group(2)
+                return m.group(0)
+            norm_lines[idx_p] = _pref_rx.sub(_heal_pref_match, s_p)
 
         # Pre-scan body prose lines (after any leading headings/standalone title) to detect
         # column-wrap width and whether explicit blank lines already separate paragraphs.
@@ -276,6 +307,45 @@ class ExtractionPipelineMixin:
                     break
             first_prose_idx = idx_scan
             break
+
+        # Recover partially-unwrapped inline sequential paragraph labels (e.g., when paragraphs 1..K were
+        # previously stripped of 'A'..'C' and paragraph K still contains inline '. D A major...' and '. E The...').
+        prose_para_indices = [
+            i for i in range(first_prose_idx, len(norm_lines))
+            if norm_lines[i] and not _is_structural_line(norm_lines[i])
+            and (i == first_prose_idx or not norm_lines[i - 1])
+        ]
+        if len(prose_para_indices) >= 2:
+            last_p_idx = prose_para_indices[-1]
+            expected_next_ord = len(prose_para_indices) + 1
+            if expected_next_ord <= 26:
+                cur_line = norm_lines[last_p_idx]
+                split_segments: List[str] = []
+                next_ord = expected_next_ord
+                while next_ord <= 26:
+                    next_letter = chr(ord("A") + next_ord - 1)
+                    m_mid = re.search(
+                        rf'([.!?]["\'”’\)\]]*)\s+{next_letter}\s+((?:[A-Z][a-z]+|[A-Z]{{2,}}|[AI]\s+[a-zA-Z]|[\'"“‘\(\[][A-Z0-9]|\d+[a-zA-Z0-9,\.]*).*)',
+                        cur_line,
+                    )
+                    if not m_mid:
+                        break
+                    before_part = cur_line[:m_mid.end(1)].strip()
+                    after_part = m_mid.group(2).strip()
+                    if before_part and after_part:
+                        split_segments.append(before_part)
+                        cur_line = after_part
+                        next_ord += 1
+                    else:
+                        break
+                if split_segments:
+                    split_segments.append(cur_line)
+                    expanded_tail: List[str] = []
+                    for seg_i, seg_txt in enumerate(split_segments):
+                        if seg_i > 0:
+                            expanded_tail.append("")
+                        expanded_tail.append(seg_txt)
+                    norm_lines = norm_lines[:last_p_idx] + expanded_tail + norm_lines[last_p_idx + 1:]
 
         # Detect and strip sequential paragraph labels ('A', 'B', 'C'... or '1', '2', '3'...)
         # across candidate paragraph-start positions (inline 'A Memory...', '1. Memory...', '(A) Memory...'
@@ -295,7 +365,7 @@ class ExtractionPipelineMixin:
                 elif len(tok) == 1 and tok.isupper():
                     return ("alpha", ord(tok) - ord("A") + 1, "")
             m_inl = re.match(
-                r"^(?:(?:Paragraph|Para\.?|Section)\s+([A-Z]|\d{1,2})[\.\):\-]?\s+|[\(\[]([A-Z]|\d{1,2})[\)\]]\s+|([A-Z]|\d{1,2})[\.\)]\s+|([A-Z]|\d{1,2})\s+)((?:[A-Z][a-z]+|[A-Z]{2,}|['\"“‘\(\[][A-Z0-9]).*)$",
+                r"^(?:(?:Paragraph|Para\.?|Section)\s+([A-Z]|\d{1,2})[\.\):\-]?\s+|[\(\[]([A-Z]|\d{1,2})[\)\]]\s+|([A-Z]|\d{1,2})[\.\)]\s+|([A-Z]|\d{1,2})\s+)((?:[A-Z][a-z]+|[A-Z]{2,}|[AI]\s+[a-zA-Z]|['\"“‘\(\[][A-Z0-9]|\d+[a-zA-Z0-9,\.]*).*)$",
                 line_str,
             )
             if m_inl:
@@ -2259,7 +2329,11 @@ class ExtractionPipelineMixin:
             # Pass 3: balance across types with sentence quote diversity
             for item in raw_candidates:
                 p_clean = item["phrase"].lower()
-                if p_clean not in seen_phrases and item["quote"] not in seen_quotes:
+                if (
+                    p_clean not in seen_phrases
+                    and item["quote"] not in seen_quotes
+                    and not any(cls.are_same_word_family(p_clean, sp) for sp in seen_phrases)
+                ):
                     selected.append({
                         "sid": item["sid"],
                         "quote": item["quote"],
@@ -2276,7 +2350,10 @@ class ExtractionPipelineMixin:
             if len(selected) < target_count:
                 for item in raw_candidates:
                     p_clean = item["phrase"].lower()
-                    if p_clean not in seen_phrases:
+                    if (
+                        p_clean not in seen_phrases
+                        and not any(cls.are_same_word_family(p_clean, sp) for sp in seen_phrases)
+                    ):
                         selected.append({
                             "sid": item["sid"],
                             "quote": item["quote"],
@@ -4337,6 +4414,7 @@ class ExtractionPipelineMixin:
 
             results: List[Dict[str, Any]] = []
             seen_words: Set[str] = set()
+            seen_defs: Set[str] = set()
             seen_word_quotes: List[Tuple[str, str]] = []
 
             for cand in target_candidates:
@@ -4563,7 +4641,7 @@ class ExtractionPipelineMixin:
                             wn = cls.get_wordnet()
                             if wn and wn.synsets(lem_v, pos="v"):
                                 w = lem_v
-                if w in seen_words:
+                if w in seen_words or (not cand.get("is_syllabus") and any(cls.are_same_word_family(w, sw) for sw in seen_words)):
                     continue
                 if not example and not locked_raw_sense:
                     example = cls.ldoce_sense_example(w, pos=pos, quote=matching_sent)
@@ -4615,6 +4693,9 @@ class ExtractionPipelineMixin:
                 # for its locked sense, allowing a fully attested reserve candidate to take its slot.
                 if not definition or cls.is_boilerplate_definition(definition) or not example:
                     continue
+                def_norm_key = re.sub(r"[^a-z0-9]+", " ", definition.lower()).strip()
+                if def_norm_key in seen_defs:
+                    continue
 
                 audit_sid = f"[{matching_sid}]" if matching_sid else "[S-1]"
                 results.append({
@@ -4630,6 +4711,7 @@ class ExtractionPipelineMixin:
                     "design_audit": f"AUDIT: {audit_sid} -> [{w}] -> [VERBATIM_CONFIRMED]"
                 })
                 seen_words.add(w)
+                seen_defs.add(def_norm_key)
                 if matching_sent:
                     seen_word_quotes.append((w, matching_sent))
 
@@ -4706,9 +4788,22 @@ class ExtractionPipelineMixin:
                 norm_form = re.sub(r'\[.*?\]|\(.*?\)', '', formula).strip().lower()
                 if not norm_form or norm_form in seen_formulas:
                     continue
+                is_syllabus_item = bool(s.get("_is_syllabus", False))
+                if not is_syllabus_item and any(
+                    cls.are_same_word_family(norm_form, sf) or cls.are_same_word_family(formula, r["word"])
+                    for sf, r in zip(seen_formulas, results)
+                ):
+                    continue
+                if not is_syllabus_item and any(cls.are_same_word_family(norm_form, sf) for sf in seen_formulas):
+                    continue
                 # Prevent verb+preposition expressions (e.g. 'conform to [sth/sb]') from duplicating
                 # a single-word headword ('conform') already extracted in the same unit.
                 if excl_w_low:
+                    if not is_syllabus_item and any(
+                        cls.are_same_word_family(norm_form, ew) or cls.are_same_word_family(formula, ew)
+                        for ew in excl_w_low
+                    ):
+                        continue
                     f_content_toks = [t for t in norm_form.split() if t not in _expr_func_stop]
                     if len(f_content_toks) == 1 and (
                         f_content_toks[0] in excl_w_low
@@ -4718,7 +4813,6 @@ class ExtractionPipelineMixin:
                 sid = s.get("sid", "S-1")
                 quote = s.get("quote", "")
                 expr_type = s.get("type", "collocation")
-                is_syllabus_item = bool(s.get("_is_syllabus", False))
 
                 discourse_ctx = ""
                 if sid and sent_pool:
@@ -4797,10 +4891,12 @@ class ExtractionPipelineMixin:
                 # Drop any multi-word expression lacking an authoritative definition or distinct corpus example.
                 if not defn or cls.is_boilerplate_definition(defn) or not ex:
                     continue
-                if excl_d_norm and re.sub(r"[^a-z0-9]+", " ", defn.lower()).strip() in excl_d_norm:
+                defn_norm_key = re.sub(r"[^a-z0-9]+", " ", defn.lower()).strip()
+                if defn_norm_key in excl_d_norm:
                     continue
 
                 seen_formulas.add(norm_form)
+                excl_d_norm.add(defn_norm_key)
                 results.append({
                     "word": formula,
                     "part_of_speech": expr_type,

@@ -57,7 +57,7 @@ def test_step1_quote_and_sentence_boundaries():
     _, pool2 = LinguisticEngine.tokenize_and_index_sentences(p2)
     sents2 = list(pool2.values())
     assert len(sents2) == 2, f"Expected 2 sentences, got {sents2}"
-    assert sents2[0] == "Their attitude was “Ah! You’re here! We can start now!”"
+    assert sents2[0] == 'Their attitude was "Ah! You\'re here! We can start now!"'
     assert sents2[1] == "Next morning they left."
 
     # Case 1C: Multi-sentence quote followed by lowercase attribution -> MUST stay unified as 1 sentence
@@ -72,7 +72,7 @@ def test_step1_quote_and_sentence_boundaries():
     _, pool4 = LinguisticEngine.tokenize_and_index_sentences(p4)
     sents4 = list(pool4.values())
     assert len(sents4) == 2, f"Expected 2 sentences, got {sents4}"
-    assert sents4[0] == "“We have no choice!” Mary said quietly."
+    assert sents4[0] == '"We have no choice!" Mary said quietly.'
     assert sents4[1] == "Then she walked out."
 
 
@@ -153,4 +153,34 @@ def test_same_sentence_multi_occurrence_homographs():
     assert LinguisticEngine.determine_contextual_pos("work", sent3, occurrence=0) == "verb"
     assert LinguisticEngine.determine_contextual_pos("work", sent3, occurrence=1) == "noun"
     assert LinguisticEngine.determine_contextual_pos("work [noun]", sent3) == "noun"
+
+
+def test_paragraph_labels_with_single_letter_sentence_start_and_expr_dedup():
+    raw_labeled = (
+        "Taking soundings\n"
+        "A Until recently it was thought that dolphins were the only mammals to use echolocation.\n"
+        "B The ability of great whales to use sound to communicate has been known for decades.\n"
+        "C Echolocation is a different form of sensory perception.\n"
+        "D A major concern of environmentalists is that high-power military sonar might dis\n"
+        "orientate or harm whales.\n"
+        "E The phenomenon of stranding is not well understood. When a single whale is found dead on a beach "
+        "it might have died at sea and been washed up on shore. In other cases the carcasses would have "
+        "washed up along different parts of the shoreline.\n"
+    )
+    cleaned = LinguisticEngine.sanitize_source_markdown(raw_labeled)
+    paras = [p for p in cleaned.splitlines() if p.strip()]
+    assert len(paras) == 6
+    assert paras[4].startswith("A major concern of environmentalists")
+    assert "disorientate" in paras[4]
+    assert paras[5].startswith("The phenomenon of stranding")
+
+    exprs = LinguisticEngine.extract_deterministic_expressions(
+        cleaned, target_count=10, enable_llm_disambiguation=False
+    )
+    expr_words = [e["word"] for e in exprs]
+    # Ensure wash up and wash up on do not collide in the same extraction batch
+    for i, w1 in enumerate(expr_words):
+        for w2 in expr_words[i + 1:]:
+            assert not LinguisticEngine.are_same_word_family(w1, w2), f"Collision: {w1} vs {w2}"
+
 
