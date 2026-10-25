@@ -2566,7 +2566,7 @@ class QuizSkeletonsMixin:
         # as Required Lexical Frame, since standalone modified nouns ('its official emblem', 'the growing population')
         # would otherwise force the LLM to invent tautological 'of + NP' tails ('population of residents').
         _generic_noun_of_re = re.compile(
-            rf"^(?:the\s+|a\s+|an\s+)?{re.escape(w_clean)}\s+of(?:\s+\[?(?:sth|something|sb|somebody)\]?)?$",
+            rf"^{re.escape(w_clean)}\s+of$",
             re.IGNORECASE,
         )
         if pos_str.lower() in ("noun", "n") and bundle_pat and _generic_noun_of_re.match(bundle_pat.strip()):
@@ -2574,7 +2574,9 @@ class QuizSkeletonsMixin:
 
         if not bundle_pat:
             ctx_sample = f"{model_example} {quote} {definition}"
-            if pos_str.lower() == "verb":
+            if pos_str.lower() == "noun" and re.search(rf"\bthe\s+{re.escape(w_clean)}\s+of\b", ctx_sample, re.IGNORECASE):
+                bundle_pat = f"the {w_clean} of [sth]"
+            elif pos_str.lower() == "verb":
                 m_vp = re.search(rf"\b{re.escape(w_clean)}(?:s|ed|ing|med|ming)?\s+(into|in|on|to|with|from|for|of)\b", ctx_sample, re.IGNORECASE)
                 if m_vp:
                     bundle_pat = f"{w_clean} {m_vp.group(1).lower()} [sth]"
@@ -2906,6 +2908,25 @@ class QuizSkeletonsMixin:
                 "constraint_note": "keep `find/make + [NP / dummy it] + [adj]` intact",
                 "zh_cue": "觉得/发现……是……的",
             }
+        if any(
+            k in header_low
+            for k in (
+                "conjunctive adverb",
+                "transition adverb",
+                "discourse stance",
+                "however,",
+                "therefore,",
+                "nevertheless,",
+                "consequently,",
+                "moreover,",
+            )
+        ):
+            return {
+                "flaw_label": "Conjunctive Adverb Comma Splice (using a comma instead of `;` or `.` before `however / therefore / nevertheless` when joining two independent clauses)",
+                "corruption_step": "joining two independent clauses with only a comma before `however / therefore / nevertheless` (comma splice) or adding a redundant conjunction (`*However, ... but ...*`)",
+                "constraint_note": "use a period or semicolon before `However, / Therefore,` when linking two independent clauses",
+                "zh_cue": "然而/因此，……",
+            }
 
         clean_warn = re.sub(r"^(?:Grammar\s+Warning\s*)?\([^)]*\)\s*:?\s*", "", mistakes, flags=re.IGNORECASE).strip()
         if clean_warn:
@@ -2914,14 +2935,18 @@ class QuizSkeletonsMixin:
                 r"(?<!\bvs)(?<!\bsb)(?<!\bsth)(?<!\be\.g)(?<!\bi\.e)\.\s+|:\s*[\"'\u201c\u2018]|\s+;\s+|\n|\[INCORRECT:|✗",
                 clean_warn,
             )
-            short_warn = parts[0].strip().rstrip(":;,.")
+            short_warn = parts[0].strip().rstrip(":;,./ ")
             # Strip trailing ', or ...' clause if it pushes the label past 100 chars
             if len(short_warn) > 95 and ", or " in short_warn:
                 short_warn = short_warn.split(", or ")[0].strip()
             topic_label = f"{warn_topic}: {short_warn}" if warn_topic and warn_topic.lower() not in short_warn.lower() else short_warn
             if len(topic_label) > 120:
-                topic_label = topic_label[:120].rsplit(" ", 1)[0].rstrip(",;:")
-            # Balance any unclosed parentheses or quotes
+                topic_label = topic_label[:120].rsplit(" ", 1)[0].rstrip(",;:./ ")
+            # Balance or strip any unclosed quotes and parentheses
+            if topic_label.count("'") % 2 == 1:
+                topic_label = topic_label.rstrip("'/ ") + "'"
+            if topic_label.count('"') % 2 == 1:
+                topic_label = topic_label.rstrip('"/ ') + '"'
             if topic_label.count("(") > topic_label.count(")"):
                 topic_label += ")" * (topic_label.count("(") - topic_label.count(")"))
             return {

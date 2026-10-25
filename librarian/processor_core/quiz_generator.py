@@ -1508,9 +1508,10 @@ class QuizGeneratorMixin:
                                         if not isinstance(corr_idx, int) or corr_idx not in (0, 1):
                                             corr_idx = 0
                                         candidate_cure["correct_answer_index"] = corr_idx
-                                        # Always synchronize idiomatic_translation and flawed_translation with clean options
+                                        # Always synchronize idiomatic_translation, flawed_translation, and correct_english_answer with clean options
                                         candidate_cure["idiomatic_translation"] = clean_cand_opts[corr_idx]
                                         candidate_cure["flawed_translation"] = clean_cand_opts[1 - corr_idx]
+                                        candidate_cure["correct_english_answer"] = clean_cand_opts[corr_idx]
 
                                     # Preserve original target language stem if cured item accidentally provided English translation as stem
                                     orig_stem = orig_dict.get("translated_sentence", "")
@@ -1624,7 +1625,7 @@ class QuizGeneratorMixin:
                                 quiz_obj.questions = final_clean_questions
                             except Exception:
                                 pass
-                        quiz_obj = self._shuffle_quiz_options(quiz_obj)
+                        quiz_obj = self._shuffle_quiz_options(quiz_obj, preserve_blueprint_order=has_prescribed_options)
 
                         # Re-bind modality-specific properties and deterministic CEFR level
                         if isinstance(quiz_obj, dict):
@@ -1896,6 +1897,25 @@ class QuizGeneratorMixin:
             return obj
 
         cleaned_data = _strip_design_audit(data_dict)
+        if template_name == "translation" and isinstance(cleaned_data, dict):
+            for q_item in cleaned_data.get("questions", []):
+                if not isinstance(q_item, dict):
+                    continue
+                opts = q_item.get("options")
+                c_idx = q_item.get("correct_answer_index")
+                if isinstance(opts, list) and len(opts) == 2 and c_idx in (0, 1):
+                    q_item["idiomatic_translation"] = opts[c_idx]
+                    q_item["flawed_translation"] = opts[1 - c_idx]
+                q_item.pop("correct_english_answer", None)
+                if q_item.get("explanation") and not q_item.get("diagnostic_critique"):
+                    q_item["diagnostic_critique"] = q_item["explanation"]
+                elif q_item.get("diagnostic_critique") and not q_item.get("explanation"):
+                    q_item["explanation"] = q_item["diagnostic_critique"]
+            if isinstance(cleaned_data.get("_expert_audit"), dict):
+                cleaned_data["_expert_audit"] = {
+                    k: v for k, v in cleaned_data["_expert_audit"].items() if k != "questions"
+                }
+
         json_data = json.dumps(cleaned_data, ensure_ascii=False)
         
 

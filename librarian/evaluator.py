@@ -200,6 +200,9 @@ def _form_in_text(tok: str, text: str) -> bool:
         return False
     if LinguisticEngine.text_contains_form(text, tok):
         return True
+    # Derived -ly adverbs (e.g. 'effectively') must appear as the adverb itself, not as base adjective ('effective')
+    if len(tok) >= 5 and tok.endswith("ly"):
+        return bool(re.search(rf"\b{re.escape(tok)}\b", text))
     if tok in text or (len(tok) >= 4 and tok[:4] in text):
         return True
     if tok in COMMON_IRREGULARS and any(ir in text for ir in COMMON_IRREGULARS[tok]):
@@ -1490,10 +1493,15 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     # In comparative translation, target_keyword must be in idiomatic_translation
                     idiomatic_ans = _clean_core(_safe_str(item.get("idiomatic_translation")).lower())
                     target_toks = [t for t in clean_target.split() if t and t not in STOP_SLOTS]
+                    is_ly_adv = (" " not in clean_target and len(clean_target) >= 5 and clean_target.endswith("ly"))
                     target_in_options = (
-                        clean_target in idiomatic_ans
-                        or (len(clean_target) >= 4 and clean_target[:4] in idiomatic_ans)
-                        or (bool(target_toks) and all(_form_in_text(t, idiomatic_ans) for t in target_toks))
+                        bool(re.search(rf"\b{re.escape(clean_target)}\b", idiomatic_ans))
+                        if is_ly_adv
+                        else (
+                            clean_target in idiomatic_ans
+                            or (len(clean_target) >= 4 and clean_target[:4] in idiomatic_ans)
+                            or (bool(target_toks) and all(_form_in_text(t, idiomatic_ans) for t in target_toks))
+                        )
                     )
                 elif is_translation:
                     # In legacy translation quizzes, target_keyword can be in the options slot,

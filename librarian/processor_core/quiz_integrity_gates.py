@@ -820,6 +820,10 @@ class QuizIntegrityGatesMixin:
             # Exact word boundary
             if re.search(rf"\b{re.escape(w)}\b", t):
                 return True
+            # Stage 6 Cross-POS / Derived-Form Guard: if target is an -ly derived adverb
+            # (e.g., 'effectively'), do NOT accept its base adjective ('effective').
+            if " " not in w and len(w) >= 5 and w.endswith("ly"):
+                return False
             # Irregular past tense / inflection pairs
             irregulars = {
                 "go": ["went", "gone", "goes", "going"],
@@ -832,10 +836,10 @@ class QuizIntegrityGatesMixin:
                     for f in forms:
                         if re.search(rf"\b{re.escape(f)}\b", t):
                             return True
-            # Inflectional variants check (e.g. s, es, ed, ing, d, ly)
-            w_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment|ness|ity|ive|able|al)$', '', w)
+            # Inflectional variants check (strictly inflectional suffixes only, never derivational -ly/-tion/-ive)
+            w_stem = re.sub(r'(?:ed|ing|es|s|d|er|est)$', '', w)
             if len(w_stem) >= 4:
-                if re.search(rf"\b{re.escape(w_stem)}\w*\b", t):
+                if re.search(rf"\b{re.escape(w_stem)}(?:s|es|d|ed|ing|er|est)?\b", t):
                     return True
             return False
 

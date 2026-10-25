@@ -516,6 +516,37 @@ class TestAnchoredTranslation(unittest.TestCase):
         self.assertIn("Causative Infinitive Trap", causative_trap["flaw_label"])
         self.assertNotIn("blend 'let sb)", causative_trap["flaw_label"])
 
+        conj_adv_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "Discourse Stance & Transition Adverbs",
+            "formula": "However, [Subject] + [Modal/VP]",
+            "common_mistakes": (
+                "Grammar Warning (Punctuating Conjunctive Adverbs): Learners frequently use a comma "
+                "instead of a semicolon or period before 'however / nevertheless / therefore' when joining two independent clauses."
+            ),
+        })
+        self.assertIn("Conjunctive Adverb Comma Splice", conj_adv_trap["flaw_label"])
+        self.assertNotIn("before 'however /)", conj_adv_trap["flaw_label"])
+
+        # Derived -ly adverb guard: 'effectively' must NOT be satisfied by base adjective 'effective'
+        bad_adv_item = [{
+            "translated_sentence": "由于被有效的管理策略所驱动，该项目实现了增长。",
+            "target_keyword": "effectively",
+            "idiomatic_translation": "Driven by effective management strategies, the project achieved growth.",
+            "flawed_translation": "Driving by effective management strategies, the project achieved growth.",
+            "options": [
+                "Driven by effective management strategies, the project achieved growth.",
+                "Driving by effective management strategies, the project achieved growth.",
+            ],
+            "correct_answer_index": 0,
+        }]
+        flagged, defects = WikiProcessor.audit_translation_integrity(
+            {"questions": bad_adv_item},
+            unit_headwords=["effectively"],
+            target_language="Simplified Chinese",
+        )
+        self.assertIn(0, flagged)
+        self.assertTrue(any("effectively" in d for d in defects))
+
 
 if __name__ == "__main__":
     import dataclasses
