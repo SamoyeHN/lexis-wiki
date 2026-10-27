@@ -1285,14 +1285,35 @@ class QuizSkeletonsMixin:
                                         quote_governed_prep = anchor
                                         break
                                 if not anchor:
+                                    has_prep_or_bundle_ev = bool(
+                                        sense_native_prep
+                                        or (locked_sense and locked_sense.get("pattern_bundles"))
+                                        or (n_entry and n_entry.get("prep"))
+                                    )
+                                    attested_adj_text = " ".join([
+                                        " ".join(str(a) for a in (n_entry.get("adj") or [])),
+                                        " ".join(str(u) for u in ((locked_sense or {}).get("units") or [])),
+                                        " ".join(str(p) for p in ((locked_sense or {}).get("patterns") or [])),
+                                        " ".join(str(ex) for ex in ((locked_sense or {}).get("examples") or [])),
+                                    ]).lower()
                                     for child in tok.children:
                                         if child.dep_ in ("amod", "compound"):
-                                            mod_tok = child.lemma_.lower()
+                                            mod_tok = (
+                                                child.text.lower()
+                                                if child.dep_ == "compound" and child.tag_ in ("NNS", "NNPS")
+                                                else child.lemma_.lower()
+                                            )
                                             if (
                                                 child.pos_ != "PRON"
                                                 and mod_tok not in cls._ANCHOR_STOPWORDS
+                                                and mod_tok not in cls.GENERIC_COLLOCATION_MODIFIERS
+                                                and not cls._is_delexical_anchor(mod_tok, "adj", "noun")
                                                 and mod_tok != w_lower
                                                 and not cls._in_forbidden_word_set(mod_tok, batch_target_words)
+                                                and (
+                                                    not has_prep_or_bundle_ev
+                                                    or bool(re.search(rf"\b{re.escape(mod_tok)}\b", attested_adj_text))
+                                                )
                                             ):
                                                 anchor = mod_tok
                                                 anchor_type = "adj"
@@ -1316,11 +1337,21 @@ class QuizSkeletonsMixin:
 
                 # Priority D: dictionary candidates, strictly gated by quote/definition evidence
                 if not anchor and n_entry:
-                    if n_entry.get("adj") or n_entry.get("verb_before"):
-                        candidates = n_entry.get("adj", []) + n_entry.get("verb_before", [])
+                    filtered_adj = [
+                        a for a in (n_entry.get("adj") or [])
+                        if str(a).strip().lower() not in cls.GENERIC_COLLOCATION_MODIFIERS
+                    ]
+                    sense_mod_cands = []
+                    if isinstance(locked_sense, dict):
+                        for pat_s in (locked_sense.get("patterns") or []):
+                            pat_toks = [t.lower() for t in re.findall(r"[a-z]+", str(pat_s)) if t.lower() not in ("a", "an", "the", "some", "any", "one")]
+                            if len(pat_toks) == 2 and cls.form_matches(pat_toks[1], w_lower) and pat_toks[0] not in cls.GENERIC_COLLOCATION_MODIFIERS:
+                                sense_mod_cands.append(pat_toks[0])
+                    if filtered_adj or sense_mod_cands or n_entry.get("verb_before"):
+                        candidates = sense_mod_cands + filtered_adj + n_entry.get("verb_before", [])
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"), target_word=w_lower, forbidden=batch_target_words)
                         if anchor:
-                            anchor_type = "adj" if cls._token_in_phrases(anchor, n_entry.get("adj", [])) else "verb"
+                            anchor_type = "adj" if cls._token_in_phrases(anchor, sense_mod_cands + filtered_adj) else "verb"
                             if cls._is_delexical_anchor(anchor, anchor_type, "noun"):
                                 anchor, anchor_type = None, "collocation"
                     elif sense_native_prep and not cls._in_forbidden_word_set(sense_native_prep, batch_target_words):
@@ -2298,6 +2329,13 @@ class QuizSkeletonsMixin:
                 if "/" in best_pattern:
                     ex_low_for_slash = (ldoce_pattern_example or it.get("quote") or "").lower()
                     anc_low_for_slash = str(anchor or "").strip().lower()
+                    # Resolve multi-word preposition slash alternatives (`into/out of`, `in/out of`) before single-word slash splitting
+                    def _pick_multiword_prep_slash(m: re.Match) -> str:
+                        p1 = m.group(1)
+                        if anc_low_for_slash == "out of" or (ex_low_for_slash and "out of" in ex_low_for_slash and p1.lower() not in ex_low_for_slash):
+                            return "out of"
+                        return p1
+                    best_pattern = re.sub(r"\b(into|in)/out\s+of\b", _pick_multiword_prep_slash, best_pattern, flags=re.IGNORECASE)
                     def _pick_slash_alt(m: re.Match) -> str:
                         # Preserve bracketed object placeholders like [sb/sth]
                         start_idx = m.start()

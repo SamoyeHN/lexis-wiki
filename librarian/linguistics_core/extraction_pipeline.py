@@ -4315,18 +4315,13 @@ class ExtractionPipelineMixin:
                     return False
 
                 for _xc in (_ent_for_sense.get("cross_collocations") or []):
-                    if isinstance(_xc, dict) and _xc.get("example"):
+                    if isinstance(_xc, dict) and _xc.get("example") and len(_ent_senses) <= 1:
                         if _colloc_matches_locked_sense(str(_xc.get("collocation") or "")):
                             cand_pool.append(str(_xc["example"]).strip())
 
                 for _th in (_ent_for_sense.get("thesaurus") or []):
                     if isinstance(_th, dict) and cls._thesaurus_variant_matches(_th.get("word"), clean_target):
-                        _th_dist = str(_th.get("distinction") or "")
-                        if (
-                            len(_ent_senses) <= 1
-                            or cls._definition_overlap_ratio(_th_dist, str(sense.get("definition") or "")) >= 0.25
-                            or _colloc_matches_locked_sense(_th_dist)
-                        ):
+                        if len(_ent_senses) <= 1:
                             for _th_ex in (_th.get("examples") or ([_th["example"]] if _th.get("example") else [])):
                                 if _th_ex:
                                     cand_pool.append(str(_th_ex).strip())
@@ -4341,7 +4336,7 @@ class ExtractionPipelineMixin:
                             _cc_s_idxs = _cc.get("sense_indices")
                             _cc_word = str(_cc.get("collocation") or "").strip().lower()
                             if (isinstance(_cc_s_idxs, list) and _locked_idx >= 0 and _locked_idx in _cc_s_idxs) or (
-                                _cc_word and _colloc_matches_locked_sense(_cc_word)
+                                len(_ent_senses) <= 1 and _cc_word and _colloc_matches_locked_sense(_cc_word)
                             ):
                                 cand_pool.append(str(_cc["example"]).strip())
 

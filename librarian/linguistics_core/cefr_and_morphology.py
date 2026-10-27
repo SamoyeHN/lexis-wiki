@@ -51,6 +51,21 @@ class CefrAndMorphologyMixin:
 
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
+    @classmethod
+    @lru_cache(maxsize=32768)
+    def _zipf_freq(cls, word: str) -> float:
+        if not word:
+            return 0.0
+        try:
+            from wordfreq import zipf_frequency
+            return float(zipf_frequency(word.strip().lower(), "en"))
+        except Exception:
+            return 0.0
+
+    @classmethod
+    def word_zipf(cls, word: str) -> float:
+        return cls._zipf_freq(word)
+
     # Authoritative Closed Paradigms for Grammatical / Function Words
     # Organized by Functional Discourse Family and Syntactic Complement Requirements:
     # - clausal: Governs finite clause (Subject + Finite Verb)

@@ -2158,7 +2158,8 @@ class PedlexDbMixin:
                         if isinstance(exp, dict) and exp.get("word")
                     ]
                     # Only include cluster if target headword/lemma is an actual standalone exponent in the cluster
-                    if (w_clean in la_words or w_lemma in la_words) and len(la_words) <= 20:
+                    _max_la_cluster = 45 if norm_pos == "noun" else 20
+                    if (w_clean in la_words or w_lemma in la_words) and len(la_words) <= _max_la_cluster:
                         for lw in la_words:
                             _add_syn(lw)
 
@@ -2225,12 +2226,25 @@ class PedlexDbMixin:
 
             # 1-hop Core Synonym Antonym Resolution (disabled for verbs because action/injury verbs
             # like 'scar' -> 'blemish' hop into appearance-verb antonyms like 'beautify'/'embellish'):
-            # In Oxford Thesaurus, specialized headwords (e.g. 'autonomy', 'precision', 'polar', 'compulsion')
-            # often point to a core/immediate synonym ('independence', 'exactness', 'opposite', 'coercion') where the
-            # reciprocal antonym block ('dependence', 'inaccuracy', 'identical', 'persuasion') is stored.
+            # In Oxford Thesaurus, specialized headwords (e.g. 'autonomy', 'precision', 'polar', 'compulsion', 'threat')
+            # often point to a core/immediate synonym ('independence', 'exactness', 'opposite', 'coercion', 'danger') where the
+            # reciprocal antonym block ('dependence', 'inaccuracy', 'identical', 'persuasion', 'safety') is stored.
             if not antonyms and scored_senses and norm_pos != "verb":
-                top_s_blk = scored_senses[0][2]
-                top_syns = {_clean_term(x) for x in (top_s_blk.get("synonyms") or []) if _clean_term(x)}
+                viable_s_blks = (
+                    [
+                        item[2]
+                        for rank, item in enumerate(scored_senses)
+                        if rank == 0 or item[0] >= 1 or (not has_context_signal and len(scored_senses) <= 3)
+                    ]
+                    if norm_pos == "noun"
+                    else [scored_senses[0][2]]
+                )
+                top_syns = {
+                    _clean_term(x)
+                    for sb in viable_s_blks
+                    for x in ((sb.get("synonyms") or []) + (sb.get("core_synonyms") or []))
+                    if _clean_term(x)
+                }
                 hop_candidates: List[str] = []
                 if entry:
                     for s in entry.get("senses", []):
@@ -2241,16 +2255,19 @@ class PedlexDbMixin:
                                 ct = _clean_term(syn)
                                 if ct and " " not in ct and ct not in hop_candidates:
                                     hop_candidates.append(ct)
-                for x in (top_s_blk.get("core_synonyms") or []):
-                    ct = _clean_term(x)
-                    if ct and " " not in ct and ct not in hop_candidates:
-                        hop_candidates.append(ct)
-                for x in (top_s_blk.get("synonyms") or [])[:6]:
-                    ct = _clean_term(x)
-                    if ct and " " not in ct and ct not in hop_candidates:
-                        hop_candidates.append(ct)
+                for sb in viable_s_blks:
+                    for x in (sb.get("core_synonyms") or []):
+                        ct = _clean_term(x)
+                        if ct and " " not in ct and ct not in hop_candidates:
+                            hop_candidates.append(ct)
+                for sb in viable_s_blks:
+                    for x in (sb.get("synonyms") or [])[:6]:
+                        ct = _clean_term(x)
+                        if ct and " " not in ct and ct not in hop_candidates:
+                            hop_candidates.append(ct)
+                max_hops = 10 if norm_pos == "noun" else 6
                 # Pass 1: Strict reciprocal membership (target appears in hop candidate's synonym/core_synonym list)
-                for cs in hop_candidates[:6]:
+                for cs in hop_candidates[:max_hops]:
                     for cs_ox in cls.get_oxford_thesaurus_entries(cs):
                         cs_pos = str(cs_ox.get("pos", "")).strip().lower()
                         if norm_pos and cs_pos and norm_pos in {"verb", "noun", "adjective", "adverb"}:
@@ -2264,7 +2281,7 @@ class PedlexDbMixin:
                                     _add_ant(ant_w)
                 # Pass 2: Fallback shared-synonym overlap only if strict reciprocal hop found no antonyms
                 if not antonyms:
-                    for cs in hop_candidates[:6]:
+                    for cs in hop_candidates[:max_hops]:
                         for cs_ox in cls.get_oxford_thesaurus_entries(cs):
                             cs_pos = str(cs_ox.get("pos", "")).strip().lower()
                             if norm_pos and cs_pos and norm_pos in {"verb", "noun", "adjective", "adverb"}:
@@ -2276,10 +2293,128 @@ class PedlexDbMixin:
                                     for ant_w in (cs_blk.get("antonyms") or []):
                                         _add_ant(ant_w)
 
+            # 1-hop Reciprocal Antonym Cluster Expansion for Nouns:
+            # In Oxford Thesaurus, nouns often list only 1 headword antonym (e.g., consensus -> disagreement,
+            # shortage -> abundance, threat -> safety, recession -> boom). Expand verified direct noun antonyms
+            # into the reciprocal opposite sense's core_synonyms so multiple distinct opposite-polarity nouns
+            # are available when slots or cross-item deduplication require them.
+            if norm_pos == "noun" and antonyms:
+                reciprocal_targets = {w_clean, w_lemma} | matched_sense_syns
+                if scored_senses:
+                    for _sc, _idx, _sb, _asyns, _csyns in scored_senses[:2]:
+                        reciprocal_targets.update(_csyns)
+                seed_ants = list(antonyms)[:2]
+                for ant_seed in seed_ants:
+                    if " " in ant_seed:
+                        continue
+                    for a_ox in cls.get_oxford_thesaurus_entries(ant_seed):
+                        if str(a_ox.get("pos", "")).strip().lower() != "noun":
+                            continue
+                        a_senses = a_ox.get("senses") or []
+                        for a_blk in a_senses:
+                            a_ants = {_clean_term(x) for x in (a_blk.get("antonyms") or []) if _clean_term(x)}
+                            if (a_ants & reciprocal_targets) or (len(a_senses) == 1 and not a_ants):
+                                for ac in (a_blk.get("core_synonyms") or []):
+                                    ct_ac = _clean_term(ac)
+                                    if ct_ac and " " not in ct_ac and ct_ac not in synonyms:
+                                        _add_ant(ct_ac)
+                                for asyn in (a_blk.get("synonyms") or [])[:4]:
+                                    ct_as = _clean_term(asyn)
+                                    if ct_as and " " not in ct_as and ct_as not in synonyms:
+                                        _add_ant(ct_as)
+
         # Antonyms take precedence: never classify an attested antonym as a synonym
         synonyms -= seen_ant
         cls._pedlex_ox_syn_ant_cache[cache_key] = (frozenset(synonyms), tuple(antonyms))
         return synonyms, antonyms
+
+    @classmethod
+    def get_strict_pedlex_and_oxford_synonyms(
+        cls,
+        word: str,
+        pos: Optional[str] = None,
+        definition: Optional[str] = None,
+        quote: Optional[str] = None,
+    ) -> Set[str]:
+        """Return strict lexical synonyms from PedLex (`senses[].synonym` + bare-gloss definitions)
+        and `oxford_thesaurus` (`core_synonyms` + sense-matched `synonyms`), excluding broad contrastive
+        `ldoce` `thesaurus` / `language_activator` clusters."""
+        w_clean = (word or "").strip().lower()
+        if not w_clean:
+            return set()
+        norm_pos = str(pos or "").strip().lower()
+        if norm_pos.startswith("v"):
+            norm_pos = "verb"
+        elif norm_pos.startswith("n"):
+            norm_pos = "noun"
+        elif norm_pos.startswith("adj") or norm_pos == "a":
+            norm_pos = "adjective"
+        elif norm_pos.startswith("adv") or norm_pos == "r":
+            norm_pos = "adverb"
+        def_low = re.sub(r"^\[.*?\]\s*", "", (definition or "").strip().lower())
+        def_tokens = set(re.findall(r"[a-z]{3,}", def_low)) - {
+            "the", "and", "for", "that", "with", "from", "into", "someone", "something",
+            "somebody", "person", "people", "thing", "things", "way", "time", "part", "place",
+            "used", "make", "have", "give", "take", "very", "more", "most", "much", "many",
+        }
+        w_lemma = cls.lemma_of(w_clean) if hasattr(cls, "lemma_of") and " " not in w_clean else w_clean
+        strict_syns: Set[str] = set()
+
+        def _clean_t(t: str) -> str:
+            t = re.sub(r"\(.*?\)|\[.*?\]", "", str(t or "")).strip().lower()
+            t = re.sub(r"\b(?:something|somebody|someone|sth|sb)\b", "", t).strip()
+            return re.sub(r"\s+", " ", t).strip()
+
+        entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_lemma) if w_lemma != w_clean else None)
+        if entry:
+            for s in entry.get("senses", []):
+                s_pos = str(s.get("pos", "")).strip().lower()
+                if s_pos.startswith("v"):
+                    s_pos = "verb"
+                elif s_pos.startswith("n"):
+                    s_pos = "noun"
+                elif s_pos.startswith("adj") or s_pos == "a":
+                    s_pos = "adjective"
+                elif s_pos.startswith("adv") or s_pos == "r":
+                    s_pos = "adverb"
+                if norm_pos and s_pos and norm_pos in {"verb", "noun", "adjective", "adverb"} and s_pos != norm_pos:
+                    continue
+                s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def):
+                    strict_syns.add(s_def)
+                for syn in ([s.get("synonym")] if isinstance(s.get("synonym"), str) else (s.get("synonym") or [])):
+                    ct = _clean_t(syn)
+                    if ct and ct not in (w_clean, w_lemma):
+                        strict_syns.add(ct)
+
+        ox_entries = list(cls.get_oxford_thesaurus_entries(w_clean))
+        if w_lemma != w_clean and not ox_entries:
+            ox_entries = list(cls.get_oxford_thesaurus_entries(w_lemma))
+        for ox in ox_entries:
+            ox_pos = str(ox.get("pos", "")).strip().lower()
+            if norm_pos and ox_pos and norm_pos in {"verb", "noun", "adjective", "adverb"} and ox_pos != norm_pos:
+                continue
+            senses = ox.get("senses") or []
+            scored = []
+            for idx, s_blk in enumerate(senses):
+                core_s = [_clean_t(x) for x in (s_blk.get("core_synonyms") or []) if _clean_t(x)]
+                all_s = [_clean_t(x) for x in (s_blk.get("synonyms") or []) if _clean_t(x)]
+                ov = len(def_tokens & (set(core_s) | set(all_s))) * 4 + (1 if idx == 0 else 0)
+                scored.append((ov, idx, core_s, all_s))
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            has_sig = bool(def_tokens) and scored and scored[0][0] > 1
+            for rank, (sc, _idx, core_s, all_s) in enumerate(scored):
+                if rank == 0 or sc >= 4 or (not has_sig and len(scored) <= 2):
+                    for cs in core_s:
+                        if cs not in (w_clean, w_lemma):
+                            strict_syns.add(cs)
+                    for sw in all_s:
+                        if sw not in (w_clean, w_lemma):
+                            strict_syns.add(sw)
+
+        _, ants = cls.get_pedlex_and_oxford_synonyms_antonyms(word, pos=pos, definition=definition, quote=quote)
+        strict_syns -= set(ants)
+        return strict_syns
 
     # ------------------------------------------------------------------
     # Section 8: Two-Tier Construction Tagging (`pedlex_cxn_index`)

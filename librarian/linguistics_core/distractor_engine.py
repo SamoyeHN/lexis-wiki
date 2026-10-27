@@ -200,6 +200,11 @@ class DistractorEngineMixin:
                 else:
                     words = wn.words(t_lemma)
 
+        if words:
+            oewn_words = [w for w in words if getattr(w, "id", "").startswith("oewn-")]
+            if oewn_words:
+                words = oewn_words
+
         exclude_words = set(exclude_words or set())
 
         def _pos_ok(lemma: str) -> bool:
@@ -280,6 +285,13 @@ class DistractorEngineMixin:
         # Integrate PedLex native + Oxford Thesaurus of English synonyms & antonyms
         ped_ox_syns, ped_ox_ants = cls.get_pedlex_and_oxford_synonyms_antonyms(
             clean_target, pos=pos, definition=definition, quote=quote
+        )
+        strict_ped_ox_syns = (
+            cls.get_strict_pedlex_and_oxford_synonyms(
+                clean_target, pos=pos, definition=definition, quote=quote
+            )
+            if wn_pos == "n"
+            else set()
         )
         for psyn in ped_ox_syns:
             if " " not in psyn:
@@ -426,15 +438,28 @@ class DistractorEngineMixin:
                         penalty += 10
 
                     # Prevent generic 'a ... place' location definitions (e.g. 'oasis: a peaceful or pleasant place...')
-                    # from falsely locking onto a `noun.artifact` building/shelter synset solely via the meta-word 'place'
+                    # from falsely locking onto a `noun.artifact` building/shelter synset solely via the meta-words 'place'/'provide'
                     if (
                         wn_pos == "n"
-                        and s_lf == "noun.artifact"
                         and "place" in def_tokens
                         and not (def_tokens & {"building", "structure", "shelter", "house", "room", "hut", "wall", "roof"})
                     ):
-                        s_direct_lemmas = s_direct_lemmas - {"place"}
-                        chain_lemmas = chain_lemmas - {"place"}
+                        if s_lf == "noun.artifact":
+                            s_direct_lemmas = s_direct_lemmas - {"place", "provide", "offer", "serve"}
+                            chain_lemmas = chain_lemmas - {"place", "provide", "offer", "serve"}
+                            penalty += 8
+                        elif s_lf == "noun.location":
+                            penalty -= 8
+
+                    # Prevent extent/scope/range definitions (e.g. 'breadth: the fact of including many different things...')
+                    # from locking onto `noun.cognition` intelligence/mental-capacity synsets when no mental terms are present
+                    if (
+                        wn_pos == "n"
+                        and s_lf == "noun.cognition"
+                        and bool((s_direct_lemmas | chain_lemmas) & {"intelligence", "understand", "mental", "capacity", "mind", "thought"})
+                        and not (def_tokens & {"intelligence", "mind", "mental", "understand", "understanding", "knowledge", "thought", "wise", "wisdom", "clever"})
+                    ):
+                        penalty += 8
 
                     def_ov = len(def_tokens.intersection(s_direct_lemmas)) * 6 + len(def_tokens.intersection(chain_lemmas)) * 3
                     quote_ov = (
@@ -444,12 +469,18 @@ class DistractorEngineMixin:
                     if def_ov > 0:
                         quote_ov += len((quote_tokens - def_tokens).intersection(s_direct_lemmas - s_def_lemmas)) * 1
                     unit_signpost_bonus = 0
-                    if pedlex_units:
-                        s_lemmas_low = {sw.lemma().lower() for sw in s.words()}
-                        if s_lemmas_low & pedlex_units:
-                            unit_signpost_bonus += 14
+                    s_lemmas_low = {sw.lemma().lower() for sw in s.words()}
+                    if pedlex_units and (s_lemmas_low & pedlex_units):
+                        unit_signpost_bonus += 14
                     if pedlex_signpost and (pedlex_signpost in s_direct_lemmas or pedlex_signpost in chain_lemmas):
                         unit_signpost_bonus += 6
+                    if wn_pos == "n" and strict_ped_ox_syns:
+                        ox_syn_peers = (s_lemmas_low - self_forms) & strict_ped_ox_syns
+                        if ox_syn_peers:
+                            unit_signpost_bonus += min(12, len(ox_syn_peers) * 5)
+                        ox_direct_peers = (s_direct_lemmas - self_forms) & strict_ped_ox_syns
+                        if ox_direct_peers:
+                            unit_signpost_bonus += min(6, len(ox_direct_peers) * 2)
                     score = def_ov + quote_ov + unit_signpost_bonus - penalty
                     scored_synsets.append((score, s))
 
@@ -870,6 +901,15 @@ class DistractorEngineMixin:
                         and anchor_type == "prep"
                         and picked not in d_words
                         and cls.lemma_of(picked) not in d_words
+                        and (
+                            wn_pos != "n"
+                            or (
+                                it.get("section_index") is not None
+                                and context_anchor.lower() != "into"
+                                and clean_target not in cls.get_strict_pedlex_and_oxford_synonyms(picked, pos="noun")
+                                and cls.lemma_of(clean_target) not in cls.get_strict_pedlex_and_oxford_synonyms(picked, pos="noun")
+                            )
+                        )
                         and not cls.double_key_collision(
                             clean_target, picked,
                             anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
@@ -1088,8 +1128,8 @@ class DistractorEngineMixin:
                             return False
                         if s.lexfile() and s.lexfile() != "noun.person" and c_wn_n[0].lexfile() == "noun.person":
                             return False
-                    # Monosemous in both PedLex and WordNet -> always aligned
-                    if len(c_senses_n) == 1 and len(c_wn_n) <= 1:
+                    # Monosemous in PedLex and either monosemous in WordNet or sharing primary WordNet lexfile -> aligned
+                    if len(c_senses_n) == 1 and (len(c_wn_n) <= 1 or (c_wn_n and c_wn_n[0].lexfile() == s.lexfile())):
                         return True
                     if sis_syn is None or hyper_syn is None:
                         return True
@@ -1580,6 +1620,12 @@ class DistractorEngineMixin:
                 # Prioritize local semantic peers (satellites, PedLex thesaurus) for domain relevance,
                 # then complement with academic adjectives governing distinct prepositions
                 candidates = tier2_satellites + tier0_ldoce_thesaurus + antonym_candidates + valency_candidates + tier3_attributes + tier1_synonyms
+        elif wn_pos == "n":
+            extra_noun_ants = [
+                a for a in sense_antonyms[1:]
+                if cls.is_cefr_compliant_distractor(a, clean_target) and not _is_informal_or_slang_distractor(a)
+            ]
+            candidates = tier0_ldoce_thesaurus + tier1_synonyms + tier2_hyponyms + tier3_coordinates + extra_noun_ants
         else:
             candidates = tier0_ldoce_thesaurus + tier1_synonyms + tier2_hyponyms + tier3_coordinates
 
@@ -1689,8 +1735,15 @@ class DistractorEngineMixin:
             if cls.are_same_word_family(cand, clean_target) or any(cls.are_same_word_family(cand, s) for s in safe_distractors):
                 continue
             # Cross-distractor mutual synonym exclusion: avoid multiple distractors being mutual synonyms
+            # (For nouns, if non-antonym coordinates are exhausted and we are filling from `sense_antonyms`,
+            # allow at most 1 extra antonym peer so we don't fall back to random orthographic rhymes.)
             cand_syns = cls.get_synonyms(cand)
-            if any(s in cand_syns or cand in cls.get_synonyms(s) for s in safe_distractors):
+            is_noun_fallback_ant = (
+                wn_pos == "n"
+                and cand in sense_antonyms
+                and sum(1 for s in safe_distractors if distractor_metadata.get(s) == "antonym") < 2
+            )
+            if not is_noun_fallback_ant and any(s in cand_syns or cand in cls.get_synonyms(s) for s in safe_distractors):
                 continue
 
             # Deterministic Double-Key & Pattern Exclusion Gate:
@@ -1780,7 +1833,7 @@ class DistractorEngineMixin:
                             and w.isalpha()
                             and not re.fullmatch(r"(.)\1+", w)
                             and cls.is_exact_pedlex_headword(w)
-                            and cls._zipf_freq(w) >= 3.0
+                            and cls.word_zipf(w) >= 3.0
                         ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
@@ -1843,7 +1896,16 @@ class DistractorEngineMixin:
             slot3_replaceable = (
                 len(safe_distractors) >= target_count
                 and (
-                    distractor_metadata.get(safe_distractors[-1]) in ("coordinate", "troponym", "attribute_coordinate")
+                    (
+                        distractor_metadata.get(safe_distractors[-1]) in ("coordinate", "troponym", "attribute_coordinate")
+                        and (
+                            wn_pos != "n"
+                            or all(
+                                distractor_metadata.get(d) not in ("antonym", "ldoce_thesaurus")
+                                for d in safe_distractors
+                            )
+                        )
+                    )
                     or sum(1 for d in safe_distractors if distractor_metadata.get(d) == "antonym") >= 3
                 )
             )
@@ -1860,6 +1922,11 @@ class DistractorEngineMixin:
                 )
                 if need_paronym_fill:
                     for p_word, _p_score in paronym_cands:
+                        if wn_pos == "n" and not (
+                            len(clean_target) >= 6
+                            and (cls._common_prefix_len(clean_target, p_word) >= 3 or _p_score >= 45)
+                        ):
+                            continue
                         if p_word not in safe_distractors:
                             safe_distractors.append(p_word)
                             distractor_metadata[p_word] = "orthographic_paronym"
@@ -1911,7 +1978,7 @@ class DistractorEngineMixin:
                             and w.isalpha()
                             and not re.fullmatch(r"(.)\1+", w)
                             and cls.is_exact_pedlex_headword(w)
-                            and cls._zipf_freq(w) >= 3.0
+                            and cls.word_zipf(w) >= 3.0
                         ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
@@ -2018,7 +2085,8 @@ class DistractorEngineMixin:
         "high", "long", "short", "order", "achieve", "produce", "produced", "show", "shown",
         "seen", "notice", "laugh", "help", "try", "trying", "know", "knowing", "think",
         "thinking", "ideas", "idea", "mind", "real", "containing", "interesting",
-        "work", "works", "working", "hard",
+        "work", "works", "working", "hard", "feeling", "feelings", "information",
+        "action", "activity",
     })
 
     @classmethod
@@ -3111,6 +3179,26 @@ class DistractorEngineMixin:
                     return True, "double_key_prep"
                 return False, "frame_only"
             if (d in near or d_lem in near) and d not in antonyms and d_lem not in antonyms:
+                # For nouns (`pos` starting with 'n'), a near-synonym in `near` is ONLY allowed under a
+                # prepositional anchor when it is a curated contrastive peer in LDOCE's `thesaurus` box
+                # (e.g. `loan` vs `overdraft` under `of`) and NOT a reciprocal synonym in `oxford_thesaurus`
+                # (e.g. `threat` vs `hazard`, `recession` vs `downturn`, `oath` vs `commitment`, `shortage` vs `absence`).
+                if pos and str(pos).lower().startswith("n"):
+                    if anchor.lower() == "into":
+                        return True, "double_key_prep"
+                    d_strict_n_syns = cls.get_strict_pedlex_and_oxford_synonyms(d, pos="noun") | cls.get_strict_pedlex_and_oxford_synonyms(d_lem, pos="noun")
+                    if t in d_strict_n_syns or t_lem in d_strict_n_syns:
+                        return True, "double_key_prep"
+                    t_ent = cls.get_ldoce_entry(t) or cls.get_ldoce_entry(t_lem) or {}
+                    t_thes_words: Set[str] = set()
+                    for th_it in (t_ent.get("thesaurus") or []):
+                        if isinstance(th_it, dict):
+                            cw = str(th_it.get("word") or "").strip().lower()
+                            if cw:
+                                t_thes_words.add(cw)
+                                t_thes_words.add(cw.split()[0])
+                    if d not in t_thes_words and d_lem not in t_thes_words:
+                        return True, "double_key_prep"
                 # A near-synonym that either lacks competing prepositional valency in PedLex/OCD
                 # or is a transitive verb (where `NP + prep` can function as a resultative/adjunct PP,
                 # e.g., `convert/adapt [sth] into [sth]`) cannot be safely discriminated by preposition alone.
