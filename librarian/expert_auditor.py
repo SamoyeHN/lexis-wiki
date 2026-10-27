@@ -105,8 +105,13 @@ class ExpertAuditor:
             lines.append("Options:")
             for opt_idx, opt in enumerate(options):
                 clean_opt = str(opt)
-                # Strip accidental annotations like "(Correct Answer)" or "[Key]"
-                clean_opt = re.sub(r"(?i)\s*[\(\[\{]?(?:correct\s*)?(?:key|answer)[\)\]\}]?", "", clean_opt)
+                # Strip accidental annotations like "(Correct Answer)", "[Key]", or "Correct Answer"
+                # without stripping legitimate phrasal verb options like "answer back" or "key in"
+                clean_opt = re.sub(
+                    r"(?i)\s*(?:[\(\[\{]\s*(?:correct\s*)?(?:key|answer)\s*[\)\]\}]|\b(?:correct\s+(?:key|answer)|answer\s+key)\b)",
+                    "",
+                    clean_opt,
+                )
                 # Strip all markdown formatting to ensure identical plain presentation
                 clean_opt = re.sub(r"[*_`]", "", clean_opt).strip()
                 letter = chr(65 + opt_idx)

@@ -1786,7 +1786,7 @@ class ExtractionPipelineMixin:
                 # 'derive from / be derived from')
                 raw_norm = re.sub(r"\s*/\s*to\s+doing\s+\[sth\]$", "", raw_norm, flags=re.IGNORECASE)
                 multi_slash_seeds = [raw_norm]
-                if " / " in raw_norm:
+                if "/" in raw_norm:
                     m_tail = re.match(r"^(.*?)\s+(to\s+do\s+\[sth\]|for\s+\[sth\]|an?\s+edge\s+(?:over|on))\s*/\s*(.+)$", raw_norm, flags=re.IGNORECASE)
                     if m_tail:
                         prefix_p, alt1, alt2 = m_tail.group(1).strip(), m_tail.group(2).strip(), m_tail.group(3).strip()
@@ -1794,7 +1794,7 @@ class ExtractionPipelineMixin:
                         alt2 = re.sub(r"^a\s+edge\b", "an edge", alt2, flags=re.IGNORECASE)
                         multi_slash_seeds = [f"{prefix_p} {alt1}".strip(), f"{prefix_p} {alt2}".strip()]
                     else:
-                        slash_parts = [p.strip() for p in raw_norm.split(" / ") if p.strip()]
+                        slash_parts = [p.strip() for p in re.split(r"\s*/\s*", raw_norm) if p.strip()]
                         if len(slash_parts) >= 2 and all(len(p.split()) >= 2 for p in slash_parts) and not any(p.startswith("[") or p.endswith("]") for p in slash_parts):
                             multi_slash_seeds = slash_parts
                         else:
@@ -3118,7 +3118,10 @@ class ExtractionPipelineMixin:
                     # 3. Adjective syntactic slot hard clash (only for adjective senses)
                     if s_p_c == "adj":
                         if q_is_pred and "[only before noun]" in s_gram_c:
-                            return True
+                            s_ex_pat_c = " ".join(list(s_c.get("examples") or []) + list(s_c.get("patterns") or [])).lower()
+                            s_ex_toks_c = {w for w in re.findall(r"\b[a-z]{4,}\b", s_ex_pat_c) if w != target_w_clean_p}
+                            if not any(cls.form_matches(tok_q, w_ex) for tok_q in q_seq_prune for w_ex in s_ex_toks_c):
+                                return True
                         if q_is_attr and ("[not before noun]" in s_gram_c or "[never before noun]" in s_gram_c):
                             return True
 
@@ -3475,6 +3478,21 @@ class ExtractionPipelineMixin:
             for refl_uk in (f"{lem_0} yourself", f"{lem_0} oneself"):
                 if refl_uk not in unit_keys:
                     unit_keys.append(refl_uk)
+        # If expr_word has an internal modifier slot between a determiner and noun (e.g. 'on a (sth) scale')
+        # and the quote realizes that slot with an adjective (e.g. 'on a large scale'), include the realized phrase key
+        m_det_mod_slot = re.match(
+            r"^([a-z]+\s+(?:a|an|the))\s+(?:\[[^\]]+\]|\([^)]+\))\s+([a-z]+)$",
+            expr_word.strip(),
+            re.I,
+        )
+        if m_det_mod_slot and q_low:
+            pref_dm = m_det_mod_slot.group(1).lower()
+            tail_dm = m_det_mod_slot.group(2).lower()
+            m_q_realized = re.search(rf"\b({re.escape(pref_dm)}\s+[a-z]+\s+{re.escape(tail_dm)})\b", q_low)
+            if m_q_realized:
+                realized_uk = cls._unit_key(m_q_realized.group(1))
+                if realized_uk and realized_uk not in unit_keys:
+                    unit_keys.append(realized_uk)
         for uk_cand in (u_key, lem_u_key, clean, " ".join(lem_tokens)):
             if uk_cand and uk_cand not in unit_keys:
                 unit_keys.append(uk_cand)
@@ -3517,6 +3535,13 @@ class ExtractionPipelineMixin:
                 return True
             if allow_prefix and (cand_uk.startswith(uk_target + " ") or uk_target.startswith(cand_uk + " ")):
                 return True
+            # Handle open modifier lists before 'etc' (e.g. 'on a large/small/grand etc scale' -> 'on a scale')
+            if re.search(r"\betc\b", str(cand_raw_or_uk), re.I):
+                stripped_etc = re.sub(r"\b(?:[a-z]+(?:/[a-z]+)*\s+)+etc\.?\b", "", str(cand_raw_or_uk), flags=re.I)
+                etc_uk = cls._unit_key(stripped_etc)
+                if etc_uk and len(etc_uk.split()) >= 2:
+                    if etc_uk == uk_target or (allow_prefix and (etc_uk.startswith(uk_target + " ") or uk_target.startswith(etc_uk + " "))):
+                        return True
             # Check _declared_unit_spellings (which properly expands token-level slashes like 'open the door/way to something')
             for sp in cls._declared_unit_spellings(cand_raw_or_uk):
                 sp_uk = cls._unit_key(re.sub(r"\bjust\b", "", sp).strip())
@@ -3581,10 +3606,20 @@ class ExtractionPipelineMixin:
                             ]
                             if non_fixed_imp:
                                 b_senses = non_fixed_imp
-                        prep_b = [dict(s, patterns=list(s.get("patterns") or []) + ([uk] if uk not in (s.get("patterns") or []) else [])) for s in b_senses]
+                        prep_b = [dict(s, patterns=list(s.get("patterns") or [uk])) for s in b_senses]
                         res_b = cls._lock_sense({"word": base_v, "senses": prep_b}, quote=quote, target_pos="verb", return_scores=True)
                         if res_b and len(res_b) >= 5 and res_b[4]:
-                            ranked_idxs = [s_i for s_i, _ in sorted(res_b[4], key=lambda x: (-x[1], x[0]))]
+                            has_any_ex = any(s.get("examples") for s in b_senses)
+                            ranked_idxs = [
+                                s_i for s_i, _ in sorted(
+                                    res_b[4],
+                                    key=lambda x: (
+                                        -(1 if (not has_any_ex or b_senses[x[0]].get("examples")) else 0),
+                                        -x[1],
+                                        x[0],
+                                    ),
+                                )
+                            ]
                             b_senses = [b_senses[s_i] for s_i in ranked_idxs if 0 <= s_i < len(b_senses)]
                     for s in b_senses:
                         df = cls.format_ldoce_definition(s)
@@ -3650,9 +3685,15 @@ class ExtractionPipelineMixin:
                                         matched_colloc_gloss = True
                             if matched_colloc_gloss:
                                 continue
+                        if tier == "phrasal_verb":
+                            # Phrasal verb blocks are already resolved in Step 1 (`_unit_blocks`);
+                            # indexing `h_entry.senses[s_idx]` here would mistakenly index main entry senses (e.g. noun sense 0 of 'factor').
+                            continue
                         senses = h_entry.get('senses', [])
                         if s_idx is not None and s_idx < len(senses):
                             s = senses[s_idx]
+                            if is_verb_expr and cls._pos_code(s.get("pos")) in ("n", "adj", "adv"):
+                                continue
                             if not cls.format_ldoce_definition(s) and s.get("crossrefs"):
                                 for xref in (s.get("crossrefs") or []):
                                     if not isinstance(xref, dict):
@@ -4117,6 +4158,12 @@ class ExtractionPipelineMixin:
             if e_norm == q_norm or (q_norm and (e_norm in q_norm or q_norm in e_norm) and abs(len(e_norm) - len(q_norm)) <= 12):
                 return False
             if is_multi:
+                if pos_low in ("phrasal verb", "verb") and u_key:
+                    v_head = u_key.split()[0]
+                    if re.search(rf"\b(?:a|an|the|this|that|each|every|one|another)\s+(?:\w+\s+)?{re.escape(v_head)}\b", e_norm):
+                        return False
+                    if check_pos and cls.determine_contextual_pos(v_head, ex_clean) == "noun":
+                        return False
                 if is_passive_cop:
                     part_tok = u_key_no_cop.split()[0]
                     v_stems = [c for c in ([cls._surface_lemma(part_tok)] + cls._headword_candidates(part_tok)) if c and c != part_tok and cls.get_ldoce_entry(c)]
@@ -4206,6 +4253,106 @@ class ExtractionPipelineMixin:
             for ex in (sense.get("examples") or []):
                 if ex:
                     cand_pool.append(str(ex).strip())
+            # Also include sense-isolated full-sentence examples from cross_collocations, thesaurus, and collocations
+            # when explicitly bound to this sense index or matching a sense-exclusive lexical cue from this sense
+            _ent_for_sense = cls.get_ldoce_entry(clean_target) if not is_multi else None
+            if _ent_for_sense:
+                _s_pats_toks: Set[str] = set()
+                for _p in (sense.get("patterns") or []):
+                    for _t in re.findall(r"[a-z]+", str(_p).lower()):
+                        if _t != clean_target and len(_t) >= 3:
+                            _s_pats_toks.add(_t)
+                for _pb in (sense.get("pattern_bundles") or []):
+                    if isinstance(_pb, dict) and _pb.get("pattern"):
+                        for _t in re.findall(r"[a-z]+", str(_pb["pattern"]).lower()):
+                            if _t != clean_target and len(_t) >= 3:
+                                _s_pats_toks.add(_t)
+                _ent_senses = _ent_for_sense.get("senses") or []
+                _locked_idx = next((i for i, _es in enumerate(_ent_senses) if _es is sense or _es.get("definition") == sense.get("definition")), -1)
+                _generic_def_meta = {
+                    "someone", "something", "somebody", "person", "people", "thing", "things",
+                    "used", "make", "very", "much", "many", "more", "most", "good", "well",
+                    "able", "produce", "have", "having", "with", "from", "that", "which",
+                    "into", "about", "especially", "particular", "usually",
+                }
+                _s_own_text = " ".join(
+                    [str(sense.get("definition") or ""), str(sense.get("signpost") or "")]
+                    + [str(_ex_i) for _ex_i in (sense.get("examples") or []) if _ex_i]
+                ).lower()
+                _s_own_toks: Set[str] = set()
+                for _w_o in re.findall(r"\b[a-z]{4,}\b", _s_own_text):
+                    if _w_o != clean_target and _w_o not in _generic_def_meta and not cls.form_matches(_w_o, clean_target):
+                        _s_own_toks.add(_w_o)
+                        _lem_o = cls._surface_lemma(_w_o)
+                        if _lem_o and len(_lem_o) >= 4 and _lem_o not in _generic_def_meta:
+                            _s_own_toks.add(_lem_o)
+                _other_s_toks: Set[str] = set()
+                for _idx_o, _es_o in enumerate(_ent_senses):
+                    if _idx_o == _locked_idx or _es_o is sense:
+                        continue
+                    _o_txt = " ".join(
+                        [str(_es_o.get("definition") or ""), str(_es_o.get("signpost") or "")]
+                        + [str(_ex_o) for _ex_o in (_es_o.get("examples") or []) if _ex_o]
+                    ).lower()
+                    for _w_ot in re.findall(r"\b[a-z]{4,}\b", _o_txt):
+                        _other_s_toks.add(_w_ot)
+                        _lem_ot = cls._surface_lemma(_w_ot)
+                        if _lem_ot and len(_lem_ot) >= 4:
+                            _other_s_toks.add(_lem_ot)
+                _allowed_sense_toks = _s_pats_toks | (_s_own_toks - _other_s_toks)
+
+                def _colloc_matches_locked_sense(_c_str: str) -> bool:
+                    if len(_ent_senses) <= 1:
+                        return True
+                    for _ct in re.findall(r"\b[a-z]{3,}\b", (_c_str or "").lower()):
+                        if _ct == clean_target or cls.form_matches(_ct, clean_target):
+                            continue
+                        if _ct in _allowed_sense_toks:
+                            return True
+                        _ct_lem = cls._surface_lemma(_ct)
+                        if _ct_lem and _ct_lem in _allowed_sense_toks:
+                            return True
+                    return False
+
+                for _xc in (_ent_for_sense.get("cross_collocations") or []):
+                    if isinstance(_xc, dict) and _xc.get("example"):
+                        if _colloc_matches_locked_sense(str(_xc.get("collocation") or "")):
+                            cand_pool.append(str(_xc["example"]).strip())
+
+                for _th in (_ent_for_sense.get("thesaurus") or []):
+                    if isinstance(_th, dict) and cls._thesaurus_variant_matches(_th.get("word"), clean_target):
+                        _th_dist = str(_th.get("distinction") or "")
+                        if (
+                            len(_ent_senses) <= 1
+                            or cls._definition_overlap_ratio(_th_dist, str(sense.get("definition") or "")) >= 0.25
+                            or _colloc_matches_locked_sense(_th_dist)
+                        ):
+                            for _th_ex in (_th.get("examples") or ([_th["example"]] if _th.get("example") else [])):
+                                if _th_ex:
+                                    cand_pool.append(str(_th_ex).strip())
+
+                if isinstance(_ent_for_sense.get("collocations"), dict):
+                    for _c_list in _ent_for_sense["collocations"].values():
+                        if not isinstance(_c_list, list):
+                            continue
+                        for _cc in _c_list:
+                            if not isinstance(_cc, dict) or not _cc.get("example"):
+                                continue
+                            _cc_s_idxs = _cc.get("sense_indices")
+                            _cc_word = str(_cc.get("collocation") or "").strip().lower()
+                            if (isinstance(_cc_s_idxs, list) and _locked_idx >= 0 and _locked_idx in _cc_s_idxs) or (
+                                _cc_word and _colloc_matches_locked_sense(_cc_word)
+                            ):
+                                cand_pool.append(str(_cc["example"]).strip())
+
+            def _is_full_sentence_example(ex_s: Optional[str]) -> bool:
+                if not ex_s:
+                    return False
+                s_clean = str(ex_s).strip().strip('"“”')
+                w_cnt = len(s_clean.split())
+                return w_cnt >= 4 and s_clean.endswith((".", "!", "?"))
+
+            fallback_short_ex: Optional[str] = None
             # If multi-word expression has an extended preposition pattern attested in quoted_sentence (e.g. 'get by on'),
             # prefer an example from the locked sense that demonstrates that exact extended pattern.
             if is_multi and q_norm and cand_pool:
@@ -4215,16 +4362,28 @@ class ExtractionPipelineMixin:
                         if p_k and len(p_k.split()) > len(u_key.split()) and cls._unit_example(p_k, [quoted_sentence], allow_modifier=True):
                             for cand_ex in cand_pool:
                                 if _is_valid_distinct(cand_ex, check_pos=False) and cls._unit_example(p_k, [cand_ex], allow_modifier=True):
-                                    return cand_ex.strip().strip('"“”')
+                                    c_ex_str = cand_ex.strip().strip('"“”')
+                                    if _is_full_sentence_example(c_ex_str):
+                                        return c_ex_str
+                                    if not fallback_short_ex:
+                                        fallback_short_ex = c_ex_str
             for exact_ex in exact_pb_exs:
                 if _is_valid_distinct(exact_ex, check_pos=False):
-                    return exact_ex.strip().strip('"“”')
+                    c_ex_str = exact_ex.strip().strip('"“”')
+                    if _is_full_sentence_example(c_ex_str):
+                        return c_ex_str
+                    if not fallback_short_ex:
+                        fallback_short_ex = c_ex_str
             # For copular/participial expressions ('be headed for [sth]'), prioritize examples from the locked sense
             # that contain the exact inflected surface phrase ('headed for') ahead of lemmatized active variants ('heading for').
             if u_key_no_cop:
                 for surf_ex in ([current_example] if current_example else []) + cand_pool:
                     if surf_ex and _is_valid_distinct(surf_ex, check_pos=False) and re.search(rf"\b{re.escape(u_key_no_cop)}\b", str(surf_ex), re.I):
-                        return str(surf_ex).strip().strip('"“”')
+                        c_ex_str = str(surf_ex).strip().strip('"“”')
+                        if _is_full_sentence_example(c_ex_str):
+                            return c_ex_str
+                        if not fallback_short_ex:
+                            fallback_short_ex = c_ex_str
                 sense_unit_strs = [
                     (str(u.get("phrase") or u.get("unit") or "") if isinstance(u, dict) else str(u)).lower()
                     for u in ((sense.get("units") or []) if isinstance(sense, dict) else [])
@@ -4239,20 +4398,41 @@ class ExtractionPipelineMixin:
                             return corp_ex.strip().strip('"“”')
             for match_ex in matching_pb_exs:
                 if _is_valid_distinct(match_ex, check_pos=False):
-                    return match_ex.strip().strip('"“”')
+                    c_ex_str = match_ex.strip().strip('"“”')
+                    if _is_full_sentence_example(c_ex_str):
+                        return c_ex_str
+                    if not fallback_short_ex:
+                        fallback_short_ex = c_ex_str
+        else:
+            def _is_full_sentence_example(ex_s: Optional[str]) -> bool:
+                if not ex_s:
+                    return False
+                s_clean = str(ex_s).strip().strip('"“”')
+                w_cnt = len(s_clean.split())
+                return w_cnt >= 4 and s_clean.endswith((".", "!", "?"))
+
+            fallback_short_ex = None
 
         if _is_valid_distinct(current_example, check_pos=(sense is None)):
-            return str(current_example).strip().strip('"“”')
+            c_ex_str = str(current_example).strip().strip('"“”')
+            if _is_full_sentence_example(c_ex_str):
+                return c_ex_str
+            if not fallback_short_ex:
+                fallback_short_ex = c_ex_str
 
         if cand_pool:
             for cand_ex in cand_pool:
                 if _is_valid_distinct(cand_ex, check_pos=False):
-                    return cand_ex.strip().strip('"“”')
+                    c_ex_str = cand_ex.strip().strip('"“”')
+                    if _is_full_sentence_example(c_ex_str):
+                        return c_ex_str
+                    if not fallback_short_ex:
+                        fallback_short_ex = c_ex_str
 
         # Determine whether the entry (or multi-word unit) is monosemous under the target POS
         entry = cls.get_ldoce_entry(clean_target)
         if entry and entry.get("kind") == "derived":
-            return ""
+            return fallback_short_ex or ""
         target_p = cls._pos_code(pos_low)
         entry_senses = (entry.get("senses") or []) if entry else []
         pos_senses = [s for s in entry_senses if not target_p or cls._sense_matches_pos(s, target_p)]
@@ -4295,7 +4475,7 @@ class ExtractionPipelineMixin:
         if sense and isinstance(sense, dict):
             if is_multi:
                 if not is_monosemous_multi:
-                    return ""
+                    return fallback_short_ex or ""
             else:
                 s_def_norm = re.sub(r"[^a-z0-9]+", " ", str(sense.get("definition") or "").lower()).strip()
                 in_pedlex = any(
@@ -4305,10 +4485,10 @@ class ExtractionPipelineMixin:
                     for ps in pos_senses
                 )
                 if pos_senses and not in_pedlex:
-                    return ""
+                    return fallback_short_ex or ""
                 if not is_monosemous:
-                    # Polysemous word whose locked sense has 0 valid examples: do NOT steal from another sense or corpus
-                    return ""
+                    # Polysemous word whose locked sense has 0 full-sentence examples: do NOT steal from another sense or corpus
+                    return fallback_short_ex or ""
 
         # 2. Monosemous or unlocked entry-level & cross-entry corpus examples
         if entry and is_monosemous:
@@ -4322,6 +4502,12 @@ class ExtractionPipelineMixin:
             for cc in (entry.get("cross_collocations") or []):
                 if isinstance(cc, dict) and cc.get("example"):
                     cand_pool.append(str(cc["example"]).strip())
+            if isinstance(entry.get("collocations"), dict):
+                for _c_list in entry["collocations"].values():
+                    if isinstance(_c_list, list):
+                        for cc in _c_list:
+                            if isinstance(cc, dict) and cc.get("example"):
+                                cand_pool.append(str(cc["example"]).strip())
 
         # 3. For multiword units, check _unit_phrase_rows and _unit_blocks when not polysemously conflicting
         if is_multi and (not sense or is_monosemous_multi):
@@ -4339,7 +4525,11 @@ class ExtractionPipelineMixin:
 
         for cand_ex in cand_pool:
             if _is_valid_distinct(cand_ex):
-                return cand_ex.strip().strip('"“”')
+                c_ex_str = cand_ex.strip().strip('"“”')
+                if _is_full_sentence_example(c_ex_str):
+                    return c_ex_str
+                if not fallback_short_ex:
+                    fallback_short_ex = c_ex_str
 
         # 4. Search corpus examples in PedLex SQLite (only for monosemous words or monosemous dedicated multi-word units)
         if (not is_multi and is_monosemous) or (is_multi and (is_monosemous_multi or (not sense and not has_poly_block))):
@@ -4350,7 +4540,11 @@ class ExtractionPipelineMixin:
                 for sq in search_queries:
                     for ex in (cls.search_corpus_examples(sq, limit=15) or []):
                         if ex and _is_valid_distinct(str(ex).strip()):
-                            return str(ex).strip().strip('"“”')
+                            c_ex_str = str(ex).strip().strip('"“”')
+                            if _is_full_sentence_example(c_ex_str):
+                                return c_ex_str
+                            if not fallback_short_ex:
+                                fallback_short_ex = c_ex_str
             except Exception:
                 pass
 
@@ -4370,11 +4564,33 @@ class ExtractionPipelineMixin:
                                     continue
                                 ex_s = re.sub(r"\s*\((?:or|e\.g\.)\s+[^)]+\)", "", str(ex)).strip()
                                 if ex_s and _is_valid_distinct(ex_s):
-                                    return ex_s.strip().strip('"“”')
+                                    c_ex_str = ex_s.strip().strip('"“”')
+                                    if _is_full_sentence_example(c_ex_str):
+                                        return c_ex_str
+                                    if not fallback_short_ex:
+                                        fallback_short_ex = c_ex_str
+            except Exception:
+                pass
+        elif is_multi and is_monosemous_multi and u_key:
+            try:
+                wn = cls.get_wordnet()
+                if wn:
+                    synsets_m = list(wn.synsets(u_key.replace(" ", "_")) or [])
+                    for syn in synsets_m:
+                        for ex in (syn.examples() or []):
+                            if not ex:
+                                continue
+                            ex_s = re.sub(r"\s*\((?:or|e\.g\.)\s+[^)]+\)", "", str(ex)).strip()
+                            if ex_s and _is_valid_distinct(ex_s):
+                                c_ex_str = ex_s.strip().strip('"“”')
+                                if _is_full_sentence_example(c_ex_str):
+                                    return c_ex_str
+                                if not fallback_short_ex:
+                                    fallback_short_ex = c_ex_str
             except Exception:
                 pass
 
-        return ""
+        return fallback_short_ex or ""
 
     @classmethod
     def extract_deterministic_vocabulary(
@@ -4879,7 +5095,7 @@ class ExtractionPipelineMixin:
             results: List[Dict[str, Any]] = []
             seen_formulas: Set[str] = set()
             for s in skeletons:
-                if len(results) >= target_count and not s.get("_is_syllabus", False):
+                if len(results) >= target_count:
                     break
                 phrase = s.get("phrase", "")
                 formula = s.get("pattern_formula", phrase)
@@ -4939,7 +5155,7 @@ class ExtractionPipelineMixin:
                     is_verb_slot_frame = bool(re.search(r"[\[\(](?:sb|sth|oneself|one's)[\]\)]", formula, re.IGNORECASE))
                     if not has_attested_pool and def_source not in attested_sources and not is_verb_slot_frame:
                         continue
-                    if defn and not has_attested_pool:
+                    if defn and (not has_attested_pool or def_source in attested_sources):
                         norm_defn = re.sub(r'[^a-z0-9]+', ' ', defn.lower()).strip()
                         if not any(re.sub(r'[^a-z0-9]+', ' ', c.get("definition", "").lower()).strip() == norm_defn for c in pool):
                             pool.insert(0, {

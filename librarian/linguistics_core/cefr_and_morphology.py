@@ -815,6 +815,101 @@ class CefrAndMorphologyMixin:
                 cls._wn = wn
         return cls._wn
 
+    @staticmethod
+    def _normalize_bre_ame(word: str) -> str:
+        """Normalizes systematic British/American and classical orthographic alternations to a canonical form."""
+        w = (word or "").lower().strip()
+        if len(w) < 4:
+            return w
+        w = re.sub(r"^artefact", "artifact", w)
+        w = re.sub(r"^sceptic", "skeptic", w)
+        w = re.sub(r"^grey", "gray", w)
+        w = re.sub(r"^enquir", "inquir", w)
+        w = re.sub(r"^esthetic", "aesthetic", w)
+        w = re.sub(r"^archeolog", "archaeolog", w)
+        w = re.sub(r"^medieval", "mediaeval", w)
+        w = re.sub(r"^programmes\b", "programs", w)
+        w = re.sub(r"^programme\b", "program", w)
+        w = re.sub(r"([a-z])our(s|ed|ing|able|ite|ites|less|ful)?$", r"\1or\2", w)
+        w = re.sub(r"([a-z]{2,})is(e|es|ed|ing|ation|ations)$", r"\1iz\2", w)
+        w = re.sub(r"([a-z]{2,})ys(e|es|ed|ing)$", r"\1yz\2", w)
+        w = re.sub(r"([bcfglmnprstv])re(s)?$", r"\1er\2", w)
+        w = re.sub(r"([a-z]{2,})ogue(s)?$", r"\1og\2", w)
+        w = re.sub(r"([dfglprt])ence(s)?$", r"\1ense\2", w)
+        w = re.sub(r"([a-z])ll(ed|ing|er|ers|or|ors|ous)$", r"\1l\2", w)
+        return w
+
+    @staticmethod
+    def _edit_distance_le2(s1: str, s2: str) -> bool:
+        """Fast check for whether Levenshtein edit distance between s1 and s2 is <= 2."""
+        if s1 == s2:
+            return True
+        if abs(len(s1) - len(s2)) > 2:
+            return False
+        prev = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1, 1):
+            curr = [i]
+            min_row = i
+            for j, c2 in enumerate(s2, 1):
+                cost = 0 if c1 == c2 else 1
+                val = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+                curr.append(val)
+                if val < min_row:
+                    min_row = val
+            if min_row > 2:
+                return False
+            prev = curr
+        return prev[-1] <= 2
+
+    @classmethod
+    @lru_cache(maxsize=4096)
+    def are_spelling_variants(cls, w1: str, w2: str) -> bool:
+        """
+        Determines whether two words are regional (BrE <-> AmE) or orthographic spelling
+        variants of the exact same lexical item (e.g. artefact/artifact, colour/color,
+        analyse/analyze, sceptical/skeptical).
+        """
+        c1 = (w1 or "").lower().strip()
+        c2 = (w2 or "").lower().strip()
+        if not c1 or not c2:
+            return False
+        if c1 == c2:
+            return True
+        if cls._normalize_bre_ame(c1) == cls._normalize_bre_ame(c2):
+            return True
+
+        l1 = cls.lemma_of(c1) or c1
+        l2 = cls.lemma_of(c2) or c2
+        if l1 == l2 or cls._normalize_bre_ame(l1) == cls._normalize_bre_ame(l2):
+            return True
+
+        # Check PedLex entry variants / alias_of
+        try:
+            for probe_a, probe_b in ((l1, l2), (c1, c2)):
+                e1 = cls.get_ldoce_entry(probe_a)
+                if e1:
+                    vars1 = {str(v).lower().strip() for v in (e1.get("variants") or []) if v}
+                    if e1.get("alias_of"):
+                        vars1.add(str(e1["alias_of"]).lower().strip())
+                    if probe_b in vars1:
+                        return True
+        except Exception:
+            pass
+
+        # Check WordNet co-synset identity with orthographic proximity (edit distance <= 2)
+        if min(len(l1), len(l2)) >= 5 and cls._edit_distance_le2(l1, l2):
+            if l1[:2] == l2[:2] or {l1[:2], l2[:2]} in ({"ae", "es"}, {"ar", "ar"}, {"sc", "sk"}, {"en", "in"}, {"oe", "es"}):
+                try:
+                    wn = cls.get_wordnet()
+                    if wn:
+                        s1 = {ss.id for ss in wn.synsets(l1)}
+                        s2 = {ss.id for ss in wn.synsets(l2)}
+                        if s1 and (s1 & s2):
+                            return True
+                except Exception:
+                    pass
+        return False
+
     @classmethod
     @lru_cache(maxsize=4096)
     def get_word_family(cls, word: str) -> Set[str]:
@@ -823,28 +918,47 @@ class CefrAndMorphologyMixin:
         if not clean_w:
             return set()
         family = {clean_w}
+        probes = {clean_w}
+        # Include underlying verb/base lemma for participial (-ed/-ing) or inflected forms (e.g. moved/moving -> move)
+        if clean_w.endswith(("ed", "ing", "s")) and len(clean_w) >= 4:
+            lem = cls.lemma_of(clean_w)
+            base_cands = {lem} if lem else set()
+            if clean_w.endswith("ed") and len(clean_w) >= 4:
+                base_cands.update({clean_w[:-2], clean_w[:-1]})
+                if clean_w.endswith("ied") and len(clean_w) >= 5:
+                    base_cands.add(clean_w[:-3] + "y")
+            elif clean_w.endswith("ing") and len(clean_w) >= 5:
+                base_cands.update({clean_w[:-3], clean_w[:-3] + "e"})
+            for bc in base_cands:
+                if bc and bc != clean_w and len(bc) >= 3 and clean_w[:3] == bc[:3]:
+                    if bc == lem or ("v" in cls._wordnet_pos(bc)):
+                        family.add(bc)
+                        probes.add(bc)
         try:
             wn = cls.get_wordnet()
-            for s in wn.synsets(clean_w):
-                for sense in s.senses():
-                    if sense.word().lemma().lower() == clean_w:
-                        for rel in sense.get_related('derivation'):
-                            rel_w = rel.word().lemma().lower()
-                            if rel_w.isalpha() and '_' not in rel_w and ' ' not in rel_w:
-                                family.add(rel_w)
+            for p_w in list(probes):
+                for s in wn.synsets(p_w):
+                    for sense in s.senses():
+                        if sense.word().lemma().lower() == p_w:
+                            for rel in sense.get_related('derivation'):
+                                rel_w = rel.word().lemma().lower()
+                                if rel_w.isalpha() and '_' not in rel_w and ' ' not in rel_w:
+                                    family.add(rel_w)
         except Exception:
             pass
         return family
 
     @classmethod
     def are_same_word_family(cls, w1: str, w2: str) -> bool:
-        """Determines whether two words belong to the exact same morphological word family."""
+        """Determines whether two words belong to the exact same morphological word family or spelling variant set."""
         clean_w1 = w1.lower().strip()
         clean_w2 = w2.lower().strip()
         if clean_w1 == clean_w2:
             return True
         if not clean_w1 or not clean_w2:
             return False
+        if cls.are_spelling_variants(clean_w1, clean_w2):
+            return True
 
         fam1 = cls.get_word_family(clean_w1)
         if clean_w2 in fam1:
@@ -853,7 +967,7 @@ class CefrAndMorphologyMixin:
         if clean_w1 in fam2:
             return True
         if fam1 & fam2:
-            # Require shared morphological root prefix (>= 4 chars) on 2-hop WordNet links
+            # Require shared morphological root prefix (>= 4 chars, or >= 3 chars for -ed/-ing participial pairs like moved/moving)
             # to prevent transitive false positives across distinct roots (e.g. critic -> critical <- crisis)
             common_len = 0
             for c1, c2 in zip(clean_w1, clean_w2):
@@ -861,7 +975,11 @@ class CefrAndMorphologyMixin:
                     common_len += 1
                 else:
                     break
-            if common_len >= 4:
+            is_participial_pair = (
+                (clean_w1.endswith("ed") and clean_w2.endswith("ing"))
+                or (clean_w1.endswith("ing") and clean_w2.endswith("ed"))
+            )
+            if common_len >= 4 or (is_participial_pair and common_len >= 3):
                 return True
 
         # Morphological stem prefix fallback: if both words length >= 5 and share stem prefix
@@ -871,6 +989,37 @@ class CefrAndMorphologyMixin:
         # Handle silent -e drop before -ing / -ed / -ation (e.g. persevere -> persevering, motivate -> motivating)
         if len(min_w) >= 5 and min_w.endswith("e") and max_w.startswith(min_w[:-1]):
             return True
+        return False
+
+    @classmethod
+    def shares_derivational_root(cls, w1: str, w2: str) -> bool:
+        """
+        Checks whether w1 and w2 share a morphological or prefix-stripped derivational root
+        (e.g. 'unsolved' vs 'solve'/'solved'/'solving'/'solution', 'impossible' vs 'possible').
+        Used by Target Stem Leakage gates so a stem testing a prefixed word never leaks its base root.
+        """
+        c1 = (w1 or "").lower().strip()
+        c2 = (w2 or "").lower().strip()
+        if not c1 or not c2:
+            return False
+        if cls.are_same_word_family(c1, c2):
+            return True
+        _prefixes = ("un", "in", "im", "ir", "il", "dis", "non", "mis", "re", "over", "under", "out", "pre", "post", "sub", "inter", "counter", "de")
+        variants_1 = {c1}
+        variants_2 = {c2}
+        for p in _prefixes:
+            if c1.startswith(p) and len(c1) - len(p) >= 4:
+                variants_1.add(c1[len(p):])
+            if c2.startswith(p) and len(c2) - len(p) >= 4:
+                variants_2.add(c2[len(p):])
+        for v1 in variants_1:
+            for v2 in variants_2:
+                if v1 == v2 or cls.are_same_word_family(v1, v2):
+                    return True
+                s1 = re.sub(r"(?:ed|ing|s|es|ly|tion|ment|able|ible|ive|al)$", "", v1)
+                s2 = re.sub(r"(?:ed|ing|s|es|ly|tion|ment|able|ible|ive|al)$", "", v2)
+                if len(s1) >= 4 and s1 == s2:
+                    return True
         return False
 
     # ------------------------------------------------------------------
@@ -1039,20 +1188,29 @@ class CefrAndMorphologyMixin:
         "grind": ("ground", "ground", "grinding", "grinds"),
     }
 
+    _wordnet_pos_cache: Dict[str, Set[str]] = {}
+
     @classmethod
     def _wordnet_pos(cls, word: str) -> Set[str]:
         """Part-of-speech letters WordNet actually records for this lemma form ('n','v','a','s','r')."""
+        w_key = (word or "").strip().lower()
+        if not w_key:
+            return set()
+        cached = cls._wordnet_pos_cache.get(w_key)
+        if cached is not None:
+            return cached
         wn = cls.get_wordnet()
         if not wn:
             return set()
         out: Set[str] = set()
         try:
-            for ss in wn.synsets((word or "").strip().lower()):
+            for ss in wn.synsets(w_key):
                 pos = getattr(ss, "pos", None)
                 if pos:
                     out.add(pos)
         except Exception:
             pass
+        cls._wordnet_pos_cache[w_key] = out
         return out
 
     @classmethod
@@ -1243,16 +1401,8 @@ class CefrAndMorphologyMixin:
     )
 
     @classmethod
-    def _analyse_word_form(cls, word: Optional[str]) -> Tuple[Optional[str], str]:
-        """
-        Reads spaCy's Penn tag and lemma for a single word form.
-
-        A bare '-ed' token is routinely tagged as an adjective ('annoyed', 'irritated'), which
-        made both the lemma and the verb-form tag unusable. The word is therefore re-read inside
-        minimal form-carrier frames that force a verbal parse, and the verbal reading wins.
-        Returns (penn_tag_or_None, lemma).
-        """
-        w = (word or "").strip().lower()
+    @lru_cache(maxsize=32768)
+    def _analyse_word_form_cached(cls, w: str) -> Tuple[Optional[str], str]:
         if not w or len(w.split()) > 3:
             return (None, w)
         nlp = cls.get_spacy()
@@ -1269,11 +1419,11 @@ class CefrAndMorphologyMixin:
             pass
         if bare_tag:
             return (bare_tag, bare_lemma)
-        # The bare token was not read as a verb. spaCy tags a lone '-ed' form as an adjective
-        # ('annoyed', 'irritated') and then reports the surface form as its own lemma, which
-        # leaves the inflection unusable; carrier frames are consulted only for that failure.
-        # A bare parse that already de-inflected ('children' -> 'child') is left untouched.
         if bare_lemma != w:
+            return (None, bare_lemma)
+        # Only consult the 5 verbal carrier frames when `w` has a plausible verbal inflection suffix
+        # ('-ed', '-ing', '-s', '-en') or is a short word that could be an irregular verb form.
+        if not (w.endswith(("ed", "ing", "s", "en")) or len(w) <= 6):
             return (None, bare_lemma)
         for frame in cls._LEMMA_CARRIERS[1:]:
             text = frame.format(w=w)
@@ -1285,6 +1435,19 @@ class CefrAndMorphologyMixin:
             if tok is not None and tok.pos_ == "VERB":
                 return (tok.tag_, (tok.lemma_ or w).lower())
         return (None, bare_lemma)
+
+    @classmethod
+    def _analyse_word_form(cls, word: Optional[str]) -> Tuple[Optional[str], str]:
+        """
+        Reads spaCy's Penn tag and lemma for a single word form.
+
+        A bare '-ed' token is routinely tagged as an adjective ('annoyed', 'irritated'), which
+        made both the lemma and the verb-form tag unusable. The word is therefore re-read inside
+        minimal form-carrier frames that force a verbal parse, and the verbal reading wins.
+        Returns (penn_tag_or_None, lemma).
+        """
+        w = (word or "").strip().lower()
+        return cls._analyse_word_form_cached(w)
 
     @classmethod
     def verb_form_tag_of(cls, word: Optional[str]) -> Optional[str]:
@@ -3094,14 +3257,6 @@ class CefrAndMorphologyMixin:
         if contextual_pos in ("adjective", "adverb", "preposition", "conjunction"):
             prefix = "adj" if contextual_pos == "adjective" else ("adv" if contextual_pos == "adverb" else contextual_pos[:4])
             has_pos = not ld_poses or any(prefix in p for p in ld_poses)
-            if not has_pos and contextual_pos == "adjective" and quote:
-                # Also check surface participle in quote (e.g. 'annoyed' for base word 'annoy')
-                for tok in re.findall(r"\b[a-z]+\b", quote.lower()):
-                    if tok.startswith(w_clean) and tok in (w_clean + "ed", w_clean + "d", w_clean + "ing"):
-                        tok_entry = cls.get_ldoce_entry(tok)
-                        if tok_entry and any(prefix in p for p in [tok_entry.get("pos", "")] + tok_entry.get("all_poses", [])):
-                            has_pos = True
-                            break
             if has_pos:
                 return contextual_pos
 

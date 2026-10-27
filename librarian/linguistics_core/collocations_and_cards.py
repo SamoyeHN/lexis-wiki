@@ -458,11 +458,14 @@ class CollocationsAndCardsMixin:
             raw = item or ""
             text = re.sub(r"\([^)]*\)?", " ", raw)
             text = re.sub(r"[][()]", " ", text)
-            if "(" in raw or ")" in raw:
-                text = re.sub(r"\s*\b(?:American|British|Australian|Canadian|North American)"
-                              r"\s+English\b", " ", text)
+            text = re.sub(
+                r"\s*\b(?:(?:especially|mainly|chiefly|mostly|usually)\s+)?(?:American|British|Australian|Canadian|North American|Scottish|Irish)\s+English\b[,;:\.]*",
+                " ",
+                text,
+                flags=re.IGNORECASE,
+            )
             text = re.sub(r"\s*\betc\.?\b", " ", text.strip(), flags=re.IGNORECASE)
-            text = re.sub(r"\s+", " ", text).strip()
+            text = re.sub(r"\s+", " ", text).strip(" ,;:")
             if "..." in text:
                 ex = box_examples.get(raw.strip().lower(), "")
                 if ex:
@@ -1278,11 +1281,11 @@ class CollocationsAndCardsMixin:
             s = re.sub(r"\bsth\b", "something", s)
             s = re.sub(r"\bsb\b", "somebody", s)
             s = re.sub(
-                r"\s+(?:(?:especially|mainly|chiefly|mostly)\s+)?(?:British|American|Australian)\s+English$",
+                r"\s*\b(?:(?:especially|mainly|chiefly|mostly|usually)\s+)?(?:British|American|Australian|Canadian|North American|Scottish|Irish)\s+English\b[,;:\.]*",
                 "",
                 s,
                 flags=re.IGNORECASE,
-            ).strip()
+            ).strip(" ,;:")
             return s
 
         # 1. Grammar Tag (<gram> tags for inline header) & Pattern Note (key pattern + grammar_boxes rule)
@@ -1292,7 +1295,7 @@ class CollocationsAndCardsMixin:
             raw_gram = str(locked_sense.get("grammar") or "").strip()
             if raw_gram and raw_gram.strip("[]` ").lower() not in ("noun", "verb", "adjective", "adverb", "preposition", "conjunction", "interjection"):
                 gram_tag_str = raw_gram.strip("`").strip()
-            if p_code == "a" and "not before noun" in gram_tag_str.lower():
+            if p_code in ("a", "adj") and "not before noun" in gram_tag_str.lower():
                 att_texts = [quote] if quote else []
                 att_texts.extend(str(ex) for ex in (locked_sense.get("examples") or [])[:3] if ex)
                 has_attr_use = False
@@ -1304,6 +1307,18 @@ class CollocationsAndCardsMixin:
                         break
                 if has_attr_use:
                     gram_tag_str = re.sub(r"\[?\bnot before noun\b\]?", "", gram_tag_str, flags=re.IGNORECASE).strip(" ,;[]")
+            elif p_code in ("a", "adj") and "only before noun" in gram_tag_str.lower() and quote:
+                nlp_inst = cls.get_spacy()
+                qdoc = nlp_inst(quote)
+                has_pred_use = any(
+                    t.lower_ == w_clean and (
+                        t.dep_ in ("acomp", "oprd")
+                        or (t.head != t and t.head.lemma_.lower() in ("be", "become", "seem", "feel", "get", "remain", "stay", "grow", "turn", "appear", "look", "sound") and t.dep_ != "amod")
+                    )
+                    for t in qdoc
+                )
+                if has_pred_use:
+                    gram_tag_str = re.sub(r"\bonly before noun\b", "usually before noun", gram_tag_str, flags=re.IGNORECASE)
             raw_pats_and_units = list(dict.fromkeys(
                 list(locked_sense.get("syntactic_patterns") or locked_sense.get("patterns") or [])
                 + [
@@ -1356,16 +1371,40 @@ class CollocationsAndCardsMixin:
         locked_homograph = locked_sense.get("homograph_num") if locked_sense else None
         locked_def_kws: Set[str] = set()
         other_sense_kws: Set[str] = set()
+        _colloc_stop = {
+            "with", "from", "into", "over", "under", "more", "most", "very", "some", "such",
+            "that", "this", "what", "when", "where", "which", "while", "able", "used", "make",
+            "made", "have", "much", "many", "something", "somebody", "someone", "particular",
+            "especially", "usually", "often", "always", "never", "other", "another", "between",
+            "through", "without", "within", "before", "after", "about", "because", "though",
+        }
         if locked_sense and len(senses) > 1:
-            l_def_str = str(definition or cls.format_ldoce_definition(locked_sense) or "").lower()
-            locked_def_kws = {w for w in re.findall(r"[a-z]{4,}", l_def_str) if w != w_clean}
+            l_signpost = str(locked_sense.get("signpost") or "")
+            l_syns = " ".join(str(x) for x in (locked_sense.get("synonyms") or []))
+            l_exs = " ".join(str(x) for x in (locked_sense.get("examples") or [])[:4])
+            l_units = " ".join(str(x) for x in (locked_sense.get("units") or []) + (locked_sense.get("patterns") or []) + (locked_sense.get("collocations") or []))
+            l_def_str = f"{l_signpost} {l_syns} {definition or cls.format_ldoce_definition(locked_sense) or ''} {l_exs} {l_units}".lower()
+            for lw in re.findall(r"[a-z]{4,}", l_def_str):
+                if lw != w_clean and lw not in _colloc_stop and not cls.form_matches(lw, w_clean):
+                    locked_def_kws.add(lw)
+                    lw_lem = cls._surface_lemma(lw)
+                    if lw_lem and lw_lem not in _colloc_stop:
+                        locked_def_kws.add(lw_lem)
             for s_other in senses:
                 if s_other is locked_sense:
                     continue
-                o_def_str = str(cls.format_ldoce_definition(s_other) or "").lower()
+                o_signpost = str(s_other.get("signpost") or "")
+                o_syns = " ".join(str(x) for x in (s_other.get("synonyms") or []))
+                o_exs = " ".join(str(x) for x in (s_other.get("examples") or [])[:4])
+                o_units = " ".join(str(x) for x in (s_other.get("units") or []) + (s_other.get("patterns") or []) + (s_other.get("collocations") or []))
+                o_def_str = f"{o_signpost} {o_syns} {cls.format_ldoce_definition(s_other) or ''} {o_exs} {o_units}".lower()
                 for ow in re.findall(r"[a-z]{4,}", o_def_str):
-                    if ow != w_clean and ow not in locked_def_kws:
-                        other_sense_kws.add(ow)
+                    if ow != w_clean and ow not in _colloc_stop and not cls.form_matches(ow, w_clean):
+                        ow_lem = cls._surface_lemma(ow) or ow
+                        if ow not in locked_def_kws and ow_lem not in locked_def_kws:
+                            other_sense_kws.add(ow)
+                            if ow_lem not in _colloc_stop:
+                                other_sense_kws.add(ow_lem)
 
         entry_p_code = cls._pos_code(entry.get("pos"))
         all_poses = [cls._pos_code(p) for p in (entry.get("all_poses") or []) if cls._pos_code(p)]
@@ -1389,14 +1428,17 @@ class CollocationsAndCardsMixin:
                     return False
             return True
 
-        def _add_colloc(cand_str: str, check_cross_sense: bool = False) -> None:
+        def _add_colloc(cand_str: str, check_cross_sense: bool = False, extra_context: str = "", require_sense_overlap: bool = False) -> None:
             c_s = _clean_pattern_text(cand_str)
             if not c_s or " " not in c_s or "..." in c_s:
                 return
             c_low = c_s.lower()
             if c_low == w_clean or c_low in (f"the {w_clean}", f"a {w_clean}", f"an {w_clean}"):
                 return
-            if p_code == "v" and re.search(rf"\b(?:a|an|the|to a|under|out of|in|beyond|within|without)\s+{re.escape(w_clean)}\b", c_low):
+            if p_code == "v" and (
+                re.search(rf"\b(?:a|an|the|to a|under|out of|in|beyond|within|without)\s+{re.escape(w_clean)}\b", c_low)
+                or re.match(r"^(?:a|an|the)\s+[a-z]+(?:ing|ed)\b", c_low)
+            ):
                 return
             c_words = c_low.split()
             if p_code == "n" and len(c_words) == 2 and c_words[1] == w_clean and re.match(r"^[a-z]+ing$", c_words[0]):
@@ -1412,11 +1454,18 @@ class CollocationsAndCardsMixin:
             if is_multi_pos and p_code == "v" and "n" in all_poses and c_words and c_words[0] == w_clean:
                 if len(c_words) >= 2 and c_words[1] in noun_only_preps:
                     return
-            if check_cross_sense and (other_sense_kws or (len(senses) > 1 and t_s_idx is not None and t_s_idx > 0)):
-                c_toks = {w for w in re.findall(r"[a-z]{4,}", c_low) if w != w_clean and not cls.form_matches(w, w_clean)}
-                if c_toks & other_sense_kws and not (c_toks & locked_def_kws):
+            if check_cross_sense and (other_sense_kws or (len(senses) > 1 and t_s_idx is not None)):
+                c_toks: Set[str] = set()
+                probe_low = f"{c_low} {extra_context.lower()}" if extra_context else c_low
+                for cw in re.findall(r"[a-z]{4,}", probe_low):
+                    if cw != w_clean and cw not in _colloc_stop and not cls.form_matches(cw, w_clean):
+                        c_toks.add(cw)
+                        cw_lem = cls._surface_lemma(cw)
+                        if cw_lem and cw_lem not in _colloc_stop:
+                            c_toks.add(cw_lem)
+                if c_toks & other_sense_kws and len(c_toks & other_sense_kws) >= len(c_toks & locked_def_kws):
                     return
-                if len(senses) > 1 and t_s_idx is not None and t_s_idx > 0 and not (c_toks & locked_def_kws):
+                if len(senses) > 1 and t_s_idx is not None and (require_sense_overlap or (t_s_idx > 0 and (c_toks & other_sense_kws))) and not (c_toks & locked_def_kws):
                     return
             for idx_e, ex_item in enumerate(colloc_items):
                 ex_low = ex_item.lower()
@@ -1501,16 +1550,21 @@ class CollocationsAndCardsMixin:
 
         # Tier D: Entry-level fixed phrases & cross-referenced dictionary collocations (when单POS or needed)
         is_ed_adj = (p_code == "adj" and w_clean.endswith("ed"))
-        if len(colloc_items) < 5 and colloc_box_pos_ok and not is_ed_adj:
+        allow_unindexed_tier_d = (len(senses) <= 1 or len(colloc_items) == 0)
+        if len(colloc_items) < 5 and colloc_box_pos_ok and not is_ed_adj and allow_unindexed_tier_d:
             for ph_obj in (entry.get("phrases") or []):
                 ph_str = ph_obj.get("phrase") or ph_obj.get("title") if isinstance(ph_obj, dict) else str(ph_obj or "")
-                _add_colloc(str(ph_str or ""), check_cross_sense=True)
+                ph_ctx = ""
+                if isinstance(ph_obj, dict):
+                    ph_ctx = f"{ph_obj.get('resolved_definition') or ''} {' '.join(str(x) for x in (ph_obj.get('examples') or [])[:2])}"
+                _add_colloc(str(ph_str or ""), check_cross_sense=True, extra_context=ph_ctx, require_sense_overlap=(len(senses) > 1))
                 if len(colloc_items) >= 5:
                     break
-        if len(colloc_items) < 5 and not is_multi_pos and not is_ed_adj:
+        if len(colloc_items) < 5 and not is_multi_pos and not is_ed_adj and allow_unindexed_tier_d:
             for cr_obj in (entry.get("cross_collocations") or []):
                 if isinstance(cr_obj, dict):
-                    _add_colloc(str(cr_obj.get("collocation") or ""), check_cross_sense=True)
+                    cr_ctx = f"{cr_obj.get('gloss') or ''} {cr_obj.get('example') or ''}"
+                    _add_colloc(str(cr_obj.get("collocation") or ""), check_cross_sense=True, extra_context=cr_ctx)
                     if len(colloc_items) >= 5:
                         break
 
@@ -1548,6 +1602,40 @@ class CollocationsAndCardsMixin:
                 return True
 
             locked_def = (definition or (cls.format_ldoce_definition(locked_sense) if locked_sense else "")).strip()
+            # When thesaurus contains multiple section_index clusters (e.g. 'save' vs 'spend' under economize),
+            # isolate the single section whose polarity and concept align with the locked sense.
+            pos_matched_thes = [t for t in thes_list if _thes_item_matches_pos(t)]
+            sec_indices = sorted({int(t.get("section_index", 0) or 0) for t in pos_matched_thes})
+            if len(sec_indices) > 1:
+                _downward_mods = {"less", "fewer", "reduce", "reducing", "save", "saving", "not", "never", "avoid", "stop", "without"}
+                best_sec_idx = sec_indices[0]
+                best_sec_score = -999.0
+                for _sec_i in sec_indices:
+                    _sec_items = [t for t in pos_matched_thes if int(t.get("section_index", 0) or 0) == _sec_i]
+                    if not _sec_items:
+                        continue
+                    _sec_head = str(_sec_items[0].get("section_headword") or "").strip().lower()
+                    _sec_concept = str(_sec_items[0].get("concept") or "").strip().lower()
+                    _sec_self = next((t for t in _sec_items if cls._thesaurus_variant_matches(t.get("word"), w_clean)), None)
+                    _sec_score = 0.15 if _sec_i == 0 else 0.0
+                    if cls._thesaurus_variant_matches(_sec_head, w_clean):
+                        _sec_score += 2.0
+                    if _sec_self and locked_def:
+                        _s_dist = re.sub(r"^[:\s]+", "", str(_sec_self.get("distinction") or "")).strip()
+                        _sec_score += cls._definition_overlap_ratio(_s_dist, locked_def)
+                        # Detect contrastive/opposite inclusion (e.g. 'economize: to spend less money' inside 'spend' section)
+                        _s_dist_toks = set(re.findall(r"\b[a-z]+\b", _s_dist.lower()))
+                        _concept_body = _sec_concept.split(":", 1)[-1] if ":" in _sec_concept else _sec_concept
+                        _concept_toks = set(re.findall(r"\b[a-z]+\b", _concept_body))
+                        if _sec_head and _sec_head in _s_dist_toks and (_s_dist_toks & _downward_mods) and not (_concept_toks & _downward_mods):
+                            _sec_score -= 2.0
+                    if _sec_concept and locked_def:
+                        _sec_score += 0.5 * cls._definition_overlap_ratio(_sec_concept, locked_def)
+                    if _sec_score > best_sec_score:
+                        best_sec_score = _sec_score
+                        best_sec_idx = _sec_i
+                thes_list = [t for t in thes_list if int(t.get("section_index", 0) or 0) == best_sec_idx]
+
             self_indices = [
                 idx_t for idx_t, t in enumerate(thes_list)
                 if cls._thesaurus_variant_matches(t.get("word"), w_clean) and _thes_item_matches_pos(t)

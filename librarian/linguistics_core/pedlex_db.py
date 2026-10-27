@@ -914,9 +914,13 @@ class PedlexDbMixin:
     # Strongest first. 'phrasal_verb' is PedLex declaring a phrasal verb; 'phrase' is its
     # PHRASES block; 'pattern' is a grammar pattern built on the headword; 'collocation' is
     # a COLLOCATIONS box item; 'example' is a sentence that merely contains the string.
-    _PHRASE_TIERS = ("phrasal_verb", "phrase", "pattern", "collocation",
-                     "cross_collocation", "example")
-    _PHRASE_STRONG_TIERS = frozenset({"phrasal_verb", "phrase", "pattern", "collocation"})
+    _PHRASE_TIERS = (
+        "phrasal_verb", "phrase", "phrase_row", "pattern", "sense_unit",
+        "collocation", "colloc_phrase", "cross_collocation", "crossref_phrase", "example"
+    )
+    _PHRASE_STRONG_TIERS = frozenset({
+        "phrasal_verb", "phrase", "phrase_row", "pattern", "sense_unit", "collocation", "colloc_phrase"
+    })
 
     @classmethod
     def _entry_text_normalizer(cls, text: Any) -> str:
@@ -1174,6 +1178,8 @@ class PedlexDbMixin:
         seen: Set[str] = set()
         return [c for c in cands if c and not (c in seen or seen.add(c))]
 
+    _phrase_hits_cache: Dict[Tuple[str, str, bool], List[Tuple[str, str]]] = {}
+
     @classmethod
     def ldoce_phrase_hits(
         cls,
@@ -1184,8 +1190,17 @@ class PedlexDbMixin:
         """The (tier, evidence text) pairs that license `phrase`; empty means nothing does.
         Kept apart from ldoce_phrase_evidence because the object-fit audit in
         mine_expression_skeletons needs the sentence the pairing was found in, not a yes/no."""
+        cache_key = (
+            (phrase or "").strip().lower(),
+            (headword or "").strip().lower(),
+            bool(include_examples),
+        )
+        cached = cls._phrase_hits_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
         tokens = cls._phrase_tokens(phrase)
         if len(tokens) < 2:
+            cls._phrase_hits_cache[cache_key] = []
             return []
         # PedLex's declared units *and* its grammar patterns both write the object inside
         # the frame - 'remind somebody of', 'take something into consideration', 'saturate
@@ -1225,6 +1240,7 @@ class PedlexDbMixin:
                             continue
                     hits.append((tier, text))
                     break
+        cls._phrase_hits_cache[cache_key] = list(hits)
         return hits
 
     @classmethod
@@ -1978,6 +1994,8 @@ class PedlexDbMixin:
         cls._oxford_thesaurus_cache[w_clean] = out
         return out
 
+    _pedlex_ox_syn_ant_cache: Dict[Tuple[str, str, str, str], Tuple[FrozenSet[str], Tuple[str, ...]]] = {}
+
     @classmethod
     def get_pedlex_and_oxford_synonyms_antonyms(
         cls,
@@ -2014,6 +2032,13 @@ class PedlexDbMixin:
             norm_pos = "adjective"
         elif norm_pos.startswith("adv") or norm_pos == "r":
             norm_pos = "adverb"
+
+        def_key = re.sub(r"^\[.*?\]\s*", "", str(definition or "").strip().lower())
+        quote_key = str(quote or "").strip().lower()[:120]
+        cache_key = (w_clean, norm_pos, def_key, quote_key)
+        cached_sa = cls._pedlex_ox_syn_ant_cache.get(cache_key)
+        if cached_sa is not None:
+            return set(cached_sa[0]), list(cached_sa[1])
 
         def _clean_term(raw_t: str) -> str:
             t = re.sub(r"\[.*?\]|\(.*?\)", "", str(raw_t or "")).strip().lower()
@@ -2068,6 +2093,7 @@ class PedlexDbMixin:
                 matched_sense_syns.add(def_low)
 
             any_sense_matched_def = False
+            unmatched_opps: Set[str] = set()
             for s in entry.get("senses", []):
                 s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
                 is_matched_sense = bool(def_low and (s_def == def_low or def_low in s_def or s_def in def_low))
@@ -2088,6 +2114,10 @@ class PedlexDbMixin:
                 for opp in ([raw_opps] if isinstance(raw_opps, str) else raw_opps):
                     if is_matched_sense or not def_low:
                         _add_ant(opp)
+                    else:
+                        ct_opp = _clean_term(opp)
+                        if ct_opp:
+                            unmatched_opps.add(ct_opp)
             # Second pass for any remaining opposites on the entry ONLY when no specific sense matched def_low
             if not any_sense_matched_def:
                 for s in entry.get("senses", []):
@@ -2095,9 +2125,26 @@ class PedlexDbMixin:
                     for opp in ([raw_opps] if isinstance(raw_opps, str) else raw_opps):
                         _add_ant(opp)
 
+            thes_sections: Dict[Any, List[Dict[str, Any]]] = {}
             for th in entry.get("thesaurus", []):
                 if isinstance(th, dict) and th.get("word"):
                     _add_syn(th["word"])
+                    sec_k = th.get("section_index", 0)
+                    thes_sections.setdefault(sec_k, []).append(th)
+            if def_tokens and thes_sections:
+                for _sec_k, sec_items in thes_sections.items():
+                    self_dists = [
+                        str(it.get("distinction", "")).lower()
+                        for it in sec_items
+                        if _clean_term(it.get("word", "")) in (w_clean, w_lemma)
+                    ]
+                    if len(thes_sections) == 1 or any(
+                        set(re.findall(r"[a-z]{3,}", sd)) & def_tokens for sd in self_dists
+                    ):
+                        for it in sec_items:
+                            ct_th = _clean_term(it.get("word", ""))
+                            if ct_th and ct_th not in (w_clean, w_lemma):
+                                matched_sense_syns.add(ct_th)
 
             for la in entry.get("language_activator", []):
                 if isinstance(la, dict):
@@ -2129,7 +2176,15 @@ class PedlexDbMixin:
             scored_senses = []
             for idx, s_blk in enumerate(senses):
                 core_syns = [_clean_term(x) for x in (s_blk.get("core_synonyms") or []) if _clean_term(x)]
-                all_syns = [_clean_term(x) for x in (s_blk.get("synonyms") or []) if _clean_term(x)]
+                reg_syns_map = s_blk.get("register_synonyms") or {}
+                reg_syns_flat = [
+                    _clean_term(x)
+                    for r_list in (reg_syns_map.values() if isinstance(reg_syns_map, dict) else [])
+                    for x in (r_list if isinstance(r_list, list) else [])
+                    if _clean_term(x)
+                ]
+                all_syns = [_clean_term(x) for x in (s_blk.get("synonyms") or []) if _clean_term(x)] + reg_syns_flat
+                s_ants = {_clean_term(x) for x in (s_blk.get("antonyms") or []) if _clean_term(x)}
                 ex_str = str(s_blk.get("example", "")).lower()
                 score = 0
                 if len(senses) == 1:
@@ -2141,6 +2196,8 @@ class PedlexDbMixin:
                     ex_tokens = set(re.findall(r"[a-z]{3,}", ex_str))
                     overlap_ex = len((def_lemmas | quote_tokens) & ex_tokens)
                     score += overlap_def * 4 + overlap_existing * 3 + overlap_ex * 2
+                    if any_sense_matched_def and unmatched_opps and (s_ants & unmatched_opps):
+                        score -= 5
                     if idx == 0:
                         score += 1
                 scored_senses.append((score, idx, s_blk, all_syns, core_syns))
@@ -2166,11 +2223,12 @@ class PedlexDbMixin:
                     for ant_w in (s_blk.get("antonyms") or []):
                         _add_ant(ant_w)
 
-            # 1-hop Core Synonym Antonym Resolution:
+            # 1-hop Core Synonym Antonym Resolution (disabled for verbs because action/injury verbs
+            # like 'scar' -> 'blemish' hop into appearance-verb antonyms like 'beautify'/'embellish'):
             # In Oxford Thesaurus, specialized headwords (e.g. 'autonomy', 'precision', 'polar', 'compulsion')
             # often point to a core/immediate synonym ('independence', 'exactness', 'opposite', 'coercion') where the
             # reciprocal antonym block ('dependence', 'inaccuracy', 'identical', 'persuasion') is stored.
-            if not antonyms and scored_senses:
+            if not antonyms and scored_senses and norm_pos != "verb":
                 top_s_blk = scored_senses[0][2]
                 top_syns = {_clean_term(x) for x in (top_s_blk.get("synonyms") or []) if _clean_term(x)}
                 hop_candidates: List[str] = []
@@ -2220,6 +2278,7 @@ class PedlexDbMixin:
 
         # Antonyms take precedence: never classify an attested antonym as a synonym
         synonyms -= seen_ant
+        cls._pedlex_ox_syn_ant_cache[cache_key] = (frozenset(synonyms), tuple(antonyms))
         return synonyms, antonyms
 
     # ------------------------------------------------------------------

@@ -481,8 +481,8 @@ class ExtractionRunnerMixin:
                             cleaned_syllabus_vocab.append(w_clean)
 
                     effective_vocab_count = (
-                        max(len(cleaned_syllabus_vocab), (v_count + e_count) - len(e_items_list))
-                        if len(e_items_list) > e_count
+                        max(target_vocab_count, (v_count + e_count) - len(e_items_list))
+                        if run_expressions
                         else target_vocab_count
                     )
                     vocab_exclude_words = (held_back_atoms | shipped_atoms) - set(cleaned_syllabus_vocab)

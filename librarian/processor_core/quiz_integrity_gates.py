@@ -168,6 +168,27 @@ class QuizIntegrityGatesMixin:
                             if hasattr(q, "question"): setattr(q, "question", stem)
                             elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
 
+                # Auto-heal redundant catenative 'promised/agreed/decided/sought/refused to ____' before past-tense '-ed' verb options
+                # (e.g. 'The minister promised to ____ that...' + [denied, assured, affirmed, testified] -> 'The minister ____ that...')
+                if options and len(options) == 4 and all(
+                    str(opt).strip().lower().endswith("ed") and " " not in str(opt).strip()
+                    for opt in options if str(opt).strip()
+                ):
+                    healed_vbd_stem = re.sub(
+                        r"\b(?:promised|agreed|decided|chose|sought|tended|seemed|appeared|managed|attempted|tried|refused|claimed|offered|hoped|wanted)\s+to\s+(_{2,}\b)",
+                        r"\1",
+                        stem,
+                        flags=re.IGNORECASE,
+                    )
+                    if healed_vbd_stem != stem:
+                        stem = healed_vbd_stem
+                        if isinstance(q, dict):
+                            if "question" in q: q["question"] = stem
+                            elif "translated_sentence" in q: q["translated_sentence"] = stem
+                        elif dataclasses.is_dataclass(q):
+                            if hasattr(q, "question"): setattr(q, "question", stem)
+                            elif hasattr(q, "translated_sentence"): setattr(q, "translated_sentence", stem)
+
                 blank_matches = re.findall(r'_{2,}', stem)
                 if len(blank_matches) > 1:
                     flagged_indices.add(idx)
@@ -180,7 +201,7 @@ class QuizIntegrityGatesMixin:
                         f"Item #{idx + 1} ('{target}'): Missing blank '____' in stem."
                     )
 
-                # Flag any remaining target leak (verbatim or inflectional root) in the stem outside the blank
+                # Flag any remaining target leak (verbatim, inflectional root, or prefix-stripped derivational root) in the stem outside the blank
                 if target:
                     esc_target = re.escape(target)
                     stem_no_blank = re.sub(r'_{2,}', ' ', stem)
@@ -188,7 +209,9 @@ class QuizIntegrityGatesMixin:
                     target_root = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target.lower())
                     leaked_in_stem = [
                         w for w in stem_words
-                        if w.lower() == target.lower() or (len(target_root) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_root)
+                        if w.lower() == target.lower()
+                        or (len(target_root) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_root)
+                        or (" " not in target and len(w) >= 4 and LinguisticEngine.shares_derivational_root(w.lower(), target.lower()))
                     ]
                     if leaked_in_stem:
                         flagged_indices.add(idx)

@@ -870,9 +870,11 @@ class QuizGeneratorMixin:
                     prescribed_opts = s.get("prescribed_options", [])
                     blueprint_specs.append({
                         "target_word": s.get("target_word"),
+                        "base_headword": s.get("base_headword"),
                         "definition": s.get("definition"),
                         "options": list(prescribed_opts) if prescribed_opts else None,
                         "correct_answer_index": s.get("correct_answer_index", 0) if prescribed_opts else None,
+                        "micro_task": s.get("micro_task", ""),
                     })
                     opts_str = ", ".join(prescribed_opts)
                     micro_task_str = s.get("micro_task", "")
@@ -892,6 +894,18 @@ class QuizGeneratorMixin:
                     f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n\n"
                     + "\n\n".join(skeleton_bullets)
                 )
+
+            if blueprint_specs:
+                selected_targets: List[str] = []
+                seen_targets_low: set = set()
+                for s_item in blueprint_specs:
+                    for k_name in ("target_word", "base_headword"):
+                        val = str(s_item.get(k_name) or "").strip()
+                        if val and val.lower() not in seen_targets_low:
+                            seen_targets_low.add(val.lower())
+                            selected_targets.append(val)
+                if selected_targets:
+                    unit_headwords = selected_targets
 
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
@@ -1202,7 +1216,27 @@ class QuizGeneratorMixin:
                             if q_i >= len(blueprint_specs):
                                 break
                             spec = blueprint_specs[q_i]
-                            if isinstance(q_item, dict):
+                            is_dict = isinstance(q_item, dict)
+                            stem_str = str(q_item.get("question") if is_dict else getattr(q_item, "question", "") or "")
+                            micro_task_rule = str(spec.get("micro_task") or "")
+                            m_bound_prep = re.search(r"____\s+([a-z]{2,10})\b", micro_task_rule)
+                            if m_bound_prep and "____" in stem_str:
+                                req_prep = m_bound_prep.group(1).lower()
+                                if not re.search(rf"____\s+{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE):
+                                    m_after = re.search(r"____\s+([A-Za-z]+)\b", stem_str)
+                                    after_tok = m_after.group(1).lower() if m_after else ""
+                                    _other_preps = {
+                                        "in", "on", "at", "to", "for", "from", "with", "by", "of",
+                                        "into", "onto", "upon", "about", "against", "under", "over",
+                                        "through", "between", "among", "as", "towards", "toward",
+                                    }
+                                    if after_tok and after_tok not in _other_preps:
+                                        stem_str = re.sub(r"____", f"____ {req_prep}", stem_str, count=1)
+                                        if is_dict:
+                                            q_item["question"] = stem_str
+                                        else:
+                                            setattr(q_item, "question", stem_str)
+                            if is_dict:
                                 if spec.get("target_word"):
                                     q_item["target_word"] = spec["target_word"]
                                 if spec.get("definition"):

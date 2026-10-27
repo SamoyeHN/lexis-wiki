@@ -111,9 +111,9 @@ MODEL_CAPABILITY_PROFILES = [
         "think": False,
     },
     {
-        # Tokenizer-constrained or large-vocab families (Nemotron, Phi, Qwen): Prompt-guided JSON mode
-        # Eliminates CPU-bound GBNF token-masking bottlenecks across large tokenizers (131k/248k) while maintaining 100% schema fidelity
-        "match": ["nemotron", "phi", "qwen"],
+        # Tokenizer-constrained or large-vocab families (Nemotron, Phi, Qwen, GPT-OSS): Prompt-guided JSON mode
+        # Eliminates CPU-bound GBNF token-masking bottlenecks across large tokenizers (131k/200k/248k) and reasoning stalls while maintaining 100% schema fidelity
+        "match": ["nemotron", "phi", "qwen", "gpt-oss"],
         "enforce_gbnf": False,
         "think": False,
     },
@@ -240,6 +240,7 @@ class LLMClient:
             self.model = model
         self.last_raw_response = None
         self.last_done_reason = None
+        self.last_log_path = None
 
 
     def _refresh_config(self):
@@ -439,6 +440,7 @@ class LLMClient:
             self.model = self._model_override
         self.last_raw_response = None
         self.last_done_reason = None
+        self.last_log_path = None
 
 
         # Deep copy messages to prevent mutating caller's list or recursively mangling messages
@@ -1359,7 +1361,7 @@ class LLMClient:
                         task_fail_cat = "QA_FATAL_FLAG" if has_audit_fatal else "QA_LOW_SCORE"
 
                 from .logger import log_task
-                log_task(
+                self.last_log_path = log_task(
                     f"{t_name}_{mode_str}",
                     system_prompt,
                     user_prompt,

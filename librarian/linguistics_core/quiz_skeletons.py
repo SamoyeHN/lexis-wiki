@@ -44,7 +44,8 @@ class QuizSkeletonsMixin:
         multis: List[Dict[str, Any]] = []
 
         for it in items:
-            is_multi = it.get("is_multi_word") or (len(it.get("target_word", "").split()) > 1) or (it.get("part_of_speech") in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom"))
+            w_str = str(it.get("target_word") or it.get("word") or "")
+            is_multi = it.get("is_multi_word") or (len(w_str.split()) > 1) or (it.get("part_of_speech") in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom"))
             if is_multi:
                 multis.append(it)
             else:
@@ -61,12 +62,31 @@ class QuizSkeletonsMixin:
         quota_single = target_count - quota_multi
 
         sel_multi = multis[:quota_multi]
-        sel_single = singles[:quota_single]
+        # Avoid selecting a single-word item whose headword is already a core lexical word
+        # inside one of the selected multi-word expressions (e.g. 'pose a threat to' + 'threat')
+        # whenever enough non-overlapping single-word items exist.
+        multi_core_lemmas: set = set()
+        for m_it in sel_multi:
+            mw_text = str(m_it.get("target_word") or m_it.get("word") or "").strip().lower()
+            for tok in re.findall(r"[a-z]{4,}", mw_text):
+                multi_core_lemmas.add(tok)
+                if tok.endswith("s") and len(tok) >= 5:
+                    multi_core_lemmas.add(tok[:-1])
+        disjoint_singles: List[Dict[str, Any]] = []
+        overlapping_singles: List[Dict[str, Any]] = []
+        for s_it in singles:
+            sw_text = str(s_it.get("target_word") or s_it.get("word") or "").strip().lower()
+            if sw_text in multi_core_lemmas:
+                overlapping_singles.append(s_it)
+            else:
+                disjoint_singles.append(s_it)
+        ordered_singles = disjoint_singles + overlapping_singles
+        sel_single = ordered_singles[:quota_single]
 
         # Backfill if one group has fewer items than its allocated quota
         if len(sel_multi) < quota_multi:
             deficit = quota_multi - len(sel_multi)
-            sel_single.extend(singles[len(sel_single):len(sel_single) + deficit])
+            sel_single.extend(ordered_singles[len(sel_single):len(sel_single) + deficit])
         elif len(sel_single) < quota_single:
             deficit = quota_single - len(sel_single)
             sel_multi.extend(multis[len(sel_multi):len(sel_multi) + deficit])
@@ -376,12 +396,17 @@ class QuizSkeletonsMixin:
                     continue
                 p_clean_search = re.sub(r"\[.*?\]|\(.*?\)", "", pat).strip().lower()
                 p_for_prep = re.sub(r"\bto\s+(?:do\s+something|\w+ing)\b", "", p_clean_search)
-                m_prep = re.search(r"\b(on|in|at|for|with|about|under|from|to|by|into|of)\b", p_for_prep)
-                bound_prep = m_prep.group(1) if m_prep else None
+                all_preps = re.findall(r"\b(on|in|at|for|with|about|under|from|to|by|into|of|between|over|against|towards|upon|as)\b", p_for_prep)
+                cand_preps: List[str] = []
+                for cp in all_preps:
+                    if cp not in cand_preps:
+                        cand_preps.append(cp)
+                bound_prep = cand_preps[0] if cand_preps else None
                 out.append({
                     "pattern": pat,
                     "example": nb.get("example") or None,
                     "prep": bound_prep,
+                    "preps": cand_preps,
                     "source": nb.get("source", "native_bundle")
                 })
             if out:
@@ -415,7 +440,7 @@ class QuizSkeletonsMixin:
 
             p_clean_search = re.sub(r"\[.*?\]|\(.*?\)", "", clean_pat).strip().lower()
             p_for_prep = re.sub(r"\bto\s+(?:do\s+something|\w+ing)\b", "", p_clean_search)
-            all_preps = re.findall(r"\b(on|in|at|for|with|about|under|from|to|by|into|of|between|over|against|towards|upon)\b", p_for_prep)
+            all_preps = re.findall(r"\b(on|in|at|for|with|about|under|from|to|by|into|of|between|over|against|towards|upon|as)\b", p_for_prep)
             # Deduplicate while preserving order
             cand_preps: List[str] = []
             for cp in all_preps:
@@ -531,9 +556,18 @@ class QuizSkeletonsMixin:
             else:
                 score -= 30
 
+            # Check if the passage quote directly attests `target_word + prep` (e.g. 'masquerading as')
+            quote_adj_preps = [
+                cp for cp in cand_preps
+                if cp and re.search(rf"\b{re.escape(tw_l)}\w*\s+{re.escape(cp.lower())}\b", q_l)
+            ]
+
             # Massive bonus if bundle contains an authentic illustrative example
             if ex:
                 score += 25
+            elif quote_adj_preps:
+                # Directly attested immediately after target word in passage quote: do NOT penalize
+                score += 20
             elif cand_preps:
                 # If pattern claims a bound preposition (e.g. 'identical in') but has NO matching example in the sense,
                 # penalize heavily so it doesn't pair with a non-prepositional fallback sentence ('four identical houses')!
@@ -546,6 +580,13 @@ class QuizSkeletonsMixin:
                 if not ex or re.search(rf"\b{re.escape(preferred_anchor.lower())}\b", ex.lower()):
                     b = dict(b, prep=preferred_anchor.lower())
                     prep = b["prep"]
+            elif quote_adj_preps:
+                score += 55
+                for cp in quote_adj_preps:
+                    if not ex or re.search(rf"\b{re.escape(cp.lower())}\b", ex.lower()):
+                        b = dict(b, prep=cp.lower())
+                        prep = b["prep"]
+                        break
             elif any(re.search(rf"\b{re.escape(cp)}\b", q_l) for cp in cand_preps):
                 score += 35
                 for cp in cand_preps:
@@ -633,6 +674,10 @@ class QuizSkeletonsMixin:
 
         nlp = cls.get_spacy()
         parsed_items = cls._normalize_vocab_items_input(vocab_content, preserve_slash_slots=True)
+        if len(parsed_items) > target_count + 4:
+            parsed_items = cls._balance_single_and_multi_word(
+                parsed_items, target_count=target_count + 4, multi_word_ratio=0.4
+            )
 
         skeletons: List[Dict[str, Any]] = []
         used_distractors: Set[str] = set()
@@ -680,19 +725,30 @@ class QuizSkeletonsMixin:
             cxn_override_pat = None
             cxn_override_frame = None
 
-            m_disc = re.match(
-                r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
-                raw_w_item.strip(),
-                re.IGNORECASE
-            )
-            if not m_disc and len(w_lower.split()) == 2:
-                w_p0, w_p1 = w_lower.split()
-                if w_p1 in ("of", "from", "into", "for", "on", "to", "with") and w_p0 in {
-                    "remind", "convince", "inform", "warn", "assure", "rob", "deprive", "rid", "cure",
-                    "prevent", "stop", "prohibit", "discourage", "deter", "accuse", "suspect",
-                    "congratulate", "blame", "thank", "forgive", "talk", "trick", "deceive", "fool",
-                }:
-                    m_disc = re.match(r'^([a-z]+)\s+([a-z]+)$', w_lower)
+            _ditrans_prep_verbs = {
+                "remind", "convince", "inform", "warn", "assure", "rob", "deprive", "rid", "cure",
+                "prevent", "stop", "prohibit", "discourage", "deter", "accuse", "suspect",
+                "congratulate", "blame", "thank", "forgive", "talk", "trick", "deceive", "fool",
+            }
+            m_disc = None
+            if str(raw_pos or "").strip().lower() != "phrasal verb":
+                m_disc = re.match(
+                    r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\s+(?:\[[^\]]+\]|\([^)]+\)|\b(?:sb|sth|somebody|something)\b)',
+                    raw_w_item.strip(),
+                    re.IGNORECASE
+                )
+                if not m_disc:
+                    m_disc_cand = re.match(
+                        r'^([a-z]+)\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+(of|to|with|from|into|for|on|in|about|against|at|upon|over)\b',
+                        raw_w_item.strip(),
+                        re.IGNORECASE
+                    )
+                    if m_disc_cand and m_disc_cand.group(1).lower() in _ditrans_prep_verbs:
+                        m_disc = m_disc_cand
+                if not m_disc and len(w_lower.split()) == 2:
+                    w_p0, w_p1 = w_lower.split()
+                    if w_p1 in ("of", "from", "into", "for", "on", "to", "with") and w_p0 in _ditrans_prep_verbs:
+                        m_disc = re.match(r'^([a-z]+)\s+([a-z]+)$', w_lower)
             if m_disc:
                 head_v = m_disc.group(1).lower()
                 disc_p = m_disc.group(2).lower()
@@ -827,6 +883,31 @@ class QuizSkeletonsMixin:
                         frame_prefix = f"{lv_v} {det_part} {adj_mod}".replace("  ", " ") if det_part else f"{lv_v} {adj_mod}"
                         lv_triad_pat = f"{prefix_str} {lv_n} {lv_p} [sth]"
                         lv_triad_frame = f"... {frame_prefix} ____ {lv_p} [sth]"
+
+            # Prepositional Phrase with Obligatory Internal Modifier Slot (e.g. `on a (sth) scale` -> `on a large scale`):
+            # Stripping `(sth)` leaves an ungrammatical bare singular count noun (`*on a scale`).
+            # Realize the authentic 4-word phrase from the passage quote or dictionary example usage.
+            _m_prep_mod_slot = re.match(
+                r"^((?:on|in|at|to|by|under|with|from)\s+(?:a|an|the))\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+([a-z]+)$",
+                raw_w_item,
+                re.IGNORECASE,
+            )
+            if _m_prep_mod_slot:
+                _pm_prefix = _m_prep_mod_slot.group(1).lower()
+                _pm_prep = _pm_prefix.split()[0]
+                _pm_tail = _m_prep_mod_slot.group(2).lower()
+                for _src_txt in (it.get("quote") or "", it.get("example_usage") or ""):
+                    if not _src_txt:
+                        continue
+                    _m_realized = re.search(
+                        rf"\b({re.escape(_pm_prep)}\s+(?:a|an)\s+[a-z]+\s+{re.escape(_pm_tail)})\b",
+                        _src_txt,
+                        re.IGNORECASE,
+                    )
+                    if _m_realized:
+                        w = _m_realized.group(1).lower()
+                        w_lower = w
+                        break
 
             # Map POS category
             # Idiomatic Slot Gate: If single word is embedded in a fixed idiomatic construction in authentic quote
@@ -972,7 +1053,13 @@ class QuizSkeletonsMixin:
                 cxn_override_pat = lv_triad_pat
                 cxn_override_frame = lv_triad_frame
 
-            word_cxn_specs = cls.get_word_cxn_specs(w_lower)
+            word_cxn_specs_raw = cls.get_word_cxn_specs(w_lower)
+            word_cxn_specs = [
+                sp for sp in word_cxn_specs_raw
+                if int(sp.get("sense_idx", -1)) < 0
+                or t_s_idx is None
+                or int(sp.get("sense_idx", -1)) == int(t_s_idx)
+            ]
             word_subcats = {str(sp.get("subcat_group") or "") for sp in word_cxn_specs}
 
             def _tok_matches_target(tok, doc_obj) -> bool:
@@ -1039,7 +1126,7 @@ class QuizSkeletonsMixin:
                                     if child.dep_ != "prep":
                                         continue
                                     prep_tok = child.text.lower()
-                                    if prep_tok not in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards"):
+                                    if prep_tok not in ("to", "with", "from", "on", "for", "in", "into", "of", "against", "at", "upon", "towards", "as", "under", "about", "over", "between", "by"):
                                         continue
                                     if child.i <= tok.i:
                                         continue  # Post-head linear constraint
@@ -1077,7 +1164,11 @@ class QuizSkeletonsMixin:
                         for tok in doc:
                             if _tok_matches_target(tok, doc):
                                 for child in tok.children:
-                                    if child.dep_ == "dobj" and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS:
+                                    if (
+                                        child.dep_ == "dobj"
+                                        and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS
+                                        and not cls._in_forbidden_word_set(child.lemma_.lower(), batch_target_words)
+                                    ):
                                         obj_form = child.text.lower() if child.tag_ == "NNS" else child.lemma_.lower()
                                         anchor = obj_form
                                         anchor_type = "object"
@@ -1094,7 +1185,11 @@ class QuizSkeletonsMixin:
                         for tok in doc:
                             if _tok_matches_target(tok, doc):
                                 for child in tok.children:
-                                    if child.dep_ in ("nsubj", "nsubjpass") and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS:
+                                    if (
+                                        child.dep_ in ("nsubj", "nsubjpass")
+                                        and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS
+                                        and not cls._in_forbidden_word_set(child.lemma_.lower(), batch_target_words)
+                                    ):
                                         subj_form = child.text.lower() if child.tag_ == "NNS" else child.lemma_.lower()
                                         anchor = subj_form
                                         anchor_type = "verb_subject"
@@ -1121,7 +1216,24 @@ class QuizSkeletonsMixin:
                 q_low_n = (it.get("quote") or "").lower()
                 # Family 5: Shell Nouns & Abstract Nouns Taking Post-Nominal Complements
                 if not anchor and q_low_n and word_subcats & {"N_SHELL_TO_DO", "N_SHELL_OF_DOING", "N_SHELL_THAT_ONLY"}:
+                    _is_shell_to_inf = False
                     if "N_SHELL_TO_DO" in word_subcats and re.search(rf"\b{re.escape(w_lower)}(?:s|es|ies)?\s+to\s+[a-z]+\b", q_low_n):
+                        try:
+                            doc_n_shell = nlp(it["quote"])
+                            for tok_n in doc_n_shell:
+                                if _tok_matches_target(tok_n, doc_n_shell) and tok_n.i + 2 < len(doc_n_shell):
+                                    nxt1 = doc_n_shell[tok_n.i + 1]
+                                    nxt2 = doc_n_shell[tok_n.i + 2]
+                                    if nxt1.text.lower() == "to" and (
+                                        nxt1.tag_ == "TO"
+                                        or nxt2.tag_ == "VB"
+                                        or nxt2.pos_ in ("VERB", "AUX")
+                                    ) and nxt2.pos_ not in ("DET", "PRON", "PROPN", "NOUN", "NUM"):
+                                        _is_shell_to_inf = True
+                                        break
+                        except Exception:
+                            pass
+                    if _is_shell_to_inf:
                         anchor = "to"
                         anchor_type = "shell_to_do"
                         cxn_override_pat = f"{w_lower} to do [sth]"
@@ -1176,7 +1288,12 @@ class QuizSkeletonsMixin:
                                     for child in tok.children:
                                         if child.dep_ in ("amod", "compound"):
                                             mod_tok = child.lemma_.lower()
-                                            if child.pos_ != "PRON" and mod_tok not in cls._ANCHOR_STOPWORDS and mod_tok != w_lower:
+                                            if (
+                                                child.pos_ != "PRON"
+                                                and mod_tok not in cls._ANCHOR_STOPWORDS
+                                                and mod_tok != w_lower
+                                                and not cls._in_forbidden_word_set(mod_tok, batch_target_words)
+                                            ):
                                                 anchor = mod_tok
                                                 anchor_type = "adj"
                                                 break
@@ -1187,7 +1304,8 @@ class QuizSkeletonsMixin:
                                         if (head_tok.pos_ != "PRON"
                                                 and head_tok_lemma not in cls._ANCHOR_STOPWORDS
                                                 and head_tok_lemma != w_lower
-                                                and head_tok_lemma not in cls._DELEXICAL_VERBS):
+                                                and head_tok_lemma not in cls._DELEXICAL_VERBS
+                                                and not cls._in_forbidden_word_set(head_tok_lemma, batch_target_words)):
                                             verb_before_set = {v.lower().split()[0] for v in n_entry.get("verb_before", [])}
                                             if not verb_before_set or head_tok_lemma in verb_before_set:
                                                 anchor = head_tok_lemma
@@ -1257,26 +1375,65 @@ class QuizSkeletonsMixin:
                         else:
                             cxn_override_pat = f"it is {w_lower} to do [sth]"
                             cxn_override_frame = "It is ____ to do [sth]"
+                # Pre-fetch OCD entry & attested prepositions so Adjective Step A1 never mistakes a clause-level
+                # temporal/circumstantial adjunct (e.g. 'remained unsolved for 1,400 years') for a bound adjective preposition.
+                adj_entry = cls.get_oxford_collocations(w_lower, pos="adj")
+                attested_adj_preps = set()
+                if sense_native_prep:
+                    attested_adj_preps.add(sense_native_prep.lower())
+                if adj_entry and adj_entry.get("prep"):
+                    for raw_p in adj_entry["prep"]:
+                        for p_tok in re.findall(r"\b(to|for|with|of|in|from|at|about|on|by|into|towards|against|over)\b", str(raw_p).lower()):
+                            attested_adj_preps.add(p_tok)
+                if locked_sense:
+                    for b in cls.extract_sense_pattern_bundles(locked_sense, w_lower):
+                        for p_tok in (b.get("preps") or []):
+                            attested_adj_preps.add(p_tok.lower())
+                else:
+                    for p_tok in cls.get_ldoce_preps(w_lower, pos="adj"):
+                        attested_adj_preps.add(p_tok.lower())
+                for p_key, adj_set in cls._ADJ_PREP_VALENCY_MAP.items():
+                    if w_lower in adj_set:
+                        attested_adj_preps.add(p_key)
+
                 # Adjective Step A: Syntactic Dependency Analysis on Authentic Quote
                 if not anchor and it["quote"]:
                     try:
                         doc = nlp(it["quote"])
+                        _temporal_pobj_lemmas = {
+                            "year", "month", "week", "day", "hour", "minute", "second",
+                            "decade", "century", "millennium", "period", "time", "while", "moment", "age", "era"
+                        }
                         for tok in doc:
                             if _tok_matches_target(tok, doc):
-                                # A1. Predicative Valency: Check if adjective governs a bound preposition
+                                # A1. Predicative Valency: Check if adjective governs a lexicographically attested bound preposition
                                 for child in tok.children:
-                                    if child.dep_ == "prep" and child.text.lower() in ("to", "for", "with", "of", "in", "from", "at", "about", "on"):
-                                        anchor = child.text.lower()
+                                    c_low = child.text.lower()
+                                    if child.dep_ == "prep" and c_low in ("to", "for", "with", "of", "in", "from", "at", "about", "on"):
+                                        if c_low not in attested_adj_preps:
+                                            continue
+                                        pobj_tokens = [pc for pc in child.children if pc.dep_ == "pobj"]
+                                        if pobj_tokens and any(
+                                            pc.ent_type_ in ("DATE", "TIME") or pc.lemma_.lower() in _temporal_pobj_lemmas
+                                            for pc in pobj_tokens
+                                        ):
+                                            continue
+                                        anchor = c_low
                                         anchor_type = "prep"
                                         quote_governed_prep = anchor
-                                        for pchild in child.children:
-                                            if pchild.dep_ == "pobj" and pchild.pos_ != "PRON" and pchild.text.lower() not in cls._ANCHOR_STOPWORDS and pchild.lemma_.lower() != w_lower:
+                                        for pchild in pobj_tokens:
+                                            if pchild.pos_ != "PRON" and pchild.text.lower() not in cls._ANCHOR_STOPWORDS and pchild.lemma_.lower() != w_lower:
                                                 prep_obj = pchild.lemma_.lower()
                                                 break
                                         break
                                 # A2. Attributive Modification: Check if adjective modifies a head noun (dep_ == "amod")
                                 if not anchor and not is_not_before_noun_adj and tok.dep_ == "amod" and tok.head and tok.head.pos_ in ("NOUN", "PROPN"):
-                                    if tok.head.pos_ != "PRON" and tok.head.text.lower() not in cls._ANCHOR_STOPWORDS and tok.head.lemma_.lower() != w_lower:
+                                    if (
+                                        tok.head.pos_ != "PRON"
+                                        and tok.head.text.lower() not in cls._ANCHOR_STOPWORDS
+                                        and tok.head.lemma_.lower() != w_lower
+                                        and not cls._in_forbidden_word_set(tok.head.lemma_.lower(), batch_target_words)
+                                    ):
                                         anchor = tok.head.lemma_.lower()
                                         anchor_type = "modified_noun"
                                 # A3. Predicative / Causative Complement: Check if adjective is complement of a causative/copula verb
@@ -1290,7 +1447,6 @@ class QuizSkeletonsMixin:
                         pass
 
                 # Adjective Step B: Collocation Lexicon Lookup (OCD) if no anchor found in quote
-                adj_entry = cls.get_oxford_collocations(w_lower, pos="adj")
                 if not anchor and adj_entry:
                     if not is_not_before_noun_adj:
                         candidates = adj_entry.get("noun_after", []) + adj_entry.get("colloc_nouns", [])
@@ -1581,13 +1737,18 @@ class QuizSkeletonsMixin:
                 if not cand or _is_double_key(cand):
                     return False
                 c_low = cand.strip().lower()
+                if canonical_pos in ("function_word", "phrase", "idiom_slot"):
+                    if c_low == w_lower:
+                        return False
+                    if canonical_pos == "phrase" and (" " in w_lower) != (" " in c_low):
+                        if anchor_type != "correl_pair" and w_lower not in cls._CORREL_FIRST_ARMS:
+                            return False
+                    return True
                 if len(w_lower) >= 4 and len(c_low) >= 4:
                     if (w_lower in c_low or c_low in w_lower) and (
                         abs(len(w_lower) - len(c_low)) >= 2 or cls.are_same_word_family(w_lower, c_low)
                     ):
                         return False
-                if canonical_pos in ("function_word", "phrase", "idiom_slot"):
-                    return True
                 if is_plural_noun and not cls.can_pluralize_noun_distractor(c_low):
                     return False
                 if not cls._distractor_occupies_slot(
@@ -1604,38 +1765,54 @@ class QuizSkeletonsMixin:
                 for d in curr_distractors:
                     if d in excl_set or not _is_valid_distractor(d):
                         continue
+                    has_d_clash, _ = cls.evaluate_syntactic_slot_clash(
+                        w_lower, d, anchor=anchor, anchor_type=anchor_type, pos=canonical_pos, quote=it.get("quote")
+                    )
                     if (
-                        curr_meta.get(d) != "ldoce_thesaurus"
+                        not has_d_clash
                         and d.lower() in near_only_s
-                        and sum(1 for x in cleared_list if x.lower() in near_only_s and curr_meta.get(x) != "ldoce_thesaurus") >= 1
+                        and sum(1 for x in cleared_list if x.lower() in near_only_s and curr_meta.get(x) != "antonym") >= 1
                     ):
                         continue
                     cleared_list.append(d)
                 r_meta: Dict[str, str] = {}
                 if len(cleared_list) < 3:
                     try:
-                        refill_pool, r_meta = cls.generate_vocab_distractors(
-                            target_word=w_lower, pos=canonical_pos,
-                            context_anchor=anchor, anchor_type=anchor_type,
-                            target_count=8, exclude_words=excl_set,
-                            definition=it.get("definition"), quote=it.get("quote"),
-                            return_metadata=True
-                        )
-                        r_meta = r_meta or {}
+                        if canonical_pos == "phrase":
+                            refill_pool = cls.generate_phrase_distractors(
+                                w_lower,
+                                pos=raw_pos or canonical_pos,
+                                count=8,
+                                exclude_words=excl_set | set(cleared_list),
+                                quote=it.get("quote"),
+                            )
+                            r_meta = {}
+                        else:
+                            refill_pool, r_meta = cls.generate_vocab_distractors(
+                                target_word=w_lower, pos=canonical_pos,
+                                context_anchor=anchor, anchor_type=anchor_type,
+                                target_count=8, exclude_words=excl_set,
+                                definition=it.get("definition"), quote=it.get("quote"),
+                                return_metadata=True
+                            )
+                            r_meta = r_meta or {}
                     except Exception:
                         refill_pool = []
                     for cand in refill_pool:
                         if len(cleared_list) >= 3:
                             break
                         if cand and cand not in cleared_list and cand not in excl_set and _is_valid_distractor(cand):
+                            has_c_clash, _ = cls.evaluate_syntactic_slot_clash(
+                                w_lower, cand, anchor=anchor, anchor_type=anchor_type, pos=canonical_pos, quote=it.get("quote")
+                            )
                             if (
-                                r_meta.get(cand) != "ldoce_thesaurus"
+                                not has_c_clash
                                 and cand.lower() in near_only_s
-                                and sum(1 for x in cleared_list if x.lower() in near_only_s and (curr_meta.get(x) or r_meta.get(x)) != "ldoce_thesaurus") >= 1
+                                and sum(1 for x in cleared_list if x.lower() in near_only_s and (curr_meta.get(x) or r_meta.get(x)) != "antonym") >= 1
                             ):
                                 continue
                             cleared_list.append(cand)
-                    if len(cleared_list) < 3:
+                    if len(cleared_list) < 3 and canonical_pos != "phrase":
                         pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
                         try:
                             for cand in cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3):
@@ -1933,6 +2110,37 @@ class QuizSkeletonsMixin:
                     if expr_ex:
                         ldoce_pattern_example = expr_ex.strip().strip('"').strip()
 
+            # Co-variant Example Guard for Multi-Word Expressions:
+            # If final_target is a multi-word expression (e.g. 'date back to' / 'date back') sharing a PedLex block
+            # with a co-variant ('date from'), ensure ldoce_pattern_example actually instantiates final_target's particle/preposition
+            # rather than the co-variant ('a custom that dates from the 17th century').
+            if ldoce_pattern_example and " " in final_target:
+                ft_toks = [t for t in re.findall(r"[a-z]+", final_target.lower()) if t not in {"sb", "sth", "somebody", "something", "one", "ones"}]
+                if len(ft_toks) >= 2:
+                    second_tok = ft_toks[1]
+                    if not re.search(rf"\b{re.escape(second_tok)}\b", ldoce_pattern_example.lower()):
+                        replacement_ex = None
+                        for raw_ex in ((locked_sense or {}).get("examples") or []):
+                            ex_txt = (raw_ex.get("text") if isinstance(raw_ex, dict) else str(raw_ex or "")).strip()
+                            if ex_txt and ex_txt.lower() != (it.get("quote") or "").strip().lower():
+                                if all(re.search(rf"\b{re.escape(tok)}\w*\b", ex_txt.lower()) for tok in ft_toks[:2]):
+                                    replacement_ex = ex_txt
+                                    break
+                        if not replacement_ex:
+                            corpus_hits = cls.search_corpus_examples(final_target, limit=5)
+                            for ch in (corpus_hits or []):
+                                if ch.strip().lower() != (it.get("quote") or "").strip().lower():
+                                    if raw_pos in ("phrasal verb", "verb") and re.search(
+                                        rf"\b(?:a|an|the|one|major|key|main|important|crucial|decisive)\s+{re.escape(ft_toks[0])}\b",
+                                        ch.lower(),
+                                    ):
+                                        continue
+                                    if all(re.search(rf"\b{re.escape(tok)}\w*\b", ch.lower()) for tok in ft_toks[:2]):
+                                        replacement_ex = ch
+                                        break
+                        if replacement_ex:
+                            ldoce_pattern_example = replacement_ex
+
             # Final Atomic Pattern-Anchor-Example Synchronization (GEMINI.md §1.10):
             # Ensure best_pattern never claims a preposition that clashes with final anchor or is absent from ldoce_pattern_example.
             if best_pattern and anchor_type not in _cxn_anchor_types and not causative_extraposition_pat and not cxn_override_pat:
@@ -2079,7 +2287,7 @@ class QuizSkeletonsMixin:
                 ):
                     best_pattern = f"{final_target} [sb/sth]"
 
-            if best_pattern and is_plural_noun:
+            if best_pattern and (is_plural_noun or (canonical_pos in ("verb", "phrase") and final_target.lower() != w_lower)):
                 best_pattern = re.sub(r"\b" + re.escape(w_lower) + r"\b", final_target, best_pattern, flags=re.IGNORECASE)
 
             # Resolve slash-separated lexical alternatives directly on best_pattern
@@ -2111,8 +2319,15 @@ class QuizSkeletonsMixin:
             if cxn_override_frame:
                 cloze_slot_frame = cxn_override_frame
             elif best_pattern:
-                # Preserve trailing object placeholders ([sb/sth], [sb], [sth], [doing sth], [V-base]) while stripping editorial notes
-                p_clean = re.sub(r"\(.*?\)", "", best_pattern).strip()
+                # Preserve trailing object placeholders ([sb/sth], [sb], [sth], [doing sth], [V-base]) and optional prepositions while stripping editorial notes
+                p_clean = re.sub(
+                    r"\((from|to|into|of|in|on|with|for|about|at|by|as)\)",
+                    r"\1",
+                    best_pattern,
+                    flags=re.IGNORECASE,
+                )
+                p_clean = re.sub(r"\(.*?\)", "", p_clean).strip()
+                p_clean = re.sub(r"\s{2,}", " ", p_clean)
                 p_clean = re.sub(r"\bdoing\s+something\b", "[doing sth]", p_clean, flags=re.IGNORECASE)
                 p_clean = re.sub(r"\bto\s+do\s+something\b", "to do [sth]", p_clean, flags=re.IGNORECASE)
                 p_clean = re.sub(r"\bsomebody\b", "[sb]", p_clean, flags=re.IGNORECASE)
@@ -2150,6 +2365,10 @@ class QuizSkeletonsMixin:
 
             if cloze_slot_frame and len(re.findall(r"_{2,}", cloze_slot_frame)) > 1:
                 cloze_slot_frame = None
+            if not cloze_slot_frame and anchor and anchor_type == "prep" and canonical_pos in ("verb", "adj"):
+                cloze_slot_frame = f"... ____ {anchor}"
+                if not best_pattern:
+                    best_pattern = f"{final_target} {anchor}"
 
             is_copula_adj = False
             is_attributive_only_adj = False
@@ -2164,6 +2383,17 @@ class QuizSkeletonsMixin:
                     is_copula_adj = True
                 elif "only before noun" in adj_sense_gram or bool(adj_gram_prof.get("only_before_noun")):
                     is_attributive_only_adj = True
+                if not is_copula_adj and not is_attributive_only_adj and distractors:
+                    for d_cand in distractors:
+                        d_clash, d_reason = cls.evaluate_syntactic_slot_clash(
+                            w_lower, d_cand, anchor=anchor, anchor_type=anchor_type, pos="adj", quote=it.get("quote")
+                        )
+                        if d_clash and d_reason == "adj_not_before_noun_in_attributive_slot":
+                            is_attributive_only_adj = True
+                            break
+                        if d_clash and d_reason == "adj_only_before_noun_in_predicative_slot":
+                            is_copula_adj = True
+                            break
                 if not is_copula_adj and not is_attributive_only_adj and (cloze_slot_frame or anchor):
                     copula_lemmas = {"be", "become", "fall", "remain", "stay", "seem", "appear", "look", "sound", "smell", "taste", "feel", "get", "turn", "grow", "keep"}
                     check_tokens = re.findall(r"\b[a-zA-Z]+\b", (cloze_slot_frame or "") + " " + str(anchor or ""))
@@ -2205,6 +2435,38 @@ class QuizSkeletonsMixin:
                 "or a modal verb 'can/will/would/should/must/may/might ____' — NEVER place '____' after "
                 "finite 'am/is/are/was/were/been' or directly after a bare subject without a modal)."
             )
+            non_base_verb_slot_hint = ""
+            if canonical_pos in ("verb", "phrase") and not is_base_verb_slot and not is_be_led_phrase:
+                if verb_form_tag == "VBD":
+                    non_base_verb_slot_hint = (
+                        f" (Finite past-tense verb slot required for '{final_target}': place '____' directly as the main "
+                        "past-tense verb after a subject — NEVER place infinitive 'to', modals 'will/would/can/could/should/must', "
+                        "or auxiliaries 'did/does/do' before '____')."
+                    )
+                elif verb_form_tag == "VBZ":
+                    non_base_verb_slot_hint = (
+                        f" (Singular 3rd-person present verb slot required for '{final_target}': place '____' directly after "
+                        "a singular subject — NEVER place infinitive 'to' or modals 'will/would/can/could/should/must' before '____')."
+                    )
+                elif verb_form_tag == "VBN":
+                    non_base_verb_slot_hint = (
+                        f" (Past participle verb slot required for '{final_target}': precede '____' with 'has/have/had' or "
+                        "passive 'is/are/was/were/been' — NEVER place infinitive 'to' or bare modals directly before '____')."
+                    )
+                elif verb_form_tag == "VBG":
+                    non_base_verb_slot_hint = (
+                        f" (Present participle / gerund '-ing' slot required for '{final_target}' — NEVER place infinitive 'to' "
+                        "or bare modals 'will/would/can/could/should/must' directly before '____')."
+                    )
+
+            has_mixed_vc_initials = (
+                canonical_pos in ("noun", "adj")
+                and bool(final_options)
+                and any(str(o).strip()[:1].lower() in "aeiou" for o in final_options if str(o).strip())
+                and any(str(o).strip()[:1].lower().isalpha() and str(o).strip()[:1].lower() not in "aeiou" for o in final_options if str(o).strip())
+            )
+            if has_mixed_vc_initials and cloze_slot_frame:
+                cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "the ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
 
             if cloze_slot_frame:
                 stem_core = f"Fit into frame '{cloze_slot_frame}'."
@@ -2224,6 +2486,8 @@ class QuizSkeletonsMixin:
                     stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
+                elif non_base_verb_slot_hint:
+                    stem_core += non_base_verb_slot_hint
             elif best_pattern:
                 stem_core = "Fit into the Pattern above."
                 if is_plural_noun:
@@ -2236,6 +2500,8 @@ class QuizSkeletonsMixin:
                     stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
+                elif non_base_verb_slot_hint:
+                    stem_core += non_base_verb_slot_hint
             else:
                 stem_core = "Write a natural sentence matching the Definition above."
                 if is_plural_noun:
@@ -2248,17 +2514,25 @@ class QuizSkeletonsMixin:
                     stem_core += be_led_slot_hint
                 elif is_base_verb_slot:
                     stem_core += " (Base-form verb slot required: use 'to ____', modal 'can/will/should ____', or plural/1st-person subject 'They/We/I ____' — NEVER singular 'He/She/It ____' or perfect 'has/have/had ____' without 'to')."
+                elif non_base_verb_slot_hint:
+                    stem_core += non_base_verb_slot_hint
+
+            if has_mixed_vc_initials and not is_plural_noun:
+                stem_core += " (Mixed vowel/consonant option initials: precede '____' with 'the', a possessive like 'his/their', or an intervening adjective like 'a remarkable ____' — NEVER write 'a ____', 'an ____', or 'a(n) ____')."
+
+            # Warn against leaking derivational root cognates (e.g. 'solve' when testing 'unsolved')
+            if " " not in w_lower and len(w_lower) >= 6:
+                for _pfx in ("un", "in", "im", "ir", "il", "dis", "non", "re", "mis", "over", "under"):
+                    if w_lower.startswith(_pfx) and len(w_lower) - len(_pfx) >= 4:
+                        _stripped_base = w_lower[len(_pfx):]
+                        _base_lem = re.sub(r"(?:ed|ing|s|es|ly|able|ible)$", "", _stripped_base)
+                        if len(_base_lem) < 4:
+                            _base_lem = _stripped_base
+                        if cls.get_ldoce_entry(_base_lem) or cls._wordnet_pos(_base_lem):
+                            stem_core += f" (Do NOT use root cognates like '{_base_lem}' or '{_stripped_base}' anywhere in the stem)."
+                        break
 
             task_parts = [stem_core]
-
-            if ldoce_pattern_example:
-                ex_clean = ldoce_pattern_example.strip()
-                skip_model = False
-                if is_plural_noun and canonical_pos == "noun":
-                    if re.search(rf"\b{re.escape(w_lower)}\b", ex_clean, re.IGNORECASE) and not re.search(rf"\b{re.escape(final_target)}\b", ex_clean, re.IGNORECASE):
-                        skip_model = True
-                if not skip_model:
-                    task_parts.append(f'Model: "{ex_clean}"')
 
             # Data-Driven Semantic & Grammatical Discriminator (PedLex <GRAM>, Grammar Boxes, Thesaurus & Language Activator)
             target_base = quant_head_noun if is_quantifier_frame else w_lower

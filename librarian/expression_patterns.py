@@ -54,6 +54,10 @@ COLLOCATION_VERB_PREPS: Dict[str, str] = {
     "benefit": "from",
     "derive": "from",
     "suffer": "from",
+    "differ": "from",
+    "recover": "from",
+    "refrain": "from",
+    "depart": "from",
     "cope": "with",
     "comply": "with",
     "lead": "to",
@@ -192,6 +196,17 @@ DECLARATIVE_EXPRESSION_PATTERNS: List[Dict[str, Any]] = [
                     "LOWER": {"IN": list(COMMON_PARTICLES)}
                 }},
                 {"LEFT_ID": "verb", "REL_OP": ">", "RIGHT_ID": "prep", "RIGHT_ATTRS": {
+                    "DEP": "prep",
+                    "LOWER": {"IN": list(DEPENDENT_PREPS)}
+                }},
+            ],
+            [
+                {"RIGHT_ID": "verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
+                {"LEFT_ID": "verb", "REL_OP": ">", "RIGHT_ID": "particle", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["prt", "advmod"]},
+                    "LOWER": {"IN": list(COMMON_PARTICLES)}
+                }},
+                {"LEFT_ID": "particle", "REL_OP": ">", "RIGHT_ID": "prep", "RIGHT_ATTRS": {
                     "DEP": "prep",
                     "LOWER": {"IN": list(DEPENDENT_PREPS)}
                 }},
@@ -555,11 +570,29 @@ class ExpressionPatternEngine:
                     from librarian.linguistics import LinguisticEngine
                     entry = LinguisticEngine.get_pedlex_entry(v_lemma)
                     pvs = (entry.get("phrasal_verbs") or []) if entry else []
-                    is_true_three_part = any(pv.get("phrase") == cand_phrase for pv in pvs)
+
+                    def _pv_headers(pv_obj):
+                        hdrs = []
+                        if pv_obj.get("phrase"):
+                            hdrs.append(str(pv_obj["phrase"]).lower().strip())
+                        for k in ("variants", "alternates"):
+                            for v in pv_obj.get(k) or []:
+                                if v:
+                                    hdrs.append(str(v).lower().strip())
+                        return hdrs
+
+                    is_true_three_part = any(
+                        any(
+                            h == cand_phrase
+                            or h.startswith(cand_phrase + " ")
+                            for h in _pv_headers(pv)
+                        )
+                        for pv in pvs
+                    )
                     if not is_true_three_part:
                         base_pv = f"{v_lemma} {p_text}"
                         for pv in pvs:
-                            if pv.get("phrase") == base_pv:
+                            if base_pv in _pv_headers(pv):
                                 for s in pv.get("senses") or []:
                                     for pat in s.get("patterns") or []:
                                         if cand_phrase in pat.lower():

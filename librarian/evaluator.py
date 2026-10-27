@@ -973,10 +973,13 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             b_word = m_target.group(1).strip().lower()
             m_pos = re.search(r"-\s*Part of Speech:\s*([^\n\r]+)", block, re.IGNORECASE)
             m_infl = re.search(r"-\s*Inflectional Form:\s*([^\n\r]+)", block, re.IGNORECASE)
+            m_def = re.search(r"-\s*(?:Locked|Contextual) Definition:\s*([^\n\r]+)", block, re.IGNORECASE)
             m_anc = re.search(r"-\s*Collocational Anchor:\s*([^\n\r]+)", block, re.IGNORECASE)
             m_ex = re.search(
                 r"(?:Authentic Corpus Blueprint:\s*'(.+?)'\s*$"
-                r"|authentic_example['\"]\s*:\s*['\"]([^'\n\r]+)['\"])",
+                r"|Reference Example:\s*['\"](.+?)['\"]\s*$"
+                r"|authentic_example['\"]\s*:\s*['\"]([^'\n\r]+)['\"]"
+                r"|Model:\s*\"([^\n\r\"]+)\")",
                 block,
                 re.IGNORECASE | re.MULTILINE,
             )
@@ -994,7 +997,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
             ex_val = ""
             if m_ex:
-                ex_val = (m_ex.group(1) or m_ex.group(2) or "").strip()
+                ex_val = next((g for g in m_ex.groups() if g), "").strip()
 
             # Quote provenance as rendered by the blueprint: a licensed quote is corpus evidence
             # strong enough to be modelled, a display-only quote may never be reused at all.
@@ -1011,14 +1014,18 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             # index; the writer is only allowed to author stem, explanation and audit.
             m_opts = re.search(r"-\s*Prescribed Options:\s*\[([^\]]*)\]", block, re.IGNORECASE)
             prescribed_opts_val = [o.strip() for o in m_opts.group(1).split(",") if o.strip()] if m_opts else []
+            m_pool = re.search(r"-\s*Attested Phrase Pool:\s*\[([^\]]*)\]", block, re.IGNORECASE)
+            attested_pool_val = [o.strip() for o in m_pool.group(1).split(",") if o.strip()] if m_pool else []
+            m_bk = re.search(r"-\s*Backup Symbolic Distractors:\s*\[([^\]]*)\]", block, re.IGNORECASE)
+            backup_dist_val = [o.strip() for o in m_bk.group(1).split(",") if o.strip()] if m_bk else []
             m_pidx = re.search(r"-\s*Correct Answer Index:\s*(\d+)", block, re.IGNORECASE)
             prescribed_index_val = int(m_pidx.group(1)) if m_pidx else None
-
 
             prompt_blueprints[b_word] = {
                 "target_word": b_word,
                 "part_of_speech": m_pos.group(1).strip().lower() if m_pos else "",
                 "inflection": m_infl.group(1).strip().lower() if m_infl else "",
+                "definition": m_def.group(1).strip() if m_def else "",
                 "anchor": anchor_val,
                 "anchor_type": anchor_type,
                 "example": ex_val,
@@ -1026,8 +1033,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 "candidate_quote": candidate_quote_val,
                 "quote_provenance": "weak" if candidate_quote_val else ("strong" if licensed_quote_val else ""),
                 "prescribed_options": prescribed_opts_val,
+                "attested_phrase_pool": attested_pool_val,
+                "backup_distractors": backup_dist_val,
                 "prescribed_index": prescribed_index_val,
-
             }
 
     # the formulas the lexicon pre-extracted, indexed by a presentation-
@@ -1102,8 +1110,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             example = _safe_str(item.get("example_usage"))
             checks += 1
             
-            # Allow words/phrases with slots, hyphens, brackets, parentheses, apostrophes
-            valid_word = bool(re.search(r"^[A-Za-z\s\-'\[\]\(\)]+$", word) and len(word) >= 2)
+            # Allow words/phrases with slots, slashes, hyphens, brackets, parentheses, apostrophes
+            valid_word = bool(re.search(r"^[A-Za-z\s\-'\[\]\(\)/]+$", word) and len(word) >= 2)
             # A multi-word row may carry an expression type, or (as a fallback the healing
             # above could not decide) the part of speech of a fixed frame it is taught as.
             allowed_pos = (VALID_POS_SET | VALID_EXPR_POS_SET) if is_expression else VALID_POS_SET
@@ -1550,6 +1558,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             # blueprints do not).
             options_match_blueprint = True
             index_match_blueprint = True
+            no_verb_inflection_clash = True
 
 
             if is_comparative_translation or is_comprehension:
@@ -1581,14 +1590,16 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Quiz item '{target}': Prompt scaffolding leaked into question stem: '{scaffold_leak.group(0)}'"
                     )
 
-                # Target Stem Leakage Gate: target word/stem cannot leak into question outside the blank
+                # Target Stem Leakage Gate: target word/stem or prefix-stripped derivational root cannot leak into question outside the blank
                 clean_target = _clean_core(target)
                 target_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', clean_target)
                 stem_no_blank = re.sub(r'_{2,}', ' ', question)
                 stem_words = re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)
                 leaked_words = [
                     w for w in stem_words
-                    if w.lower() == clean_target or (len(target_stem) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_stem)
+                    if w.lower() == clean_target
+                    or (len(target_stem) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', w.lower()) == target_stem)
+                    or (" " not in clean_target and len(w) >= 4 and LinguisticEngine.shares_derivational_root(w.lower(), clean_target))
                 ]
                 if leaked_words:
                     no_stem_leak = False
@@ -1596,9 +1607,14 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Quiz item '{target}': Target word leaks verbatim into question stem outside blank: {leaked_words}"
                     )
 
-                # Article Leakage Gate (Pre-blank 'a' or 'an' leaking answer or invalidating distractors)
+                # Article Leakage Gate (Pre-blank 'a', 'an', 'a(n)', or 'a/an' leaking answer or invalidating distractors)
                 no_article_leak = True
-                if options and re.search(r"\b(?:a|an)\s+_{2,}\b", question, flags=re.IGNORECASE):
+                if re.search(r"\ba\s*(?:\(\s*n\s*\)|/\s*an)\s*_{2,}\b", question, flags=re.IGNORECASE):
+                    no_article_leak = False
+                    flags.append(
+                        f"❌ Quiz item '{target}': Question stem uses artificial 'a(n) ____' or 'a/an ____' before blank; use 'the ____', a possessive, an intervening adjective ('a remarkable ____'), or plural instead."
+                    )
+                elif options and re.search(r"\b(?:a|an)\s+_{2,}\b", question, flags=re.IGNORECASE):
                     initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
                     has_vowel_init = any(init in 'aeiou' for init in initials)
                     has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
@@ -1609,6 +1625,34 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         )
 
                 bp_info = prompt_blueprints.get(target.lower(), {}) if prompt_blueprints else {}
+
+                # Non-Base Verb Inflection Slot Gate (prevents 'to ____' or modal 'will/can ____' before past-tense VBD / 3sg VBZ verb options)
+                bp_pos = bp_info.get("part_of_speech", "")
+                bp_infl = bp_info.get("inflection", "")
+                is_non_base_finite_verb = (
+                    bp_pos in ("verb", "phrase")
+                    and (
+                        "past tense" in bp_infl
+                        or "third-person singular" in bp_infl
+                        or (
+                            bp_pos == "verb"
+                            and options
+                            and len(options) == 4
+                            and all(str(o).strip().lower().endswith("ed") for o in options if str(o).strip())
+                        )
+                    )
+                )
+                if is_non_base_finite_verb:
+                    m_inf_clash = re.search(
+                        r"\b(to|will|would|can|could|shall|should|may|might|must|did|does|do)\s+(?:not\s+|never\s+|always\s+|also\s+)?_{2,}\b",
+                        question,
+                        flags=re.IGNORECASE,
+                    )
+                    if m_inf_clash:
+                        no_verb_inflection_clash = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Non-base verb inflection clash — '{m_inf_clash.group(1)} ____' requires a base-form verb, but options are inflected ({bp_infl or 'past tense -ed'})."
+                        )
 
                 # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer
@@ -1714,18 +1758,17 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     if opt_clean in prompt_headwords or (opt_core and opt_core in clean_hw_set and opt_core != clean_target):
                         recycled_in_distractors.append(opt_clean)
                     elif not is_translation:
-                        # For vocabulary multiple-choice, check suffix-stripped stems
-                        opt_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', opt_clean)
+                        # For vocabulary multiple-choice, check lemma and morphological family identity
+                        # (Avoid naive 5-char prefix matching which falsely conflates 'underestimated' with 'underpin'!)
+                        opt_lemma = LinguisticEngine.lemma_of(opt_clean) if " " not in opt_clean else opt_clean
                         for hw in prompt_headwords:
                             hw_clean = str(hw).strip().lower()
                             if clean_target and (hw_clean == clean_target or _clean_core(hw_clean) == clean_target):
                                 continue
-                            hw_stem = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', hw_clean)
-                            if (len(hw_stem) >= 4 and len(opt_stem) >= 4 and hw_stem == opt_stem) or (
-                                " " not in hw_clean and " " not in opt_clean and (
-                                    (len(hw_clean) >= 5 and opt_clean.startswith(hw_clean[:5])) or
-                                    (len(opt_clean) >= 5 and hw_clean.startswith(opt_clean[:5]))
-                                )
+                            hw_lemma = LinguisticEngine.lemma_of(hw_clean) if " " not in hw_clean else hw_clean
+                            if (
+                                (opt_lemma and hw_lemma and opt_lemma == hw_lemma)
+                                or (" " not in hw_clean and " " not in opt_clean and LinguisticEngine.are_same_word_family(opt_clean, hw_clean))
                             ):
                                 recycled_in_distractors.append(opt_clean)
                                 break
@@ -1746,6 +1789,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 no_stem_leak and
                 no_scaffold_leak and
                 no_article_leak and
+                no_verb_inflection_clash and
                 no_verbatim_example and
                 no_in_list_recycling and
                 options_match_blueprint and
@@ -1767,6 +1811,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not is_single_blank: reasons.append("multiple blanks detected in stem")
                 if not no_stem_leak: reasons.append("target word leaks into question stem")
                 if not no_article_leak: reasons.append("indefinite article leakage before blank")
+                if not no_verb_inflection_clash: reasons.append("non-base verb inflection clash before blank")
                 if not no_verbatim_example: reasons.append(f"stem verbatim from {verbatim_label}")
                 if not options_match_blueprint:
                     reasons.append(f"prescribed options altered from blueprint {bp_info.get('prescribed_options')}")
@@ -1863,7 +1908,22 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 flags.append(f"❌ Found {dup_defs} duplicate or copy-pasted definition(s) across different terms")
                 passes = max(0, passes - dup_defs)
 
-    raw_score = round((passes / checks) * W_PEDAGOGY, 1)
+    # Enforce 100% blueprint target coverage for vocabulary/cloze quizzes
+    if task_type == "quiz" and prompt_blueprints and len(items) < len(prompt_blueprints):
+        covered_targets = {
+            str(it.get("target_word") or it.get("word") or "").strip().lower()
+            for it in items
+            if isinstance(it, dict)
+        }
+        missing_targets = [w for w in prompt_blueprints.keys() if w not in covered_targets]
+        if missing_targets:
+            flags.append(
+                f"❌ Incomplete target coverage: generated {len(items)}/{len(prompt_blueprints)} items; "
+                f"missing required blueprint targets: {missing_targets}"
+            )
+            passes = max(0, passes - len(missing_targets))
+
+    raw_score = round((passes / max(checks, len(prompt_blueprints) if task_type == "quiz" and prompt_blueprints else checks)) * W_PEDAGOGY, 1)
     # Apply soft deduction for auto-remapped grammar categories (2.0 pts per remapped item)
     if task_type == "grammar":
         remap_count = sum(1 for f in flags if "Deterministic Auto-Remap" in f)
@@ -2311,7 +2371,7 @@ class LogEvaluator:
 
         # Extract USER PROMPT content block
         user_prompt = ""
-        user_prompt_match = re.search(r"--- USER PROMPT ---\n(.*?)(?=\n--- RAW RESPONSE ---|\n=== END OF LOG ===|\Z)", content, re.DOTALL)
+        user_prompt_match = re.search(r"--- USER PROMPT ---\n(.*?)(?=\n--- CONSOLIDATED ITEM|\n--- RAW RESPONSE ---|\n=== END OF LOG ===|\Z)", content, re.DOTALL)
         if user_prompt_match:
             user_prompt = user_prompt_match.group(1).strip()
 

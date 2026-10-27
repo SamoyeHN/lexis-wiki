@@ -1120,14 +1120,13 @@ class SyllabusAndMarkdownMixin:
                         target_count=target_e_k,
                         syllabus_expressions=syl_e
                     )
+                    shipped_atoms: Set[str] = set()
                     shipped_parent_by_atom: Dict[str, str] = {}
+                    shipped_parent_quotes: Dict[str, Set[str]] = {}
                     e_items = []
                     for it in (det_e or []):
                         if not str(it.get("definition", "")).strip() or not str(it.get("example_usage", "")).strip():
                             continue
-                        expr_word = it.get("word", "")
-                        for atom in self.expression_constituent_atoms(expr_word):
-                            shipped_parent_by_atom.setdefault(atom, expr_word)
                         e_items.append(
                             VocabularyItem(
                                 word=it['word'],
@@ -1139,34 +1138,114 @@ class SyllabusAndMarkdownMixin:
                             )
                         )
 
-                    f12_suppressed: List[Tuple[str, str]] = []
-                    filtered_syl_v = list(syl_v) if syl_v else []
-                    if syl_v and shipped_parent_by_atom:
-                        pending_v: List[str] = []
+                    if len(e_items) < target_e_k:
+                        existing_expr_tokens = {
+                            re.sub(r'\[.*?\]|\(.*?\)', '', it.word).strip().lower()
+                            for it in e_items
+                        }
+                        supplementary_items = LinguisticEngine.extract_deterministic_expressions(
+                            clean_p,
+                            target_count=target_e_k + 5,
+                            syllabus_expressions=None,
+                        )
+                        for sup in (supplementary_items or []):
+                            if len(e_items) >= target_e_k:
+                                break
+                            sup_clean = re.sub(r'\[.*?\]|\(.*?\)', '', sup.get("word", "")).strip().lower()
+                            if (
+                                sup_clean not in existing_expr_tokens
+                                and str(sup.get("definition", "")).strip()
+                                and str(sup.get("example_usage", "")).strip()
+                            ):
+                                e_items.append(
+                                    VocabularyItem(
+                                        word=sup['word'],
+                                        part_of_speech=sup.get('part_of_speech', 'collocation'),
+                                        definition=sup.get('definition', ''),
+                                        quoted_sentence=sup.get('quoted_sentence', ''),
+                                        example_usage=sup.get('example_usage', ''),
+                                        design_audit=sup.get('design_audit', '')
+                                    )
+                                )
+                                existing_expr_tokens.add(sup_clean)
+
+                    _DELEXICAL_LIGHT_VERBS = {"give", "make", "take", "have", "do", "get"}
+                    _nlp_delex = LinguisticEngine.get_spacy()
+                    for e_row in e_items:
+                        _e_atoms = self.expression_constituent_atoms(e_row.word)
+                        for atom in _e_atoms:
+                            shipped_atoms.add(atom)
+                            shipped_parent_by_atom.setdefault(atom, e_row.word)
+                            if e_row.quoted_sentence:
+                                shipped_parent_quotes.setdefault(atom, set()).add(e_row.quoted_sentence.strip())
+                        if e_row.quoted_sentence and _nlp_delex and _e_atoms:
+                            _doc_e = _nlp_delex(e_row.quoted_sentence)
+                            for _tok in _doc_e:
+                                if _tok.lemma_.lower() in _e_atoms or _tok.text.lower() in _e_atoms:
+                                    _head = _tok.head
+                                    if (
+                                        _head is not None
+                                        and _head != _tok
+                                        and _head.pos_ == "VERB"
+                                        and _head.lemma_.lower() in _DELEXICAL_LIGHT_VERBS
+                                        and _tok.dep_ in ("dobj", "obj", "attr", "oprd", "acomp", "nsubjpass", "nsubj:pass", "pobj")
+                                    ):
+                                        _lv = _head.lemma_.lower()
+                                        shipped_atoms.add(_lv)
+                                        shipped_parent_by_atom.setdefault(_lv, f"{_lv} {e_row.word}")
+                                        shipped_parent_quotes.setdefault(_lv, set()).add(e_row.quoted_sentence.strip())
+
+                    cleaned_syllabus_vocab: List[str] = []
+                    held_back_atoms: Set[str] = set()
+                    if syl_v:
+                        unshipped_declared_atoms: Set[str] = set()
+                        for expr in (syl_e or []):
+                            for atom in self.expression_constituent_atoms(expr):
+                                if atom not in shipped_atoms:
+                                    unshipped_declared_atoms.add(atom)
+
                         for w in syl_v:
                             w_clean = re.sub(r'\[.*?\]|\(.*?\)', '', w).strip().lower()
-                            parent_expr = shipped_parent_by_atom.get(w_clean)
-                            if parent_expr:
-                                has_indep_sent = any(
-                                    LinguisticEngine.text_contains_form(s, w_clean, standalone=True)
-                                    and not LinguisticEngine.text_contains_form(
-                                        s, re.sub(r'\[.*?\]|\(.*?\)', '', parent_expr).strip().lower(), standalone=False
+                            if not w_clean or w_clean in cleaned_syllabus_vocab:
+                                continue
+                            if w_clean in shipped_parent_by_atom:
+                                parent_qs = shipped_parent_quotes.get(w_clean) or set()
+                                has_indep_sent = bool(
+                                    sent_pool
+                                    and any(
+                                        s.strip() not in parent_qs
+                                        and LinguisticEngine.text_contains_form(s, w_clean, standalone=True)
+                                        for s in (sent_pool or {}).values()
                                     )
-                                    for s in (sent_pool or {}).values()
                                 )
                                 if not has_indep_sent:
-                                    f12_suppressed.append((w, parent_expr))
+                                    held_back_atoms.add(w_clean)
                                     continue
-                            pending_v.append(w)
-                        filtered_syl_v = pending_v
+                            elif w_clean in unshipped_declared_atoms and sent_pool:
+                                if not any(
+                                    LinguisticEngine.text_contains_form(s, w_clean, standalone=True)
+                                    for s in (sent_pool or {}).values()
+                                ):
+                                    held_back_atoms.add(w_clean)
+                                    continue
+
+                            e = LinguisticEngine.get_pedlex_entry(w_clean)
+                            has_pedlex = bool(e and e.get("senses"))
+                            if not has_pedlex:
+                                wn_mod = LinguisticEngine.get_wordnet()
+                                has_pedlex = bool(wn_mod and wn_mod.synsets(w_clean))
+                            if not has_pedlex:
+                                continue
+                            cleaned_syllabus_vocab.append(w_clean)
 
                     total_budget = v_default_k + e_default_k
-                    target_k = max(len(filtered_syl_v), total_budget - len(e_items)) if (syl_v or syl_e) else v_default_k
+                    target_k = max(v_default_k, total_budget - len(e_items))
+                    vocab_exclude_words = (held_back_atoms | shipped_atoms) - set(cleaned_syllabus_vocab)
                     det_v = LinguisticEngine.extract_deterministic_vocabulary(
                         clean_p,
-                        syllabus_vocab=filtered_syl_v if filtered_syl_v else None,
+                        syllabus_vocab=cleaned_syllabus_vocab if syl_v else None,
                         target_count=target_k,
-                        exclude_words={w for w, _ in f12_suppressed} if f12_suppressed else None
+                        exclude_words=vocab_exclude_words if vocab_exclude_words else None
                     )
                     v_items = [
                         VocabularyItem(

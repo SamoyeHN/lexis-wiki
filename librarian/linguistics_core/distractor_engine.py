@@ -36,7 +36,11 @@ class DistractorEngineMixin:
         _classroom_sensitive = {
             "nudity", "mistress", "prostitute", "prostitution", "harlot",
             "concubine", "brothel", "adultery", "erotic", "porn", "pornography",
-            "rape", "incest", "orgasm",
+            "rape", "rapist", "incest", "orgasm", "molest", "molester",
+            "pedophile", "paedophile", "pimp", "whore", "slut", "hooker",
+            "fetish", "penis", "vagina", "anus", "masturbate", "masturbation",
+            "sodomy", "bestiality", "fornication", "genitals", "genitalia",
+            "testicle", "scrotum", "clitoris", "erection", "ejaculate", "ejaculation",
         }
         if cw in _classroom_sensitive:
             return True
@@ -360,7 +364,8 @@ class DistractorEngineMixin:
 
                     s_def_doc = nlp(s.definition().lower())
                     s_def_lemmas = ({t.lemma_.lower() for t in s_def_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
-                    s_direct_doc = nlp((s.definition() + " " + " ".join(s.examples())).lower())
+                    s_peer_text = " ".join(sw.lemma().replace("-", " ").replace("_", " ") for sw in s.words())
+                    s_direct_doc = nlp((s.definition() + " " + " ".join(s.examples()) + " " + s_peer_text).lower())
                     s_direct_lemmas = ({t.lemma_.lower() for t in s_direct_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
 
                     chain_texts = []
@@ -375,6 +380,11 @@ class DistractorEngineMixin:
                         for hw in cur.words():
                             chain_texts.append(hw.lemma())
                         depth += 1
+                    if s.pos in ("a", "s"):
+                        for adj_rel in s.get_related("similar") + s.get_related("also") + s.get_related("attribute"):
+                            chain_texts.append(adj_rel.definition())
+                            for hw in adj_rel.words():
+                                chain_texts.append(hw.lemma().replace("-", " ").replace("_", " "))
                     chain_doc = nlp(" ".join(chain_texts).lower())
                     chain_lemmas = ({t.lemma_.lower() for t in chain_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
                     if _material_genus_words and climbed_into_substance:
@@ -414,6 +424,17 @@ class DistractorEngineMixin:
                         or s_def_low.startswith(("the natural process of", "the act of", "the process of"))
                     ):
                         penalty += 10
+
+                    # Prevent generic 'a ... place' location definitions (e.g. 'oasis: a peaceful or pleasant place...')
+                    # from falsely locking onto a `noun.artifact` building/shelter synset solely via the meta-word 'place'
+                    if (
+                        wn_pos == "n"
+                        and s_lf == "noun.artifact"
+                        and "place" in def_tokens
+                        and not (def_tokens & {"building", "structure", "shelter", "house", "room", "hut", "wall", "roof"})
+                    ):
+                        s_direct_lemmas = s_direct_lemmas - {"place"}
+                        chain_lemmas = chain_lemmas - {"place"}
 
                     def_ov = len(def_tokens.intersection(s_direct_lemmas)) * 6 + len(def_tokens.intersection(chain_lemmas)) * 3
                     quote_ov = (
@@ -570,7 +591,7 @@ class DistractorEngineMixin:
                         return
                     if wn_pos == "r" and not any("adv" in p for p in al_poses):
                         return
-                    if not any(
+                    if al_ent.get("kind") != "derived" and not any(
                         s.get("examples") or s.get("pattern_bundles") or s.get("patterns")
                         for s in (al_ent.get("senses") or [])
                     ):
@@ -740,17 +761,24 @@ class DistractorEngineMixin:
             for it in thes_items:
                 it_w = str(it.get("word", "")).strip().lower()
                 it_concept = str(it.get("concept", "")).strip().lower()
-                if it_w == clean_target and it_concept:
+                it_cluster_key = it_concept or (f"sec_{it.get('section_index')}" if it.get("section_index") is not None else "")
+                if it_w == clean_target and it_cluster_key:
                     self_toks = {
                         w for w in re.findall(r"\b[a-zA-Z]{3,}\b", (str(it.get("distinction", "")) + " " + it_concept).lower())
                         if w not in _thes_stopwords and w != clean_target
                     }
-                    cluster_self_distinction[it_concept] = self_toks
+                    cluster_self_distinction[it_cluster_key] = self_toks
 
             scored_thes_items = []
             for it in thes_items:
                 it_concept = str(it.get("concept", "")).strip().lower()
+                it_cluster_key = it_concept or (f"sec_{it.get('section_index')}" if it.get("section_index") is not None else "")
                 it_dist = str(it.get("distinction", "")).strip().lower()
+                it_reg = str(it.get("register") or "").lower()
+                if not target_is_informal and any(
+                    r in it_reg for r in ("informal", "slang", "taboo", "old-fashioned", "old use", "biblical")
+                ):
+                    continue
                 # POS-frame guard on Language Activator clusters:
                 # Reject verb concept clusters ('to put something somewhere') when target is a noun/adjective,
                 # and reject noun concept clusters ('a layer of...') when target is a verb.
@@ -758,8 +786,8 @@ class DistractorEngineMixin:
                     continue
                 if wn_pos == "v" and it_concept and not it_concept.startswith("to ") and it_dist.startswith(("a ", "an ", "the ")):
                     continue
-                if d_words and it_concept in cluster_self_distinction and not it.get("is_grambox_peer"):
-                    if not (cluster_self_distinction[it_concept] & (d_words | q_words | ped_ox_syns)):
+                if d_words and it_cluster_key in cluster_self_distinction and not it.get("is_grambox_peer"):
+                    if not (cluster_self_distinction[it_cluster_key] & (d_words | q_words | ped_ox_syns)):
                         continue
                 t_text = (it.get("word", "") + " " + it_dist + " " + it_concept).lower()
                 t_toks = {w for w in re.findall(r"\b[a-zA-Z]{3,}\b", t_text) if w not in _thes_stopwords}
@@ -834,10 +862,14 @@ class DistractorEngineMixin:
                         anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
                     )
                     # Differentiated PedLex Thesaurus peers (e.g. 'loan' vs 'mortgage'/'overdraft' under anchor 'of')
-                    # are curated contrastive peers: allow them when an explicit context_anchor discriminates them
-                    # with zero double-key collision.
+                    # are curated contrastive peers: allow direct synset synonyms ONLY when a bound prepositional
+                    # anchor or syntactic slot clash strictly rules them out, and never when the candidate literally
+                    # defines the target word in its dictionary definition (e.g. 'interested' in 'intrigued').
                     is_anchor_discriminated_peer = bool(
                         context_anchor
+                        and anchor_type == "prep"
+                        and picked not in d_words
+                        and cls.lemma_of(picked) not in d_words
                         and not cls.double_key_collision(
                             clean_target, picked,
                             anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
@@ -897,7 +929,7 @@ class DistractorEngineMixin:
                         and " " not in lemma
                         and "_" not in lemma
                         and "-" not in lemma
-                        and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                        and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                         and not _is_informal_or_slang_distractor(lemma)
                     ):
@@ -932,7 +964,7 @@ class DistractorEngineMixin:
                             and " " not in lemma
                             and "_" not in lemma
                             and "-" not in lemma
-                            and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                            and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
                             and _pos_ok(lemma)
                             and cls.is_cefr_compliant_distractor(lemma, clean_target)
                             and not _is_informal_or_slang_distractor(lemma)
@@ -955,7 +987,7 @@ class DistractorEngineMixin:
                                 and " " not in lemma
                                 and "_" not in lemma
                                 and "-" not in lemma
-                                and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                                and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
                                 and _pos_ok(lemma)
                                 and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                 and not _is_informal_or_slang_distractor(lemma)
@@ -971,7 +1003,7 @@ class DistractorEngineMixin:
                                     and " " not in lemma
                                     and "_" not in lemma
                                     and "-" not in lemma
-                                    and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                                    and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
                                     and _pos_ok(lemma)
                                     and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                     and not _is_informal_or_slang_distractor(lemma)
@@ -1032,19 +1064,41 @@ class DistractorEngineMixin:
                     ] or (c_ent_n.get("senses") or [])
                     if not c_senses_n:
                         return True
-                    # Countability Symmetry Gate for strictly uncountable material/substance nouns:
-                    # Reject countable artifact homonyms (e.g. 'diaper', 'sheet', 'till', 'sliver', 'nap', 'duck')
-                    # whose top 2 PedLex noun senses do not attest [uncountable].
+                    # Countability & Number Symmetry Gate for noun coordinates:
+                    # 1. Reject countable artifact homonyms (e.g. 'diaper', 'sheet', 'till', 'sliver', 'nap', 'duck')
+                    #    whose top 2 PedLex noun senses do not attest [uncountable] when target is strictly uncountable.
+                    # 2. Symmetric: Reject strictly [uncountable] mass nouns (e.g. 'adrenalin', 'afterbirth')
+                    #    when target is strictly [countable].
+                    # 3. Reject pluralia tantum [plural] nouns (e.g. 'banns') when clean_target is singular.
                     if target_strictly_uncountable:
                         top2_grams = " ".join(str(sn.get("grammar") or "").lower() for sn in c_senses_n[:2])
                         if "uncountable" not in top2_grams:
                             return False
-                    c_wn_n = wn.synsets(cand_lem, "n")
+                    elif target_strictly_countable:
+                        top2_grams = " ".join(str(sn.get("grammar") or "").lower() for sn in c_senses_n[:2])
+                        if "uncountable" in top2_grams and "countable" not in re.sub(r"\buncountable\b", "", top2_grams):
+                            return False
+                    if not clean_target.endswith("s") and cand_lem.endswith("s"):
+                        g0_low = str(c_senses_n[0].get("grammar") or "").lower()
+                        if "plural" in g0_low and "countable" not in re.sub(r"\buncountable\b", "", g0_low):
+                            return False
+                    c_wn_n = [cs for cs in wn.synsets(cand_lem, "n") if cs.lexfile()] or wn.synsets(cand_lem, "n")
+                    if c_wn_n:
+                        if s.lexfile() == "noun.person" and c_wn_n[0].lexfile() != "noun.person":
+                            return False
+                        if s.lexfile() and s.lexfile() != "noun.person" and c_wn_n[0].lexfile() == "noun.person":
+                            return False
                     # Monosemous in both PedLex and WordNet -> always aligned
                     if len(c_senses_n) == 1 and len(c_wn_n) <= 1:
                         return True
                     if sis_syn is None or hyper_syn is None:
                         return True
+                    _meta_stop = {
+                        "someone", "somebody", "anyone", "anybody", "something", "anything",
+                        "person", "people", "thing", "things", "place", "time", "part", "type",
+                        "kind", "form", "amount", "number", "small", "large", "used", "make",
+                        "made", "making", "taken", "order", "particular", "usually", "often",
+                    }
                     # Check if top-2 PedLex senses share domain tokens (with plural -s normalization) with sister synset / hypernym / target definition
                     prim_txt = re.sub(
                         r"\bthe\s+earth\b",
@@ -1060,7 +1114,7 @@ class DistractorEngineMixin:
                     )
                     raw_prim_toks = {
                         tok for tok in re.findall(r"\b[a-z]{3,}\b", prim_txt)
-                        if tok not in cls._PARONYM_STOP_DEF_TOKS and tok not in cls._ANCHOR_STOPWORDS and tok != cand_lem
+                        if tok not in cls._PARONYM_STOP_DEF_TOKS and tok not in cls._ANCHOR_STOPWORDS and tok not in _meta_stop and tok != cand_lem
                     }
                     prim_toks = set(raw_prim_toks) | {
                         tok[:-1] for tok in raw_prim_toks if tok.endswith("s") and len(tok) > 3
@@ -1074,10 +1128,10 @@ class DistractorEngineMixin:
                     ]).lower()
                     raw_branch_toks = {
                         tok for tok in re.findall(r"\b[a-z]{3,}\b", branch_txt)
-                        if tok not in cls._PARONYM_STOP_DEF_TOKS and tok not in cls._ANCHOR_STOPWORDS and tok != cand_lem
-                    } | (coord_domain_cues - {cand_lem})
+                        if tok not in cls._PARONYM_STOP_DEF_TOKS and tok not in cls._ANCHOR_STOPWORDS and tok not in _meta_stop and tok != cand_lem
+                    } | ((coord_domain_cues - _meta_stop) - {cand_lem})
                     if definition:
-                        raw_branch_toks |= (def_tokens - {cand_lem})
+                        raw_branch_toks |= ((def_tokens - _meta_stop) - {cand_lem})
                     branch_toks = set(raw_branch_toks) | {
                         tok[:-1] for tok in raw_branch_toks if tok.endswith("s") and len(tok) > 3
                     }
@@ -1226,6 +1280,29 @@ class DistractorEngineMixin:
                             max_g_hypos = 65 if not tier3_coordinates else 35
                             if len(g_hyper.hyponyms()) > max_g_hypos:
                                 continue
+                            if (
+                                len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count
+                                and hasattr(g_hyper, "min_depth")
+                                and g_hyper.min_depth() >= 5
+                                and (not target_lf or g_hyper.lexfile() == target_lf)
+                            ):
+                                for ghw in g_hyper.words():
+                                    gh_lem = ghw.lemma().lower()
+                                    if (
+                                        gh_lem.isalpha()
+                                        and len(gh_lem) >= 3
+                                        and gh_lem not in seen
+                                        and gh_lem not in global_synonyms
+                                        and cls.is_exact_pedlex_headword(gh_lem)
+                                        and not _is_primarily_adj_or_verb(gh_lem)
+                                        and _pos_ok(gh_lem)
+                                        and cls.is_cefr_compliant_distractor(gh_lem, clean_target)
+                                        and not _is_informal_or_slang_distractor(gh_lem)
+                                        and _is_aligned_noun_coord(gh_lem, g_hyper, g_hyper)
+                                    ):
+                                        seen.add(gh_lem)
+                                        coord_hyper_overlap[gh_lem] = max(coord_hyper_overlap.get(gh_lem, 0), 1)
+                                        tier3_coordinates.append(gh_lem)
                             g_sis_pool = list(g_hyper.hyponyms())
                             for g_sis in list(g_sis_pool):
                                 # Unwrap multi-word taxonomic intermediate nodes (e.g. 'paper money' -> 'bill', 'animal fiber' -> 'silk', 'wool')
@@ -1265,10 +1342,71 @@ class DistractorEngineMixin:
                                         seen.add(lemma)
                                         coord_hyper_overlap.setdefault(lemma, 0)
                                         tier3_coordinates.append(lemma)
+                # Tier 3.2b: Aristotelian Genus-Noun Taxonomic Bridge
+                # When a noun's WordNet hypernym branch is sparse (< target_count) and its dictionary definition
+                # follows the Aristotelian "a/an [modifier]* <genus_noun> in/of/about/..." structure (e.g., obituary ->
+                # "an article in a newspaper..."), harvest direct single-word co-hyponyms of the genus noun in the same lexfile.
+                if wn_pos == "n" and definition and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count:
+                    _m_genus = re.match(
+                        r"^(?:(?:\[[^\]]+\]\s*)+)?(?:a|an|the)\s+"
+                        r"(?:(?:small|large|short|long|brief|formal|official|public|special|particular|printed|written|spoken|musical|medical|scientific|legal|political|religious|traditional|modern|simple|basic)\s+)*"
+                        r"([a-z]{4,})\s+(?:in|of|about|for|that|which|who|where|on|from|to|with|by|used)\b",
+                        definition.strip().lower(),
+                    )
+                    if _m_genus:
+                        _g_noun = _m_genus.group(1)
+                        if _g_noun not in cls._PARONYM_STOP_DEF_TOKS and _g_noun not in cls._ANCHOR_STOPWORDS and _g_noun != clean_target:
+                            _g_cands = []
+                            for _g_idx, _g_syn in enumerate(wn.synsets(_g_noun, "n")):
+                                if not _g_syn.lexfile():
+                                    continue
+                                if target_lfs_set and _g_syn.lexfile() not in target_lfs_set:
+                                    continue
+                                if hasattr(_g_syn, "min_depth") and _g_syn.min_depth() < 4:
+                                    continue
+                                _g_hypos = _g_syn.hyponyms()
+                                if not (0 < len(_g_hypos) <= 50):
+                                    continue
+                                _g_def_toks = set(re.findall(r"\b[a-z]{4,}\b", (_g_syn.definition() or "").lower()))
+                                _g_ov = len(_g_def_toks & def_tokens)
+                                _g_cands.append((-_g_ov, _g_idx, _g_syn))
+                            _g_cands.sort(key=lambda x: (x[0], x[1]))
+                            for _, _, _g_syn in _g_cands[:1]:
+                                for _gsis in _g_syn.hyponyms():
+                                    if _gsis.id == s.id or (target_lfs_set and _gsis.lexfile() not in target_lfs_set):
+                                        continue
+                                    for _gsw in _gsis.words():
+                                        _raw_glem = _gsw.lemma()
+                                        if not _raw_glem.islower() or len(_raw_glem) < 3:
+                                            continue
+                                        _glem = _raw_glem.lower()
+                                        if (
+                                            _glem not in seen
+                                            and _glem not in global_synonyms
+                                            and " " not in _glem
+                                            and "_" not in _glem
+                                            and "-" not in _glem
+                                            and cls.is_exact_pedlex_headword(_glem)
+                                            and not _is_primarily_adj_or_verb(_glem)
+                                            and _pos_ok(_glem)
+                                            and cls.is_cefr_compliant_distractor(_glem, clean_target)
+                                            and not _is_informal_or_slang_distractor(_glem)
+                                            and _is_aligned_noun_coord(_glem, _gsis, _g_syn)
+                                        ):
+                                            seen.add(_glem)
+                                            coord_hyper_overlap[_glem] = max(coord_hyper_overlap.get(_glem, 0), 1)
+                                            tier3_coordinates.append(_glem)
                 # Tier 3.3: PedLex `ldoce_sense_cue_index` Scenario/Material Co-Hyponym Tier
                 # When a concrete/scenario noun sits under a singleton or sparse WordNet branch (e.g. 'stamp' under 'postage stamp',
                 # 'ticket' under 'commercial document'), query `ldoce_sense_cue_index` for primary-sense nouns sharing >= 2 domain cues.
-                if wn_pos == "n" and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count * 2:
+                _is_concrete_t = wn_pos == "n" and s.lexfile() in (
+                    "noun.artifact", "noun.substance", "noun.communication",
+                    "noun.possession", "noun.plant", "noun.food", "noun.object",
+                )
+                if (
+                    (_is_concrete_t and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count * 2)
+                    or (wn_pos == "n" and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count)
+                ):
                     conn_cue = cls._ldoce_conn if cls._ensure_ldoce_conn() else None
                     if conn_cue is not None:
                         _cue_stop = {
@@ -1285,6 +1423,8 @@ class DistractorEngineMixin:
                             "you", "and", "the", "for", "out", "can", "has", "been", "are", "was", "were",
                             "his", "her", "its", "our", "who", "what", "how", "all", "any", "one", "two",
                             "not", "but", "second", "first", "last", "week", "year", "day", "open", "like", "got",
+                            "about", "just", "recently", "already", "still", "even", "also", "only", "always", "never",
+                            "taken", "tested", "examined", "order",
                         }
                         _t_cues: List[str] = []
                         if definition:
@@ -1313,20 +1453,18 @@ class DistractorEngineMixin:
                                     f"SELECT host_word, COUNT(DISTINCT cue_word) as cnt, SUM(weight) as wsum "
                                     f"FROM ldoce_sense_cue_index "
                                     f"WHERE sense_idx = 0 AND cue_word IN ({','.join(['?'] * len(_t_cues))}) "
-                                    f"AND host_word != ? "
+                                    f"AND host_word != ? AND host_word NOT LIKE '% %' AND host_word NOT LIKE '%-%' "
                                     f"GROUP BY host_word HAVING cnt >= 2 "
-                                    f"ORDER BY cnt DESC, wsum DESC LIMIT 25"
+                                    f"ORDER BY cnt DESC, wsum DESC LIMIT 35"
                                 )
                                 _cue_rows = conn_cue.execute(_q_sql, _t_cues + [clean_target]).fetchall()
                             except Exception:
                                 _cue_rows = []
-                            _is_concrete_t = s.lexfile() in (
-                                "noun.artifact", "noun.substance", "noun.communication",
-                                "noun.possession", "noun.plant", "noun.food", "noun.object",
-                            )
                             _allowed_cue_lfs = set(target_lfs_set)
                             if _allowed_cue_lfs & {"noun.communication", "noun.artifact", "noun.possession", "noun.group"}:
                                 _allowed_cue_lfs |= {"noun.communication", "noun.artifact", "noun.possession"}
+                            if _allowed_cue_lfs & {"noun.state", "noun.feeling", "noun.attribute", "noun.act", "noun.event"}:
+                                _allowed_cue_lfs |= {"noun.state", "noun.feeling", "noun.attribute", "noun.act", "noun.event", "noun.cognition"}
                             _wn_coords_enough = len(tier3_coordinates) >= target_count
                             for _hw, _cnt, _wsum in _cue_rows:
                                 _lem = str(_hw or "").strip().lower()
@@ -1346,6 +1484,12 @@ class DistractorEngineMixin:
                                     continue
                                 _h_ent = cls.get_ldoce_entry(_lem) or {}
                                 if cls._pos_code(_h_ent.get("pos") or "") != "n":
+                                    continue
+                                if (
+                                    _lem not in ocd
+                                    and int(_h_ent.get("core_level") or 0) == 0
+                                    and not any(sn.get("examples") for sn in (_h_ent.get("senses") or []))
+                                ):
                                     continue
                                 _c_syns_cue = wn.synsets(_lem, "n")
                                 if s.lexfile() == "noun.person":
@@ -1393,12 +1537,15 @@ class DistractorEngineMixin:
                     c_wn = wn.synsets(cand_w, wn_pos)
                     if c_wn and c_wn[0].lexfile() in target_lfs_set:
                         prim_aligned = True
-                c_lvl = cls._lexicon_profile(cand_w)[2] or "C1"
+                c_lvl_raw = cls._lexicon_profile(cand_w)[2]
+                c_lvl = c_lvl_raw or "C1"
                 c_rank = cls.CEFR_ORDER.get(c_lvl, 5)
+                is_non_core = 0 if (cand_w in ocd or int(c_ent.get("core_level") or 0) > 0 or c_lvl_raw in ("A1", "A2", "B1", "B2", "C1")) else 1
                 gerund_mismatch = 1 if (wn_pos == "n" and cand_w.endswith("ing") and not clean_target.endswith("ing")) else 0
                 return (
                     gerund_mismatch,
                     countability_mismatch,
+                    is_non_core,
                     -coord_hyper_overlap.get(cand_w, 0),
                     0 if has_ex else 1,
                     0 if prim_aligned else 1,
@@ -1523,7 +1670,7 @@ class DistractorEngineMixin:
 
         # Slots 2 & 3: Candidates from PedLex Thesaurus & Activator / Coordinate / Troponym / Synonym trees
         near_set_for_pile, ants_for_pile = cls.semantic_fields(clean_target, pos=pos)
-        near_only_for_pile = near_set_for_pile - ants_for_pile - set(sense_antonyms) - tier0_set
+        near_only_for_pile = (near_set_for_pile | tier0_set) - ants_for_pile - set(sense_antonyms)
         for cand in candidates:
             if cand in safe_distractors:
                 continue
@@ -1556,7 +1703,7 @@ class DistractorEngineMixin:
                     pos=pos,
                     quote=quote
                 )
-                if is_dk:
+                if is_dk or (dk_reason == "contrast" and cand not in sense_antonyms):
                     continue
 
             if cand not in forbidden_words and cand not in exclude_words and len(cand) >= 2:
@@ -1628,7 +1775,13 @@ class DistractorEngineMixin:
             if target_lfs_pre:
                 if not cls._ocd_lexfile_cache:
                     for w in ocd.keys():
-                        if len(w) >= 3 and "_" not in w and "-" not in w and " " not in w:
+                        if (
+                            len(w) >= 3
+                            and w.isalpha()
+                            and not re.fullmatch(r"(.)\1+", w)
+                            and cls.is_exact_pedlex_headword(w)
+                            and cls._zipf_freq(w) >= 3.0
+                        ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
                                 lf = w_syns[0].lexfile()
@@ -1753,7 +1906,13 @@ class DistractorEngineMixin:
                 # Lazy-build or retrieve lexfile-indexed OCD nouns
                 if not cls._ocd_lexfile_cache:
                     for w in ocd.keys():
-                        if len(w) >= 3 and "_" not in w and "-" not in w and " " not in w:
+                        if (
+                            len(w) >= 3
+                            and w.isalpha()
+                            and not re.fullmatch(r"(.)\1+", w)
+                            and cls.is_exact_pedlex_headword(w)
+                            and cls._zipf_freq(w) >= 3.0
+                        ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
                                 lf = w_syns[0].lexfile()
@@ -1761,23 +1920,39 @@ class DistractorEngineMixin:
                                     cls._ocd_lexfile_cache[lf] = []
                                 cls._ocd_lexfile_cache[lf].append(w)
                 for t_lf in target_lfs:
-                    for fb in cls._ocd_lexfile_cache.get(t_lf, []):
+                    raw_fb_pool = [
+                        fb for fb in cls._ocd_lexfile_cache.get(t_lf, [])
                         if (
                             fb != clean_target
                             and fb not in forbidden_words
                             and fb not in exclude_words
+                            and fb not in global_synonyms
                             and fb not in safe_distractors
                             and not _is_primarily_adj_or_verb(fb)
+                            and not _is_informal_or_slang_distractor(fb)
                             and cls.is_cefr_compliant_distractor(fb, clean_target)
+                        )
+                    ]
+                    if "_coord_sort_key" in locals():
+                        raw_fb_pool.sort(key=_coord_sort_key)
+                    else:
+                        raw_fb_pool.sort(key=lambda x: -cls._zipf_freq(x))
+                    for fb in raw_fb_pool:
+                        if target_strictly_uncountable:
+                            _fb_ent = cls.get_ldoce_entry(fb) or {}
+                            _fb_sns = [
+                                sn for sn in (_fb_ent.get("senses") or [])
+                                if not sn.get("pos") or cls._pos_code(sn.get("pos")) == "n"
+                            ] or (_fb_ent.get("senses") or [])
+                            if _fb_sns and "uncountable" not in " ".join(str(sn.get("grammar") or "").lower() for sn in _fb_sns[:2]):
+                                continue
+                        if (
+                            not cls.are_same_word_family(fb, clean_target)
+                            and not any(cls.are_same_word_family(fb, s) for s in safe_distractors)
+                            and not cls.double_key_collision(
+                                clean_target, fb, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                            )[0]
                         ):
-                            if target_strictly_uncountable:
-                                _fb_ent = cls.get_ldoce_entry(fb) or {}
-                                _fb_sns = [
-                                    sn for sn in (_fb_ent.get("senses") or [])
-                                    if not sn.get("pos") or cls._pos_code(sn.get("pos")) == "n"
-                                ] or (_fb_ent.get("senses") or [])
-                                if _fb_sns and "uncountable" not in " ".join(str(sn.get("grammar") or "").lower() for sn in _fb_sns[:2]):
-                                    continue
                             safe_distractors.append(fb)
                             distractor_metadata[fb] = "dynamic_domain_fallback"
                             if len(safe_distractors) >= target_count:
@@ -1921,7 +2096,7 @@ class DistractorEngineMixin:
         return cls._orthographic_pos_index
 
     @staticmethod
-    def _edit_distance_le2(s1: str, s2: str) -> int:
+    def _edit_distance_bounded(s1: str, s2: str) -> int:
         """Fast bounded Levenshtein distance (returns 99 if distance > 2)."""
         if abs(len(s1) - len(s2)) > 2:
             return 99
@@ -2107,10 +2282,27 @@ class DistractorEngineMixin:
             )
         )
 
-        # 1. Reject inflectional / participial / negation prefix derivatives
+        # 1. Reject inflectional / participial / negation prefix derivatives & unaligned productive-prefix compounds
         for pfx in ("un", "in", "im", "ir", "il", "non", "dis", "mis", "re", "over", "under"):
             if cand == pfx + target or target == pfx + cand:
                 return False
+        for c_pfx in (
+            "under", "over", "inter", "trans", "super", "counter", "multi", "ultra",
+            "extra", "micro", "macro", "cross", "out", "sub", "mis", "dis", "pre",
+            "post", "anti", "auto", "semi", "fore", "back", "down",
+        ):
+            if target.startswith(c_pfx) and cand.startswith(c_pfx):
+                t_st = target[len(c_pfx):]
+                c_st = cand[len(c_pfx):]
+                if len(t_st) >= 3 and len(c_st) >= 3:
+                    # Require the stems after the shared productive prefix to also be orthographic look-alikes
+                    # (e.g. allow 'overreach'/'overreact' where 'reach'/'react' have edit distance 1,
+                    #  but block 'underpin'/'underlie' where 'pin'/'lie' only share the prefix 'under-').
+                    if not (
+                        (t_st[:2] == c_st[:2] or t_st[-2:] == c_st[-2:])
+                        and cls._edit_distance_bounded(t_st, c_st) <= 2
+                    ):
+                        return False
         if wn_pos == "a" and cand.endswith("ed") and not target.endswith("ed"):
             return False
         if wn_pos == "n" and cand.endswith("ing") and not target.endswith("ing"):
@@ -2158,11 +2350,13 @@ class DistractorEngineMixin:
             ):
                 return False
 
-            cand_prim_pos = cls._pos_code(e_cand.get("pos") or "")
+            raw_e_pos = str(e_cand.get("pos") or "").split("|")[0].strip()
+            first_sense_pos = str(senses[0].get("pos") or "").strip() if senses else ""
+            cand_prim_pos = cls._pos_code(first_sense_pos or raw_e_pos)
             if cand_prim_pos and cand_prim_pos != p_code:
                 # Only allow secondary POS when edit distance == 1 AND shared initial + len >= 6 (classic homophone/paronym like complement/compliment)
                 strict_pos_senses = [s for s in senses if cls._pos_code(s.get("pos") or "") == p_code]
-                if not strict_pos_senses or cls._edit_distance_le2(target, cand) > 1 or target[0] != cand[0] or len(target) < 6:
+                if not strict_pos_senses or cls._edit_distance_bounded(target, cand) > 1 or target[0] != cand[0] or len(target) < 6:
                     return False
 
         # 4. Double-Key Collision Check (includes context_anchor & quote frame checks)
@@ -2186,6 +2380,31 @@ class DistractorEngineMixin:
             for s in c_syns if s.lemmas()
         ):
             return False
+        # For nouns, block jarring concrete-object vs. abstract-state clashes
+        # (e.g., blocking 'leopard' [animal] for 'jeopardy' [abstract danger] and 'breast' [body] for 'breadth' [abstract quality],
+        # while still permitting long root-sharing morphological paronyms like 'specimen' [len 8] vs. 'speculation').
+        if wn_pos == "n":
+            _abs_lfs = {
+                "noun.state", "noun.attribute", "noun.cognition", "noun.feeling",
+                "noun.communication", "noun.act", "noun.event", "noun.phenomenon",
+                "noun.time", "noun.relation",
+            }
+            _bio_conc_lfs = {
+                "noun.animal", "noun.plant", "noun.food", "noun.body", "noun.substance",
+            }
+            _all_conc_lfs = _bio_conc_lfs | {"noun.artifact", "noun.object"}
+            t_lfs_all = [s.lexfile() for s in t_syns if s.lexfile()]
+            c_prim_lf = c_syns[0].lexfile() if c_syns[0].lexfile() else ""
+            if t_lfs_all and c_prim_lf:
+                if (all(lf in _abs_lfs for lf in t_lfs_all) and c_prim_lf in _bio_conc_lfs) or (
+                    all(lf in _bio_conc_lfs for lf in t_lfs_all) and c_prim_lf in _abs_lfs
+                ):
+                    return False
+                if cls._common_prefix_len(target, cand) < 4 or len(target) < 8:
+                    if (all(lf in _abs_lfs for lf in t_lfs_all) and c_prim_lf in _all_conc_lfs) or (
+                        all(lf in _all_conc_lfs for lf in t_lfs_all) and c_prim_lf in _abs_lfs
+                    ):
+                        return False
         t_ids = {s.id for s in t_syns}
         c_ids = {s.id for s in c_syns}
         if t_ids & c_ids:
@@ -2210,12 +2429,12 @@ class DistractorEngineMixin:
 
         # 6. Root-Sharing Cognate & Compound Head-Sharing Semantic Overlap Check:
         # If target and cand share a 4+ char prefix (same Latin/Greek root, e.g. activism/activity, specimen/species, continual/continuous)
-        # OR share a 5+ char compound head suffix as nouns (excluding -itude/-tion/-sion/-ment derivational suffixes, e.g. shareholder/stakeholder, policymaker/lawmaker),
+        # OR share a 5+ char compound head suffix (excluding -itude/-tion/-sion/-ment derivational suffixes, e.g. shareholder/stakeholder, ecological/biological),
         # block if they share content words across their PedLex+WN definitions OR share 2-hop derivational bases (for nouns/verbs).
         pref = cls._common_prefix_len(target, cand)
         suff = cls._common_suffix_len(target, cand)
         is_deriv_suffix_only = target.endswith(("itude", "ation", "ition", "ment", "ness", "ship", "ance", "ence"))
-        if pref >= 4 or (wn_pos == "n" and suff >= 5 and not is_deriv_suffix_only):
+        if pref >= 4 or (suff >= 5 and not is_deriv_suffix_only):
             t_defs = cls._get_def_content_words(target, wn_pos)
             c_defs = cls._get_def_content_words(cand, wn_pos)
             if t_defs & c_defs:
@@ -2274,9 +2493,11 @@ class DistractorEngineMixin:
         for w in raw_pool:
             if w in excl or abs(len(w) - len(tw)) > 3:
                 continue
+            if anchor_type == "modified_noun" and wn_pos == "a" and w in cls._PREDICATIVE_ONLY_ADJS:
+                continue
             pref = cls._common_prefix_len(tw, w)
             suff = cls._common_suffix_len(tw, w)
-            ed = cls._edit_distance_le2(tw, w)
+            ed = cls._edit_distance_bounded(tw, w)
             w_skel = cls._phonetic_consonant_skeleton(w)
             w_rhyme = cls._phonetic_rhyme_tail(w)
             skel_match = bool(tw_skel and w_skel == tw_skel and abs(len(w) - len(tw)) <= 2)
@@ -2288,14 +2509,6 @@ class DistractorEngineMixin:
                 or (pref >= 4 and len(tw) >= 6 and abs(len(w) - len(tw)) <= 3)
                 or (pref >= 3 and suff >= 2)
             ):
-                if anchor_type == "modified_noun" and wn_pos == "a" and w in cls._PREDICATIVE_ONLY_ADJS:
-                    continue
-                if not cls.is_cefr_compliant_distractor(w, tw):
-                    continue
-                if not cls.is_safe_orthographic_paronym(
-                    tw, w, pos=wn_pos, context_anchor=context_anchor, anchor_type=anchor_type, quote=quote
-                ):
-                    continue
                 w_syl = cls._estimate_syllables(w)
                 score = 0
                 if ed == 1:
@@ -2317,9 +2530,15 @@ class DistractorEngineMixin:
                 scored.append((score, w))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
-        # Deduplicate mutual word-family members among selected paronyms
+        # Lazily verify CEFR, orthographic paronym safety, and deduplicate mutual word-family members
         selected: List[Tuple[str, int]] = []
         for sc, w in scored:
+            if not cls.is_cefr_compliant_distractor(w, tw):
+                continue
+            if not cls.is_safe_orthographic_paronym(
+                tw, w, pos=wn_pos, context_anchor=context_anchor, anchor_type=anchor_type, quote=quote
+            ):
+                continue
             if any(cls.are_same_word_family(w, prev_w) for prev_w, _ in selected):
                 continue
             selected.append((w, sc))
@@ -2344,6 +2563,8 @@ class DistractorEngineMixin:
     #     sentence polarity, not double-keys.
     #     Coordinate-term (sister-synset) expansion is deliberately EXCLUDED —
     #     it over-matches (break ~ coincide) and yields false double-keys.
+    _semantic_fields_cache: Dict[Tuple[str, str], Tuple[Set[str], Set[str]]] = {}
+
     @classmethod
     def semantic_fields(cls, word: str, pos: Optional[str] = None) -> Tuple[Set[str], Set[str]]:
         """Returns (near_set, antonyms) for a lemma, WordNet-derived.
@@ -2352,8 +2573,14 @@ class DistractorEngineMixin:
                     hypernym / entailment / hyponym lemmas.
         antonyms  : sense-locked antonyms (+ their satellite cluster).
         Deterministic; never raises."""
+        target = (word or "").strip().lower()
+        pos_clean = (pos or "").strip().lower()
+        cache_key = (target, pos_clean)
+        cached = cls._semantic_fields_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         wn = cls.get_wordnet()
-        target = word.lower()
         near: Set[str] = set()
         antonyms: Set[str] = set()
 
@@ -2361,7 +2588,6 @@ class DistractorEngineMixin:
             for w in syn.words():
                 near.add(w.lemma().lower())
 
-        pos_clean = (pos or "").strip().lower()
         if pos_clean in ("noun", "n"):
             pos_tags = ("n",)
         elif pos_clean in ("verb", "v"):
@@ -2417,7 +2643,9 @@ class DistractorEngineMixin:
 
         near.discard(target)
         antonyms.discard(target)
-        return near, antonyms
+        res = (near, antonyms)
+        cls._semantic_fields_cache[cache_key] = res
+        return res
 
     GENERIC_COLLOCATION_MODIFIERS: Set[str] = {
         "big", "bigger", "biggest", "large", "larger", "largest",
@@ -2882,6 +3110,12 @@ class DistractorEngineMixin:
                 if d in near or d_lem in near:
                     return True, "double_key_prep"
                 return False, "frame_only"
+            if (d in near or d_lem in near) and d not in antonyms and d_lem not in antonyms:
+                # A near-synonym that either lacks competing prepositional valency in PedLex/OCD
+                # or is a transitive verb (where `NP + prep` can function as a resultative/adjunct PP,
+                # e.g., `convert/adapt [sth] into [sth]`) cannot be safely discriminated by preposition alone.
+                if not d_preps or (pos and str(pos).lower().startswith("v") and cls._verb_takes_object(d_lem)):
+                    return True, "double_key_prep"
             # Candidate does NOT govern the anchor preposition -> single-fit discriminated!
             return False, "none"
 
@@ -2951,6 +3185,29 @@ class DistractorEngineMixin:
                                     if re.search(rf"\b{re.escape(d)}\b|\b{re.escape(d_lem)}\b", v_col):
                                         shared_colloc = True
                                         break
+                    if not shared_colloc and anchor_type == "modified_noun":
+                        a_entry = cls.get_oxford_collocations(a_clean, pos="noun")
+                        if d in [adj_w.split()[0].lower() for adj_w in a_entry.get("adj", [])] or d_lem in [adj_w.split()[0].lower() for adj_w in a_entry.get("adj", [])]:
+                            shared_colloc = True
+                        if not shared_colloc:
+                            a_ldoce = cls.get_ldoce_entry(a_clean)
+                            if a_ldoce:
+                                for adj_item in a_ldoce.get("collocations", {}).get("adjectives", []):
+                                    adj_col = (adj_item.get("collocation") or adj_item.get("phrase") or "").lower()
+                                    if re.search(rf"\b{re.escape(d)}\b|\b{re.escape(d_lem)}\b", adj_col):
+                                        shared_colloc = True
+                                        break
+                        if not shared_colloc:
+                            if cls.lookup_ldoce_phrase(f"{d} {a_clean}") or cls.get_ldoce_entry(f"{d} {a_clean}") or (d_lem != d and (cls.lookup_ldoce_phrase(f"{d_lem} {a_clean}") or cls.get_ldoce_entry(f"{d_lem} {a_clean}"))):
+                                shared_colloc = True
+                        if not shared_colloc and d_ldoce:
+                            for s in d_ldoce.get("senses", []):
+                                for ex in s.get("examples", []):
+                                    if re.search(rf"\b(?:{re.escape(d)}|{re.escape(d_lem)})\s+{re.escape(a_clean)}s?\b", str(ex).lower()):
+                                        shared_colloc = True
+                                        break
+                                if shared_colloc:
+                                    break
                 elif anchor_type in ("modifies_adj", "modifies_verb"):
                     # Check if distractor adverb explicitly collocates with this anchor in PedLex
                     d_ldoce = cls.get_ldoce_entry(d)
@@ -3093,6 +3350,12 @@ class DistractorEngineMixin:
         "slut", "tit", "twat", "wanker", "whore", "doss"
     }
 
+    _TABOO_MULTIWORD_PHRASES: Set[str] = {
+        "go down on", "get it on", "get laid", "knock up", "jerk off", "jack off",
+        "toss off", "make out with", "sleep with", "sleep around", "fool around with",
+        "come on to", "have it off", "do it with", "turn on", "screw around",
+    }
+
     @classmethod
     def is_inappropriate_phrase(cls, phrase: str) -> bool:
         """
@@ -3103,6 +3366,9 @@ class DistractorEngineMixin:
         if not tokens:
             return False
         if any(t in cls._TABOO_PHRASE_TOKENS for t in tokens):
+            return True
+        norm_p = " ".join(tokens)
+        if norm_p in cls._TABOO_MULTIWORD_PHRASES:
             return True
         return False
 
@@ -3190,11 +3456,18 @@ class DistractorEngineMixin:
         t_entry_top = cls.get_ldoce_entry(phrase_clean) if n_words == 2 else None
         t_pos_top = str((t_entry_top or {}).get("pos", "")).strip().lower()
         pos_norm = str(pos or "").strip().lower()
+        _ADV_OR_ADJ_COMPLEMENTS = {
+            "better", "worse", "best", "worst", "well", "badly", "hard", "fast",
+            "far", "more", "less", "long", "short", "high", "low", "early", "late",
+            "alone", "wrong", "right", "free", "clear", "open", "close", "sure", "certain",
+        }
         is_compound_noun = (
             n_words == 2
             and words[0] not in _PARTICLES_AND_PREPS
             and words[0] not in _NON_VERB_PHRASE_HEADS
             and words[1] not in _PARTICLES_AND_PREPS
+            and words[1] not in _ADV_OR_ADJ_COMPLEMENTS
+            and str((cls.get_ldoce_entry(words[1]) or {}).get("pos") or "").strip().lower() not in ("adverb", "adjective")
             and pos_norm not in ("verb", "v", "phrasal verb", "phrasal_verb", "adj", "adjective", "adv", "adverb")
             and (
                 t_pos_top == "noun"
@@ -3268,8 +3541,20 @@ class DistractorEngineMixin:
                         pats = " ".join(str(pt) for pt in (s.get("patterns") or [])).lower()
                         if p_str in phw or p_str in pats:
                             chunks.append(str(s.get("definition") or ""))
-            for _tier, txt in cls.ldoce_phrase_hits(p_str):
-                chunks.append(str(txt or ""))
+                    for pv in e_head.get("phrasal_verbs", []) or []:
+                        if isinstance(pv, dict):
+                            pv_name = str(pv.get("phrase") or pv.get("headword") or "").lower()
+                            if p_str in pv_name:
+                                for pvs in pv.get("senses", []) or []:
+                                    if isinstance(pvs, dict):
+                                        chunks.append(str(pvs.get("definition") or ""))
+                    for ph in e_head.get("phrases", []) or []:
+                        if isinstance(ph, dict):
+                            ph_name = str(ph.get("phrase") or ph.get("headword") or "").lower()
+                            if p_str in ph_name:
+                                for phs in ph.get("senses", []) or []:
+                                    if isinstance(phs, dict):
+                                        chunks.append(str(phs.get("definition") or ""))
             return " ; ".join(chunks).lower()
 
         target_phrase_def_text = _get_phrase_def_text(phrase_clean) if n_words == 2 else ""
@@ -3277,6 +3562,7 @@ class DistractorEngineMixin:
         def ships(cand: str) -> bool:
             if (cand == phrase_clean or _norm_poss(cand) == target_norm_poss
                     or cand in exclude or cand in synonym_set
+                    or "." in cand or "[" in cand or "]" in cand or "(" in cand or ")" in cand or "/" in cand
                     or cls.is_inappropriate_phrase(cand)
                     or not (cand in phrase_index or cls.is_attested_phrase(cand))):
                 return False
@@ -3290,11 +3576,33 @@ class DistractorEngineMixin:
                 if not (cls._wordnet_pos(c_words[-1]) & {"n"}):
                     return False
             elif target_head_is_verb:
-                # Active lexical/light verb phrases (e.g. 'make the most of', 'take pleasure in')
+                # Active lexical/light verb phrases (e.g. 'make the most of', 'take pleasure in', 'play a part', 'fare better')
                 # must only pair with active verb-headed phrases, never determiner/noun/prep fragments
-                # ('no to speak of', 'a bad judge of') or passive 'be <VBN> ...' constructions.
+                # ('no to speak of', 'a bad judge of'), nominal compounds ('walk-on part', 'fare dodger'),
+                # or mismatched inflectional forms ('getting better' vs base 'fare better').
                 if c_head in _NON_VERB_PHRASE_HEADS or not (cls._wordnet_pos(c_head) & {"v"}):
                     return False
+                if (c_head.endswith("ing") and not head_w.endswith("ing")) or (head_w.endswith("ing") and not c_head.endswith("ing")):
+                    return False
+                c_ent_full = cls.get_ldoce_entry(cand) or cls.get_ldoce_entry(cand.replace(" ", "-"))
+                if c_ent_full and str(c_ent_full.get("pos") or "").strip().lower() == "noun":
+                    return False
+                if len(c_words) >= 2:
+                    c_ent_pre = cls.get_ldoce_entry(f"{c_words[0]}-{c_words[1]}")
+                    if c_ent_pre and str(c_ent_pre.get("pos") or "").strip().lower() in ("adjective", "noun"):
+                        return False
+                ch_entry = cls.get_ldoce_entry(c_head)
+                ch_primary_pos = str((ch_entry or {}).get("pos") or "").lower()
+                if any(bad_p in ch_primary_pos for bad_p in ("interjection", "exclamation", "adjective", "adverb", "preposition", "determiner")):
+                    return False
+                if n_words == 2 and len(c_words) == 2 and c_words[1] in _PARTICLES_AND_PREPS:
+                    _ditrans_only_heads = {
+                        "attribute", "equip", "provide", "confine", "devote", "dedicate",
+                        "expose", "subject", "owe", "accuse", "deprive", "remind",
+                        "convince", "inform", "warn", "assure", "rob", "rid", "cure",
+                    }
+                    if c_head in _ditrans_only_heads and head_w not in _ditrans_only_heads:
+                        return False
                 if c_head == "be" and head_w != "be":
                     return False
                 if target_is_v_noun_prep and len(c_words) == 3:
@@ -3302,12 +3610,27 @@ class DistractorEngineMixin:
                     # ('bring out in', 'come on in', 'take up with') or Verb + Det + Noun ('take a chance')
                     if c_words[1] in _PARTICLE_OR_DET_MIDDLES or not (cls._wordnet_pos(c_words[1]) & {"n"}):
                         return False
+                if n_words == 3 and words[1] in ("a", "an", "the"):
+                    # Preserve Verb + Det + Noun structural symmetry (e.g. 'play a part'):
+                    # reject phrasal-verb nominalizations ('walk on part') and synonymous light-verb variants ('have a part').
+                    if len(c_words) != 3 or c_words[1] not in ("a", "an", "the", "one's", "your", "his", "her", "their", "some", "no"):
+                        return False
+                    if c_words[1:] == words[1:] and head_w in ("play", "have", "take", "make", "do", "give") and c_head in ("play", "have", "take", "make", "do", "give"):
+                        return False
             elif target_head_is_det:
                 if c_head not in ("a", "an", "the"):
                     return False
             elif target_head_is_prep:
-                if c_head not in _NON_VERB_PHRASE_HEADS:
+                if c_head not in _PARTICLES_AND_PREPS:
                     return False
+                if n_words == 3 and words[1] in ("a", "an", "the"):
+                    if len(c_words) != 3 or c_words[1] not in ("a", "an", "the"):
+                        return False
+                if n_words == 4 and words[1] in ("a", "an", "the"):
+                    if len(c_words) != 4 or c_words[1] not in ("a", "an", "the"):
+                        return False
+                    if words[-1] not in _PARTICLES_AND_PREPS and c_words[-1] == words[-1]:
+                        return False
 
             # Same-preposition / same-tail 2-word phrase double-key guard (e.g. 'care about' vs 'worry about')
             if n_words == 2 and len(c_words) == 2 and c_words[1] == words[1] and c_head != head_w:
@@ -3335,11 +3658,14 @@ class DistractorEngineMixin:
 
         def strength(cand: str) -> int:
             """PedLex's own phrasal-verb block beats a PHRASES item, which beats a pattern."""
+            idx_tier = phrase_index.get(cand)
+            if idx_tier == "phrasal_verb":
+                return 0
             hits = cls.ldoce_phrase_hits(cand)
             if hits:
                 return min((tier_rank.get(tier, len(tier_rank)) for tier, _text in hits),
                            default=len(tier_rank))
-            tier = phrase_index.get(cand, "example")
+            tier = "phrase" if idx_tier == "sense_unit" else (idx_tier or "example")
             return tier_rank.get(tier, len(tier_rank))
 
         # -------------------------------------------------------------
@@ -3399,19 +3725,13 @@ class DistractorEngineMixin:
             NOUN_DEPENDENT_PREPS = {}
             FRAME_PREPOSITION_NOUNS = set()
 
-        if n_words == 2 and words[0] in COLLOCATION_VERB_PREPS:
+        if n_words == 2 and words[0] in COLLOCATION_VERB_PREPS and words[1] == COLLOCATION_VERB_PREPS[words[0]]:
             verb, prep = words[0], words[1]
             verb_cands: List[str] = []
-            # Priority 1: Same preposition contrast (e.g. 'worry about' -> 'care about', 'complain about')
+            # Priority 1: Same preposition contrast (e.g. 'worry about' -> 'care about', 'complain about'; 'derive from' -> 'benefit from', 'suffer from', 'differ from')
             for v, p in COLLOCATION_VERB_PREPS.items():
                 if p == prep and v != verb:
                     c = f"{v} {prep}"
-                    if ships(c) and c not in verb_cands:
-                        verb_cands.append(c)
-            # Priority 2: Cross-preposition verb collocations
-            for v, p in COLLOCATION_VERB_PREPS.items():
-                if v != verb and p != prep:
-                    c = f"{v} {p}"
                     if ships(c) and c not in verb_cands:
                         verb_cands.append(c)
             if len(verb_cands) >= count:
@@ -3640,15 +3960,31 @@ class DistractorEngineMixin:
                             same_part.append(cand)
 
                 # Query phrase_index for 2-word phrasal verbs ending with particle `p`
-                for k in phrase_index:
-                    k_words = k.split()
-                    if len(k_words) == 2 and k_words[1] == p and k_words[0] != v:
-                        cand_head = k_words[0]
-                        # Enforce head syntactic concord: if target head is a verb, cand head must be a verb
-                        if v_is_verb and not (cls._wordnet_pos(cand_head) & {"v"}):
+                p_cands = [
+                    k for k in phrase_index
+                    if " " in k and len(k.split()) == 2 and k.split()[1] == p and k.split()[0] != v
+                ]
+                p_cands.sort(key=lambda k: (0 if phrase_index.get(k) == "phrasal_verb" else 1, k))
+                tier0_count = sum(1 for c in same_part if strength(c) == 0)
+                for k in p_cands:
+                    if tier0_count >= count:
+                        break
+                    cand_head = k.split()[0]
+                    # Enforce head syntactic concord: if target head is a verb, cand head must be a primary verb
+                    # (not an exclamation/interjection/adjective greeting frame like 'welcome to')
+                    if v_is_verb:
+                        if not (cls._wordnet_pos(cand_head) & {"v"}):
                             continue
-                        if ships(k) and k not in diff_part and k not in same_part:
-                            same_part.append(k)
+                        ch_entry = cls.get_ldoce_entry(cand_head)
+                        ch_primary_pos = str((ch_entry or {}).get("pos") or "").lower()
+                        if any(bad_p in ch_primary_pos for bad_p in ("interjection", "exclamation", "adjective", "adverb", "preposition", "determiner")):
+                            continue
+                    if k not in diff_part and k not in same_part and ships(k):
+                        same_part.append(k)
+                        if strength(k) == 0:
+                            tier0_count += 1
+                            if tier0_count >= count:
+                                break
 
                 diff_part.sort(key=lambda c: (strength(c), c))
                 same_part.sort(key=lambda c: (strength(c), c))
@@ -3671,17 +4007,31 @@ class DistractorEngineMixin:
                 elif same_part:
                     distractors = same_part
             else:
-                # Verb + Complement/Adjective Collocation (e.g. 'make possible', 'make certain')
+                # Verb + Complement/Adjective/Adverb Collocation (e.g. 'make possible', 'fare better', 'go wrong')
                 p_is_adj = bool(cls._wordnet_pos(p) & {"a", "s"})
+                p_is_adv = p in _ADV_OR_ADJ_COMPLEMENTS or bool(cls._wordnet_pos(p) & {"r"})
                 diff_comp: List[str] = []
                 for k in phrase_index:
                     kw = k.split()
                     if len(kw) == 2 and kw[0] == v and kw[1] != p and kw[1] not in particles:
+                        if p_is_adv and str((cls.get_ldoce_entry(kw[1]) or {}).get("pos") or "").strip().lower() == "noun":
+                            continue
                         if p_is_adj:
                             if not (cls._wordnet_pos(kw[1]) & {"a", "s"}):
                                 continue
                         if ships(k) and k not in diff_comp:
                             diff_comp.append(k)
+                if p_is_adv and len(diff_comp) < count:
+                    for k in phrase_index:
+                        kw = k.split()
+                        if len(kw) == 2 and kw[1] == p and kw[0] != v:
+                            if v == "fare" and kw[0] in ("do", "get"):
+                                continue
+                            if ships(k) and k not in diff_comp:
+                                diff_comp.append(k)
+                    for _adv_col in ("know better", "think better", "go wrong", "fall short", "come first", "work hard", "hold fast", "stand firm"):
+                        if _adv_col != phrase_clean and ships(_adv_col) and _adv_col not in diff_comp:
+                            diff_comp.append(_adv_col)
                 if diff_comp:
                     diff_comp.sort(key=lambda c: (strength(c), c))
                     distractors = diff_comp[:count]
@@ -3823,6 +4173,14 @@ class DistractorEngineMixin:
                             cands_found.append(c)
                 elif "type of" in phrase_clean:
                     for c in ["any form of", "any sort of", "any kind of", "any part of"]:
+                        if ships(c) and c not in cands_found:
+                            cands_found.append(c)
+                elif target_head_is_prep and n_words == 3 and words[1] in ("a", "an"):
+                    for c in ["at a time", "in a hurry", "on a diet", "at a loss", "in a row", "on a roll", "at a glance", "in a mess", "on a whim"]:
+                        if ships(c) and c not in cands_found:
+                            cands_found.append(c)
+                elif target_head_is_prep and n_words == 4 and words[1] in ("a", "an"):
+                    for c in ["on a regular basis", "at a rapid pace", "on a tight budget", "in a big way", "on a daily basis", "to a certain extent", "at a steady rate"]:
                         if ships(c) and c not in cands_found:
                             cands_found.append(c)
 
@@ -4446,6 +4804,38 @@ class DistractorEngineMixin:
                 "canonical_blank": w_clean,
                 "contrast_groups": ["LV_TRIAD_CONTRAST"],
                 "ban_groups": [],
+            }
+            return cands[:target_count], synth_spec
+
+        # Special handler 3: Family 1A Preparatory Object Extraposition ('make it easy/possible/clear/a rule')
+        if w_clean.startswith("make it "):
+            _fam1a_ease_group = {
+                "make it easy", "make it easier", "make it simple",
+                "make it possible", "make it impossible",
+                "make it hard", "make it difficult", "make it tough",
+            }
+            _fam1a_foils = [
+                "make it a rule",
+                "make it a point",
+                "make it a habit",
+                "make it clear",
+                "make it plain",
+                "make it known",
+            ]
+            if w_clean not in _fam1a_ease_group:
+                _fam1a_foils = ["make it possible", "make it easy", "make it hard"] + _fam1a_foils
+            cands = [
+                c for c in _fam1a_foils
+                if c != w_clean and c not in excl and (w_clean not in _fam1a_ease_group or c not in _fam1a_ease_group)
+            ]
+            synth_spec = {
+                "word": w_clean,
+                "pos": "phrase",
+                "family_id": 1,
+                "subcat_group": "MAKE_IT_EXTRAPOS",
+                "canonical_blank": w_clean,
+                "contrast_groups": ["MAKE_IT_COMP_CONTRAST"],
+                "ban_groups": sorted(_fam1a_ease_group) if w_clean in _fam1a_ease_group else [],
             }
             return cands[:target_count], synth_spec
 

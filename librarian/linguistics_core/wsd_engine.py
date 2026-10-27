@@ -775,7 +775,14 @@ class WsdEngineMixin:
                 if "[plural]" in s_gram and "[singular]" not in s_gram and "[countable]" not in s_gram:
                     score -= 60
             if target_tok_is_predicative and "[only before noun]" in s_gram:
-                score -= 60
+                s_ex_pat_text = " ".join(list(s.get("examples") or []) + list(s.get("patterns") or [])).lower()
+                s_ex_pat_toks = set(re.findall(r"\b[a-z]{4,}\b", s_ex_pat_text)) - meta_stopwords
+                for _t_ex in list(s_ex_pat_toks):
+                    _l_ex = cls._surface_lemma(_t_ex)
+                    if _l_ex and len(_l_ex) >= 4:
+                        s_ex_pat_toks.add(_l_ex)
+                if not (s_ex_pat_toks & (q_tokens - meta_stopwords)):
+                    score -= 60
             elif target_tok_is_attributive and "[not before noun]" in s_gram:
                 score -= 60
 
@@ -1164,14 +1171,34 @@ class WsdEngineMixin:
                         v_toks_u_chk = [t for t in doc_q if t.lemma_.lower() in head_cand_lemmas or t.text.lower() in head_cand_lemmas]
                         if not v_toks_u_chk:
                             v_toks_u_chk = [t for t in doc_q if t.pos_ in ("VERB", "AUX")]
-                        has_u_gov_obj = any(
-                            c.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass", "relcl", "ccomp", "xcomp")
-                            or (c.dep_ == "prep" and any(gc.dep_ in ("pobj", "pcomp") for gc in c.children))
-                            for v in v_toks_u_chk for c in v.children
-                        ) or any(v.dep_ in ("relcl", "acl") for v in v_toks_u_chk)
+                        u_gov_objs = [
+                            c for v in v_toks_u_chk for c in v.children
+                            if c.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass", "relcl", "ccomp", "xcomp")
+                        ] + [
+                            gc for v in v_toks_u_chk for c in v.children if c.dep_ == "prep"
+                            for gc in c.children if gc.dep_ in ("pobj", "pcomp")
+                        ]
+                        has_u_gov_obj = bool(u_gov_objs) or any(v.dep_ in ("relcl", "acl") for v in v_toks_u_chk)
                         if not has_u_gov_obj:
                             any_unit_demanded = True
                             continue
+                        # Enforce somebody vs something animacy on unit patterns (e.g. 'put somebody out' vs 'put brochures out')
+                        u_has_sb = bool(re.search(r"\b(?:somebody|someone|sb)\b(?!'s\b)", u_no_opt))
+                        u_has_sth = bool(re.search(r"\b(?:something|sth)\b(?!'s\b)", u_no_opt))
+                        if u_gov_objs and (u_has_sb != u_has_sth):
+                            u_obj_is_human = any(
+                                o.pos_ == "PRON" and o.lemma_.lower() in ("i", "me", "you", "he", "him", "she", "her", "we", "us", "they", "them", "who", "whom", "somebody", "someone", "anyone", "anybody", "everybody", "everyone", "nobody")
+                                or (o.pos_ in ("NOUN", "PROPN") and o.ent_type_ in ("PERSON", "ORG"))
+                                or o.lemma_.lower() in ("person", "people", "man", "woman", "child", "boy", "girl", "student", "teacher", "worker", "employee", "friend", "family", "parent", "customer", "patient", "guest", "visitor")
+                                or "noun.person" in cls.get_wordnet_supersenses(o.lemma_.lower(), pos="n")
+                                for o in u_gov_objs
+                            )
+                            if u_has_sb and not u_has_sth and not u_obj_is_human:
+                                any_unit_demanded = True
+                                continue
+                            if u_has_sth and not u_has_sb and u_obj_is_human:
+                                any_unit_demanded = True
+                                continue
                     u_no_opt = re.sub(r"\b(?:somebody|something|someone|sb|sth|one)'s?\b", "somebody", u_no_opt)
                     u_no_opt = re.sub(r"'s\b", "", u_no_opt)
                     slash_match = re.search(r"([a-zA-Z]+(?:/[a-zA-Z]+)+)", u_no_opt)
@@ -2018,6 +2045,9 @@ class WsdEngineMixin:
                                     if "noun.communication" in obj_supersenses or "noun.possession" in obj_supersenses:
                                         if any(k in s_defn for k in ("give", "award", "prize", "gift", "medal", "money", "present", "degree")):
                                             score += 40
+                                    if "noun.communication" in obj_supersenses:
+                                        if any(k in s_defn for k in ("broadcast", "publish", "read or listen", "information", "statement", "newspaper", "magazine", "book")):
+                                            score += 45
                                     if "noun.person" in obj_supersenses:
                                         if any(k in s_defn for k in ("introduce someone", "formally introduce")):
                                             score += 35
@@ -2055,11 +2085,11 @@ class WsdEngineMixin:
                                                 wh_markers = [w for w in pw if w in ("where", "when", "why", "how", "what", "who", "whom", "whose")]
                                                 if wh_markers and not any(w in q_seq for w in wh_markers):
                                                     continue
-                                                # Selectional restriction: if pattern requires person object (e.g. 'coming from him/her/you etc')
-                                                # and context prepositional object is inanimate / non-person, skip this pattern
+                                                # Selectional restriction: if pattern requires person object (e.g. 'coming from him/her/you etc' or 'put somebody out')
+                                                # and context prepositional or direct object is inanimate / non-person, skip this pattern
                                                 has_person_constraint = any(w in ("him", "her", "you", "someone", "somebody", "sb") for w in pw) and not any(w in ("something", "sth", "what") for w in pw)
                                                 if has_person_constraint:
-                                                    p_objs = [pc for pc in ch.children if pc.dep_ in ("pobj", "pcomp")]
+                                                    p_objs = [pc for pc in ch.children if pc.dep_ in ("pobj", "pcomp")] or list(deep_dobj_tokens)
                                                     if p_objs:
                                                         is_pobj_person = any(
                                                             pc.pos_ == "PRON" and pc.lemma_.lower() in ("he", "she", "i", "we", "they", "you", "who", "someone", "somebody", "him", "her", "me", "us", "them")
@@ -4595,22 +4625,23 @@ class WsdEngineMixin:
         active_session = getattr(cls._wsd_session_local, "session", None)
         if cache_key in cls._wsd_llm_cache:
             cached_idx, cached_raw = cls._wsd_llm_cache[cache_key]
-            if active_session is not None:
-                active_session["model"] = active_session.get("model") or active_model
-                active_session["records"].append({
-                    "item_name": item_name,
-                    "sentence": sentence,
-                    "discourse_context": ctx_clean,
-                    "candidates": candidates,
-                    "options_text": options_text,
-                    "prompt": prompt,
-                    "chosen_idx": cached_idx,
-                    "raw_reply": cached_raw,
-                    "error": None,
-                    "duration": 0.0,
-                    "cached": True,
-                })
-            return cached_idx
+            if 0 <= cached_idx < len(candidates):
+                if active_session is not None:
+                    active_session["model"] = active_session.get("model") or active_model
+                    active_session["records"].append({
+                        "item_name": item_name,
+                        "sentence": sentence,
+                        "discourse_context": ctx_clean,
+                        "candidates": candidates,
+                        "options_text": options_text,
+                        "prompt": prompt,
+                        "chosen_idx": cached_idx,
+                        "raw_reply": cached_raw,
+                        "error": None,
+                        "duration": 0.0,
+                        "cached": True,
+                    })
+                return cached_idx
 
         chosen_idx: Optional[int] = None
         raw = ""
