@@ -2074,8 +2074,8 @@
         // Collect model parameters
         const api_type = document.getElementById('config-api-type').value;
         const model = document.getElementById('config-active-model').value;
-        const api_url = document.getElementById('config-api-url').value;
-        const api_key = document.getElementById('config-api-key').value;
+        const api_url = (document.getElementById('config-api-url').value || '').trim().replace(/\/+$/, '');
+        const api_key = document.getElementById('config-api-key').value.trim();
 
         const compile_defaults = {
             vocabulary: parseInt(document.getElementById('config-vocab-count').value),
@@ -2105,7 +2105,7 @@
         };
 
         const tts_engine = document.getElementById('config-tts-engine').value;
-        const tts_url = document.getElementById('config-tts-url').value;
+        const tts_url = (document.getElementById('config-tts-url').value || '').trim().replace(/\/+$/, '');
         const tts_voice_a = document.getElementById('config-tts-voice-a').value;
         const tts_voice_b = document.getElementById('config-tts-voice-b').value;
         const tts_model = document.getElementById('config-tts-model').value;
@@ -2275,8 +2275,8 @@
         // for THAT engine (not just the saved one). This is what lets the list update live
         // when the user switches API Engine or modifies URL/Token before saving.
         const apiType = document.getElementById('config-api-type').value;
-        const apiUrl = (document.getElementById('config-api-url') || {}).value || '';
-        const apiKey = (document.getElementById('config-api-key') || {}).value || '';
+        const apiUrl = ((document.getElementById('config-api-url') || {}).value || '').trim().replace(/\/+$/, '');
+        const apiKey = ((document.getElementById('config-api-key') || {}).value || '').trim();
         const params = new URLSearchParams();
         params.set('api_type', apiType);
         if (apiUrl) params.set('api_url', apiUrl);
@@ -2288,8 +2288,8 @@
 
         // Check if the current form endpoint matches the saved server configuration
         const savedApiType = (appConfig && appConfig.api_type) || '';
-        const savedApiUrl = (appConfig && appConfig.api_url) || '';
-        const savedApiKey = (appConfig && appConfig.api_key) || '';
+        const savedApiUrl = ((appConfig && appConfig.api_url) || '').trim().replace(/\/+$/, '');
+        const savedApiKey = ((appConfig && appConfig.api_key) || '').trim();
         const endpointChanged = (savedApiType !== apiType || savedApiUrl !== apiUrl || savedApiKey !== apiKey);
 
         fetch('/api/models?' + params.toString())

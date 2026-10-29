@@ -246,7 +246,7 @@ class LLMClient:
     def _refresh_config(self):
         """Refreshes configuration from the config object."""
         raw_type = config.get("api_type") or "ollama"
-        self.api_url = (config.get("api_url") or config.get("ollama_url") or "http://localhost:11434").rstrip('/')
+        self.api_url = (config.get("api_url") or config.get("ollama_url") or "http://localhost:11434").strip().rstrip('/')
         # Auto-heal: If configured endpoint is on Ollama's standard port (11434) and api_type was set to 'openai',
         # auto-switch to native 'ollama' to guarantee correct options (think: false, format: json) are dispatched.
         if raw_type == "openai" and ":11434" in self.api_url:
@@ -269,7 +269,7 @@ class LLMClient:
         """
         self._refresh_config()
         api_type = api_type or self.api_type
-        api_url = (api_url or self.api_url).rstrip('/')
+        api_url = (api_url or self.api_url).strip().rstrip('/')
         api_key = api_key if api_key else self.api_key
         # Surface reachability so the dashboard can distinguish "server offline"
         # (request failed) from "server online but lists no models".
@@ -278,7 +278,7 @@ class LLMClient:
         if api_type == "ollama":
             url = f"{api_url}/api/tags"
             try:
-                response = requests.get(url, timeout=2)
+                response = requests.get(url, timeout=5)
                 response.raise_for_status()
                 data = response.json()
                 self.last_models_ok = True

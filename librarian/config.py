@@ -98,6 +98,10 @@ class Config:
                         # Migration: ollama_url -> api_url
                         if "ollama_url" in user_config and "api_url" not in user_config:
                             user_config["api_url"] = user_config.pop("ollama_url")
+                        if isinstance(user_config.get("api_url"), str):
+                            user_config["api_url"] = user_config["api_url"].strip().rstrip("/")
+                        if isinstance(user_config.get("tts_url"), str):
+                            user_config["tts_url"] = user_config["tts_url"].strip().rstrip("/")
                         
                         self.data.update(user_config)
                     self._config_mtime = current_mtime
@@ -160,6 +164,8 @@ class Config:
         """Generic config update helper."""
         self.load_config()
         config_path = self.project_root / "wiki_config.json"
+        if key in ("api_url", "tts_url") and isinstance(value, str):
+            value = value.strip().rstrip("/")
         self.data[key] = value
         try:
             with open(config_path, "w", encoding="utf-8") as f:
