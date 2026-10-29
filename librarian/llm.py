@@ -255,8 +255,8 @@ class LLMClient:
             self.api_type = raw_type
         self.api_key = config.get("api_key") or "ollama"
         self.model = config.get("model")
-        # Default read timeout: 1200 seconds (20 mins) to support deep reasoning and large parameter local models (27B-70B)
-        self.timeout = config.get("request_timeout", 1200)
+        # Default read timeout: 300 seconds (5 mins) aligned with reverse-proxy (Nginx/NPM) read timeouts
+        self.timeout = config.get("request_timeout", 300)
 
     def list_models(self, api_type=None, api_url=None, api_key=None):
         """Fetches models from Ollama (/api/tags) or OpenAI-compatible servers like llama-server (/v1/models).
