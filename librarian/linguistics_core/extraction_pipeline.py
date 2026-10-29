@@ -2048,6 +2048,20 @@ class ExtractionPipelineMixin:
                     # Syllabus item already declares an explicit slot formula ('do [one\'s] part', 'put [sth] into the atmosphere', 'make the most of [sth]')
                     lookup_phrase = re.sub(r"\s+", " ", re.sub(r"\[(?:one's|oneself|sth|sb|sth/sb|sb/sth)\]", "", expr_clean, flags=re.IGNORECASE)).strip() or expr_clean
                     cand_type = cls.classify_expression_type(lookup_phrase, matched_sent) or "collocation"
+                    if cand_type == "phrasal verb" and re.match(
+                        r"^[a-z]+\s+\[(?:sth|sb|sth/sb|sb/sth)\]\s+(?:to|with|into|as|of|from|for|against|upon)\b",
+                        expr_clean,
+                        flags=re.IGNORECASE,
+                    ):
+                        v0 = lookup_phrase.split()[0].lower() if lookup_phrase else ""
+                        v0_entry = cls.get_ldoce_entry(v0)
+                        if v0_entry and any(
+                            "transitive" in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                            and "intransitive" not in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                            for s in (v0_entry.get("senses") or [])
+                            if cls._pos_code(s.get("pos")) == "v"
+                        ):
+                            cand_type = "collocation"
                     cand_item = {
                         "sid": matched_sid,
                         "quote": matched_sent,
@@ -2850,9 +2864,25 @@ class ExtractionPipelineMixin:
             morph_poses = {target_p}
 
         has_pos_match = bool(
-            (target_p and any(cls._sense_matches_pos(s, target_p) for s in senses))
-            or (morph_poses and any(cls._pos_code(s.get("pos")) in morph_poses for s in senses))
+            any(cls._sense_matches_pos(s, target_p) for s in senses)
+            if target_p
+            else (morph_poses and any(cls._pos_code(s.get("pos")) in morph_poses for s in senses))
         )
+        # Zero-derived run-on guard: just like suffixed `kind == "derived"` entries (line 2805),
+        # a zero-derived conversion listed in `derived_forms` (e.g. `showcase` verb under `showcase` noun)
+        # has no independent dictionary definition in `senses` and must not steal the base POS definition.
+        if (
+            target_p
+            and not has_pos_match
+            and entry
+            and any(
+                isinstance(df, dict)
+                and str(df.get("word") or "").strip().lower() == w_low_clean
+                and cls._pos_code(df.get("pos")) == target_p
+                for df in (entry.get("derived_forms") or [])
+            )
+        ):
+            return []
 
         if not senses:
             candidates = []
@@ -3108,9 +3138,9 @@ class ExtractionPipelineMixin:
                     if s_p_c == "n":
                         if " " not in target_w_clean_p and s_c.get("units") and s_defn_c.strip().startswith(("to ", "if ", "used ")):
                             return True
-                        if ("Plur" in q_morph_num or q_has_count_det) and "[uncountable]" in s_gram_c and "[countable]" not in s_gram_c:
+                        if (("Plur" in q_morph_num and not target_w_clean_p.endswith("s")) or q_has_count_det) and "[uncountable]" in s_gram_c and "[countable]" not in s_gram_c:
                             return True
-                        if "Plur" in q_morph_num and "[singular]" in s_gram_c and "[countable]" not in s_gram_c and "[plural]" not in s_gram_c:
+                        if ("Plur" in q_morph_num and not target_w_clean_p.endswith("s")) and "[singular]" in s_gram_c and "[countable]" not in s_gram_c and "[plural]" not in s_gram_c:
                             return True
                         if ("Sing" in q_morph_num or q_has_count_det) and "[plural]" in s_gram_c and "[singular]" not in s_gram_c and "[countable]" not in s_gram_c:
                             return True
@@ -3163,7 +3193,10 @@ class ExtractionPipelineMixin:
                     if is_tech and not any(w in q_low for w in (
                         "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
                         "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound",
-                        "technology", "technological", "scientific", "science", "engineering"
+                        "technology", "technological", "scientific", "science", "engineering",
+                        "robot", "robotics", "inventor", "inventors", "technician", "technicians",
+                        "experiment", "printing", "device", "machine", "software", "hardware",
+                        "digital", "electronic", "electronics", "computer"
                     )):
                         return True
                     is_grammar_meta = (
@@ -3569,11 +3602,56 @@ class ExtractionPipelineMixin:
             locked_expr_type == "phrasal verb"
             or (tokens and cls.determine_contextual_pos(tokens[0], quote) == "verb")
         )
+        _has_internal_obj_slot = bool(
+            re.search(
+                r"\b[a-z]+\s+[\(\[]\s*(?:sth|sb|sth/sb|sb/sth|something|somebody)\s*[\)\]]\s+(?:to|with|into|from|of|for|on|upon|in|at|by|as|against)\b",
+                str(expr_word or "").lower(),
+            )
+        )
+        _is_passive_v_prep = bool(
+            quote
+            and len(tokens) == 2
+            and tokens[1] in {"to", "with", "into", "from", "of", "for", "on", "upon", "as", "against"}
+            and re.search(
+                rf"\b(?:am|is|are|was|were|be|been|being|get|gets|got|gotten)\s+(?:[a-z]+ly\s+)?{re.escape(tokens[0])}(?:ed|d|en|t)?\s+{re.escape(tokens[1])}\b",
+                q_low,
+            )
+        )
+        is_trivalent_prep_frame = _has_internal_obj_slot or _is_passive_v_prep
         if len(tokens) >= 2 or any(" " in uk for uk in unit_keys):
             # Check phrasal verb blocks FIRST so verbal expressions ('wind up') never get hijacked by hyphenated noun entries ('wind-up')
             for uk in unit_keys:
                 for block in cls._unit_blocks(uk):
                     b_senses = cls._unit_senses(block, uk)
+                    if is_trivalent_prep_frame and b_senses:
+                        base_v0 = uk.split()[0]
+                        v0_ent = cls.get_pedlex_entry(base_v0)
+                        has_trans_base = bool(
+                            v0_ent
+                            and any(
+                                "transitive" in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                                and "intransitive" not in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                                for s in (v0_ent.get("senses") or [])
+                                if cls._pos_code(s.get("pos")) == "v"
+                            )
+                        )
+                        if has_trans_base:
+                            blk_hw_l = str(block.get("headword") or "").lower()
+                            b_senses = [
+                                s for s in b_senses
+                                if any(
+                                    re.search(
+                                        rf"\b{re.escape(base_v0)}\s+(?:somebody|something|someone|sb|sth)\b.*\b{re.escape(uk.split()[-1])}\b",
+                                        str(pat_or_hw).lower(),
+                                    )
+                                    for pat_or_hw in ([blk_hw_l] + list(s.get("patterns") or []))
+                                )
+                                and not (
+                                    ("intransitive" in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                                     and "transitive" not in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower().replace("intransitive", ""))
+                                    or "no passive" in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                                )
+                            ]
                     if len(b_senses) >= 2 and quote:
                         base_v = uk.split()[0]
                         part_w = uk.split()[-1]
@@ -3625,11 +3703,35 @@ class ExtractionPipelineMixin:
                         df = cls.format_ldoce_definition(s)
                         _add_cand(df, locked_expr_type, block.get('phrase') or block.get('headword') or uk, s.get('examples', []), s, True)
             for mw_cand in unit_keys:
+                _mw_has_trans_base = False
+                if is_trivalent_prep_frame and mw_cand:
+                    _mw_v0_ent = cls.get_pedlex_entry(mw_cand.split()[0])
+                    _mw_has_trans_base = bool(
+                        _mw_v0_ent
+                        and any(
+                            "transitive" in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                            and "intransitive" not in f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                            for s in (_mw_v0_ent.get("senses") or [])
+                            if cls._pos_code(s.get("pos")) == "v"
+                        )
+                    )
                 mw_entry = cls.get_pedlex_entry(mw_cand)
                 if mw_entry and mw_entry.get("senses"):
                     for s_i, s in enumerate(mw_entry.get("senses") or []):
                         if is_verb_expr and cls._pos_code(s.get("pos")) in ("n", "adj"):
                             continue
+                        if _mw_has_trans_base:
+                            s_gram_mw = f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                            mw_hw_pats = [str(mw_entry.get("headword") or "")] + list(s.get("patterns") or [])
+                            has_int_obj_mw = any(
+                                re.search(
+                                    rf"\b{re.escape(mw_cand.split()[0])}\s+(?:somebody|something|someone|sb|sth)\b.*\b{re.escape(mw_cand.split()[-1])}\b",
+                                    str(ph).lower(),
+                                )
+                                for ph in mw_hw_pats
+                            )
+                            if not has_int_obj_mw or ("intransitive" in s_gram_mw and "transitive" not in s_gram_mw.replace("intransitive", "")) or "no passive" in s_gram_mw:
+                                continue
                         df = cls.format_ldoce_definition(s)
                         _add_cand(df, locked_expr_type, f"{mw_cand} #{s_i}", s.get("examples", []), s, True)
                 for _host_p, row_p in cls._unit_phrase_rows(mw_cand):
@@ -3642,6 +3744,10 @@ class ExtractionPipelineMixin:
                         res_senses = (res_ent.get("senses") or []) if res_ent else []
                         if 0 <= res_s_idx < len(res_senses):
                             s_res = res_senses[res_s_idx]
+                            if _mw_has_trans_base:
+                                s_gram_res = f"{s_res.get('grammar') or ''} {s_res.get('syntax_codes') or ''}".lower()
+                                if ("intransitive" in s_gram_res and "transitive" not in s_gram_res.replace("intransitive", "")) or "no passive" in s_gram_res:
+                                    continue
                             df_res = cls.format_ldoce_definition(s_res)
                             exs_res = list(row_p.get("examples") or s_res.get("examples") or [])
                             _add_cand(df_res, locked_expr_type, f"{res_w} #{res_s_idx}", exs_res, s_res, True)
@@ -3850,6 +3956,15 @@ class ExtractionPipelineMixin:
                         if not other_content and len(other_tok_set) == 1 and next(iter(other_tok_set)) in ("into", "onto", "towards", "toward", "across", "along", "through", "around", "round", "back", "away", "out", "up", "down"):
                             if "etc" in pat_words and any(dp in pat_words for dp in ("to", "towards", "toward", "away", "out", "in", "into", "onto", "down", "up", "around", "round", "left", "right")):
                                 return True
+                        # Trivalent split-frame verbs ('equate (sth) to (sth)' matching transitive sense 'equate something with something')
+                        if is_trivalent_prep_frame and len(other_tok_set) == 1 and next(iter(other_tok_set)) in {"to", "with", "into", "from", "of", "for", "on", "upon", "as", "against"}:
+                            s_gram = f"{s_obj.get('grammar') or ''} {s_obj.get('syntax_codes') or ''}".lower()
+                            if "transitive" in s_gram and "intransitive" not in s_gram and any(obj_w in pat_words for obj_w in ("something", "somebody", "sth", "sb")):
+                                return True
+                    if is_trivalent_prep_frame and not pats:
+                        s_gram = f"{s_obj.get('grammar') or ''} {s_obj.get('syntax_codes') or ''}".lower()
+                        if "transitive" in s_gram and "intransitive" not in s_gram and cls._pos_code(s_obj.get("pos")) == "v":
+                            return True
                     if not other_content and s_obj.get("examples"):
                         uk_list = [uk for uk in unit_keys if len(uk.split()) >= 2]
                         for uk in list(uk_list):
@@ -4209,6 +4324,17 @@ class ExtractionPipelineMixin:
                                 if p_word in re.findall(r"[a-z]+", pat_l) and (p0 in pat_l or (v_stem and v_stem in pat_l)):
                                     if cls.match_typed_slot_pattern(str(pat), ex_clean):
                                         return True
+                    # Trivalent split-frame verb sense ('equate (sth) to (sth)' grounded on transitive 'equate' sense whose example uses a sister preposition 'equate wealth with success')
+                    if (
+                        sense
+                        and isinstance(sense, dict)
+                        and cls._pos_code(sense.get("pos")) == "v"
+                        and len(u_key_no_cop.split()) == 2
+                        and u_key_no_cop.split()[1] in {"to", "with", "into", "from", "of", "for", "on", "upon", "as", "against"}
+                    ):
+                        v_head = u_key_no_cop.split()[0]
+                        if ex_clean in [str(e).strip().strip('"“”') for e in (sense.get("examples") or [])] and cls.text_contains_form(ex_clean, v_head):
+                            return True
                 norm_clean = re.sub(r"[^a-z0-9]+", " ", clean_low).strip()
                 norm_ex = re.sub(r"[^a-z0-9]+", " ", e_norm).strip()
                 return bool(norm_clean and norm_clean in norm_ex)
@@ -4874,18 +5000,22 @@ class ExtractionPipelineMixin:
                         chosen_idx = cls.disambiguate_via_llm(w, matching_sent, cand_pool, discourse_context=discourse_ctx)
                         if 0 <= chosen_idx < len(cand_pool):
                             chosen = cand_pool[chosen_idx]
-                        elif pos:
-                            cand_pool_all = cls.build_top_k_vocab_candidates(
-                                w, matching_sent, pos=None, k=8, discourse_context=discourse_ctx
+                        elif pos and re.search(rf"\b{re.escape(w)}\b", matching_sent.lower()):
+                            # Cross-POS retry is only permitted when the surface token is in base uninflected form
+                            # and not syntactically locked to a prepositional/determiner noun phrase ('from drones')
+                            is_locked_np = (
+                                str(pos).strip().lower() == "noun"
+                                and bool(re.search(rf"\b(?:from|of|in|on|at|with|by|for|into|between|among|the|a|an|this|that|these|those|my|your|his|her|its|our|their)\s+{re.escape(w)}\b", matching_sent.lower()))
                             )
-                            alt_pool = [
-                                c for c in cand_pool_all
-                                if str(c.get("pos") or "").strip().lower() != str(pos).strip().lower()
-                            ] or cand_pool_all
-                            if alt_pool and alt_pool != cand_pool:
-                                if len(alt_pool) == 1:
-                                    chosen = alt_pool[0]
-                                else:
+                            if not is_locked_np:
+                                cand_pool_all = cls.build_top_k_vocab_candidates(
+                                    w, matching_sent, pos=None, k=8, discourse_context=discourse_ctx
+                                )
+                                alt_pool = [
+                                    c for c in cand_pool_all
+                                    if str(c.get("pos") or "").strip().lower() != str(pos).strip().lower()
+                                ] or cand_pool_all
+                                if alt_pool and alt_pool != cand_pool and len(alt_pool) > 1:
                                     retry_idx = cls.disambiguate_via_llm(
                                         w, matching_sent, alt_pool, discourse_context=discourse_ctx
                                     )
@@ -5002,6 +5132,27 @@ class ExtractionPipelineMixin:
                 # for its locked sense, allowing a fully attested reserve candidate to take its slot.
                 if not definition or cls.is_boilerplate_definition(definition) or not example:
                     continue
+                # Gate 2b (Sense-Level Pedagogical Filter):
+                # Drop single-word nouns locked to:
+                # (1) Phrase-bound bare noun senses ('odds' -> "if two statements... are at odds", 'sake' -> "in order to help...")
+                # (2) Everyday [plural] commodity aggregate senses ('electronics' -> "[plural] electronic equipment, or equipment with electronic parts")
+                if pos == "noun" and " " not in w:
+                    _def_s_low = definition.strip().lower()
+                    _locked_gram_low = str((locked_raw_sense or {}).get("grammar") or "").lower()
+                    if _def_s_low.startswith(("if two ", "if people ", "in order to help ", "used to say ")):
+                        continue
+                    if "[plural]" in _locked_gram_low and "[uncountable]" not in _locked_gram_low:
+                        if any(
+                            _def_s_low.startswith(p)
+                            for p in (
+                                "electronic equipment",
+                                "food and other goods",
+                                "substances that you put on your face",
+                                "things such as soap",
+                                "drinks and small amounts of food",
+                            )
+                        ):
+                            continue
                 def_norm_key = re.sub(r"[^a-z0-9]+", " ", definition.lower()).strip()
                 if def_norm_key in seen_defs:
                     continue

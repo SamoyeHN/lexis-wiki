@@ -246,6 +246,26 @@ During quiz generation, [`build_precomputed_target_skeletons`](../librarian/ling
   - **Family 8 (Mandative Subjunctive & Modal Idioms)**:
     - For mandative triggers (`insist`, `suggest`, `demand`, `recommend`, `propose`, `vital`, `essential`, `imperative` + `that S (should) V_base`) and modal idioms (`would rather S V_past`, `it is high time S V_past`, `may/might as well do`), `Micro-Task` locks the subordinate verb form and feeds these structures directly into `translation_quiz` as high-yield minimal-pair grammar traps.
 
+#### 9. Family 9: Internal Possessive Idioms (`come to one's aid`, `a roof over one's head`, `come into one's mind`) — Whole-Idiom Preservation + Concrete Possessive Pronoun & Tense Synchronization
+- **Core Linguistic Problem**:
+  - Multi-word idioms and collocations containing internal `one's` / `somebody's` / `someone's` slots (`come to one's aid`, `a roof over one's head`, `come into one's mind`, `turn one's attention to`, `do one's utmost`, `pick one's brains`, `catch one's eye`) possess **non-compositional idiomatic semantics**.
+  - Splitting such an idiom to blank only a single word (e.g., `come into her ____` or `____ her mind`) destroys the holistic idiomatic unit (`come into one's mind` = *suddenly occur to someone*) or opens massive single-word collocation double-keys. Conversely, leaving raw dictionary citation forms (`"come to one's aid"`, `"a roof over one's head"`) inside `options` causes severe pronoun and tense clashes in concrete third-person narrative stems (`*A kind stranger immediately come to one's aid`).
+- **Four-Step Neuro-Symbolic Solution**:
+  1. **Whole-Idiom Slot Preservation**:
+     - The entire multi-word idiom is preserved inside the blank `____` (never fractured into a single-word noun or verb slot).
+  2. **Strategy A2 Structural Symmetry & Truncation Guards (`generate_phrase_distractors`)**:
+     - Queries `pedlex_phrase_index` (`sense_unit` and `phrase_row` complete idiom tiers prioritized over bare patterns) for structurally parallel `one's` idioms matching the target's syntactic skeleton (`<Verb> + <Prep> + one's + <Noun>`, `<Verb> + one's + <Noun> + <Prep>`, `<Det> + <Noun> + <Prep> + one's + <Noun>`).
+     - Enforces three hard structural filters:
+       - **Trailing Preposition vs. Adverbial Particle Symmetry**: When the target ends with a relational preposition requiring a complement (`turn one's attention to [sth]`), candidates ending in intransitive adverbial particles (`turn one's nose up`) are rejected unless they share the exact trailing preposition (`set one's mind on`, `get one's teeth into`, `turn one's back on`).
+       - **Truncated Phrasal-Verb Prefix Guard**: 3-word `one's` prefixes that only exist in `pedlex_phrase_index` as 4-word particle constructions (`keep one's hands [off]`, `let one's guard [down]`, `keep one's head [down]`) are filtered out.
+       - **Near-Synonym & Register Guard**: Co-occurring synonymous idioms (`turn one's mind to` vs. `turn one's attention to`, `do one's best` vs. `do one's utmost`, `come to one's rescue` vs. `come to one's aid`) and undignified colloquialisms (`pick one's nose`) are blocked.
+  3. **Concrete Possessive Determiner & Singular Head-Noun Agreement (`_reconcile_prescribed_inflection`)**:
+     - Extracts the concrete 3rd-person possessive determiner (`her`, `his`, `their`, `its`) attested in the passage `quote` (primary) or `authentic_example` (secondary; e.g., converting 1st/2nd-person `"came to my aid"` $\rightarrow$ `"her"` / `"his"`).
+     - **Singular Countable Head-Noun Agreement Guard**: If the extracted possessive is plural `"their"` (e.g., from a plural subject in `"put a roof over their heads"`), but the dictionary idiom's head noun after `one's` is singular countable (`head`, `mind`, `eye`, `cap`, `hand`, `back`, `heart`, `way`), the synchronizer normalizes the determiner to singular `"his"` (or `"her"`) so options never produce ungrammatical distributive number clashes like `*a roof over their head` or `*a feather in their cap`.
+  4. **Parallel Leading-Verb Tense Inflection & Cross-Possessive Frame Slicing**:
+     - Detects the target verb's inflectional tag (`VBD`, `VBZ`, `VBG`, `VBN`, `VB`) from the passage quote or winning dictionary example and inflects the leading verb across all 4 idiom options in lockstep (e.g., `["came to her aid", "got to her feet", "had to her credit", "looked to her laurels"]`).
+     - `derive_cloze_slot_frame_from_example` matches across any possessive pronoun variant (`my`/`your`/`his`/`her`/`our`/`their`/`one's`) and uses `spaCy` `nsubj` recovery for finite verbal idioms so `cloze_slot_frame` anchors on the subject (`... a man ____`) rather than a stray preposition (`*... to ____`), while `🎯 Micro-Task` explicitly instructs the LLM to introduce an unambiguous matching antecedent (`a woman/girl` for `her`, `a man/boy` for `his`) and keep the possessive + noun inside `____`.
+
 ---
 
 ### 5.3 Data-Driven Execution Engine: Two-Tier `pedlex.db` Construction Tagging & Reverse Subcategorization Index (`pedlex_cxn_index`)
@@ -263,3 +283,54 @@ To execute all Eight Construction Families with **zero hardcoded word lists or b
 
 
 
+---
+
+## 6. Six-Source Optimal Example Pre-Selection & Example-Derived Cloze Slot Frame Architecture
+
+### 6.1 Core Architectural Insight ("Select Optimal Example First, Then Slice the Frame")
+Empirical evaluation across Books 1–4 (`Book_1_Unit_1`, `Book_1_Unit_2`, `Book_2_Unit_1`, `Book_2_Unit_2`, `Book_3_Unit_6`, `Book_4_Unit_1`, `Book_4_Unit_5`) revealed four structural root causes whenever `vocabulary_quiz` items degraded to bare `... ____ ...` frames or suffered pattern–example desynchronization:
+1. **Cross-Sense Collocation Pollution on Polysemous Entries (`plot`)**:
+   - In `pedlex.db`, entry-level `collocations` are stored at the homograph level rather than per `sense_idx`. For polysemous words like `plot` (Sense 0: *conspiracy* vs. Sense 1: *storyline of a book/film*), blindly harvesting entry-level verb collocations assigned `discover a plot` (*conspiracy*) to a *storyline* item.
+   - Conversely, `Sense.pattern_bundles` (`the plot unfolds`), `Language Activator` (`[the events in a story]` $\rightarrow$ *"The plot was so complicated..."*), and `Oxford Thesaurus` (*"the plot of her next novel"*) are strictly concept-isolated.
+2. **Idiom Over-Binding vs. Syntactic Valency (`weird`, `routine`)**:
+   - `Sense.pattern_bundles` mixes `source: "gramexa"` (core syntactic subcategorization such as `pledge to do something`, `pose for`, `be absorbed in`, `benchmark for`, `originate in`) with `source: "colloinexa"` (incidental idioms such as `weird and wonderful` or `matter of routine`). Treating `colloinexa` idioms as mandatory patterns artificially locks general adjectives (`weird`) into fixed idioms (`... ____ and wonderful`) even when the passage tests simple predicative or `adj + noun` usage (*"a weird dream"*).
+3. **Fragment / Postpositive Sense Examples When Rich Full Sentences Exist Elsewhere (`unparalleled`, `earthy`, `impersonal`, `tedious`, `loan`)**:
+   - Relying solely on `sense['examples'][0]` often selects a verbless fragment (`"a loan of £60,000"`, `"earthy language"`, `"a formal and impersonal style of management"`) or an atypical postpositive participial clause (`"an achievement unparalleled in sporting history"`) when `LDOCE Thesaurus`, `Language Activator`, or `Oxford Thesaurus` provides a complete, idiomatic sentence with a canonical slot (`"We took out a loan to buy a new car."`, `"She was shocked by Emma's earthy language."`, `"an unparalleled opportunity to change society"`, `"Jake began the tedious task of sorting through his papers."`).
+4. **Ambiguous Slash Placeholders (`... ____ someone/something`)**:
+   - Generalizing `[sb]` or `[sth]` into `____ someone/something` forces the LLM to choose between human and non-human objects (or copy the literal string `someone/something` into `design_audit`). Instead, object animacy/form must be resolved deterministically from the locked example (`appeal to the government` $\rightarrow$ `... ____ someone`; `on top of everything else` $\rightarrow$ `... ____ something`).
+
+### 6.2 Six-Source Candidate Example Pool (Strict Sense Isolation)
+Before constructing any quiz blueprint in [`build_precomputed_target_skeletons`](../librarian/linguistics_core/quiz_skeletons.py), the engine gathers candidate `(example, pattern_hint, source_tier)` tuples across all six dictionary compartments in `pedlex.db`, subject to **Strict Sense Isolation**:
+1. **`grammar_boxes` (Tier 1 — Pedagogical Error-Trap Goldmine)**:
+   - Matched via `sense_indices` (or monosemous headword). Provides high-discrimination positive models paired with `Don't say` rules (`ability to listen` vs. `*of listening`; `take into account` vs. `*in account`; `admit making` vs. `*to make`; `give some good advice` vs. `*an advice`).
+2. **`Sense.pattern_bundles` & `Sense.examples` (Tier 2 — Core Sense Valency)**:
+   - Directly inside `locked_sense`. `source == "gramexa"` bundles receive top syntactic priority (`pledge to do`, `pose for`, `be absorbed in`, `benchmark for`, `originate in`, `escalate into`).
+3. **`LDOCE Thesaurus` (`thesaurus` self-entries — Tier 3 — Concept-Aligned Full Sentences & `<gram>` Tags)**:
+   - Matched by headword + `pos` + concept/definition overlap with `locked_sense`. Supplies explicit countability/position tags (`loan [countable]` vs. `interest [uncountable]`, `urban [only before noun]`, `intrigued [not before noun]`) and curated full-sentence examples (`"We took out a loan to buy a new car."`, `"Jake began the tedious task of sorting through his papers."`).
+4. **`Language Activator` (`language_activator` — Tier 4 — Concept-Indexed Phrase & Subcategorization Frames)**:
+   - Matched by concept gloss + headword/subphrase (`[the events in a story / plot]`, `[to make something more modern / modernize]`, `[to increase / escalate to]`).
+5. **`Oxford Thesaurus` (`oxford_thesaurus` — Tier 5 — Canonical `adj + noun` / `verb + noun` Supplement)**:
+   - Matched by `pos` + sense synonym/example overlap. Rescues senses whose LDOCE entry only contains fragments or postpositive constructions (`"an unparalleled opportunity to change society"`, `"she was shocked by Emma's earthy language"`, `"the plot of her next novel"`).
+6. **`collocations` & `cross_collocations` (Tier 6 — Sense-Verified Entry Collocations)**:
+   - Enabled unconditionally for monosemous words, or for polysemous words **only when** the collocation's `gloss`/`example` shares lexical cues with `locked_sense` or the passage `quote` (preventing cross-sense drift like `discover a plot` for storyline `plot`).
+
+### 6.3 Deterministic Scoring Rubric for Selecting the Optimal Quiz Example
+Every candidate example in the sense-isolated pool is scored deterministically so the **single best pedagogical example** wins before slot-frame extraction:
+- **Rule 1 (Complete Finite Sentence > Fragment)**: Full sentences containing a finite verb (`ROOT` / `aux`) outrank verbless noun-phrase fragments (`"We took out a loan to buy a new car."` $\gg$ `"a loan of £60,000"`; `"She was shocked by Emma's earthy language."` $\gg$ `"earthy language"`).
+- **Rule 2 (Syntactic Slot & Inflection Alignment with Target/Distractors)**:
+  - When an adjective target is paired against `[not before noun]` distractors (e.g., `unparalleled` vs. `alone`) or appears attributively in the passage (`unparalleled levels`, `a modernized nation`, `a tedious oddity`), examples where the target occupies a **pre-nominal attributive slot (`det/poss + ____ + noun`)** receive a decisive bonus (`"an unparalleled opportunity..."`, `"a tastefully modernized old farmhouse"`, `"the tedious task"`).
+  - When a countable singular noun target is paired against `[uncountable]` distractors (e.g., `loan` vs. `interest`/`credit`), examples containing an **explicit singular indefinite article + verb (`take out a loan`, `became a benchmark for`)** receive a decisive bonus.
+- **Rule 3 (`gramexa` Valency > General Collocation > Idiomatic `colloinexa`)**:
+  - Core syntactic subcategorization (`gramexa` / `grammar_boxes`, e.g., `pledge to do`, `pose for`, `absorbed in`, `benchmark for`) outranks general `verb + noun` / `adj + noun` collocations, which in turn outrank narrow `colloinexa` coordinate idioms (`weird and wonderful`) unless the passage quote itself uses that idiom.
+- **Rule 4 (Pedagogical Clarity & Length)**:
+  - Sentences of 6–22 words with clean everyday vocabulary outrank overly long corpus extracts containing obscure proper nouns or technical jargon.
+
+### 6.4 Example-Derived Concrete Cloze Slot Frame (`0 Bare Frames`, `0 Slash Choices`)
+Once the winning `authentic_example` is locked, `cloze_slot_frame` is **sliced directly from that example's syntactic dependency neighborhood around the target word** (combining `gramexa` pattern structure with concrete lexical/POS neighbors from the winning sentence):
+1. **Guaranteed Left or Right Context Neighbor**:
+   - **Adjective (`adj`)**: `(det/poss) + ____ + head_noun` or `____ + prep` (e.g., `'... an ____ opportunity'`, `'... her ____ language'`, `'... the ____ task'`, `'... a (very) ____ career'`, `'... ____ words'`, `'... ____ to'`).
+   - **Verb / Phrasal Verb (`verb` / `phrase`)**: `____ + prep`, `____ + to [verb]`, `____ + (det) + dobj_noun`, or `subj_noun + ____` (e.g., `'... ____ to [verb]'` for `pledge`, `'... ____ for'` for `pose`, `'... ____ in'` for `absorbed`, `'... ____ a decision'` for `await`, `'... ____ a programme'` for `put out`, `'... ____ the system'` for `modernize`).
+   - **Noun (`noun`)**: `verb + (a/the/poss) + ____ (+ prep)` or `(det/adj) + ____ + prep/verb` (e.g., `'... take out a ____'` for `loan`, `'... a ____ for'` for `benchmark`, `'... the ____ unfolds'` or `'... the ____ of'` for `plot`, `'... a personal ____'` for `triumph`).
+   - **Adverb (`adv`)**: `(aux) + ____ + verb/adj` or `verb + ____` (e.g., `'... is ____ working'` or `'... ____ employs'` for `currently`).
+2. **Zero Slash Placeholders (`someone/something` Ban)**:
+   - Any `[sb/sth]` or `someone/something` placeholder is resolved against the actual argument in the winning `authentic_example`: human/animate/organization objects (`the government`, `her`, `farmers`) resolve to `someone`, and inanimate/abstract objects (`everything else`, `the French one`) resolve to `something`.

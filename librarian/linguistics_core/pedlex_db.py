@@ -2092,20 +2092,46 @@ class PedlexDbMixin:
                 _add_syn(def_low)
                 matched_sense_syns.add(def_low)
 
-            any_sense_matched_def = False
+            ped_senses = entry.get("senses", [])
+            any_sense_matched_def = any(
+                bool(
+                    def_low
+                    and (
+                        re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower()) == def_low
+                        or def_low in re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                        or (
+                            len(re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())) >= 10
+                            and re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower()) in def_low
+                        )
+                    )
+                )
+                for s in ped_senses
+            )
             unmatched_opps: Set[str] = set()
-            for s in entry.get("senses", []):
+            for s in ped_senses:
                 s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
-                is_matched_sense = bool(def_low and (s_def == def_low or def_low in s_def or s_def in def_low))
-                if is_matched_sense:
-                    any_sense_matched_def = True
-                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def):
+                is_matched_sense = bool(
+                    def_low
+                    and (
+                        s_def == def_low
+                        or def_low in s_def
+                        or (len(s_def) >= 10 and s_def in def_low)
+                    )
+                )
+                s_def_toks = set(re.findall(r"[a-z]{3,}", s_def))
+                allow_sense_syn = (
+                    not any_sense_matched_def
+                    or is_matched_sense
+                    or len(s_def_toks & def_tokens) >= 2
+                )
+                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def) and allow_sense_syn:
                     _add_syn(s_def)
                     if is_matched_sense or not def_low:
                         matched_sense_syns.add(s_def)
                 raw_syns = s.get("synonym") or []
                 for syn in ([raw_syns] if isinstance(raw_syns, str) else raw_syns):
-                    _add_syn(syn)
+                    if allow_sense_syn:
+                        _add_syn(syn)
                     if is_matched_sense or not def_low:
                         ct = _clean_term(syn)
                         if ct:
@@ -2120,7 +2146,7 @@ class PedlexDbMixin:
                             unmatched_opps.add(ct_opp)
             # Second pass for any remaining opposites on the entry ONLY when no specific sense matched def_low
             if not any_sense_matched_def:
-                for s in entry.get("senses", []):
+                for s in ped_senses:
                     raw_opps = s.get("opposite") or []
                     for opp in ([raw_opps] if isinstance(raw_opps, str) else raw_opps):
                         _add_ant(opp)
@@ -2234,7 +2260,9 @@ class PedlexDbMixin:
                     [
                         item[2]
                         for rank, item in enumerate(scored_senses)
-                        if rank == 0 or item[0] >= 1 or (not has_context_signal and len(scored_senses) <= 3)
+                        if rank == 0
+                        or (item[0] >= 2 if has_context_signal else item[0] >= 1)
+                        or (not has_context_signal and len(scored_senses) <= 3)
                     ]
                     if norm_pos == "noun"
                     else [scored_senses[0][2]]
@@ -2365,9 +2393,31 @@ class PedlexDbMixin:
             t = re.sub(r"\b(?:something|somebody|someone|sth|sb)\b", "", t).strip()
             return re.sub(r"\s+", " ", t).strip()
 
+        def_lemmas = set(def_tokens) | (
+            {cls.lemma_of(tok) for tok in def_tokens} if hasattr(cls, "lemma_of") else set()
+        )
+        quote_tokens = {
+            tok for tok in re.findall(r"[a-z]{4,}", str(quote or "").lower())
+            if tok not in (w_clean, w_lemma)
+        }
         entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_lemma) if w_lemma != w_clean else None)
         if entry:
-            for s in entry.get("senses", []):
+            ped_senses = entry.get("senses", [])
+            any_strict_sense_matched = any(
+                bool(
+                    def_low
+                    and (
+                        re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower()) == def_low
+                        or def_low in re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                        or (
+                            len(re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())) >= 10
+                            and re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower()) in def_low
+                        )
+                    )
+                )
+                for s in ped_senses
+            )
+            for s in ped_senses:
                 s_pos = str(s.get("pos", "")).strip().lower()
                 if s_pos.startswith("v"):
                     s_pos = "verb"
@@ -2380,6 +2430,17 @@ class PedlexDbMixin:
                 if norm_pos and s_pos and norm_pos in {"verb", "noun", "adjective", "adverb"} and s_pos != norm_pos:
                     continue
                 s_def = re.sub(r"^\[.*?\]\s*", "", str(s.get("definition", "")).strip().lower())
+                is_matched_sense = bool(
+                    def_low
+                    and (
+                        s_def == def_low
+                        or def_low in s_def
+                        or (len(s_def) >= 10 and s_def in def_low)
+                    )
+                )
+                s_def_toks = set(re.findall(r"[a-z]{3,}", s_def))
+                if any_strict_sense_matched and not is_matched_sense and len(s_def_toks & def_tokens) < 2:
+                    continue
                 if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def):
                     strict_syns.add(s_def)
                 for syn in ([s.get("synonym")] if isinstance(s.get("synonym"), str) else (s.get("synonym") or [])):
@@ -2399,7 +2460,12 @@ class PedlexDbMixin:
             for idx, s_blk in enumerate(senses):
                 core_s = [_clean_t(x) for x in (s_blk.get("core_synonyms") or []) if _clean_t(x)]
                 all_s = [_clean_t(x) for x in (s_blk.get("synonyms") or []) if _clean_t(x)]
-                ov = len(def_tokens & (set(core_s) | set(all_s))) * 4 + (1 if idx == 0 else 0)
+                ex_tokens = set(re.findall(r"[a-z]{3,}", str(s_blk.get("example", "")).lower()))
+                ov = (
+                    len(def_lemmas & (set(core_s) | set(all_s))) * 4
+                    + len((def_lemmas | quote_tokens) & ex_tokens) * 2
+                    + (1 if idx == 0 else 0)
+                )
                 scored.append((ov, idx, core_s, all_s))
             scored.sort(key=lambda x: (-x[0], x[1]))
             has_sig = bool(def_tokens) and scored and scored[0][0] > 1

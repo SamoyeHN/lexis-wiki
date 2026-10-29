@@ -147,7 +147,7 @@ _FALLBACK_ACTION = (
 )
 
 _ITEM_NAME_RE = re.compile(
-    r"(?:Quiz item|Item|item|target word|target|word|Headword|headword)\s+['\"\u2018]([^'\"\u2019]+)['\"\u2019]?"
+    r"(?:Quiz item|Item|item|target word|target|word|Headword|headword)\s+['\"\u2018]((?:[^'\"\u2019]|['\u2019](?=[a-zA-Z]))+)['\"\u2019]?"
 )
 
 _QUOTED_RE = re.compile(r"['\u2018\"]([^'’\"]{4,})['’\"]")

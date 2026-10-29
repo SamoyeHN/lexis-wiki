@@ -230,5 +230,79 @@ def test_book3_unit6_section_a_distractor_and_skeleton_fixes():
     reg_skel = next(s for s in skeletons if s["target_word"] == "regulatory")
     assert "body/authority/agency" not in reg_skel["micro_task"]
     assert "____ authority" in reg_skel["micro_task"]
-    assert "a roof over one's head" in skeleton_md
+    assert "a roof over his head" in skeleton_md
+
+
+def test_possessive_idiom_whole_preservation_and_pronoun_tense_sync():
+    """
+    Whole-Idiom Preservation + Concrete Possessive Pronoun & Tense Synchronization:
+    - Idioms with internal `one's` slots keep the entire idiom in `options` (no single-word splitting that destroys idiomatic meaning).
+    - All 4 options synchronize `one's` to a concrete 3rd-person possessive (`her`/`his`/`their`/`its`) and synchronize leading verb inflection (`VBD`/`VBZ`/`VB`).
+    - Strategy A2 never returns truncated phrasal-verb prefixes (`keep one's hands`, `let one's guard`), near-synonym double-keys (`do one's best` vs `do one's utmost`, `turn one's mind to` vs `turn one's attention to`), or undignified idioms (`pick one's nose`).
+    """
+    from librarian.linguistics import LinguisticEngine
+    items = [
+        {
+            "word": "come to one's aid",
+            "part_of_speech": "idiom",
+            "definition": "to help someone who is in trouble or difficulty",
+            "quote": "Friends came to her aid.",
+        },
+        {
+            "word": "a roof over one's head",
+            "part_of_speech": "idiom",
+            "definition": "a place to live",
+            "quote": "Struggling for years to make ends meet and keep a roof over their heads.",
+        },
+        {
+            "word": "come into one's mind",
+            "part_of_speech": "idiom",
+            "definition": "if an idea or thought comes into your mind, you suddenly think of it",
+            "quote": "Then a story she had heard as a child came into her mind.",
+        },
+        {
+            "word": "turn one's attention to",
+            "part_of_speech": "collocation",
+            "definition": "to begin to think about, deal with, or look at something else",
+            "quote": "He then turned his attention to the financial crisis.",
+        },
+        {
+            "word": "do one's utmost",
+            "part_of_speech": "collocation",
+            "definition": "to try as hard as you can to do something",
+            "quote": "She did her utmost to protect the children.",
+        },
+    ]
+    skeletons = LinguisticEngine.build_precomputed_target_skeletons(items, target_count=5)
+    by_base = {s["base_headword"]: s for s in skeletons}
+
+    # 1. come to one's aid -> synchronized to VBD + 'her'
+    aid_skel = by_base["come to one's aid"]
+    assert aid_skel["target_word"] == "came to her aid"
+    assert all("one's" not in opt and " her " in opt for opt in aid_skel["prescribed_options"])
+    assert "to ____" not in (aid_skel["cloze_slot_frame"] or "")
+
+    # 2. a roof over one's head -> singular head noun guard normalizes 'their' -> 'his'
+    roof_skel = by_base["a roof over one's head"]
+    assert roof_skel["target_word"] == "a roof over his head"
+    assert all("one's" not in opt and " his " in opt for opt in roof_skel["prescribed_options"])
+
+    # 3. come into one's mind -> kept whole, synchronized to VBD + 'her'
+    mind_skel = by_base["come into one's mind"]
+    assert mind_skel["target_word"] == "came into her mind"
+    assert all("one's" not in opt and " her " in opt for opt in mind_skel["prescribed_options"])
+
+    # 4. turn one's attention to -> relational prep 'to' preserved across all 4 options, no 'turn his mind to' or 'turn his nose up'
+    att_skel = by_base["turn one's attention to"]
+    assert att_skel["target_word"] == "turned his attention to"
+    assert all("one's" not in opt and " his " in opt for opt in att_skel["prescribed_options"])
+    assert all("mind to" not in opt and "nose up" not in opt for opt in att_skel["prescribed_options"])
+
+    # 5. do one's utmost -> 3-word idiom distractors are complete idioms (no 'keep her hands', 'let her guard', 'do her best')
+    utmost_skel = by_base["do one's utmost"]
+    assert utmost_skel["target_word"] == "did her utmost"
+    assert all("one's" not in opt and " her " in opt for opt in utmost_skel["prescribed_options"])
+    for bad_frag in ("hands", "guard", "faith", "confidence", "best", "bit", "part"):
+        assert all(not opt.endswith(" " + bad_frag) for opt in utmost_skel["prescribed_options"])
+
 

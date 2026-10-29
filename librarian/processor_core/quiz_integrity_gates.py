@@ -295,13 +295,24 @@ class QuizIntegrityGatesMixin:
                         f"Item #{idx + 1} ('{target}'): Distractors recycle headwords from current unit: {recycled_distractors}"
                     )
 
-            # 3. Degraded-Options Gate (structural option cardinality invariant)
-            if "target_word" in q_dict and options and len(options) < 4:
-                flagged_indices.add(idx)
-                defect_messages.append(
-                    f"Item #{idx + 1} ('{target}'): Degraded item — only {len(options)} options "
-                    f"(exactly 4 required). Clear double-keys by refilling, not by truncation."
-                )
+            # 3. Degraded-Options & Key-Target Alignment Gate (structural option cardinality & key invariant)
+            if "target_word" in q_dict and options:
+                if len(options) < 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Degraded item — only {len(options)} options "
+                        f"(exactly 4 required). Clear double-keys by refilling, not by truncation."
+                    )
+                elif isinstance(correct_idx, int) and 0 <= correct_idx < len(options) and target:
+                    key_opt = str(options[correct_idx]).strip().lower()
+                    target_forms = {target} | set(LinguisticEngine.inflected_forms(target))
+                    key_forms = {key_opt} | set(LinguisticEngine.inflected_forms(key_opt))
+                    if not (target_forms & key_forms) and key_opt not in target and target not in key_opt:
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Item #{idx + 1} ('{target}'): Declared key option '{options[correct_idx]}' "
+                            f"at index {correct_idx} does not match target_word '{target}'."
+                        )
 
         return sorted(list(flagged_indices)), defect_messages
 

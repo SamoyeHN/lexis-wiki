@@ -5114,182 +5114,328 @@ class TestEightConstructionFamiliesBlueprint:
         assert s8["anchor_type"] == "mandative_subj"
         assert "that [sb] (should) [V-base]" in s8["micro_task"]
 
+    def test_noun_morphological_suffix_and_rhyme_standard_distractor_slot(self):
+        """Standard '2 + 1' Noun Distractor Architecture:
+        1. -ics / [plural] nouns ('electronics', 'physics') never double-pluralize to '*electronicses*'.
+        2. Abstract/academic/morphological nouns ('recession', 'venue', 'electronics', 'emergence', 'scientist', 'optimism', 'physics')
+           blend 2 semantic coordinates + 1 morphological/phonetic paronym.
+        3. Concrete physical nouns ('shopper', 'heat', 'cricket') preserve 3 pure semantic coordinates.
+        """
+        assert LinguisticEngine.pluralize_noun("electronics") == "electronics"
+        assert LinguisticEngine.pluralize_noun("physics") == "physics"
+        assert LinguisticEngine.can_pluralize_noun_distractor("electronics") is True
 
+        for word, expected_paronym_pool in [
+            ("recession", {"repression", "regression", "concession", "succession", "procession", "obsession", "accession"}),
+            ("venue", {"avenue", "revenue"}),
+            ("electronics", {"economics", "athletics", "genetics", "ceramics", "mechanics", "physics"}),
+            ("emergence", {"emergency", "divergence", "negligence", "intelligence"}),
+            ("scientist", {"science", "dentist", "specialist", "artist", "activist"}),
+            ("optimism", {"optimist", "organism", "capitalism", "realism"}),
+            ("physics", {"physicist", "physician", "politics", "basics", "athletics"}),
+        ]:
+            dists, meta = LinguisticEngine.generate_vocab_distractors(word, "noun", target_count=3, return_metadata=True)
+            assert len(dists) == 3, (word, dists)
+            assert any(d in expected_paronym_pool for d in dists), (word, dists, meta)
+            assert "orthographic_paronym" in meta.values(), (word, dists, meta)
 
+        for conc_word in ("shopper", "heat", "cricket"):
+            dists, meta = LinguisticEngine.generate_vocab_distractors(conc_word, "noun", target_count=3, return_metadata=True)
+            assert len(dists) == 3
+            assert "orthographic_paronym" not in meta.values(), (conc_word, dists, meta)
 
-
-class TestEightConstructionFamiliesBlueprint:
-    """End-to-end verification of the Eight Lexico-Syntactic Construction Families
-    across extraction routing, single-blank decomposition, cloze frames, and
-    pedlex_cxn_index subcategorization-contrasting distractors."""
-
-    @staticmethod
-    def _single_skeleton(vocab_block: str):
-        skeletons = LinguisticEngine.build_precomputed_target_skeletons(vocab_block, target_count=1)
-        assert len(skeletons) == 1
-        return skeletons[0]
-
-    def test_family_1a_preparatory_object_extraposition_and_comparative_normalization(self):
-        """Family 1A: 'make [sth] possible' / 'make it easier' normalizes to 3-word blank
-        'make it possible' / 'make it easy' with frame '... ____ ... to do [sth]' and
-        same-verb complement-contrasting distractors."""
-        sample_vocab = """
-## [[make [sth] easy]]
-- **Part Of Speech**: phrase
-- **Definition**: To make it easier for someone to do something.
-- **Quoted Sentence**: "Modern communication tools make it easier for remote teams to collaborate across time zones."
-"""
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"] == "make it easy"
-        assert "to do [sth]" in (s.get("best_pattern") or "")
-        assert "Fit into frame '... ____ ... to do [sth]'" in s["micro_task"]
-        opts = [o.lower() for o in s["prescribed_options"]]
-        assert "make it easy" in opts
-        for d in opts:
-            if d != "make it easy":
-                assert d.startswith("make it ")
-                assert d not in ("make it possible", "make it impossible", "make it hard", "make it difficult", "make it simple")
-
-    def test_family_1b_extraction_guard_and_chomsky_easy_vs_eager_contrast(self):
-        """Family 1B: 'It is <adj> (for sb) to do' is guarded out of multi-word expression extraction
-        and tested as a single-word adjective against animate-subject control adjectives (eager/willing/afraid)."""
-        passage = "It is hard for young workers to balance personal autonomy and career demands."
-        exprs = LinguisticEngine.extract_deterministic_expressions(
-            passage, syllabus_expressions=["it is hard", "make it possible"]
+    def test_discontinuous_trivalent_verb_frame_and_dual_prep_guard(self):
+        """Discontinuous trivalent verb frames ('equate (sth) to (sth)', 'compare (sth) to (sth)')
+        1. Ground onto transitive 'V + something + Prep' senses rather than [intransitive, no passive] phrasal verb blocks.
+        2. Decompose in quiz skeletons into head verb ('equate') + preposition anchor ('with'/'to').
+        3. Never generate same-head dual-preposition distractors ('equate with' for 'equate to', 'compare with' for 'compare to').
+        """
+        quote = (
+            "From the perspective of the inhabitants, a smart city is equated to a space "
+            "that has all the core functionality of a city integrated with and enhanced by technology."
         )
-        extracted_expr_names = {e["expression"].lower() for e in exprs}
-        assert "it is hard" not in extracted_expr_names
+        defn, ex, src = LinguisticEngine.expression_definition_evidence(
+            "equate (sth) to (sth)", "collocation", context_sentence=quote
+        )
+        assert "similar or connected" in defn, defn
+        assert "wealth with success" in ex or "high prices to high quality" in ex, ex
 
-        sample_vocab = """
-## [[hard]]
-- **Part Of Speech**: adj
-- **Definition**: Difficult to do, understand, or deal with.
-- **Quoted Sentence**: "It is hard for young workers to balance personal autonomy and career demands."
-"""
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"] == "hard"
-        assert s["anchor_type"] == "it_extrapos"
-        assert "It is ____" in s["micro_task"] and "to do [sth]" in s["micro_task"]
-        opts = {o.lower() for o in s["prescribed_options"]}
-        assert "hard" in opts
-        banned_extrapos = {"difficult", "tough", "easy", "simple", "possible", "impossible", "necessary", "essential", "vital", "important"}
-        assert opts.isdisjoint(banned_extrapos)
+        top_k = LinguisticEngine.build_top_k_expression_candidates(
+            "equate (sth) to (sth)", quote, k=4, expr_type="collocation"
+        )
+        assert top_k and "similar or connected" in top_k[0]["definition"], top_k
+        assert all("equal to something" not in c["definition"] for c in top_k), top_k
 
-    def test_family_2_discontinuous_correlative_first_arm_blanking(self):
-        """Family 2: Discontinuous correlatives ('not only ... but also') blank the first arm ('not only')
-        and lock the second arm ('... ____ ... but also ...') with cross-correlative distractors."""
-        sample_vocab = """
-## [[not only ... but also]]
-- **Part Of Speech**: phrase
-- **Definition**: Used to emphasize that something else is also true.
-- **Quoted Sentence**: "The reform not only improved efficiency but also reduced environmental waste."
-"""
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"] == "not only"
-        assert s["anchor_type"] == "correl_pair"
-        assert "... ____ ... but also ..." in s["micro_task"]
-        opts = {o.lower() for o in s["prescribed_options"]}
-        assert "not only" in opts
-        assert len(opts & {"neither", "either", "hardly", "scarcely", "no sooner", "whether", "rather than"}) >= 2
+        # Phrase distractor guard: relational prepositions never vary particle on the same verb
+        for target_phr, banned_twin in [
+            ("equate to", "equate with"),
+            ("compare to", "compare with"),
+            ("integrate into", "integrate with"),
+        ]:
+            p_dists = LinguisticEngine.generate_phrase_distractors(target_phr, count=3)
+            assert banned_twin not in p_dists, (target_phr, p_dists)
+            assert LinguisticEngine.double_key_collision(target_phr, banned_twin, pos="phrase")[0] is True
 
-    def test_family_3_discontinuous_verb_object_prep_frame(self):
-        """Family 3: 'prevent [sb] from doing' blanks the governing verb ('prevent') and locks
-        '[sb/sth] from [doing sth]' in the frame while excluding co-licensing verbs (stop/keep/discourage)."""
-        sample_vocab = """
-## [[prevent]]
-- **Part Of Speech**: verb
-- **Definition**: To stop something from happening, or stop someone from doing something.
-- **Quoted Sentence**: "Strict safety regulations prevent factories from dumping untreated chemicals into the river."
+        sample_equate = f"""
+## [[equate (sth) to (sth)]]
+- **Part Of Speech**: phrasal verb
+- **Definition**: to be equal to something
+- **Quoted Sentence**: "{quote}"
 """
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"].startswith("prevent")
-        assert s["anchor_type"] == "sb_to_do" or s["context_anchor"] == "from"
-        assert "from" in s["micro_task"]
-        opts_base = {o.lower().rstrip("s") for o in s["prescribed_options"]}
-        assert opts_base.isdisjoint({"stop", "keep", "discourage", "prohibit", "ban", "hinder", "deter"})
+        s_eq = self._single_skeleton(sample_equate)
+        assert s_eq["target_word"].startswith("equate"), s_eq
+        assert " " not in s_eq["target_word"], s_eq
+        assert s_eq["part_of_speech"] == "verb", s_eq
+        assert "similar or connected" in s_eq["definition"], s_eq
+        assert s_eq["anchor_type"] == "prep", s_eq
+        assert all(" " not in opt for opt in s_eq["prescribed_options"]), s_eq
 
-    def test_family_4_non_finite_verb_complementation_inversion(self):
-        """Family 4: Gerund-requiring verbs ('avoid doing') preserve '[doing sth]' in the frame
-        and select infinitive-only verbs as syntactic contrast distractors."""
-        sample_vocab = """
-## [[avoid]]
-- **Part Of Speech**: verb
-- **Definition**: To deliberately stay away from someone or something, or prevent something from happening.
-- **Quoted Sentence**: "Experienced drivers avoid driving during severe winter storms."
-"""
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"].startswith("avoid")
-        assert s["anchor_type"] == "gerund"
-        assert "[doing sth]" in s["micro_task"]
-        opts_base = {o.lower() for o in s["prescribed_options"]}
-        assert opts_base.isdisjoint({"begin", "start", "continue", "enjoy", "mind", "postpone", "deny", "admit"})
+    def test_pedlex_compare_analogy_vs_literal_and_trivalent_promotion(self):
+        """Verify data-layer pedlex.db enrichment & WSD disambiguation for:
+        1. 'compare' Sense 1a (literal same-class comparison: compare A with/to B)
+           vs Sense 1b (metaphorical analogy / liken: compare A to B, *compare A with B)
+           vs Sense 2 (participial adjunct: compared to/with something).
+        2. Promoted obligatory trivalent prepositional verbs ('deprive', 'attribute', 'ascribe', 'base', 'subject', 'mistake', 'liken').
+        """
+        if LinguisticEngine._is_pedlex_disabled():
+            pytest.skip("pedlex.db required")
 
-    def test_family_5_shell_nouns_post_nominal_complement_clash(self):
-        """Family 5: Shell nouns ('ability to do') lock 'the ____ to do [sth]' and contrast against
-        nouns that require 'of doing' or 'that-clause' while banning co-licensing 'attempt'/'effort'."""
-        sample_vocab = """
-## [[ability]]
-- **Part Of Speech**: noun
-- **Definition**: The state of being able to do something; skill or power.
-- **Quoted Sentence**: "The ability to adapt quickly is crucial in modern engineering."
-"""
-        s = self._single_skeleton(sample_vocab)
-        assert s["target_word"] == "ability"
-        assert s["anchor_type"] == "shell_to_do"
-        assert "____ to do [sth]" in s["micro_task"]
-        opts = {o.lower() for o in s["prescribed_options"]}
-        assert "ability" in opts
-        assert opts.isdisjoint({"attempt", "effort", "tendency", "willingness", "opportunity", "chance", "right"})
+        compare_entry = LinguisticEngine.get_pedlex_entry("compare")
+        assert compare_entry is not None
+        for quote, expected_snum, expected_sub in [
+            ("Shakespeare compared the world to a stage.", "1b", "of a different kind"),
+            ("The speaker compared the human brain to a computer.", "1b", "of a different kind"),
+            ("Poets have often compared sleep to death.", "1b", "of a different kind"),
+            ("Critics have compared his novels to those of Dickens.", "1a", "similar or different"),
+            ("The study compares British universities to American colleges.", "1a", "similar or different"),
+            ("The report compares this year's sales with last year's.", "1a", "similar or different"),
+            ("Compared to our small flat, Bill's house seemed like a palace.", "2", "in relation to something similar"),
+            ("A 20% reduction in burglary compared with last year.", "2", "in relation to something similar"),
+        ]:
+            idx = LinguisticEngine._lock_sense(compare_entry, quote=quote, target_pos="verb")
+            assert idx is not None, quote
+            s = compare_entry["senses"][idx]
+            assert s.get("sensenum") == expected_snum, (quote, s)
+            assert expected_sub in s.get("definition", ""), (quote, s)
 
-    def test_family_6_light_verb_triads_dual_blanking_modes(self):
-        """Family 6: Full 3-word triad ('take advantage of') excludes synonymous 'make use of';
-        internal adjective modifier ('pay close attention to') blanks the internal noun ('attention')."""
-        sample_full = """
-## [[take advantage of]]
-- **Part Of Speech**: phrase
-- **Definition**: To use a particular situation to do or get what you want.
-- **Quoted Sentence**: "Students should take advantage of the university library resources."
-"""
-        s_full = self._single_skeleton(sample_full)
-        assert s_full["target_word"] == "take advantage of"
-        opts_full = {o.lower() for o in s_full["prescribed_options"]}
-        assert "make use of" not in opts_full
+        traps = LinguisticEngine.get_word_error_traps("compare")
+        assert any("compared sleep with death" in (t.get("wrong_frame") or "") for t in traps), traps
 
-        sample_internal = """
-## [[pay attention to]]
-- **Part Of Speech**: phrase
-- **Definition**: To watch, listen to, or think about someone or something carefully.
-- **Quoted Sentence**: "Researchers must pay close attention to subtle changes in temperature."
-"""
-        s_int = self._single_skeleton(sample_internal)
-        assert s_int["target_word"] == "attention"
-        assert s_int["part_of_speech"] == "noun"
-        assert s_int["anchor_type"] == "lv_triad"
-        assert "pay close ____ to [sth]" in s_int["micro_task"] or "pay [close] ____ to [sth]" in s_int["micro_task"]
+        for verb_w, quote, expected_def_sub in [
+            ("deprive", "They were deprived of their basic rights.", "prevent someone from having something"),
+            ("attribute", "The fall in deaths is attributed to improvements in diet.", "caused by something"),
+            ("ascribe", "The report ascribes the rise in childhood asthma to air pollution.", "caused by a particular person"),
+            ("base", "The film is based on a true story.", "from which something else is developed"),
+            ("subject", "Police subjected him to hours of questioning.", "experience something very unpleasant"),
+            ("mistake", "She was frequently mistaken for her twin sister.", "wrongly think that one person or thing"),
+            ("liken", "Critics have likened the new building to a giant spaceship.", "similar to another person or thing"),
+        ]:
+            v_entry = LinguisticEngine.get_pedlex_entry(verb_w)
+            assert v_entry is not None and "verb" in (v_entry.get("all_poses") or []), verb_w
+            v_idx = LinguisticEngine._lock_sense(v_entry, quote=quote, target_pos="verb")
+            assert v_idx is not None, (verb_w, quote)
+            v_s = v_entry["senses"][v_idx]
+            assert expected_def_sub in v_s.get("definition", ""), (verb_w, v_s)
 
-    def test_families_7_and_8_fronted_inversion_and_mandative_subjunctive(self):
-        """Families 7 & 8: Fronted negative inversion ('under no circumstances') enforces Aux+Subj+V frame
-        and pairs with non-inverting PP distractors; mandative trigger ('insist') locks 'that [sb] (should) [V-base]'."""
-        sample_f7 = """
-## [[under no circumstances]]
-- **Part Of Speech**: phrase
-- **Definition**: Used to emphasize that something must never happen or be allowed.
-- **Quoted Sentence**: "Under no circumstances should passengers leave their luggage unattended."
-"""
-        s7 = self._single_skeleton(sample_f7)
-        assert s7["target_word"] == "under no circumstances"
-        assert s7["anchor_type"] == "fronted_inv"
-        assert "Aux + Subj + V" in s7["micro_task"] or "Aux + S + V" in s7["micro_task"]
-        opts7 = {o.lower() for o in s7["prescribed_options"]}
-        assert opts7.isdisjoint({"by no means", "on no account", "in no way", "at no time"})
+    def test_collective_noun_distractors_and_sense_isolation(self):
+        """Verify neuro-symbolic handling for collective nouns:
+        1. Sense-isolated synonym/antonym lookup never leaks homograph/cross-sense noise
+           ('stave'/'bread' for 'staff', 'photocopy' for 'cast', 'inability' for 'faculty').
+        2. Orthogonal-domain collective noun peer pool supplies high-discrimination role/species
+           coordinates ('audience'/'choir'/'committee'/'police' for 'staff'; 'herd'/'pack'/'swarm' for 'flock')
+           while banning intra-subgroup synonyms ('personnel'/'workforce' for 'staff') and metonymic
+           room/building nouns ('room'/'suite').
+        3. Quiz skeleton for 'staff' enforces collective noun determiner constraints and avoids
+           articleless 'member of ____' / 'on ____' slot clashes.
+        """
+        if LinguisticEngine._is_pedlex_disabled():
+            pytest.skip("pedlex.db required")
 
-        sample_f8 = """
-## [[insist]]
-- **Part Of Speech**: verb
-- **Definition**: To demand that something should happen and refuse to let anyone say no.
-- **Quoted Sentence**: "The committee insisted that the contractor submit a revised safety report."
-"""
-        s8 = self._single_skeleton(sample_f8)
-        assert s8["target_word"].startswith("insist")
-        assert s8["anchor_type"] == "mandative_subj"
-        assert "that [sb] (should) [V-base]" in s8["micro_task"]
+        # 1. Sense-isolated synonyms & antonyms
+        staff_syns, staff_ants = LinguisticEngine.get_pedlex_and_oxford_synonyms_antonyms(
+            "staff", pos="noun", definition="the people who work for an organization"
+        )
+        assert "stave" not in staff_syns and "bread" not in staff_syns, staff_syns
+        assert not staff_ants, staff_ants
+
+        cast_syns = LinguisticEngine.get_strict_pedlex_and_oxford_synonyms(
+            "cast", pos="noun", definition="all the people who perform in a play, film etc"
+        )
+        assert "photocopy" not in cast_syns, cast_syns
+
+        fac_syns, fac_ants = LinguisticEngine.get_pedlex_and_oxford_synonyms_antonyms(
+            "faculty", pos="noun", definition="all the teachers in a university, college, or school"
+        )
+        assert "inability" not in fac_ants, fac_ants
+
+        # 2. Orthogonal collective noun distractors & metonymy filter
+        staff_dists, staff_meta = LinguisticEngine.generate_vocab_distractors(
+            "staff",
+            pos="noun",
+            definition="the people who work for an organization",
+            quote="I've spent several years working as a hotel receptionist, which has allowed me to observe both guests and fellow staff.",
+            return_metadata=True,
+        )
+        assert len(staff_dists) == 3, staff_dists
+        assert not ({"personnel", "workforce", "room", "suite", "bread"} & set(staff_dists)), staff_dists
+        assert all(staff_meta[d] == "coordinate" for d in staff_dists), staff_meta
+
+        flock_dists = LinguisticEngine.generate_vocab_distractors(
+            "flock",
+            pos="noun",
+            definition="a group of sheep, goats, or birds",
+            quote="A flock of wild geese flew overhead.",
+        )
+        assert set(flock_dists) == {"herd", "pack", "swarm"}, flock_dists
+
+        # 3. Skeleton determiner constraint and pattern bundle hygiene for 'staff'
+        skels = LinguisticEngine.build_precomputed_target_skeletons([
+            {
+                "word": "staff",
+                "part_of_speech": "noun",
+                "definition": "the people who work for an organization",
+                "quote": "I've spent several years working as a hotel receptionist, which has allowed me to observe both guests and fellow staff.",
+            }
+        ], target_count=1)
+        assert skels, "Expected skeleton for staff"
+        s0 = skels[0]
+        assert "Collective noun slot required" in s0["micro_task"], s0["micro_task"]
+        assert "member of ____" not in s0["micro_task"] and "'... on ____'" not in s0["micro_task"], s0["micro_task"]
+        assert not ({"personnel", "workforce", "room", "suite"} & set(s0["prescribed_options"])), s0["prescribed_options"]
+
+    def test_interior_and_concrete_plural_ics_noun_distractors(self):
+        """Verify:
+        1. 'interior' ('the inner part or inside of something') never leaks anatomical 'noun.body'
+           hyponyms like 'palate' under WordNet 'surface'.
+        2. 'electronics' ('electronic equipment', [plural]) bridges WordNet's single-synset
+           'noun.cognition' blind spot so its quiz skeleton blends plural concrete artifact
+           distractors + 1 '-ics' morphological peer instead of 3 academic disciplines, and
+           includes the concrete [plural] sense guardrail in micro_task.
+        """
+        if LinguisticEngine._is_pedlex_disabled():
+            pytest.skip("pedlex.db required")
+
+        int_dists = LinguisticEngine.generate_vocab_distractors(
+            "interior",
+            pos="noun",
+            definition="the inner part or inside of something",
+            quote="We were impressed by the building's modern interior.",
+        )
+        assert len(int_dists) == 3, int_dists
+        assert "palate" not in int_dists, int_dists
+        assert "exterior" in int_dists, int_dists
+
+        skels = LinguisticEngine.build_precomputed_target_skeletons([
+            {
+                "word": "electronics",
+                "part_of_speech": "noun",
+                "definition": "electronic equipment",
+                "quote": "Sales of consumer electronics have risen sharply this year.",
+            }
+        ], target_count=1)
+        assert skels, "Expected skeleton for electronics"
+        s_elec = skels[0]
+        opts = [o for o in s_elec["prescribed_options"] if o != "electronics"]
+        assert len(opts) == 3, opts
+        assert "aeronautics" not in opts, opts
+        ics_peers = [o for o in opts if o.endswith("ics")]
+        non_ics_plurals = [o for o in opts if not o.endswith("ics") and o.endswith("s")]
+        assert len(ics_peers) == 1, opts
+        assert len(non_ics_plurals) == 2, opts
+        assert "Concrete [plural] noun sense required" in s_elec["micro_task"], s_elec["micro_task"]
+
+    def test_noun_countability_contrast_and_academic_ics_wsd_and_gate3_ranking(self):
+        """Verify all four deliverables of the Noun Extraction, Countability-Contrast Distractor,
+        and Pattern-Priority Architecture:
+        1. Academic '-ics' WSD: 'electronics' in 'engineering or electronics students' locks to
+           the [uncountable] discipline/industry sense instead of [plural] 'electronic equipment'.
+        2. Non-pedagogical trivia/commodity nouns ('toothpaste', 'popcorn', 'basalt', 'groceries')
+           are filtered out by `is_pedagogical_target`.
+        3. Countable singular/plural nouns ('device', 'devices', 'suggestion', 'breakthrough')
+           receive 1 pure-[uncountable] countability-contrast distractor ('equipment', 'advice',
+           'progress') that remains uninflected under plural targets and locks the countable/plural
+           determiner in `micro_task`.
+        4. Gate 3 `_balance_single_and_multi_word` ranks pattern-bearing nouns ('sponsorship from',
+           'prototype for') ahead of bare sense-recognition nouns.
+        """
+        if LinguisticEngine._is_pedlex_disabled():
+            pytest.skip("pedlex.db required")
+
+        # 1. Academic '-ics' WSD on Book 4 Unit 3 Section A quote
+        b4u3_quote = (
+            "Although it's common to think of standardizing bodies as primarily of interest to "
+            "engineering or electronics students, they touch nearly every area of academic life."
+        )
+        elec_def, _ = LinguisticEngine.get_ldoce_definition_and_example(
+            "electronics", target_pos="noun", context_sentence=b4u3_quote
+        )
+        assert elec_def and "electronic equipment" not in elec_def.lower(), elec_def
+        assert "use of electronic equipment" in elec_def.lower() or "industry" in elec_def.lower(), elec_def
+
+        # 2. Non-pedagogical trivia/commodity noun filtering
+        for trivia_w in ("toothpaste", "popcorn", "chocolate", "cosmetics", "groceries", "basalt", "tungsten"):
+            assert not LinguisticEngine.is_pedagogical_target(trivia_w, "NOUN"), trivia_w
+
+        # 3. Noun countability-contrast safe distractor slot (singular & plural)
+        dev_dists, dev_meta = LinguisticEngine.generate_vocab_distractors(
+            "device",
+            pos="noun",
+            definition="a machine or tool that does a special job",
+            quote="The company developed a handheld device to monitor heart rate.",
+            return_metadata=True,
+        )
+        assert len(dev_dists) == 3, dev_dists
+        assert "countability_contrast_uncountable" in dev_meta.values(), dev_meta
+        assert any(u in dev_dists for u in ("equipment", "hardware", "machinery")), dev_dists
+
+        skels_plural = LinguisticEngine.build_precomputed_target_skeletons([
+            {
+                "word": "device",
+                "part_of_speech": "noun",
+                "definition": "a machine or tool that does a special job",
+                "quote": "Many mobile devices now include built-in sensors.",
+            }
+        ], target_count=1)
+        assert skels_plural, "Expected skeleton for plural 'devices'"
+        sp0 = skels_plural[0]
+        assert sp0["target_word"] == "devices", sp0
+        # The uncountable contrast distractor ('equipment'/'hardware'/'machinery') stays uninflected!
+        assert any(u in sp0["prescribed_options"] for u in ("equipment", "hardware", "machinery")), sp0["prescribed_options"]
+        assert "equipments" not in sp0["prescribed_options"], sp0["prescribed_options"]
+        assert "Countability contrast active against uncountable distractor" in sp0["micro_task"], sp0["micro_task"]
+
+        # 4. Gate 3 single-word pedagogical priority ranking
+        candidates = [
+            {
+                "word": "obstacle",
+                "part_of_speech": "noun",
+                "context_anchor": "",
+                "anchor_type": "none",
+                "anchor_downgrade": "sense_recognition",
+                "best_pattern": "",
+                "distractor_mechanisms": {"a": "coordinate", "b": "coordinate", "c": "coordinate"},
+            },
+            {
+                "word": "sponsorship",
+                "part_of_speech": "noun",
+                "context_anchor": "from",
+                "anchor_type": "prep",
+                "anchor_downgrade": "none",
+                "best_pattern": "sponsorship from",
+                "distractor_mechanisms": {"a": "coordinate", "b": "coordinate", "c": "countability_contrast_uncountable"},
+            },
+            {
+                "word": "take part in",
+                "part_of_speech": "phrase",
+                "is_multi_word": True,
+            },
+        ]
+        balanced = LinguisticEngine._balance_single_and_multi_word(candidates, target_count=2, multi_word_ratio=0.5)
+        sel_words = [it["word"] for it in balanced]
+        assert "sponsorship" in sel_words and "obstacle" not in sel_words, sel_words
+
+
+
+
+
+

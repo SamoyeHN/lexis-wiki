@@ -552,13 +552,19 @@ class CefrAndMorphologyMixin:
             return False
         w_lower = w_clean.lower()
 
-        # Ultra-Basic Function Words Filter (Primary CEFR A1/A2 grammatical connectors)
-        ultra_basic_words = {
+        # Ultra-Basic Function Words & Low-SLA Trivia / Commodity / Mineral Filter
+        ultra_basic_or_non_pedagogical_words = {
             "but", "and", "or", "so", "if", "because", "then", "than", "too",
             "very", "also", "just", "now", "not", "no", "yes", "oh", "ah",
-            "he", "she", "it", "they", "we", "you", "i", "me", "him", "her", "us", "them"
+            "he", "she", "it", "they", "we", "you", "i", "me", "him", "her", "us", "them",
+            # Everyday food / toiletry / household trivia nouns (inflated by low academic Zipf frequency)
+            "toothpaste", "toothbrush", "shampoo", "soap", "lotion", "cosmetics", "toiletries",
+            "popcorn", "chocolate", "candy", "cookie", "biscuit", "pizza", "burger", "soda",
+            "groceries", "refreshments", "goody", "goodies", "trash", "housewares",
+            # Pure encyclopedic geological rocks / chemical elements / compounds (no SLA collocation value)
+            "basalt", "granite", "limestone", "sandstone", "tungsten", "dioxide", "monoxide",
         }
-        if w_lower in ultra_basic_words:
+        if w_lower in ultra_basic_or_non_pedagogical_words:
             return False
 
         wn = cls.get_wordnet()
@@ -3838,8 +3844,16 @@ class CefrAndMorphologyMixin:
         }
         if w in plural_tantum:
             return True
+        if w.endswith("ics") and len(w) >= 5:
+            return True
         if not w.endswith("s") or w.endswith(("ss", "us", "is")):
             return False
+        ld_w = cls.get_ldoce_entry(w)
+        if ld_w:
+            for s in ld_w.get("senses") or []:
+                g_low = str(s.get("grammar") or "").lower()
+                if re.search(r"\bplural\b", g_low):
+                    return True
         nlp = cls.get_spacy()
         doc = nlp(f"these {w}")
         tok = doc[1] if len(doc) > 1 else doc[0]
@@ -3919,7 +3933,11 @@ class CefrAndMorphologyMixin:
         if not w or " " in w:
             return False
         pl = cls.pluralize_noun(w)
-        if not pl or pl == w:
+        if not pl:
+            return False
+        if pl == w:
+            if w.endswith("s") and not w.endswith(("ss", "us", "is")) and cls._is_genuine_plural_noun(w):
+                return True
             return False
         gram_prof = cls.get_word_gram_profile(w, pos="noun")
         if gram_prof.get("pure_uncountable"):

@@ -765,8 +765,10 @@ class WsdEngineMixin:
             # 0b. Morphological Number / Countability & Syntactic Slot Gate:
             # If target noun in quote is physically plural ('causes', 'customs'),
             # it cannot match an exclusively [uncountable] sense if a [countable] sense is available.
+            # Guard invariant -s / -ics nouns ('electronics', 'physics', 'economics', 'news', 'means', 'species')
+            # where spaCy tags Number=Plur on morphologically invariant -s headwords.
             s_gram = (s.get("grammar") or "").lower()
-            if target_tok_morph_number and "Plur" in target_tok_morph_number:
+            if target_tok_morph_number and "Plur" in target_tok_morph_number and not target_w_clean.endswith("s"):
                 if "[uncountable]" in s_gram and "[countable]" not in s_gram:
                     score -= 60
                 if "[singular]" in s_gram and "[countable]" not in s_gram and "[plural]" not in s_gram:
@@ -774,6 +776,23 @@ class WsdEngineMixin:
             elif target_tok_morph_number and "Sing" in target_tok_morph_number:
                 if "[plural]" in s_gram and "[singular]" not in s_gram and "[countable]" not in s_gram:
                     score -= 60
+            # For -ics nouns ('electronics', 'mechanics', 'statistics', 'politics', 'ethics', 'acoustics'),
+            # disambiguate between [uncountable] academic discipline/industry/science vs [plural] concrete objects/facts
+            if eff_p == "n" and target_w_clean.endswith("ics"):
+                _ics_def_low = (s.get("definition") or "").lower()
+                _has_academic_or_industry_ctx = bool(
+                    q_tokens & {
+                        "student", "students", "engineer", "engineers", "engineering", "science", "sciences",
+                        "professor", "department", "major", "degree", "course", "courses", "study", "studies",
+                        "industry", "company", "companies", "firm", "firms", "sector", "field", "research",
+                        "technology", "specialist", "specialists", "expert", "experts", "technician",
+                    }
+                )
+                if _has_academic_or_industry_ctx:
+                    if "[uncountable]" in s_gram or any(k in _ics_def_low for k in ("the study", "the science", "industry", "scientific study", "subject")):
+                        score += 55
+                    elif "[plural]" in s_gram and "[uncountable]" not in s_gram:
+                        score -= 45
             if target_tok_is_predicative and "[only before noun]" in s_gram:
                 s_ex_pat_text = " ".join(list(s.get("examples") or []) + list(s.get("patterns") or [])).lower()
                 s_ex_pat_toks = set(re.findall(r"\b[a-z]{4,}\b", s_ex_pat_text)) - meta_stopwords
@@ -828,7 +847,10 @@ class WsdEngineMixin:
                 has_tech_trigger = any(w in q_low_all for w in (
                     "chemical", "acid", "substance", "atom", "molecule", "reaction", "physics",
                     "laboratory", "voltage", "circuit", "alkali", "gas", "metal", "compound",
-                    "technology", "technological", "scientific", "science", "engineering"
+                    "technology", "technological", "scientific", "science", "engineering",
+                    "robot", "robotics", "inventor", "inventors", "technician", "technicians",
+                    "experiment", "printing", "device", "machine", "software", "hardware",
+                    "digital", "electronic", "electronics", "computer"
                 ))
                 if not has_tech_trigger:
                     score -= 50
@@ -1048,10 +1070,21 @@ class WsdEngineMixin:
 
                         words_in_pat = cls._pattern_words(br)
                         # If pattern is a slotless preposition + headword frame (e.g. 'in fashion', 'out of fashion')
-                        # with no wildcard/infix slot, require contiguous adjacency (window=1) so 'in a predictably irrational fashion'
-                        # does not falsely match 'in fashion'.
-                        has_slot_in_br = bool(re.search(r"(\.\.\.|somebody|something|someone|\bsb\b|\bsth\b|\bdoing\b|\bto\s+do\b|\()", br.lower()))
-                        frame_win = cls.PATTERN_FRAME_WINDOW if has_slot_in_br else (1 if words_in_pat and words_in_pat[0] in cls._PATTERN_PREPS else cls.PATTERN_FRAME_WINDOW)
+                        # or a contiguous verb+preposition frame whose only slot is a trailing prepositional object
+                        # ('compared to something', 'equate to something'), require contiguous adjacency (window=1)
+                        # so transitive 'compared [the world] to [a stage]' does not falsely match 'compared to something'.
+                        br_interior = re.sub(
+                            r"\s+(?:somebody|something|someone|sb|sth|doing|to\s+do(?:\s+(?:something|somebody|sth|sb))?|\.\.\.)(?:/(?:somebody|something|someone|sb|sth))*$",
+                            "",
+                            br.lower().strip(),
+                        )
+                        br_interior = re.sub(
+                            r"^(?:somebody|something|someone|sb|sth|\.\.\.)(?:/(?:somebody|something|someone|sb|sth))*\s+",
+                            "",
+                            br_interior,
+                        )
+                        has_slot_in_br = bool(re.search(r"(\.\.\.|somebody|something|someone|\bsb\b|\bsth\b|\bdoing\b|\bto\s+do\b|\()", br_interior))
+                        frame_win = cls.PATTERN_FRAME_WINDOW if has_slot_in_br else 1
                         if len(words_in_pat) >= 2 and cls._quote_has_frame(q_seq, words_in_pat, window=frame_win):
                             score += 40
                             matched_pat = True
@@ -1070,7 +1103,7 @@ class WsdEngineMixin:
                         frame_words = list(non_prep)
                         if not any(w in cls.inflected_forms(target_w_clean) for w in frame_words):
                             frame_words.insert(0, target_w_clean)
-                        if prep_words and frame_words and all(cls._quote_has_frame(q_seq, frame_words + [pw]) for pw in prep_words):
+                        if prep_words and frame_words and all(cls._quote_has_frame(q_seq, frame_words + [pw], window=frame_win) for pw in prep_words):
                             score += 40
                             matched_pat = True
                             break
@@ -1160,7 +1193,17 @@ class WsdEngineMixin:
                             any_unit_matched = True
                             continue
 
-                    has_infix_slot = bool(re.search(r"(\.\.\.|somebody|something|someone|\bsb\b|\bsth\b)", u_clean))
+                    u_interior = re.sub(
+                        r"\s+(?:somebody|something|someone|sb|sth|doing|\.\.\.)(?:/(?:somebody|something|someone|sb|sth))*$",
+                        "",
+                        u_clean.strip(),
+                    )
+                    u_interior = re.sub(
+                        r"^(?:somebody|something|someone|sb|sth|\.\.\.)(?:/(?:somebody|something|someone|sb|sth))*\s+",
+                        "",
+                        u_interior,
+                    )
+                    has_infix_slot = bool(re.search(r"(\.\.\.|somebody|something|someone|\bsb\b|\bsth\b)", u_interior))
                     u_no_opt = re.sub(r"\(.*?\)", "", u_clean).strip()
                     _has_non_poss_obj_slot = bool(
                         eff_p == "v"
@@ -1245,7 +1288,7 @@ class WsdEngineMixin:
                                     best_unit_bonus = max(best_unit_bonus, 45)
                                     any_unit_matched = True
                                     break
-                            elif cls._quote_has_frame(q_seq, words):
+                            elif cls._quote_has_frame(q_seq, words, window=(cls.PATTERN_FRAME_WINDOW if has_infix_slot else 1)):
                                 # Fixed Idiom Invariant: if target word in quote has an intervening/modifying
                                 # content noun or adjective (e.g. 'voice message', 'text message'), it is NOT
                                 # the figurative idiom 'get the message' — UNLESS the unit explicitly specifies an infix slot ('in a ... fashion')!
@@ -1791,6 +1834,21 @@ class WsdEngineMixin:
 
                             surface_dobjs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj")]
                             if not surface_dobjs and eff_p == "v":
+                                # Recover noun-verb homograph direct objects misparsed by en_core_web_sm as right-hand npadvmod
+                                # (e.g. 'compared sleep to death', 'equate work with play')
+                                _temporal_measure_nouns = {
+                                    "today", "yesterday", "tonight", "tomorrow", "morning", "afternoon",
+                                    "evening", "night", "year", "month", "week", "day", "hour", "minute",
+                                    "second", "time", "way", "mile", "kilometer", "percent", "lot", "bit", "little",
+                                }
+                                surface_dobjs = [
+                                    ch for ch in tok.children
+                                    if ch.dep_ == "npadvmod"
+                                    and ch.pos_ in ("NOUN", "PROPN", "PRON")
+                                    and ch.i > tok.i
+                                    and ch.lemma_.lower() not in _temporal_measure_nouns
+                                ]
+                            if not surface_dobjs and eff_p == "v":
                                 for conj_v in tok.children:
                                     if conj_v.dep_ == "conj" and conj_v.pos_ == "VERB" and conj_v.i > tok.i:
                                         conj_dobjs = [ch for ch in conj_v.children if ch.dep_ in ("dobj", "obj")]
@@ -1905,6 +1963,16 @@ class WsdEngineMixin:
                                 t_clean = re.sub(r"\(.*?\)", "", txt)
                                 t_clean = re.sub(r"\b(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\s+to\s+(?:do|make|have|be)\s+(?:something|sth|somebody|sb)?\b", "", t_clean)
                                 t_clean = re.sub(r"\b(?:to|and)\s+(?:do|make|have)\s+(?:something|sth|somebody|sb)\b", "", t_clean)
+                                # Strip prepositional objects (Prep + sb/sth) so intransitive/participial frames
+                                # ('compared to/with something', 'equate to something', 'pay for something')
+                                # are not misclassified as requiring a direct object before the preposition.
+                                t_clean = re.sub(
+                                    r"\b(?:to|with|for|of|in|on|at|from|by|about|into|onto|upon|against|between|among|through|over|under|after|before|without|towards|toward|around|across)"
+                                    r"(?:/(?:to|with|for|of|in|on|at|from|by|about|into|onto|upon|against|between|among|through|over|under|after|before|without|towards|toward|around|across))*"
+                                    r"\s+(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\b",
+                                    "",
+                                    t_clean,
+                                )
                                 return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean))
 
                             # Check if definition shows ergative or intransitive conditional usage:
@@ -2053,7 +2121,17 @@ class WsdEngineMixin:
                                             score += 35
 
                             # Prepositional complement / adverbial phrase / particle matching (e.g. 'recognize sb by doing', 'come in', 'sit down', 'turn around')
-                            for ch in tok.children:
+                            _verb_prep_children = [ch for ch in tok.children if ch.dep_ in ("prep", "prt", "advmod")]
+                            for _dobj_ch in surface_dobjs:
+                                for _d_prep in _dobj_ch.children:
+                                    if _d_prep.dep_ == "prep" and _d_prep not in _verb_prep_children:
+                                        _verb_prep_children.append(_d_prep)
+                            _any_sib_has_trans_pat = any(
+                                _requires_direct_object(p_other)
+                                for s_other in senses if isinstance(s_other, dict)
+                                for p_other in (s_other.get("patterns") or [])
+                            )
+                            for ch in _verb_prep_children:
                                 if ch.dep_ in ("prep", "prt", "advmod"):
                                     p_txt = ch.text.lower()
                                     p_lem = ch.lemma_.lower()
@@ -2106,6 +2184,8 @@ class WsdEngineMixin:
                                                     continue
                                                 if _requires_direct_object(br) and not has_effective_obj:
                                                     continue
+                                                if not _requires_direct_object(br) and has_direct_obj and _any_sib_has_trans_pat and not has_trans_gram:
+                                                    continue
                                                 if not content_pw or any(any(cls.form_matches(tok_q, cpw) for tok_q in q_seq) for cpw in content_pw):
                                                     # When particle/preposition matches pattern (or open-ended locative pattern)
                                                     score += 40
@@ -2113,6 +2193,56 @@ class WsdEngineMixin:
                                                     break
                                         if pat_matched:
                                             break
+
+                                    # Ontological Class Comparison vs. Metaphorical Analogy (e.g. 'compare A with/to B' vs 'compare A to B = liken'):
+                                    # When a verb governs a direct/passive object A and a 'to + B' prepositional complement,
+                                    # check whether A and B belong to the same taxonomic class (near-hypernym overlap in WordNet)
+                                    # or orthogonal domains ("another person or thing of a different kind").
+                                    if p_lem == "to" and deep_dobj_tokens and (
+                                        "similar or different" in s_defn or "of a different kind" in s_defn
+                                    ):
+                                        to_pobjs = [pc for pc in ch.children if pc.dep_ in ("pobj", "pcomp")]
+                                        if to_pobjs:
+                                            a_tok = deep_dobj_tokens[0]
+                                            b_tok = to_pobjs[0]
+                                            a_lem = a_tok.lemma_.lower()
+                                            b_lem = b_tok.lemma_.lower()
+                                            is_same_class = (
+                                                a_lem == b_lem
+                                                or b_lem in ("those", "that", "one", "ones", "other", "others", "year", "month", "week", "day", "average", "standard", "norm", "level", "rate", "figure")
+                                                or any(gc.dep_ in ("case", "poss") for gc in b_tok.children)
+                                            )
+                                            if not is_same_class and a_tok.pos_ == "NOUN" and b_tok.pos_ == "NOUN":
+                                                try:
+                                                    wn_inst = cls.get_wordnet()
+                                                    _high_roots = {
+                                                        "entity", "physical entity", "abstraction", "abstract entity",
+                                                        "object", "whole", "artifact", "matter", "psychological feature",
+                                                        "state", "event", "act", "group", "thing",
+                                                    }
+                                                    sa = wn_inst.synsets(a_lem, pos="n")[:2]
+                                                    sb = wn_inst.synsets(b_lem, pos="n")[:2]
+                                                    for _s1 in sa:
+                                                        _h1 = {_s1} | {h for path in _s1.hypernym_paths() for h in path[:3] if not (set(h.lemmas()) & _high_roots)}
+                                                        for _s2 in sb:
+                                                            _h2 = {_s2} | {h for path in _s2.hypernym_paths() for h in path[:3] if not (set(h.lemmas()) & _high_roots)}
+                                                            if _h1 & _h2:
+                                                                is_same_class = True
+                                                                break
+                                                        if is_same_class:
+                                                            break
+                                                except Exception:
+                                                    pass
+                                            if is_same_class:
+                                                if "similar or different" in s_defn:
+                                                    score += 45
+                                                elif "of a different kind" in s_defn:
+                                                    score -= 35
+                                            else:
+                                                if "of a different kind" in s_defn:
+                                                    score += 55
+                                                elif "similar or different" in s_defn:
+                                                    score -= 25
                                     # Check prepositional objects or complement verbs
                                     has_action_pcomp = False
                                     p_objs_expanded = []
@@ -4039,14 +4169,27 @@ class WsdEngineMixin:
         if not clean_phrase:
             return ("", "", "")
 
+        has_internal_obj_slot = bool(
+            re.search(
+                r"^[a-z]+\s+(?:\[[^\]]+\]|\([^)]+\)|\.\.\.)\s+[a-z]+",
+                str(phrase or "").strip(),
+                re.IGNORECASE,
+            )
+        )
         key = cls._unit_key(clean_phrase)
         is_multiword = len(key.split()) >= 2
 
-        # When expr_type is explicitly a phrasal verb or verbal multiword, check PedLex's phrasal-verb block first
-        # to prevent noun homographs (e.g. 'cutout' for 'cut out') from hijacking the unit.
+        # When expr_type is explicitly a phrasal verb or verbal multiword (or has an internal object slot V + [sth/sb] + Prep),
+        # check PedLex's phrasal-verb block alongside base verb senses in a unified candidate pool.
         is_phrasal_v = is_multiword and (
-            expr_type in ("phrasal verb", "v", "verb") or
-            (
+            expr_type in ("phrasal verb", "v", "verb")
+            or has_internal_obj_slot
+            or (
+                expr_type not in ("noun", "idiom", "set phrase")
+                and bool(cls._unit_blocks(key))
+                and cls.determine_contextual_pos(key.split()[0], context_sentence) == "verb"
+            )
+            or (
                 expr_type not in cls.EXPRESSION_TYPE_LABELS
                 and cls.determine_contextual_pos(key.split()[0], context_sentence) == "verb"
             )
@@ -4057,10 +4200,36 @@ class WsdEngineMixin:
                 if b_senses:
                     base_verb = key.split()[0]
                     other_tokens = key.split()[1:]
+                    ctx_low = (context_sentence or "").lower()
+                    v_forms_re = "|".join(re.escape(f) for f in (cls.inflected_forms(base_verb) | {base_verb}))
+                    pt_re = re.escape(other_tokens[0]) if len(other_tokens) == 1 else ""
+                    is_passive_v_prep = bool(
+                        pt_re
+                        and context_sentence
+                        and re.search(
+                            rf"\b(?:am|is|are|was|were|be|been|being|get|gets|got)\s+(?:[a-z]+ly\s+)?(?:{v_forms_re})\s+{pt_re}\b",
+                            ctx_low,
+                        )
+                    )
+                    # Detect separable direct object between verb and particle/preposition
+                    has_sep_dobj_or_dest = False
+                    if len(other_tokens) == 1 and context_sentence:
+                        if re.search(rf"\b(?:{v_forms_re})\s+(?:the|a|an|his|her|their|our|my|your|its|this|that|these|those|[a-z]+'s)\s+[^.,;!?]{{1,35}}\b{pt_re}\b", ctx_low) or re.search(rf"\b{pt_re}\s+to\s+(?:the|a|an|his|her|their|our|my|your|its)\b", ctx_low):
+                            has_sep_dobj_or_dest = True
+
+                    _relational_preps = {
+                        "to", "with", "into", "from", "of", "upon", "for", "at", "by", "about", "as", "against"
+                    }
+                    is_trivalent_prep_frame = bool(
+                        len(other_tokens) == 1
+                        and other_tokens[0] in _relational_preps
+                        and (has_internal_obj_slot or is_passive_v_prep or has_sep_dobj_or_dest)
+                    )
+
                     cand_base_senses = []
                     v_entry = cls.get_ldoce_entry(base_verb)
-                    if v_entry and context_sentence:
-                        ctx_words_low = set(re.findall(r"[a-z]+", context_sentence.lower()))
+                    if v_entry and (context_sentence or is_trivalent_prep_frame):
+                        ctx_words_low = set(re.findall(r"[a-z]+", ctx_low))
                         _pat_slot_meta = {
                             "something", "somebody", "someone", "sth", "sb", "oneself",
                             "one's", "etc", "to", "for", "with", "from", "in", "on", "at",
@@ -4069,17 +4238,16 @@ class WsdEngineMixin:
                             "a", "an", "the", "doing", "do", "be", "being",
                         }
                         for s in v_entry.get("senses", []):
+                            matched_exact_pat = False
                             for p in (s.get("patterns") or []):
                                 norm_p = cls._entry_text_normalizer(p)
                                 p_toks = norm_p.split()
                                 if not p_toks or not cls.form_matches(p_toks[0], base_verb):
                                     continue
                                 if all(re.search(r'(?<!\w)' + re.escape(tok) + r'(?!\w)', norm_p) for tok in other_tokens):
-                                    # If pattern requires specific lexical nouns beyond verb + particle + slots
-                                    # (e.g. 'go on a trip/tour/cruise'), require at least one to appear in context_sentence
                                     extra_lex = [
                                         wt for wt in p_toks[1:]
-                                        if wt not in other_tokens and not any( sub in _pat_slot_meta for sub in wt.split("/") )
+                                        if wt not in other_tokens and not any(sub in _pat_slot_meta for sub in wt.split("/"))
                                         and all(len(sub) >= 3 and sub.isalpha() for sub in wt.split("/"))
                                     ]
                                     if extra_lex and not any(
@@ -4088,25 +4256,36 @@ class WsdEngineMixin:
                                     ):
                                         continue
                                     cand_base_senses.append(s)
+                                    matched_exact_pat = True
                                     break
+                            # When the item/sentence uses a transitive or passive trivalent frame (e.g. 'equate (sth) to (sth)' /
+                            # 'is equated to') and the host verb's main transitive sense lists a sister relational preposition
+                            # (e.g. 'equate something with something'), include that transitive sense in cand_base_senses.
+                            if not matched_exact_pat and is_trivalent_prep_frame:
+                                s_gram_l = str(s.get("grammar") or "").lower()
+                                s_pats = list(s.get("patterns") or [])
+                                has_trans_obj = (
+                                    ("transitive" in s_gram_l and "intransitive" not in s_gram_l)
+                                    or any(
+                                        re.search(
+                                            rf"\b{re.escape(base_verb)}\s+(?:something|somebody|someone|sth|sb)\b",
+                                            cls._entry_text_normalizer(p),
+                                        )
+                                        for p in s_pats
+                                    )
+                                )
+                                if has_trans_obj:
+                                    s_triv = dict(s)
+                                    synth_pat = f"{base_verb} something {other_tokens[0]} something"
+                                    s_triv["patterns"] = list(s_pats) + [synth_pat]
+                                    cand_base_senses.append(s_triv)
 
                     # Construct unified candidate pool: base senses + phrasal verb block senses
-                    # Ensure phrasal verb senses without patterns receive a default pattern matching the key,
-                    # so they can fairly participate in syntactic particle/preposition binding.
-                    ctx_low = (context_sentence or "").lower()
                     is_passive_remind = "remind" in key and bool(
                         re.search(r"\b(?:am|is|are|was|were|be|been|being|get|gets|got)\s+(?:often\s+|always\s+|suddenly\s+|immediately\s+|constantly\s+)?reminded\b", ctx_low)
                     )
                     _chem_words = {"chemical", "substance", "acid", "metal", "gas", "oxygen", "water", "element", "compound", "solution", "calcium", "sulphur", "hydrogen", "carbon", "alkali", "molecule", "atom", "chlorine", "iron"}
                     has_chem_ctx = bool(set(re.findall(r"[a-z]{3,}", ctx_low)) & _chem_words)
-
-                    # Detect separable direct object between verb and particle (e.g. 'take the giraffe's body back to their village')
-                    has_sep_dobj_or_dest = False
-                    if len(other_tokens) == 1 and context_sentence:
-                        v_forms_re = "|".join(re.escape(f) for f in (cls.inflected_forms(base_verb) | {base_verb}))
-                        pt_re = re.escape(other_tokens[0])
-                        if re.search(rf"\b(?:{v_forms_re})\s+(?:the|a|an|his|her|their|our|my|your|its|this|that|these|those|[a-z]+'s)\s+[^.,;!?]{{1,35}}\b{pt_re}\b", ctx_low) or re.search(rf"\b{pt_re}\s+to\s+(?:the|a|an|his|her|their|our|my|your|its)\b", ctx_low):
-                            has_sep_dobj_or_dest = True
 
                     prepared_b_senses = []
                     for s in b_senses:
@@ -4117,6 +4296,17 @@ class WsdEngineMixin:
                             continue
                         if has_sep_dobj_or_dest and any(k in s_def_l for k in ("admit that you were wrong", "something that you said")):
                             continue
+                        # Filter out strictly intransitive / no-passive phrasal_verbs senses (e.g. 'equate to sth' [intransitive, no passive]:
+                        # 'to be equal to something') when the phrase/context is transitive or passive and a transitive base sense exists.
+                        if is_trivalent_prep_frame and cand_base_senses:
+                            b_gram_l = (str(s.get("grammar") or "") + " " + " ".join(str(x) for x in (s.get("syntax_codes") or []))).lower()
+                            b_pats_norm = [cls._entry_text_normalizer(p) for p in (s.get("patterns") or [])]
+                            b_has_internal_obj = any(
+                                re.search(rf"\b{re.escape(base_verb)}\s+(?:something|somebody|someone|sth|sb)\s+{re.escape(other_tokens[0])}\b", bp)
+                                for bp in b_pats_norm
+                            )
+                            if not b_has_internal_obj and ("intransitive" in b_gram_l or "no passive" in b_gram_l):
+                                continue
                         s_copy = dict(s)
                         if not s_copy.get("pos"):
                             s_copy["pos"] = "verb"
@@ -4126,7 +4316,7 @@ class WsdEngineMixin:
                         ]
                         s_copy["patterns"] = s_pats
                         prepared_b_senses.append(s_copy)
-                    if not prepared_b_senses and b_senses:
+                    if not prepared_b_senses and b_senses and not (is_trivalent_prep_frame and cand_base_senses):
                         prepared_b_senses = [
                             dict(
                                 s,
@@ -4201,7 +4391,12 @@ class WsdEngineMixin:
                                 ex = cls._relaxed_unit_example(
                                     key, cls._arbitrated_example_pool(base_verb, chosen_sense, key)
                                 )
-                            if (not ex or not cls.text_contains_form(ex, key)) and context_sentence and cls._unit_example(key, [context_sentence]):
+                                if not ex and is_trivalent_prep_frame:
+                                    for cand_ex in (chosen_sense.get("examples") or []):
+                                        if cls.text_contains_form(cand_ex, base_verb):
+                                            ex = cand_ex
+                                            break
+                            if (not ex or (not cls.text_contains_form(ex, key) and not (is_trivalent_prep_frame and cls.text_contains_form(ex, base_verb)))) and context_sentence and cls._unit_example(key, [context_sentence]):
                                 ex = context_sentence
                             return (defn, ex, chosen_source)
 
@@ -4614,12 +4809,13 @@ class WsdEngineMixin:
             f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
             f"Instructions:\n"
             f"- Match the candidate whose definition, [SIGNPOST], and [Pattern: ...] best fit how '{item_name}' is used in the target sentence.\n"
+            f"- Match the semantic domain of the governing verb or argument in the sentence (e.g., speaking/writing/expressing an argument vs. thinking/remembering vs. seeing/hearing), rather than merely matching a preposition in an example sentence.\n"
             f"- Respect selectional restrictions (e.g., 'if a [subject] ...', animate vs. inanimate arguments) and register/domain tags ([formal], [informal], [spoken], [technical], [disapproving]).\n"
             f"- Prefer core general senses over narrow technical, legal, medical, or [spoken]/[informal] senses unless the context clearly requires them.\n"
             f"Reply with ONLY the single capital letter ({letters[0]}-{letters[-1]}):"
         )
 
-        cache_raw = f"{active_model}|v4|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
+        cache_raw = f"{active_model}|v5|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
         cache_key = hashlib.sha1(cache_raw.encode("utf-8")).hexdigest()
 
         active_session = getattr(cls._wsd_session_local, "session", None)

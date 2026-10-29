@@ -1216,12 +1216,9 @@ class LLMClient:
                                     composite = 100.0
                             
                             flags = audit.get("flags", [])
-                            # Level 1 Code Gate: Filter out issues already healed deterministically by Python logic
-                            # (e.g. missing fill-in-the-blank slots that were auto-masked, POS tags normalized, etc.)
-                            actionable_flags = [
-                                f for f in flags
-                                if "missing fill-in-the-blank slot" not in f
-                            ]
+                            # Note: evaluate_log runs on dict_to_eval AFTER deterministic auto-healing,
+                            # so any surviving flags (including unhealed missing '____' slots) are actionable.
+                            actionable_flags = list(flags)
 
                             from .evaluator import FATAL_QA_FLAGS
                             has_fatal_flags = any(

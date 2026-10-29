@@ -878,7 +878,8 @@ class QuizGeneratorMixin:
                     })
                     opts_str = ", ".join(prescribed_opts)
                     micro_task_str = s.get("micro_task", "")
-                    pattern_line = f"- Pattern: {s['best_pattern']}\n" if s.get("best_pattern") else ""
+                    frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
+                    pattern_line = f"- Required Stem Frame: {frame_str}\n"
                     skeleton_bullets.append(
                         f"### Item {idx} ###\n"
                         f"- Target Word: {s['target_word']}\n"
@@ -1220,16 +1221,19 @@ class QuizGeneratorMixin:
                             stem_str = str(q_item.get("question") if is_dict else getattr(q_item, "question", "") or "")
                             micro_task_rule = str(spec.get("micro_task") or "")
                             m_bound_prep = re.search(r"____\s+([a-z]{2,10})\b", micro_task_rule)
-                            if m_bound_prep and "____" in stem_str:
+                            _other_preps = {
+                                "in", "on", "at", "to", "for", "from", "with", "by", "of",
+                                "into", "onto", "upon", "about", "against", "under", "over",
+                                "through", "between", "among", "as", "towards", "toward",
+                            }
+                            if m_bound_prep and m_bound_prep.group(1).lower() in _other_preps and "____" in stem_str:
                                 req_prep = m_bound_prep.group(1).lower()
-                                if not re.search(rf"____\s+{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE):
+                                if (
+                                    not re.search(rf"____\s+{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
+                                    and not re.search(rf"____\b[^.?!;]*\b{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
+                                ):
                                     m_after = re.search(r"____\s+([A-Za-z]+)\b", stem_str)
                                     after_tok = m_after.group(1).lower() if m_after else ""
-                                    _other_preps = {
-                                        "in", "on", "at", "to", "for", "from", "with", "by", "of",
-                                        "into", "onto", "upon", "about", "against", "under", "over",
-                                        "through", "between", "among", "as", "towards", "toward",
-                                    }
                                     if after_tok and after_tok not in _other_preps:
                                         stem_str = re.sub(r"____", f"____ {req_prep}", stem_str, count=1)
                                         if is_dict:

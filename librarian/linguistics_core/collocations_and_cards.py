@@ -1528,7 +1528,25 @@ class CollocationsAndCardsMixin:
                         c_val = _clean_pattern_text(str(it_c.get("collocation") or ""))
                         if not c_val or " " not in c_val:
                             continue
-                        _add_colloc(c_val, check_cross_sense=not has_direct_sense_link)
+                        it_ex = str(it_c.get("example") or "").strip()
+                        if c_val[0].isupper() and it_ex.startswith(c_val):
+                            continue
+                        if not has_direct_sense_link and len(senses) > 1 and t_s_idx is not None:
+                            for g_box in (entry.get("grammar_boxes") or []):
+                                g_s_idxs = g_box.get("sense_indices")
+                                if isinstance(g_s_idxs, list) and g_s_idxs and t_s_idx not in g_s_idxs:
+                                    g_exs = [str(gx).strip() for gx in (g_box.get("examples") or []) if gx]
+                                    if it_ex and it_ex in g_exs:
+                                        c_val = ""
+                                        break
+                            if not c_val:
+                                continue
+                        _add_colloc(
+                            c_val,
+                            check_cross_sense=not has_direct_sense_link,
+                            extra_context=it_ex,
+                            require_sense_overlap=(not has_direct_sense_link and len(senses) > 1 and t_s_idx is not None and t_s_idx > 0),
+                        )
                         if len(colloc_items) >= 5:
                             break
                     if len(colloc_items) >= 5:
@@ -1856,9 +1874,10 @@ class CollocationsAndCardsMixin:
                         continue
                     if cls._definition_overlap_ratio(dist_note, target_side) >= 0.8 and not dist_gram:
                         continue  # no real contrast in this cluster pairing
-                    hinge = ("polar opposite" if mechanism == "antonym" else "different degree/scale or collocational frame")
                     if dist_gram:
-                        hinge = f"`{dist_gram}`; {hinge}"
+                        hinge = f"polar opposite; `{dist_gram}`" if mechanism == "antonym" else f"`{dist_gram}`"
+                    else:
+                        hinge = "polar opposite" if mechanism == "antonym" else "different degree/scale or collocational frame"
                     notes.append(f"Contrast: vs '{dist}' ({hinge}).")
                     break
             else:
@@ -2281,32 +2300,64 @@ class CollocationsAndCardsMixin:
         # Strict Sense-First scope: never roam into other senses when locked_sense is resolved
         candidate_senses = [locked_sense] if locked_sense is not None else senses
 
-        # Precompute sense lemma set for filtering entry-level collocations against the locked sense
+        # Precompute sense lemma set and other-sense lemma set for filtering entry-level collocations against the locked sense
         sense_lemmas: Set[str] = set()
+        other_sense_lemmas: Set[str] = set()
         is_polysemous = len(senses) > 1 and locked_sense is not None
         if locked_sense is not None:
             try:
                 nlp = cls.get_spacy()
+                self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
                 s_text = (
                     (locked_sense.get("definition") or "")
                     + " "
-                    + " ".join(locked_sense.get("examples") or [])
+                    + " ".join(str(x) for x in (locked_sense.get("examples") or []))
                     + " "
                     + (locked_sense.get("signpost") or "")
+                    + " "
+                    + " ".join(str(x) for x in (locked_sense.get("synonyms") or []))
+                    + " "
+                    + " ".join(str(x) for x in (locked_sense.get("patterns") or []))
                 ).lower()
-                self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
                 sense_lemmas = {
                     tok.lemma_.lower()
                     for tok in nlp(s_text)
                     if tok.is_alpha and not tok.is_stop and len(tok.lemma_) >= 3
                 } - self_forms - cls._ANCHOR_STOPWORDS
+                if is_polysemous:
+                    other_chunks = []
+                    for idx_o, s_other in enumerate(senses):
+                        if s_other is locked_sense or idx_o == locked_s_idx:
+                            continue
+                        other_chunks.append(
+                            (s_other.get("definition") or "")
+                            + " "
+                            + " ".join(str(x) for x in (s_other.get("examples") or [])[:4])
+                            + " "
+                            + (s_other.get("signpost") or "")
+                            + " "
+                            + " ".join(str(x) for x in (s_other.get("synonyms") or []))
+                        )
+                    if other_chunks:
+                        o_text = " ".join(other_chunks).lower()
+                        other_sense_lemmas = (
+                            {
+                                tok.lemma_.lower()
+                                for tok in nlp(o_text)
+                                if tok.is_alpha and not tok.is_stop and len(tok.lemma_) >= 3
+                            }
+                            - self_forms
+                            - cls._ANCHOR_STOPWORDS
+                            - sense_lemmas
+                        )
             except Exception:
                 sense_lemmas = set()
+                other_sense_lemmas = set()
 
         def _score_colloc_item(it_c: Dict[str, Any]) -> int:
             it_s_indices = it_c.get("sense_indices")
             if isinstance(it_s_indices, list) and it_s_indices and locked_s_idx is not None:
-                return 100 if locked_s_idx in it_s_indices else 0
+                return 100 if locked_s_idx in it_s_indices else -100
             if not sense_lemmas:
                 return 0
             try:
@@ -2318,13 +2369,19 @@ class CollocationsAndCardsMixin:
                     + (it_c.get("gloss") or "")
                     + " "
                     + (it_c.get("example") or "")
+                    + " "
+                    + " ".join(str(x) for x in (it_c.get("examples") or []))
                 ).lower()
                 c_lems = {
                     t.lemma_.lower()
                     for t in nlp(c_text)
                     if t.is_alpha and not t.is_stop and len(t.lemma_) >= 3
                 } - self_forms - cls._ANCHOR_STOPWORDS
-                return len(c_lems & sense_lemmas)
+                pos_hits = len(c_lems & sense_lemmas)
+                neg_hits = len(c_lems & other_sense_lemmas) if other_sense_lemmas else 0
+                if is_polysemous and neg_hits > pos_hits:
+                    return -50
+                return pos_hits - neg_hits
             except Exception:
                 return 0
 
@@ -2439,34 +2496,48 @@ class CollocationsAndCardsMixin:
 
         # 2. Verb Cascades (direct object patient >> governing prep)
         elif p_low.startswith("v"):
+            is_strictly_intransitive = (
+                bool(candidate_senses)
+                and any(s.get("grammar") for s in candidate_senses)
+                and all(
+                    "intransitive" in [str(g).lower().strip("[] ") for g in (s.get("grammar") or [])]
+                    and "transitive" not in [str(g).lower().strip("[] ") for g in (s.get("grammar") or [])]
+                    for s in candidate_senses
+                    if s.get("grammar")
+                )
+            )
             # Step A: Prioritize direct object patient strictly from the locked target sense
-            try:
-                nlp = cls.get_spacy()
-                for s in candidate_senses:
-                    for ex in s.get("examples", []):
-                        doc_ex = nlp(ex)
-                        for tok in doc_ex:
-                            if tok.lemma_.lower() == tw_clean and tok.pos_ in ("VERB", "AUX"):
-                                for child in tok.children:
-                                    if child.dep_ in ("dobj", "obj") and child.is_alpha and len(child.lemma_) >= 3 and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS and child.pos_ in ("NOUN", "PROPN"):
-                                        cand_obj = child.lemma_.lower()
-                                        if not any(cls.double_key_collision(tw_clean, d, anchor=cand_obj, anchor_type="object", pos="verb")[0] for d in dists):
-                                            anchor = cand_obj
-                                            atype = "object"
-                                            frame_desc = f"direct object noun {cand_obj}"
-                                            authentic_ex = ex
-                                            break
-                                if anchor:
-                                    break
+            if not is_strictly_intransitive:
+                try:
+                    nlp = cls.get_spacy()
+                    for s in candidate_senses:
+                        s_grams = [str(g).lower().strip("[] ") for g in (s.get("grammar") or [])]
+                        if "intransitive" in s_grams and "transitive" not in s_grams:
+                            continue
+                        for ex in s.get("examples", []):
+                            doc_ex = nlp(ex)
+                            for tok in doc_ex:
+                                if tok.lemma_.lower() == tw_clean and tok.pos_ in ("VERB", "AUX"):
+                                    for child in tok.children:
+                                        if child.dep_ in ("dobj", "obj") and child.is_alpha and len(child.lemma_) >= 3 and child.lemma_.lower() not in cls._ANCHOR_STOPWORDS and child.pos_ in ("NOUN", "PROPN"):
+                                            cand_obj = child.lemma_.lower()
+                                            if not any(cls.double_key_collision(tw_clean, d, anchor=cand_obj, anchor_type="object", pos="verb")[0] for d in dists):
+                                                anchor = cand_obj
+                                                atype = "object"
+                                                frame_desc = f"direct object noun {cand_obj}"
+                                                authentic_ex = ex
+                                                break
+                                    if anchor:
+                                        break
+                            if anchor:
+                                break
                         if anchor:
                             break
-                    if anchor:
-                        break
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             # Step B: Sense-aligned direct object nouns in collocations
-            if not anchor and entry.get("collocations", {}).get("nouns"):
+            if not anchor and not is_strictly_intransitive and entry.get("collocations", {}).get("nouns"):
                 try:
                     nlp = cls.get_spacy()
                 except Exception:
@@ -2479,6 +2550,8 @@ class CollocationsAndCardsMixin:
                 for it in colloc_nouns:
                     ex = it.get("example", "")
                     c_str = it.get("collocation", "").lower()
+                    if re.search(rf"\b{re.escape(tw_clean)}\w*\s+(?:to|on|at|about|for|with|over|into|of|from|in)\b", c_str):
+                        continue
                     tok_clean = cls._pick_anchor_token([c_str], target_word=tw_clean, prefer_pos="noun")
                     if not tok_clean:
                         continue
@@ -2760,15 +2833,52 @@ class CollocationsAndCardsMixin:
                     if anc_re.search(ex.lower()):
                         return ex
 
-            # 1. Curated collocations of the target (only if anchor is NOT a bare preposition from another sense)
+            # 1. Curated collocations of the target (only if anchor is NOT a bare preposition from another sense,
+            # and strictly sense-isolated when locked_sense is resolved on a polysemous word)
             is_bare_prep = anc_l in ("of", "to", "for", "with", "about", "from", "in", "on", "at", "into", "over", "under", "against", "towards", "toward", "by", "upon")
             if not is_bare_prep:
+                senses_list = t_entry.get("senses") or []
+                is_poly = len(senses_list) > 1 and locked_sense is not None
+                locked_idx = None
+                if is_poly:
+                    for idx_s, s_c in enumerate(senses_list):
+                        if s_c is locked_sense or (
+                            s_c.get("definition") == locked_sense.get("definition")
+                            and s_c.get("pos") == locked_sense.get("pos")
+                        ):
+                            locked_idx = idx_s
+                            break
+                s_kws: Set[str] = set()
+                o_kws: Set[str] = set()
+                if is_poly and locked_sense is not None:
+                    l_str = f"{locked_sense.get('signpost') or ''} {locked_sense.get('definition') or ''} {' '.join(str(x) for x in (locked_sense.get('examples') or []))} {' '.join(str(x) for x in (locked_sense.get('synonyms') or []))}".lower()
+                    s_kws = {w for w in re.findall(r"[a-z]{4,}", l_str) if w != tw_l and w not in cls._ANCHOR_STOPWORDS}
+                    for idx_o, s_o in enumerate(senses_list):
+                        if s_o is locked_sense or idx_o == locked_idx:
+                            continue
+                        o_str = f"{s_o.get('signpost') or ''} {s_o.get('definition') or ''} {' '.join(str(x) for x in (s_o.get('examples') or [])[:4])}".lower()
+                        o_kws |= {w for w in re.findall(r"[a-z]{4,}", o_str) if w != tw_l and w not in cls._ANCHOR_STOPWORDS and w not in s_kws}
+
+                def _colloc_matches_locked_sense(item_obj: Dict[str, Any]) -> bool:
+                    if not is_poly:
+                        return True
+                    s_inds = item_obj.get("sense_indices")
+                    if isinstance(s_inds, list) and s_inds and locked_idx is not None:
+                        return locked_idx in s_inds
+                    c_probe = f"{item_obj.get('collocation') or ''} {item_obj.get('gloss') or ''} {item_obj.get('example') or ''}".lower()
+                    c_words = {w for w in re.findall(r"[a-z]{4,}", c_probe) if w != tw_l and w not in cls._ANCHOR_STOPWORDS}
+                    if o_kws and len(c_words & o_kws) >= len(c_words & s_kws) and len(c_words & o_kws) > 0:
+                        return False
+                    if s_kws and len(c_words & s_kws) == 0:
+                        return False
+                    return True
+
                 for items in (t_entry.get("collocations") or {}).values():
                     for item in items or []:
-                        if anc_re.search((item.get("collocation") or "").lower()) and item.get("example"):
+                        if anc_re.search((item.get("collocation") or "").lower()) and item.get("example") and _colloc_matches_locked_sense(item):
                             return item["example"]
                 for item in t_entry.get("cross_collocations") or []:
-                    if anc_re.search((item.get("collocation") or "").lower()) and item.get("example"):
+                    if anc_re.search((item.get("collocation") or "").lower()) and item.get("example") and _colloc_matches_locked_sense(item):
                         return item["example"]
 
             # 2. Only scan all senses if no locked_sense was resolved

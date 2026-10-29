@@ -322,6 +322,53 @@ class ExpertAuditor:
                         elif "correct" in t_type.lower():
                             d_item["trap_type"] = "Plausible Real-World Distractor"
 
+                # Deterministic Countability-Agreement False Double-Key Guard:
+                # If the judge solved the correct answer (blind_raw == declared_raw) but flagged a false double-key
+                # on a strictly [uncountable] mass-noun distractor (e.g. 'equipment', 'machinery', 'furniture') when
+                # the stem explicitly contains a countable-only determiner/quantifier ('many', 'several', 'various',
+                # 'numerous', 'fewer', 'two', 'three', 'these', 'those', 'each', 'every', 'a', 'an', 'one', 'another')
+                # or plural verb agreement, deterministically veto the false double-key alarm.
+                if blind_raw == declared_raw and not q_audit.get("single_fit_valid", True) and isinstance(distractors, list):
+                    stem_text = str(q.get("question") or "")
+                    has_countable_det_before_blank = bool(
+                        re.search(
+                            r"\b(?:many|several|various|numerous|fewer|two|three|four|five|these|those|both|each|every|a|an|a\(n\)|one|another)\s+(?:[a-zA-Z\-]+\s+){0,2}_{2,}\b",
+                            stem_text,
+                            flags=re.IGNORECASE,
+                        )
+                        or re.search(r"\b_{2,}\s+(?:are|were|have)\b", stem_text, flags=re.IGNORECASE)
+                    )
+                    if has_countable_det_before_blank:
+                        from .linguistics import LinguisticEngine
+                        non_key_dks = [
+                            (d_idx, d_item)
+                            for d_idx, d_item in enumerate(distractors)
+                            if isinstance(d_item, dict) and d_idx != declared_raw and d_item.get("is_double_key")
+                        ]
+                        if non_key_dks:
+                            all_uncountable_clashes = True
+                            for _, d_item in non_key_dks:
+                                d_txt = str(d_item.get("option_text") or "").strip().lower()
+                                d_prof = LinguisticEngine.get_word_grammar_profile(d_txt)
+                                if not (d_prof.get("uncountable") and not d_prof.get("countable")):
+                                    all_uncountable_clashes = False
+                                    break
+                            if all_uncountable_clashes:
+                                for d_idx, d_item in enumerate(distractors):
+                                    if isinstance(d_item, dict):
+                                        d_item["is_double_key"] = False
+                                        if d_idx != declared_raw and "double" in str(d_item.get("trap_type", "")).lower():
+                                            d_item["trap_type"] = "Morphological/Register Contrast"
+                                q_audit["single_fit_valid"] = True
+                                q_audit["confidence"] = "Definite"
+                                q_audit["triage_action"] = "PASS"
+                                q_audit["cured_question"] = None
+                                q_audit["pedagogical_score"] = max(int(q_audit.get("pedagogical_score") or 92), 92)
+                                q_audit["diagnostic_feedback"] = (
+                                    "Valid item. The countable determiner before the blank grammatically requires a countable noun, "
+                                    "disqualifying uncountable mass-noun distractors via determiner-number agreement."
+                                )
+
                 # Check for unsolvable / ambiguous item (-1)
                 if blind_raw == -1:
                     unsolvable_count += 1
