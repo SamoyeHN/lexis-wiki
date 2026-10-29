@@ -48,7 +48,18 @@ DEFAULT_CONFIG = {
     "enable_authentic_cloze": True,
     "disable_pedlex": False,
     "disable_ldoce": False,
-    "dashboard_port": 8000
+    "dashboard_port": 8000,
+    "pedlex_distribution": {
+        "auto_download": True,
+        "auto_update": False,
+        "expected_sha256": "92f6f4b575cc8f5a1c50f0e6a678723d0c1692839ea2096d5b8c71254172c654",
+        "urls": [
+            "https://r2.airopen.org/pedlex.db.xz",
+            "https://huggingface.co/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
+            "https://hf-mirror.com/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz"
+        ],
+        "auth_token": ""
+    }
 }
 
 class Config:
@@ -100,6 +111,17 @@ class Config:
         except Exception as e:
             print(f"Warning: Could not create directories: {e}")
 
+    def seed_sample_unit(self):
+        """Ensure the built-in Rosetta_Stone sample unit exists under wiki/Rosetta_Stone/sources/."""
+        try:
+            sample_src = Path(__file__).resolve().parent / "data" / "samples" / "Rosetta_Stone.txt"
+            target_src = self.wiki_content_path / "Rosetta_Stone" / "sources" / "Rosetta_Stone.txt"
+            if sample_src.exists() and not target_src.exists():
+                target_src.parent.mkdir(parents=True, exist_ok=True)
+                target_src.write_text(sample_src.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Could not seed sample unit: {e}")
+
     def initialize_project(self, target_path=None):
         """Creates a new project structure in the target path (idempotent)."""
         target_path = Path(target_path or os.getcwd()).resolve()
@@ -112,6 +134,7 @@ class Config:
             self.project_root = target_path
             self.load_config()
             self.ensure_dirs()
+            self.seed_sample_unit()
             return True, f"Already initialized at {target_path} (nothing to do)"
 
         try:
@@ -123,6 +146,7 @@ class Config:
             self.project_root = target_path
             self.load_config()
             self.ensure_dirs()
+            self.seed_sample_unit()
 
             return True, f"Successfully initialized project at {target_path} (wiki/ structure created)"
         except Exception as e:

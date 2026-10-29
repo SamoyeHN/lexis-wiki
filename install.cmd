@@ -57,13 +57,13 @@ echo   Skipped. You can add it later with:  %PY% -m pip install faster-whisper
 :extra_done
 
 :: ---- 2/2 Initialize the project (safe to re-run)
-echo [2/2] Initializing project (lexis init .) ...
+echo [2/2] Initializing project and checking PedLex lexicon (lexis init .) ...
 %PY% -m librarian.cli init . || goto :fail
 
 echo.
 echo ============================================
 echo   Setup complete! You can now run:
-echo     lexis compile "D:\My Lessons\Book_4_Unit_1.md"
+echo     lexis compile Rosetta_Stone
 echo   or double-click  start_dashboard.vbs  to open the web console
 echo ============================================
 pause

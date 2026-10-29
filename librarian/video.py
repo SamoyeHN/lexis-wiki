@@ -196,8 +196,13 @@ class VideoService:
         print(f"Loading Whisper model ('base')...")
         try:
             model = WhisperModel("base", device="cpu", compute_type="int8")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load Whisper model: {e}")
+        except Exception:
+            if not os.environ.get("HF_ENDPOINT"):
+                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            try:
+                model = WhisperModel("base", device="cpu", compute_type="int8")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load Whisper model: {e}")
 
         print(f"Transcribing file {filepath}...")
         try:

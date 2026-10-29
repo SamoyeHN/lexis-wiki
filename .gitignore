@@ -26,6 +26,12 @@ Thumbs.db
 *.db
 *.db-journal
 *.db.bak*
+*.db.xz
+*.db.gz
+*.db.zst
+*.db.tmp
+*.db.*.tmp
+*.db.sha256
 
 # =============================================================================
 # 4. Runtime Logs & Temporary Output
@@ -34,9 +40,14 @@ logs/
 *.log
 
 # =============================================================================
-# 5. User Wiki Data & Local Config
+# 5. User Wiki Data & Local Config (Keep built-in Rosetta_Stone sample source)
 # =============================================================================
-wiki/
+wiki/*
+!wiki/Rosetta_Stone/
+wiki/Rosetta_Stone/*
+!wiki/Rosetta_Stone/sources/
+wiki/Rosetta_Stone/sources/*
+!wiki/Rosetta_Stone/sources/Rosetta_Stone.txt
 wiki_config.json
 
 # =============================================================================

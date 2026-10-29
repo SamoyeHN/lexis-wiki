@@ -95,7 +95,10 @@ class PedlexDbMixin:
         primary = Path(__file__).resolve().parent.parent / "data" / "pedlex.db"
         if primary.exists():
             return primary
-        return Path(__file__).resolve().parent.parent / "data" / "ldoce6_essential.db"
+        legacy = Path(__file__).resolve().parent.parent / "data" / "ldoce6_essential.db"
+        if legacy.exists():
+            return legacy
+        return primary
 
     @classmethod
     def _pedlex_db_path(cls) -> Path:
@@ -205,6 +208,12 @@ class PedlexDbMixin:
         if cls._ldoce_conn is not None:
             return True
         db_path = cls._pedlex_db_path()
+        if not db_path.exists():
+            try:
+                from .pedlex_dist import ensure_pedlex_database
+                ensure_pedlex_database(db_path)
+            except Exception:
+                pass
         if not db_path.exists():
             return False
         try:

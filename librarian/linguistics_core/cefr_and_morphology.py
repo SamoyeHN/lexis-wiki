@@ -805,7 +805,12 @@ class CefrAndMorphologyMixin:
         """Lazy-loads the spaCy English model (~12MB) with a bounded LRU Doc cache."""
         if cls._spacy_nlp is None:
             import spacy
-            nlp = spacy.load("en_core_web_sm")
+            try:
+                nlp = spacy.load("en_core_web_sm")
+            except OSError:
+                from spacy.cli import download as _spacy_download
+                _spacy_download("en_core_web_sm")
+                nlp = spacy.load("en_core_web_sm")
             orig_call = nlp.__class__.__call__
 
             @lru_cache(maxsize=4096)
@@ -833,7 +838,11 @@ class CefrAndMorphologyMixin:
             try:
                 cls._wn = wn.Wordnet("oewn:2025+")
             except Exception:
-                cls._wn = wn
+                try:
+                    wn.download("oewn:2025+")
+                    cls._wn = wn.Wordnet("oewn:2025+")
+                except Exception:
+                    cls._wn = wn
         return cls._wn
 
     @staticmethod
