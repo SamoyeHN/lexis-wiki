@@ -1,0 +1,8 @@
+# Shell scripts & Python files must always use LF (prevents /usr/bin/env bash\r failures in WSL/Linux)
+*.sh text eol=lf
+*.py text eol=lf
+
+# Windows batch and VBScript files must always use CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.vbs text eol=crlf

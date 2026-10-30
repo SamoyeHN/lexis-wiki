@@ -63,6 +63,55 @@ class PedlexDbMixin:
             cands.extend([stem, stem + "e"])
             if len(stem) > 2 and stem[-1] == stem[-2]:
                 cands.append(stem[:-1])
+
+        # Systematic AmE <-> BrE headword spelling alternations (evaluated after literal stems)
+        ortho_cands: List[str] = []
+        for st in list(cands):
+            if len(st) < 4:
+                continue
+            if st.endswith(("enroll", "unroll", "fulfill", "instill", "distill", "appall", "enthrall")):
+                ortho_cands.append(st[:-1])
+            elif st.endswith(("enrol", "unrol", "fulfil", "instil", "distil", "appal", "enthral")):
+                ortho_cands.append(st + "l")
+            if "llful" in st:
+                ortho_cands.append(st.replace("llful", "lful"))
+            elif "lful" in st and "llful" not in st:
+                ortho_cands.append(st.replace("lful", "llful"))
+            if len(st) >= 5 and st.endswith("or") and not st.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior")):
+                ortho_cands.append(st[:-2] + "our")
+            elif len(st) >= 6 and st.endswith("our"):
+                ortho_cands.append(st[:-3] + "or")
+            if len(st) >= 6 and st.endswith(("ter", "ber", "ger", "ver", "ker")):
+                ortho_cands.append(st[:-2] + "re")
+            elif len(st) >= 6 and st.endswith(("tre", "bre", "gre", "vre", "kre")):
+                ortho_cands.append(st[:-2] + "er")
+            if len(st) >= 6 and st.endswith("og"):
+                ortho_cands.append(st + "ue")
+            elif len(st) >= 8 and st.endswith("ogue"):
+                ortho_cands.append(st[:-2])
+            if len(st) >= 5 and st.endswith("ize"):
+                ortho_cands.append(st[:-3] + "ise")
+            elif len(st) >= 5 and st.endswith("ise"):
+                ortho_cands.append(st[:-3] + "ize")
+            if len(st) >= 5 and st.endswith("yze"):
+                ortho_cands.append(st[:-3] + "yse")
+            elif len(st) >= 5 and st.endswith("yse"):
+                ortho_cands.append(st[:-3] + "yze")
+            if len(st) >= 6 and st.endswith("ense"):
+                ortho_cands.append(st[:-4] + "ence")
+            elif len(st) >= 6 and st.endswith("ence"):
+                ortho_cands.append(st[:-4] + "ense")
+            for am_p, br_p in (
+                ("skeptic", "sceptic"), ("artifact", "artefact"), ("gray", "grey"),
+                ("esthetic", "aesthetic"), ("archeolog", "archaeolog"), ("maneuver", "manoeuvre"),
+                ("mold", "mould"), ("plow", "plough"), ("smolder", "smoulder"),
+            ):
+                if st.startswith(am_p):
+                    ortho_cands.append(br_p + st[len(am_p):])
+                elif st.startswith(br_p):
+                    ortho_cands.append(am_p + st[len(br_p):])
+        cands.extend(ortho_cands)
+
         seen, out = set(), []
         for cand in cands:
             if cand and cand not in seen:

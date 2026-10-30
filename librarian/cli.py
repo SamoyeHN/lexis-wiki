@@ -1,4 +1,5 @@
 import argparse
+import re
 import sys
 from . import __version__
 from .config import config
@@ -114,11 +115,23 @@ def main():
             from pathlib import Path
             from .linguistics_core.pedlex_dist import ensure_pedlex_database
             db_path = Path(__file__).resolve().parent / "data" / "pedlex.db"
-            if db_path.exists() and db_path.stat().st_size > 1_000_000:
-                print(f"[PedLex] Lexicon database already present ({db_path.stat().st_size / (1024 * 1024):.1f} MB).")
-            else:
+            if not db_path.exists():
                 print("[PedLex] Downloading and extracting pedagogical lexicon database (pedlex.db)...")
-                ensure_pedlex_database(db_path, force_check=True)
+            ok = ensure_pedlex_database(db_path, force_check=True)
+            if ok and db_path.exists():
+                print(f"[PedLex] Lexicon database ready ({db_path.stat().st_size / (1024 * 1024):.1f} MB).")
+            else:
+                print("[PedLex] Warning: Could not download pedlex.db (running in open-source WordNet fallback mode).")
+
+        # Pre-warm offline NLP assets (spaCy 'en_core_web_sm' & Open English WordNet 'oewn:2025+')
+        try:
+            from .linguistics import LinguisticEngine
+            print("[NLP] Verifying spaCy model (en_core_web_sm) & WordNet (oewn:2025+)...")
+            LinguisticEngine.get_spacy()
+            LinguisticEngine.get_wordnet()
+            print("[NLP] Offline syntactic & lexical models ready.")
+        except Exception as nlp_err:
+            print(f"[NLP] Warning: Could not pre-warm NLP models ({nlp_err}).")
 
     elif args.command == "lint":
         print("Checking links...")
@@ -449,19 +462,28 @@ def main():
                 except Exception:
                     pass
             else:
-                try:
-                    out = subprocess.check_output(f"lsof -ti tcp:{target_port}", shell=True, text=True, stderr=subprocess.DEVNULL)
-                    for pid_str in out.strip().split():
+                pids_to_kill = set()
+                for cmd, pat in (
+                    (f"lsof -ti tcp:{target_port}", r"\b(\d+)\b"),
+                    (f"ss -lptn 'sport = :{target_port}'", r"pid=(\d+)"),
+                    (f"fuser {target_port}/tcp", r"\b(\d+)\b"),
+                ):
+                    try:
+                        out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+                        for m in re.findall(pat, out):
+                            pids_to_kill.add(int(m))
+                        if pids_to_kill:
+                            break
+                    except Exception:
+                        continue
+                for pid in pids_to_kill:
+                    if pid and pid != current_pid:
                         try:
-                            pid = int(pid_str)
-                            if pid and pid != current_pid:
-                                print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
-                                os.kill(pid, signal.SIGKILL)
-                                time.sleep(0.5)
-                        except (ValueError, ProcessLookupError, PermissionError):
+                            print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
+                            os.kill(pid, signal.SIGKILL)
+                            time.sleep(0.5)
+                        except (ProcessLookupError, PermissionError):
                             pass
-                except Exception:
-                    pass
 
         _free_port(port)
 
@@ -525,14 +547,42 @@ def main():
             print("Closing the browser window will automatically stop this server and free the port.")
             print("(Ctrl+C also works.)")
             
+            # Detect WSL so we can launch the Windows host browser and give a generous connect window
+            is_wsl = bool(os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"))
+            if not is_wsl and os.name != "nt":
+                try:
+                    with open("/proc/version", "r", encoding="utf-8", errors="ignore") as _vf:
+                        is_wsl = "microsoft" in _vf.read().lower()
+                except Exception:
+                    pass
+
+            browser_state = {"opened": False}
+
             # Open browser automatically in a separate thread
             # (skipped when LEXIS_NO_BROWSER is set - e.g. automated tests)
             def open_browser():
                 import os as _os
+                import shutil as _shutil
                 if _os.environ.get("LEXIS_NO_BROWSER"):
                     return
+                if is_wsl:
+                    for wsl_cmd in (
+                        (["wslview", url] if _shutil.which("wslview") else None),
+                        (["cmd.exe", "/c", "start", "", url] if _shutil.which("cmd.exe") else None),
+                        (["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"] if _shutil.which("powershell.exe") else None),
+                    ):
+                        if not wsl_cmd:
+                            continue
+                        try:
+                            res = subprocess.run(wsl_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+                            if res.returncode == 0:
+                                browser_state["opened"] = True
+                                return
+                        except Exception:
+                            continue
                 try:
-                    webbrowser.open(url)
+                    if webbrowser.open(url):
+                        browser_state["opened"] = True
                 except Exception:
                     pass
             
@@ -552,7 +602,7 @@ def main():
             #  - Safety:    never kill in-progress background jobs (compile / re-audit);
             #               the server stays up until they finish, then exits automatically.
             IDLE_TIMEOUT = 300         # seconds without any request => client is gone (5 min)
-            NO_CLIENT_GRACE = 60       # seconds to wait for the browser to open its first request
+            NO_CLIENT_GRACE = 300 if is_wsl else 60  # seconds to wait when browser was auto-opened
             SHUTDOWN_GRACE = 45        # seconds after the beacon to wait for a reconnect (covers slow refresh / tab transitions)
             server_start_ts = time.time()
 
@@ -565,8 +615,9 @@ def main():
                     # already cleared shutdown_at and we stay up.
                     return (time.time() - shutdown_at) > SHUTDOWN_GRACE
                 if last_ts is None:
-                    # No client ever connected (e.g. browser failed to open): give it a grace period
-                    return (time.time() - server_start_ts) > NO_CLIENT_GRACE
+                    # If no browser could be auto-opened (e.g., headless terminal), do not premature-exit at 60s
+                    grace = NO_CLIENT_GRACE if browser_state["opened"] else 3600
+                    return (time.time() - server_start_ts) > grace
                 return (time.time() - last_ts) > IDLE_TIMEOUT
 
             # Poll with a socket-level timeout: handle_request() then returns

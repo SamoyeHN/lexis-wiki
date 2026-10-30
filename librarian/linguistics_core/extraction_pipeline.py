@@ -2815,7 +2815,15 @@ class ExtractionPipelineMixin:
         3. Simplified Lesk overlap, 2nd-order collocate projection, and discourse window cue scoring
         4. PedLex natural frequency order fallback
         """
+        w_low_clean = (word or "").strip().lower()
         entry = cls.get_pedlex_entry(word)
+        if not entry and ("-" in w_low_clean or " " in w_low_clean):
+            u_res = cls._unit_owning_sense(
+                w_low_clean.replace("-", " "), context_sentence=quote
+            )
+            if u_res and u_res[0] and u_res[1]:
+                u_owner, u_sense, _u_row = u_res
+                entry = {"headword": word, "pos": pos or u_sense.get("pos"), "senses": [dict(u_sense, pos=pos or u_sense.get("pos"))]}
         if entry and entry.get("kind") == "derived":
             return []
         raw_senses = entry.get("senses", []) if entry else []
@@ -2835,14 +2843,22 @@ class ExtractionPipelineMixin:
         target_pos = pos or (entry.get("pos") if entry else None)
         target_p = cls._pos_code(target_pos)
         q_low = (quote or "").lower()
-        w_low_clean = (word or "").strip().lower()
 
         # Determine morphologically compatible POS codes from the surface token(s) of `word` in `quote`
         all_sense_poses = {cls._pos_code(s.get("pos")) for s in senses if s.get("pos")}
         q_toks_raw = re.findall(r"\b[a-z]+(?:-[a-z]+)*\b", q_low)
         matched_surf_toks = [t for t in q_toks_raw if t == w_low_clean or cls.form_matches(t, w_low_clean)]
         morph_poses: Set[str] = set()
-        if not matched_surf_toks or w_low_clean in matched_surf_toks:
+        if (
+            target_p == "adj"
+            and "adj" not in all_sense_poses
+            and "n" in all_sense_poses
+            and not w_low_clean.endswith(("ed", "ing"))
+        ):
+            # Attributive noun adjunct (e.g. 'fossil fuels', 'rival options') where PedLex records
+            # noun (+ verb) senses but no standalone adjective sense: lock to noun senses.
+            morph_poses = {"n"}
+        elif not matched_surf_toks or w_low_clean in matched_surf_toks:
             # Base uninflected form (e.g. 'trap', 'ride', 'stamp', 'present') is morphologically compatible with all entry POS
             morph_poses = set(all_sense_poses) | ({target_p} if target_p else set())
         else:
@@ -3022,7 +3038,7 @@ class ExtractionPipelineMixin:
                     "raw_sense": s,
                     "score": 0.0,
                     "margin": 0.0,
-                    "confidence": "high",
+                    "confidence": "high" if len(matched) <= 1 else "low",
                 } for i, s in enumerate(matched[:k])]
             else:
                 idx, score, margin, conf, score_trace = res
@@ -3321,7 +3337,7 @@ class ExtractionPipelineMixin:
                 c0_reg = str(c0_raw.get("register") or "").lower()
                 c0_gram = str(c0_raw.get("grammar") or "").lower()
                 is_restr = (
-                    any(tag in c0_def or tag in c0_reg or tag in c0_gram for tag in ("disapproving", "humorous"))
+                    any(tag in c0_reg or tag in c0_gram or f"[{tag}]" in c0_def for tag in ("disapproving", "humorous"))
                     or c0_def.startswith(("if a piece of ", "if a chemical substance "))
                 )
                 c0_pats = [str(p) for p in (c0_raw.get("patterns") or []) if isinstance(p, str) and str(p).strip()]
@@ -3356,7 +3372,7 @@ class ExtractionPipelineMixin:
             or not has_pos_match
             or sole_pedlex_restricted
         )
-        if needs_wn_fallback:
+        if cls._is_pedlex_disabled() and needs_wn_fallback:
             try:
                 wn = cls.get_wordnet()
                 if wn:
@@ -4076,8 +4092,8 @@ class ExtractionPipelineMixin:
                     cand_exs = [m_ex] + [e for e in cand_exs if e != m_ex]
                 _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", cand_exs, s, True)
 
-        # Pass 3B: WordNet (oewn:2025+) Multi-Word Synsets & Unit-Example-Attested Synsets ONLY when PedLex has 0 attested phrase candidates
-        if not candidates and len(tokens) >= 2:
+        # Pass 3B: WordNet (oewn:2025+) Multi-Word Synsets & Unit-Example-Attested Synsets ONLY when PedLex is disabled
+        if cls._is_pedlex_disabled() and not candidates and len(tokens) >= 2:
             try:
                 wn = cls.get_wordnet()
                 if wn:
@@ -4146,8 +4162,8 @@ class ExtractionPipelineMixin:
                         _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, False)
                         if len(candidates) >= k - 2:
                             break
-                # Also include WordNet verb synsets for verb-slot expressions (e.g. 'lift [sb] out of [sth]')
-                if expect_verb and c_tok in (tokens[0], lem_0) and len(candidates) < k:
+                # Also include WordNet verb synsets for verb-slot expressions ONLY when PedLex is disabled
+                if cls._is_pedlex_disabled() and expect_verb and c_tok in (tokens[0], lem_0) and len(candidates) < k:
                     try:
                         wn = cls.get_wordnet()
                         if wn:
@@ -4669,8 +4685,8 @@ class ExtractionPipelineMixin:
             except Exception:
                 pass
 
-        # 5. Check WordNet synset examples (only when PedLex is absent or has no senses for target POS, and monosemous in WordNet)
-        allow_wn_examples = bool(not entry or not pos_senses)
+        # 5. Check WordNet synset examples ONLY when PedLex is disabled and monosemous in WordNet
+        allow_wn_examples = bool(cls._is_pedlex_disabled() and (not entry or not pos_senses))
         if not is_multi and is_monosemous and allow_wn_examples:
             try:
                 wn = cls.get_wordnet()
@@ -4692,7 +4708,7 @@ class ExtractionPipelineMixin:
                                         fallback_short_ex = c_ex_str
             except Exception:
                 pass
-        elif is_multi and is_monosemous_multi and u_key:
+        elif cls._is_pedlex_disabled() and is_multi and is_monosemous_multi and u_key:
             try:
                 wn = cls.get_wordnet()
                 if wn:
@@ -5048,8 +5064,8 @@ class ExtractionPipelineMixin:
                         w, target_pos=pos, context_sentence=matching_sent,
                         require_sense_confidence=False
                     )
-                if not definition and not (matching_sent and cls.get_pedlex_entry(w) and not cand_pool):
-                    # Fallback to WordNet definition if PedLex headword missing
+                if cls._is_pedlex_disabled() and not definition and not (matching_sent and cls.get_pedlex_entry(w) and not cand_pool):
+                    # Fallback to WordNet definition ONLY when PedLex is disabled
                     try:
                         best_s = cls.disambiguate_wordnet_synset(w, pos=pos, context_sentence=matching_sent)
                         if best_s:
@@ -5072,9 +5088,14 @@ class ExtractionPipelineMixin:
                     ld_e = cls.get_ldoce_entry(w)
                     if ld_e:
                         dict_hw = str(ld_e.get("word") or "").strip().lower()
-                        if dict_hw and dict_hw != w and cls.are_same_word_family(w, dict_hw):
+                        if (
+                            dict_hw
+                            and dict_hw != w
+                            and cls.are_same_word_family(w, dict_hw)
+                            and not cls.are_spelling_variants(w, dict_hw)
+                        ):
                             w = dict_hw
-                    else:
+                    elif cls._is_pedlex_disabled():
                         lem_v = cls._surface_lemma(w)
                         if lem_v and lem_v != w:
                             wn = cls.get_wordnet()

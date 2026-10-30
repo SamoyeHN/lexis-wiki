@@ -355,6 +355,8 @@ def ensure_pedlex_database(target_path: Path, force_check: bool = False) -> bool
             cached_sha = read_cached_sha256(target_path)
             if cached_sha is None:
                 cached_sha = compute_file_sha256(target_path)
+                if cached_sha == expected_sha:
+                    write_cached_sha256(target_path, cached_sha)
             if cached_sha == expected_sha:
                 return True
 

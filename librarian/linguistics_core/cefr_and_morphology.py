@@ -860,13 +860,28 @@ class CefrAndMorphologyMixin:
         w = re.sub(r"^medieval", "mediaeval", w)
         w = re.sub(r"^programmes\b", "programs", w)
         w = re.sub(r"^programme\b", "program", w)
-        w = re.sub(r"([a-z])our(s|ed|ing|able|ite|ites|less|ful)?$", r"\1or\2", w)
+        w = re.sub(r"^(enrol|unrol|fulfil|instil|distil|appal|enthral)$", r"\1l", w)
+        w = re.sub(r"^(skil|wil)ful", r"\1lful", w)
+        if not w.startswith(("four", "hour", "pour", "tour", "sour", "flour", "your", "devour")):
+            w = re.sub(r"([a-z]{2,})our(s|ed|ing|able|ite|ites|less|ful)?$", r"\1or\2", w)
         w = re.sub(r"([a-z]{2,})is(e|es|ed|ing|ation|ations)$", r"\1iz\2", w)
         w = re.sub(r"([a-z]{2,})ys(e|es|ed|ing)$", r"\1yz\2", w)
-        w = re.sub(r"([bcfglmnprstv])re(s)?$", r"\1er\2", w)
-        w = re.sub(r"([a-z]{2,})ogue(s)?$", r"\1og\2", w)
-        w = re.sub(r"([dfglprt])ence(s)?$", r"\1ense\2", w)
-        w = re.sub(r"([a-z])ll(ed|ing|er|ers|or|ors|ous)$", r"\1l\2", w)
+        if len(w) >= 6:
+            w = re.sub(r"([bcfglmnprstv])re(s)?$", r"\1er\2", w)
+            w = re.sub(r"([a-z]{2,})ogue(s)?$", r"\1og\2", w)
+            w = re.sub(r"([dfglprt])ence(s)?$", r"\1ense\2", w)
+        if len(w) >= 7:
+            _native_ll_stems = {
+                "fill", "will", "bill", "kill", "drill", "chill", "skill", "spill", "thrill",
+                "grill", "mill", "pill", "till", "still", "distill", "instill", "fulfill",
+                "spell", "shell", "smell", "swell", "dwell", "tell", "sell", "bell", "well", "yell",
+                "call", "fall", "hall", "mall", "stall", "tall", "wall", "install", "recall", "appall", "enthrall",
+                "poll", "roll", "enroll", "unroll", "scroll", "stroll", "toll", "troll",
+                "dull", "full", "hull", "lull", "mull", "null", "pull", "skull",
+            }
+            m_ll = re.match(r"^([a-z]+l)l(ed|ing|er|ers|or|ors|ous)$", w)
+            if m_ll and (m_ll.group(1) + "l") not in _native_ll_stems:
+                w = m_ll.group(1) + m_ll.group(2)
         return w
 
     @staticmethod
@@ -1012,13 +1027,28 @@ class CefrAndMorphologyMixin:
             if common_len >= 4 or (is_participial_pair and common_len >= 3):
                 return True
 
-        # Morphological stem prefix fallback: if both words length >= 5 and share stem prefix
+        # Morphological stem prefix fallback: if both words length >= 5 and share stem prefix + valid derivational/inflectional suffix
+        if " " in clean_w1 or " " in clean_w2:
+            return False
+        _valid_family_suffixes = {
+            "s", "es", "ed", "d", "ing", "er", "ers", "or", "ors", "est", "ly", "ily", "ally",
+            "ness", "ment", "ments", "tion", "tions", "ation", "ations", "ition", "itions",
+            "able", "ible", "al", "ial", "ic", "ical", "ically", "ive", "ively", "ous", "ously",
+            "ful", "fully", "less", "lessly", "ize", "izes", "ized", "izing", "ise", "ises", "ised", "ising",
+            "ify", "ifies", "ified", "ifying", "ity", "ities", "ty", "ties", "ist", "ists", "ism", "isms",
+            "ance", "ances", "ence", "ences", "ant", "ants", "ent", "ents", "ery", "ry", "cy",
+            "dom", "ship", "hood", "ward", "wards", "wise", "en", "ens", "ened", "ening",
+        }
         min_w, max_w = (clean_w1, clean_w2) if len(clean_w1) <= len(clean_w2) else (clean_w2, clean_w1)
         if len(min_w) >= 5 and max_w.startswith(min_w):
-            return True
-        # Handle silent -e drop before -ing / -ed / -ation (e.g. persevere -> persevering, motivate -> motivating)
+            rem = max_w[len(min_w):]
+            if rem in _valid_family_suffixes or (len(rem) >= 2 and rem[0] == min_w[-1] and rem[1:] in _valid_family_suffixes):
+                return True
+        # Handle silent -e drop before vowel-initial suffixes (-ing / -ed / -ation / -able / -ive, etc.)
         if len(min_w) >= 5 and min_w.endswith("e") and max_w.startswith(min_w[:-1]):
-            return True
+            rem_e = max_w[len(min_w) - 1:]
+            if rem_e and rem_e[0] in "aeiou" and rem_e in _valid_family_suffixes:
+                return True
         return False
 
     @classmethod
@@ -1433,7 +1463,7 @@ class CefrAndMorphologyMixin:
     @classmethod
     @lru_cache(maxsize=32768)
     def _analyse_word_form_cached(cls, w: str) -> Tuple[Optional[str], str]:
-        if not w or len(w.split()) > 3:
+        if not w or " " in w:
             return (None, w)
         nlp = cls.get_spacy()
         if not nlp:
@@ -1664,22 +1694,49 @@ class CefrAndMorphologyMixin:
         irregular = cls._IRREGULAR_VERB_FORMS.get(w)
         if irregular:
             forms.update(f for f in irregular if f)
+        if w == "be":
+            forms.update({"am", "is", "are", "was", "were", "been", "being"})
+
+        _irregular_adj_forms = {
+            "good": ("better", "best"),
+            "bad": ("worse", "worst"),
+            "far": ("farther", "further", "farthest", "furthest"),
+            "little": ("less", "least"),
+            "many": ("more", "most"),
+            "much": ("more", "most"),
+        }
+        if w in _irregular_adj_forms:
+            forms.update(_irregular_adj_forms[w])
+
         p = (pos or "").strip().lower()
+        _pure_adjectives = {
+            "good", "bad", "happy", "sad", "big", "small", "old", "young", "new",
+            "high", "low", "long", "short", "large", "great", "little", "different",
+            "important", "available", "possible", "impossible", "likely", "unlikely",
+            "able", "unable", "sure", "certain", "aware", "afraid", "alive", "alone",
+            "asleep", "awake",
+        }
         if w not in ("a", "an", "the", "as", "at", "to", "in", "on", "of", "by", "or", "so", "if"):
-            # Multi-word non-verb phrases (e.g. 'climate change' as noun) must not undergo verb inflections ('climate changed')
-            is_verb_eligible = (" " not in w) or (p in ("verb", "v", "phrasal verb"))
+            # Multi-word non-verb phrases (e.g. 'climate change' as noun) and pure adjectives must not undergo verb inflections
+            is_verb_eligible = (
+                ((" " not in w) or (p in ("verb", "v", "phrasal verb")))
+                and p not in ("adjective", "adj", "a", "s", "adverb", "adv", "r")
+                and w not in _pure_adjectives
+            )
             if is_verb_eligible:
                 for tag in ("VBZ", "VBD", "VBN", "VBG"):
                     inflected = cls._inflect_verb(w, tag)
                     if inflected:
                         forms.add(inflected)
 
-            plural = cls.pluralize_noun(w)
-            if plural:
-                forms.add(plural)
+            if p not in ("adjective", "adj", "a", "s", "adverb", "adv", "r", "verb", "v") and w not in _pure_adjectives:
+                plural = cls.pluralize_noun(w)
+                if plural:
+                    forms.add(plural)
 
-            # Hyphenated prefix spelling variant (e.g. 're-schedule' <-> 'reschedule', 'co-operate' <-> 'cooperate')
+            # Hyphenated prefix/compound spelling variant (e.g. 're-schedule' <-> 'reschedule', 'in-person' <-> 'in person')
             if "-" in w and " " not in w:
+                forms.add(w.replace("-", " "))
                 closed_w = w.replace("-", "")
                 if len(closed_w) >= 4:
                     forms.add(closed_w)
@@ -1700,9 +1757,19 @@ class CefrAndMorphologyMixin:
                 elif w.endswith("y") and len(w) > 2 and w[-2] not in "aeiou":
                     forms.update({w[:-1] + "ier", w[:-1] + "iest"})
 
-        # US/UK -or / -our and -gram / -gramme spelling equivalence
+        # US/UK -or / -our, -ll / -l, -ize / -ise, and -gram / -gramme spelling equivalence
         for f_cand in list(forms):
-            if len(f_cand) >= 5 and f_cand.endswith("or") and not f_cand.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior", "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor", "mirror", "error", "terror", "horror", "sensor")):
+            if f_cand.endswith(("enroll", "unroll", "fulfill", "instill", "distill", "appall", "enthrall")):
+                uk_l = f_cand[:-1]
+                forms.update({uk_l, uk_l + "s", uk_l + "led", uk_l + "ling"})
+            elif f_cand.endswith(("enrol", "unrol", "fulfil", "instil", "distil", "appal", "enthral")):
+                us_ll = f_cand + "l"
+                forms.update({us_ll, us_ll + "s", us_ll + "ed", us_ll + "ing"})
+            elif "llful" in f_cand:
+                forms.add(f_cand.replace("llful", "lful"))
+            elif "lful" in f_cand and "llful" not in f_cand:
+                forms.add(f_cand.replace("lful", "llful"))
+            elif len(f_cand) >= 5 and f_cand.endswith("or") and not f_cand.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior", "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor", "mirror", "error", "terror", "horror", "sensor")):
                 uk_f = f_cand[:-2] + "our"
                 forms.add(uk_f)
                 forms.add(uk_f + "s")

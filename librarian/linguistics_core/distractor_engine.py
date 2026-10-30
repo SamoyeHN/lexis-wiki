@@ -2522,7 +2522,11 @@ class DistractorEngineMixin:
                     wl = w.lower()
                     if wl in ("enrol", "fulfil", "instil", "distil", "skilful", "wilful"):
                         continue
-                    raw_ps = [x.strip().lower() for x in (p_all or p or "").split("|") if x.strip()]
+                    raw_ps = [
+                        x.strip().strip('"\'[]').lower()
+                        for x in re.split(r"[,|]", p_all or p or "")
+                        if x.strip().strip('"\'[]')
+                    ]
                     for rp in raw_ps:
                         code = pos_map.get(rp)
                         if code:

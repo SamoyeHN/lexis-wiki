@@ -480,6 +480,8 @@ class WsdEngineMixin:
         target_p = cls._pos_code(target_pos)
         
         # Exact / clean definition override: if definition was passed directly from PedLex extraction
+        # Pass 1: exact definition equality across all POS-compatible senses
+        # Pass 2: prefix match fallback if no exact equality match exists
         if definition:
             clean_def = re.sub(r"\[.*?\]", "", definition).strip().lower()
             if clean_def:
@@ -487,7 +489,17 @@ class WsdEngineMixin:
                     if target_p and not cls._sense_matches_pos(s, target_p):
                         continue
                     s_defn_clean = re.sub(r"\[.*?\]", "", s.get("definition") or "").strip().lower()
-                    if s_defn_clean and (s_defn_clean == clean_def or s_defn_clean.startswith(clean_def) or clean_def.startswith(s_defn_clean)):
+                    if s_defn_clean and s_defn_clean == clean_def:
+                        if return_scores:
+                            return (idx, 100.0, 100.0, "high", [(idx, 100.0)])
+                        if return_confidence:
+                            return (idx, 100.0, 100.0, "high")
+                        return idx
+                for idx, s in enumerate(senses):
+                    if target_p and not cls._sense_matches_pos(s, target_p):
+                        continue
+                    s_defn_clean = re.sub(r"\[.*?\]", "", s.get("definition") or "").strip().lower()
+                    if s_defn_clean and (s_defn_clean.startswith(clean_def) or clean_def.startswith(s_defn_clean)):
                         if return_scores:
                             return (idx, 100.0, 100.0, "high", [(idx, 100.0)])
                         if return_confidence:
@@ -2833,7 +2845,7 @@ class WsdEngineMixin:
         # Nothing to disambiguate: a single sense, or a POS gate that matched exactly one
         # sense, is as certain as the entry itself, so the floors do not apply. A gate that
         # matched nothing across several senses is a guess and stays under the floors.
-        unambiguous = eligible_senses <= 1 or (eligible_senses == 0 and len(senses) == 1)
+        unambiguous = eligible_senses == 1 or (eligible_senses == 0 and len(senses) == 1)
         confident = unambiguous or (
             score >= cls.SENSE_CONFIDENCE_FLOOR and margin >= cls.SENSE_MARGIN_FLOOR
         )
@@ -2884,41 +2896,6 @@ class WsdEngineMixin:
         defn = str(sense.get("definition") or "").strip()
         if not defn:
             return ""
-
-        # Semantic clarity & anti-circular expansions
-        low = defn.lower()
-        circular_upgrades = {
-            "the act of celebrating": "a special social event, party, or activity organized to mark a happy or important occasion",
-            "the act of carpooling": "the practice or act of travelling together to work, school etc in one car and sharing the cost",
-            "in an intensive manner": "with a lot of activity, effort, or careful attention in a short period of time",
-            "a permanent change in the earth's weather conditions": "a long-term change in the Earth's climate and weather conditions",
-            "if you are filled with an emotion, or if it fills you, you feel it very strongly": "to become full of or cause someone or something to be full of a strong feeling, quality, or spirit",
-            "the condition of being urbanized": "the process by which towns and cities grow larger as more people move from the countryside to live and work there",
-            "the act of raising to the highest possible point or condition or position": "the act or process of increasing something such as profit, value, or efficiency to the greatest possible amount or degree",
-            "the property of being sustainable": "the ability to continue over a long period of time without damaging the environment or exhausting natural resources",
-            "in a radiant manner": "with a bright, warm, and joyful expression or glow",
-            "with attention; in an attentive manner": "while listening or watching very carefully and showing close interest",
-            "a point where lines intersect": "a place where two or more roads, lines, or areas meet or cross each other",
-            "act of assisting or making easier the progress or improvement of something": "the act of helping a process, discussion, or activity happen more smoothly and effectively",
-            "in a ruthless manner": "in a cruel, harsh, and determined way without showing any pity or concern for others",
-            "in a feverish manner": "with great excitement, nervous energy, or rapid activity, especially in order to finish something quickly",
-            "in the direction opposite to the rotation of the hands of a clock": "in the direction opposite to the movement of the hands of a clock; anticlockwise",
-            "capable of being attained or accomplished": "possible to achieve, reach, or accomplish through effort",
-            "abundant wealth": "the state of having a lot of money, material wealth, and a high standard of living",
-            "the act of decreasing something markedly": "a large reduction in the amount of something important that is available, such as natural resources or energy",
-            "the act of digging": "the act of digging carefully in the ground to uncover ancient buildings, tools, or historical remains",
-            "(physics) any of several kinds of apparatus that maintain and control a nuclear reaction for the production of energy or artificial elements": "a large machine or structure in which nuclear reactions are controlled in order to produce electrical power",
-        }
-        if low.startswith("a well-kept building or garden is") or low.startswith("if something is well-kept"):
-            defn = "kept in good order, carefully maintained, or well cared for"
-        elif low == "a list of the subjects to be discussed at a meeting":
-            defn = "a list of matters to be discussed at a meeting, or a personal schedule of appointments and tasks to be done"
-        elif low in ("to sit on a horse, bicycle, motorcycle etc and control it as it moves", "to travel on a bicycle or motorbike"):
-            defn = "to sit or stand on a bicycle, motorcycle, horse, or personal wheeled vehicle and control it as it moves"
-        elif low == "to have enough money to buy the things you need, but no more":
-            defn = "to manage to live or do something with the things, money, or resources that you have, even if they are limited"
-        elif low in circular_upgrades:
-            defn = circular_upgrades[low]
 
         labels = []
         raw_variety = str(sense.get("variety") or "").strip()

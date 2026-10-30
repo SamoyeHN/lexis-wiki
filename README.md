@@ -47,7 +47,20 @@
 
 ---
 
-### Option B: Manual Installation (Cross-Platform)
+### Option B: Linux / WSL / macOS One-Click Setup
+
+```bash
+git clone https://github.com/SamoyeHN/lexis-wiki.git
+cd lexis-wiki
+chmod +x install.sh
+./install.sh
+```
+
+- Automatically creates/reuses `.venv` (avoiding PEP 668 `externally-managed-environment` errors on Ubuntu/WSL), installs dependencies and `en_core_web_sm`, and runs `lexis init .` to download and verify `pedlex.db` from mirrors.
+
+---
+
+### Option C: Manual Installation (Cross-Platform)
 
 ```bash
 # 1. Clone repository and install core package
