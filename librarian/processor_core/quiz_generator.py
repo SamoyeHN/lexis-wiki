@@ -325,9 +325,14 @@ class QuizGeneratorMixin:
         cls,
         quiz_obj: Any,
         blueprint_specs: List[Dict[str, Any]],
+        speaker_1_name: str = "",
+        speaker_2_name: str = "",
     ) -> Any:
         """
         Deterministically hydrates and reconciles blueprint-owned fields on ListeningQuiz items:
+        - Enforces `speaker_1`, `speaker_2`, and alternating turn `speaker` names (`speaker_1` on odd turns,
+          `speaker_2` on even turns), replacing any residual `'Speaker 1'` / `'Speaker 2'` across `question`,
+          `options`, and `explanation`.
         - Enforces `category` from `spec["target_skill"]` ("Detail", "Main Idea", "Inference").
         - Reconciles the true option position with the CRC32-prescribed `spec["correct_answer_index"]`:
           if the LLM placed the true answer at a different index `actual_idx`, swaps
@@ -339,45 +344,80 @@ class QuizGeneratorMixin:
         if not quiz_obj or not blueprint_specs:
             return quiz_obj
 
-        # 0. Auto-heal any script turns missing the `speaker` field (alternating speaker_1 / speaker_2)
+        # 0. Synchronize speaker_1, speaker_2, and script turn speakers
+        spk1 = str(
+            speaker_1_name
+            or (quiz_obj.get("speaker_1") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_1", ""))
+            or ""
+        ).strip()
+        spk2 = str(
+            speaker_2_name
+            or (quiz_obj.get("speaker_2") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_2", ""))
+            or ""
+        ).strip()
+
+        if not spk1 or spk1.lower() in ("speaker 1", "speaker1") or not spk2 or spk2.lower() in ("speaker 2", "speaker2"):
+            try:
+                from ..tts import tts_service
+                tts_service._refresh()
+                if not spk1 or spk1.lower() in ("speaker 1", "speaker1"):
+                    spk1 = tts_service.get_speaker_name(tts_service.voice_a)
+                if not spk2 or spk2.lower() in ("speaker 2", "speaker2"):
+                    spk2 = tts_service.get_speaker_name(tts_service.voice_b)
+            except Exception:
+                pass
+
         script_list = (
             quiz_obj.get("script", [])
             if isinstance(quiz_obj, dict)
             else getattr(quiz_obj, "script", [])
         )
         if isinstance(script_list, list) and script_list:
-            spk1 = str(
-                (quiz_obj.get("speaker_1") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_1", ""))
-                or ""
-            ).strip()
-            spk2 = str(
-                (quiz_obj.get("speaker_2") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_2", ""))
-                or ""
-            ).strip()
             for t_idx, t_item in enumerate(script_list):
                 t_spk = str(
                     (t_item.get("speaker") if isinstance(t_item, dict) else getattr(t_item, "speaker", ""))
                     or ""
                 ).strip()
-                if t_spk:
+                if t_spk and t_spk.lower() not in ("speaker 1", "speaker1", "speaker 2", "speaker2"):
                     if t_idx % 2 == 0 and not spk1:
                         spk1 = t_spk
                     elif t_idx % 2 == 1 and not spk2:
                         spk2 = t_spk
-            spk1 = spk1 or "Speaker 1"
-            spk2 = spk2 or "Speaker 2"
+            spk1 = spk1 or "Aria"
+            spk2 = spk2 or "Ryan"
+            if isinstance(quiz_obj, dict):
+                quiz_obj["speaker_1"] = spk1
+                quiz_obj["speaker_2"] = spk2
+            else:
+                setattr(quiz_obj, "speaker_1", spk1)
+                setattr(quiz_obj, "speaker_2", spk2)
+
             for t_idx, t_item in enumerate(script_list):
                 t_is_dict = isinstance(t_item, dict)
                 t_spk = str(
                     (t_item.get("speaker") if t_is_dict else getattr(t_item, "speaker", ""))
                     or ""
                 ).strip()
-                if not t_spk:
-                    expected_spk = spk1 if (t_idx % 2 == 0) else spk2
+                expected_spk = spk1 if (t_idx % 2 == 0) else spk2
+                if (
+                    not t_spk
+                    or t_spk.lower() in ("speaker 1", "speaker1", "speaker 2", "speaker2")
+                    or (speaker_1_name and speaker_2_name)
+                ):
                     if t_is_dict:
                         t_item["speaker"] = expected_spk
                     else:
                         setattr(t_item, "speaker", expected_spk)
+
+        def _replace_speaker_labels(txt: str) -> str:
+            if not txt:
+                return txt
+            out = txt
+            if spk1 and spk1 != "Speaker 1":
+                out = re.sub(r"\bSpeaker\s*1\b", spk1, out, flags=re.IGNORECASE)
+            if spk2 and spk2 != "Speaker 2":
+                out = re.sub(r"\bSpeaker\s*2\b", spk2, out, flags=re.IGNORECASE)
+            return out
 
         q_list = (
             quiz_obj.get("questions", [])
@@ -410,10 +450,7 @@ class QuizGeneratorMixin:
             raw_stem = str(_get("question", "") or "").strip()
             if raw_stem:
                 clean_stem = re.sub(r"\s+in\s+[Tt]urns?\s+\d+(?:\s*[–-]\s*\d+)?", "", raw_stem)
-                if spk1 and spk1 != "Speaker 1":
-                    clean_stem = re.sub(r"\bSpeaker\s*1\b", spk1, clean_stem, flags=re.IGNORECASE)
-                if spk2 and spk2 != "Speaker 2":
-                    clean_stem = re.sub(r"\bSpeaker\s*2\b", spk2, clean_stem, flags=re.IGNORECASE)
+                clean_stem = _replace_speaker_labels(clean_stem)
                 clean_stem = re.sub(r"\s{2,}", " ", clean_stem).strip()
                 if clean_stem != raw_stem:
                     _set("question", clean_stem)
@@ -422,7 +459,9 @@ class QuizGeneratorMixin:
             raw_opts = _get("options", [])
             if not isinstance(raw_opts, list) or len(raw_opts) != 4:
                 continue
-            opts = list(raw_opts)
+            opts = [_replace_speaker_labels(str(o or "")) for o in raw_opts]
+            if opts != list(raw_opts):
+                _set("options", opts)
 
             prescribed_idx = spec.get("correct_answer_index")
             if not isinstance(prescribed_idx, int) or prescribed_idx not in (0, 1, 2, 3):
@@ -436,7 +475,9 @@ class QuizGeneratorMixin:
             if declared_idx not in (0, 1, 2, 3):
                 declared_idx = prescribed_idx
 
-            cur_exp = str(_get("explanation", "") or "")
+            cur_exp = _replace_speaker_labels(str(_get("explanation", "") or ""))
+            if cur_exp != str(_get("explanation", "") or ""):
+                _set("explanation", cur_exp)
             cur_audit = str(_get("design_audit", "") or "")
             full_text = f"{cur_audit}\n{cur_exp}"
 
@@ -1206,23 +1247,42 @@ class QuizGeneratorMixin:
             cefr = (data.get("cefr_level") or "B2").upper()
             kwargs["cefr_level"] = cefr
 
+            # Retrieve TTS configurations to bind speaker names, genders & accents for Schema-First Live Injection
+            from ..tts import tts_service
+            tts_service._refresh()
+
+            s1_name = tts_service.get_speaker_name(tts_service.voice_a)
+            s2_name = tts_service.get_speaker_name(tts_service.voice_b)
+            g1 = tts_service.get_gender(tts_service.voice_a)
+            g2 = tts_service.get_gender(tts_service.voice_b)
+            a1 = tts_service.get_accent(tts_service.voice_a)
+            a2 = tts_service.get_accent(tts_service.voice_b)
+
+            kwargs["speaker_1_name"] = s1_name
+            kwargs["speaker_2_name"] = s2_name
+            kwargs["speaker_1_gender"] = g1
+            kwargs["speaker_2_gender"] = g2
+            kwargs["speaker_1_accent"] = a1
+            kwargs["speaker_2_accent"] = a2
+
             if cefr in ("A1", "A2", "A2+"):
                 kwargs["dialogue_style_guidance"] = (
                     "Conversational, everyday social or campus service interactions (e.g. discussing schedules, course plans, making arrangements, or solving daily problems). "
                     "Keep speaker turns short and natural (8 to 15 words per turn), using accessible S1/S2 spoken phrasing and concrete dialogue markers."
                 )
                 kwargs["question_stem_guidance"] = (
-                    "Use direct, unambiguous question stems (e.g. 'What does Speaker 1 want to do?', 'Why is Speaker 2 concerned?'). "
+                    f"Use direct, unambiguous question stems referring to {s1_name} and {s2_name} by name "
+                    f"(e.g. 'What does {s1_name} want to do?', 'Why is {s2_name} concerned?'). "
                     "Avoid complex speculative or hypothetical framing."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options concise, simple, and direct (ideally 3 to 8 words), using only basic everyday A1-A2 vocabulary "
-                    "(such as 'work hours', 'schedule', 'sign in', 'next', 'cold', 'rest', 'water', 'doctor')."
+                    "ideally 3 to 8 words, using only basic everyday A1-A2 vocabulary "
+                    "such as 'work hours', 'schedule', 'sign in', 'next', 'cold', 'rest', 'water', 'doctor'"
                 )
                 kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail`: 2 to 3 questions assessing concrete facts, explicitly stated intentions, or direct causes.\n"
-                    "     * `Main Idea`: 1 to 2 questions assessing the overall topic or mutual agreement.\n"
-                    "     * `Inference`: 0 to 1 question assessing a straightforward, obvious conclusion."
+                    "     * `Detail`: concrete facts, explicitly stated intentions, or direct causes.\n"
+                    "     * `Main Idea`: overall topic or mutual agreement.\n"
+                    "     * `Inference`: a straightforward, obvious conclusion."
                 )
             elif cefr in ("B1", "B1+"):
                 kwargs["dialogue_style_guidance"] = (
@@ -1233,12 +1293,12 @@ class QuizGeneratorMixin:
                     "Use clear question stems assessing explicit facts, speaker reasoning, and immediate deductions."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options standard and clear (ideally 5 to 10 words), with natural everyday vocabulary."
+                    "ideally 5 to 10 words, with natural everyday vocabulary"
                 )
                 kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail`: 2 questions assessing specific rationale or facts stated by a speaker.\n"
-                    "     * `Main Idea`: 1 to 2 questions assessing the core theme or conclusion.\n"
-                    "     * `Inference`: 1 to 2 questions assessing speaker attitude or logical takeaway."
+                    "     * `Detail`: specific rationale or facts stated by a speaker.\n"
+                    "     * `Main Idea`: core theme or opening purpose.\n"
+                    "     * `Inference`: speaker attitude or logical takeaway."
                 )
             elif cefr == "B2":
                 kwargs["dialogue_style_guidance"] = (
@@ -1250,12 +1310,12 @@ class QuizGeneratorMixin:
                     "Use clear, natural question stems testing speaker intention, stance shifts, and agreed next steps."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options clear and idiomatic (ideally 6 to 12 words), paraphrasing spoken meaning without overly formal or bookish vocabulary."
+                    "ideally 6 to 12 words, paraphrasing spoken meaning without overly formal or bookish vocabulary"
                 )
                 kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail`: 2 questions assessing specific rationale or constraints stated by a speaker.\n"
-                    "     * `Main Idea`: 1 question assessing the opening purpose or overall topic.\n"
-                    "     * `Inference`: 2 questions assessing speaker attitude, hedged disagreement, or final outcome."
+                    "     * `Detail`: specific rationale or constraints stated by a speaker.\n"
+                    "     * `Main Idea`: opening purpose or overall topic.\n"
+                    "     * `Inference`: speaker attitude, hedged disagreement, or final outcome."
                 )
             else:
                 kwargs["dialogue_style_guidance"] = (
@@ -1266,12 +1326,12 @@ class QuizGeneratorMixin:
                     "Use rigorous assessment stems testing speaker stance, implicit qualifications, and analytical deductions."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Craft nuanced, intellectually mature options (8 to 16 words) with precise paraphrasing."
+                    "8 to 16 words, with nuanced and precise paraphrasing"
                 )
                 kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail`: 1 to 2 questions on key nuances, qualifying conditions, or exact rationales.\n"
-                    "     * `Inference`: 2 to 3 questions drawing deductions warranted by tone, stance, or logic.\n"
-                    "     * `Main Idea`: 1 question assessing the overarching academic consensus or disagreement."
+                    "     * `Detail`: key nuances, qualifying conditions, or exact rationales.\n"
+                    "     * `Main Idea`: overarching academic purpose, consensus, or disagreement.\n"
+                    "     * `Inference`: deductions warranted by tone, stance, or logic."
                 )
 
             # Resolve broad thematic topic from source frontmatter (unit_title / text_title) or Summary Core Concepts
@@ -1309,42 +1369,6 @@ class QuizGeneratorMixin:
 
             thematic_topic_str = "\n".join(thematic_concepts)
             kwargs["thematic_topic"] = thematic_topic_str
-            
-            # Retrieve tts configurations to get genders & accents for Schema-First Live Injection
-            from ..tts import tts_service
-            tts_service._refresh()
-            
-            def get_voice_gender(voice_name):
-                v = str(voice_name or "").lower()
-                if any(v.startswith(p) for p in ["af_", "bf_"]):
-                    return "female"
-                if any(v.startswith(p) for p in ["am_", "bm_"]):
-                    return "male"
-                if any(x in v for x in ["aria", "jenny", "sonia", "libby"]):
-                    return "female"
-                if any(x in v for x in ["guy", "christopher", "ryan", "thomas"]):
-                    return "male"
-                return "female"
-                
-            def get_voice_accent(voice_name):
-                v_lower = str(voice_name or "").lower()
-                if "gb" in v_lower or "bf_" in v_lower or "bm_" in v_lower or "sonia" in v_lower:
-                    return "Accent: British"
-                if "us" in v_lower or "af_" in v_lower or "am_" in v_lower or "aria" in v_lower or "michael" in v_lower or "guy" in v_lower:
-                    return "Accent: American"
-                if "cn" in v_lower or "zh" in v_lower or "xiaoxiao" in v_lower or "yunxi" in v_lower:
-                    return "Accent: Chinese (Mandarin)"
-                return "Accent: Standard"
-
-            g1 = get_voice_gender(tts_service.voice_a)
-            g2 = get_voice_gender(tts_service.voice_b)
-            a1 = get_voice_accent(tts_service.voice_a)
-            a2 = get_voice_accent(tts_service.voice_b)
-
-            kwargs["speaker_1_gender"] = g1
-            kwargs["speaker_2_gender"] = g2
-            kwargs["speaker_1_accent"] = a1
-            kwargs["speaker_2_accent"] = a2
 
             try:
                 listening_bp = LinguisticEngine.build_listening_micro_task_blueprints(
@@ -1352,6 +1376,8 @@ class QuizGeneratorMixin:
                     thematic_topic=thematic_topic_str,
                     target_count=count,
                     cefr_level=cefr,
+                    speaker_1_name=s1_name,
+                    speaker_2_name=s2_name,
                 )
             except Exception as e:
                 logger.warning(f"Failed to build listening micro-task blueprints: {e}")
@@ -1413,7 +1439,12 @@ class QuizGeneratorMixin:
                 if template_name == "translation":
                     quiz_obj = self.hydrate_translation_blueprint_items(quiz_obj, blueprint_specs)
                 elif template_name == "listening":
-                    quiz_obj = self.hydrate_listening_blueprint_items(quiz_obj, blueprint_specs)
+                    quiz_obj = self.hydrate_listening_blueprint_items(
+                        quiz_obj,
+                        blueprint_specs,
+                        speaker_1_name=kwargs.get("speaker_1_name", ""),
+                        speaker_2_name=kwargs.get("speaker_2_name", ""),
+                    )
                 else:
                     q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
                     if isinstance(q_list, list):
@@ -2015,38 +2046,127 @@ class QuizGeneratorMixin:
                     from ..tts import tts_service
                     tts_service._refresh()
 
-                    # Use pre-calculated genders, roles, and accents directly from kwargs or quiz_obj
+                    # Synchronize speaker names, genders, roles, accents, and TTS voices
+                    _COMMON_FEMALE_NAMES = {
+                        "alice", "anna", "aria", "ava", "bella", "chloe", "claire", "clara", "DIANA", "diana",
+                        "elena", "ella", "emily", "emma", "eva", "grace", "hannah", "helen", "iris", "isabella",
+                        "jade", "jenny", "jessica", "julia", "karen", "kate", "laura", "leah", "libby", "lily",
+                        "linda", "lisa", "lucy", "maria", "maya", "mei", "mia", "michelle", "naomi", "natasha",
+                        "nicole", "nina", "Nora", "nora", "olivia", "rachel", "rose", "ruby", "samantha",
+                        "sara", "sarah", "sofia", "sonia", "sophia", "stella", "tina", "victoria", "wendy", "zoe",
+                    }
+                    _COMMON_MALE_NAMES = {
+                        "adam", "alex", "andrew", "aris", "ben", "brian", "charles", "chris", "christopher",
+                        "dan", "daniel", "david", "edward", "eric", "ethan", "evan", "frank", "george", "guy",
+                        "harry", "henry", "ian", "isaac", "jack", "jacob", "james", "jason", "john", "jordan",
+                        "josh", "kevin", "leo", "lewis", "liam", "lucas", "luke", "marcus", "mark", "matt",
+                        "matthew", "max", "michael", "mike", "nathan", "nick", "noah", "oliver", "oscar",
+                        "owen", "paul", "peter", "ray", "richard", "robert", "roger", "ryan", "sam", "samuel",
+                        "scott", "sean", "simon", "steffan", "stephen", "steve", "steven", "thomas", "tim",
+                        "tom", "victor", "william",
+                    }
+
+                    def _infer_name_gender(full_name: str) -> str | None:
+                        tokens = [
+                            re.sub(r"[^a-zA-Z]", "", t).lower()
+                            for t in str(full_name or "").split()
+                        ]
+                        tokens = [t for t in tokens if t and t not in ("dr", "prof", "mr", "ms", "mrs", "miss", "speaker")]
+                        if not tokens:
+                            return None
+                        first = tokens[0]
+                        if first in _COMMON_FEMALE_NAMES:
+                            return "female"
+                        if first in _COMMON_MALE_NAMES:
+                            return "male"
+                        return None
+
+                    def _resolve_speaker_metadata(s1_name, s2_name, raw_g1, raw_g2, raw_r1, raw_r2):
+                        g1_norm = str(raw_g1 or kwargs.get("speaker_1_gender") or "female").strip().lower()
+                        g2_norm = str(raw_g2 or kwargs.get("speaker_2_gender") or "male").strip().lower()
+                        if g1_norm not in ("female", "male"):
+                            g1_norm = "female"
+                        if g2_norm not in ("female", "male"):
+                            g2_norm = "male" if g1_norm == "female" else "female"
+
+                        inferred_1 = _infer_name_gender(s1_name)
+                        inferred_2 = _infer_name_gender(s2_name)
+                        if inferred_1 and inferred_2 and inferred_1 != inferred_2:
+                            g1_norm, g2_norm = inferred_1, inferred_2
+                        elif inferred_1 and inferred_1 != g1_norm:
+                            g1_norm = inferred_1
+                            g2_norm = "male" if g1_norm == "female" else "female"
+                        elif inferred_2 and inferred_2 != g2_norm:
+                            g2_norm = inferred_2
+                            g1_norm = "male" if g2_norm == "female" else "female"
+                        elif g1_norm == g2_norm:
+                            g2_norm = "male" if g1_norm == "female" else "female"
+
+                        # Bind accent directly to the actual voice (voice_a=female, voice_b=male) that will speak for each character
+                        acc_female = tts_service.get_accent(tts_service.voice_a)
+                        acc_male = tts_service.get_accent(tts_service.voice_b)
+                        a1_resolved = acc_female if g1_norm == "female" else acc_male
+                        a2_resolved = acc_female if g2_norm == "female" else acc_male
+
+                        r1_clean = str(raw_r1 or "").strip()
+                        r2_clean = str(raw_r2 or "").strip()
+                        if not r1_clean:
+                            r1_clean = "Discussion Partner" if g1_norm == "female" else "Colleague"
+                        if not r2_clean or r2_clean == r1_clean:
+                            r2_clean = "Colleague" if r1_clean != "Colleague" else "Project Partner"
+                        return g1_norm, g2_norm, a1_resolved, a2_resolved, r1_clean, r2_clean
+
+                    cfg_s1 = kwargs.get("speaker_1_name") or tts_service.get_speaker_name(tts_service.voice_a)
+                    cfg_s2 = kwargs.get("speaker_2_name") or tts_service.get_speaker_name(tts_service.voice_b)
+
                     if isinstance(quiz_obj, dict):
-                        g1 = quiz_obj.get("speaker_1_gender") or kwargs["speaker_1_gender"]
-                        g2 = quiz_obj.get("speaker_2_gender") or kwargs["speaker_2_gender"]
-                        a1 = quiz_obj.get("speaker_1_accent") or kwargs["speaker_1_accent"]
-                        a2 = quiz_obj.get("speaker_2_accent") or kwargs["speaker_2_accent"]
-                        
-                        role1 = "Creative Director" if g1 == "female" else "Technical Lead"
-                        role2 = "Technical Lead" if g2 == "male" else "Creative Director"
-                        if role1 == role2:
-                            role2 = "Product Manager" if g2 == "female" else "Lead Analyst"
-                            
-                        quiz_obj["speaker_1_gender"] = g1
-                        quiz_obj["speaker_2_gender"] = g2
-                        quiz_obj["speaker_1_role"] = role1
-                        quiz_obj["speaker_2_role"] = role2
-                        quiz_obj["speaker_1_accent"] = a1
-                        quiz_obj["speaker_2_accent"] = a2
+                        s1 = str(quiz_obj.get("speaker_1") or "").strip()
+                        s2 = str(quiz_obj.get("speaker_2") or "").strip()
+                        if not s1 or s1.lower() in ("speaker 1", "speaker1"):
+                            s1 = cfg_s1
+                        if not s2 or s2.lower() in ("speaker 2", "speaker2"):
+                            s2 = cfg_s2
+                        g1, g2, a1, a2, role1, role2 = _resolve_speaker_metadata(
+                            s1, s2,
+                            quiz_obj.get("speaker_1_gender"),
+                            quiz_obj.get("speaker_2_gender"),
+                            quiz_obj.get("speaker_1_role"),
+                            quiz_obj.get("speaker_2_role"),
+                        )
+                        ordered_head = {
+                            "title": quiz_obj.get("title", ""),
+                            "topic": quiz_obj.get("topic", ""),
+                            "speaker_1": s1,
+                            "speaker_2": s2,
+                            "speaker_1_gender": g1,
+                            "speaker_2_gender": g2,
+                            "speaker_1_role": role1,
+                            "speaker_2_role": role2,
+                            "speaker_1_accent": a1,
+                            "speaker_2_accent": a2,
+                        }
+                        for k, v in list(quiz_obj.items()):
+                            if k not in ordered_head:
+                                ordered_head[k] = v
+                        quiz_obj.clear()
+                        quiz_obj.update(ordered_head)
                         script_dicts = quiz_obj["script"]
-                        s1 = quiz_obj.get("speaker_1")
-                        s2 = quiz_obj.get("speaker_2")
                     else:
-                        g1 = quiz_obj.speaker_1_gender or kwargs["speaker_1_gender"]
-                        g2 = quiz_obj.speaker_2_gender or kwargs["speaker_2_gender"]
-                        a1 = quiz_obj.speaker_1_accent or kwargs["speaker_1_accent"]
-                        a2 = quiz_obj.speaker_2_accent or kwargs["speaker_2_accent"]
-                        
-                        role1 = "Creative Director" if g1 == "female" else "Technical Lead"
-                        role2 = "Technical Lead" if g2 == "male" else "Creative Director"
-                        if role1 == role2:
-                            role2 = "Product Manager" if g2 == "female" else "Lead Analyst"
-                            
+                        s1 = str(quiz_obj.speaker_1 or "").strip()
+                        s2 = str(quiz_obj.speaker_2 or "").strip()
+                        if not s1 or s1.lower() in ("speaker 1", "speaker1"):
+                            s1 = cfg_s1
+                        if not s2 or s2.lower() in ("speaker 2", "speaker2"):
+                            s2 = cfg_s2
+                        quiz_obj.speaker_1 = s1
+                        quiz_obj.speaker_2 = s2
+                        g1, g2, a1, a2, role1, role2 = _resolve_speaker_metadata(
+                            s1, s2,
+                            quiz_obj.speaker_1_gender,
+                            quiz_obj.speaker_2_gender,
+                            quiz_obj.speaker_1_role,
+                            quiz_obj.speaker_2_role,
+                        )
                         quiz_obj.speaker_1_gender = g1
                         quiz_obj.speaker_2_gender = g2
                         quiz_obj.speaker_1_role = role1
@@ -2054,8 +2174,6 @@ class QuizGeneratorMixin:
                         quiz_obj.speaker_1_accent = a1
                         quiz_obj.speaker_2_accent = a2
                         script_dicts = [dataclasses.asdict(t) for t in quiz_obj.script]
-                        s1 = quiz_obj.speaker_1
-                        s2 = quiz_obj.speaker_2
 
                     audio_binary = tts_service.process_script(
                         script_dicts, 

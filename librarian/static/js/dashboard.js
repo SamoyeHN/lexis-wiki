@@ -2046,6 +2046,7 @@
         modalInstance.show();
     }
     function closeSettingsModal() {
+        stopTTSVoicePreview();
         const modal = document.getElementById('settings-modal');
         const modalInstance = bootstrap.Modal.getInstance(modal);
         if (modalInstance) modalInstance.hide();
@@ -2071,6 +2072,7 @@
     });
 
     function saveGlobalConfigurationAndClose() {
+        stopTTSVoicePreview();
         // Collect model parameters
         const api_type = document.getElementById('config-api-type').value;
         const model = document.getElementById('config-active-model').value;
@@ -2105,10 +2107,8 @@
         };
 
         const tts_engine = document.getElementById('config-tts-engine').value;
-        const tts_url = (document.getElementById('config-tts-url').value || '').trim().replace(/\/+$/, '');
         const tts_voice_a = document.getElementById('config-tts-voice-a').value;
         const tts_voice_b = document.getElementById('config-tts-voice-b').value;
-        const tts_model = document.getElementById('config-tts-model').value;
         const target_language = document.getElementById('config-target-language').value;
         const enable_expert_audit = document.getElementById('config-enable-expert-audit').checked;
         const judge_model = document.getElementById('config-judge-model').value.trim();
@@ -2119,7 +2119,7 @@
             body: JSON.stringify({
                 api_type, model, api_url, api_key,
                 compile_defaults, quiz_defaults,
-                tts_engine, tts_url, tts_voice_a, tts_voice_b, tts_model, target_language,
+                tts_engine, tts_voice_a, tts_voice_b, target_language,
                 enable_expert_audit, judge_model
             })
         })
@@ -2141,6 +2141,9 @@
             .then(res => res.json())
             .then(data => {
                 appConfig = data.config || {};
+                if (data.tts_voices) {
+                    ttsVoiceCatalogs = data.tts_voices;
+                }
                 
                 document.getElementById('headbar-model-name').innerText = appConfig.model || 'No model';
 
@@ -2195,9 +2198,7 @@
                 document.getElementById('config-quiz-video').value = qVideo;
                 document.getElementById('config-quiz-video-val').innerText = qVideo;
 
-                document.getElementById('config-tts-engine').value = appConfig.tts_engine || 'kokoro';
-                document.getElementById('config-tts-url').value = appConfig.tts_url || '';
-                document.getElementById('config-tts-model').value = appConfig.tts_model || 'tts-1';
+                document.getElementById('config-tts-engine').value = appConfig.tts_engine || 'edge';
                 document.getElementById('config-target-language').value = appConfig.target_language || 'Chinese';
 
                 // Level 2 Expert Audit options
@@ -2211,8 +2212,8 @@
                 // Load API type first (sets up model field visibility)
                 onApiTypeChange(false);
 
-                // Populate voice dropdowns based on engine, do NOT auto-fill URL — we already loaded saved config above
-                onTTSEngineChange(appConfig.tts_voice_a, appConfig.tts_voice_b, false);
+                // Populate Female & Male voice dropdowns extracted from Python TTS controls
+                onTTSEngineChange(appConfig.tts_voice_a, appConfig.tts_voice_b);
 
                 // Fetch models AFTER all fields are set so active model can be highlighted correctly
                 fetchModels();
@@ -3232,60 +3233,162 @@
         }
     }
 
-    const KOKORO_VOICES = [
-        { value: "af_sarah", label: "US Female: Sarah" },
-        { value: "af_bella", label: "US Female: Bella" },
-        { value: "am_michael", label: "US Male: Michael" },
-        { value: "bf_emma", label: "UK Female: Emma" }
-    ];
-    const EDGE_VOICES = [
-        { value: "en-US-AriaNeural", label: "US Female: Aria" },
-        { value: "en-US-JennyNeural", label: "US Female: Jenny" },
-        { value: "en-GB-RyanNeural", label: "UK Male: Ryan" }
-    ];
+    let ttsVoiceCatalogs = {
+        edge: {
+            female: [
+                { value: "en-US-AriaNeural", label: "US Female: Aria" },
+                { value: "en-US-AvaMultilingualNeural", label: "US Female: Ava (Multilingual)" },
+                { value: "en-US-EmmaMultilingualNeural", label: "US Female: Emma (Multilingual)" },
+                { value: "en-US-JennyNeural", label: "US Female: Jenny" },
+                { value: "en-GB-SoniaNeural", label: "UK Female: Sonia" },
+                { value: "en-GB-LibbyNeural", label: "UK Female: Libby" }
+            ],
+            male: [
+                { value: "en-GB-RyanNeural", label: "UK Male: Ryan" },
+                { value: "en-US-AndrewMultilingualNeural", label: "US Male: Andrew (Multilingual)" },
+                { value: "en-US-BrianMultilingualNeural", label: "US Male: Brian (Multilingual)" },
+                { value: "en-US-GuyNeural", label: "US Male: Guy" },
+                { value: "en-US-ChristopherNeural", label: "US Male: Christopher" },
+                { value: "en-GB-ThomasNeural", label: "UK Male: Thomas" }
+            ],
+            default_female: "en-US-AriaNeural",
+            default_male: "en-GB-RyanNeural"
+        },
+        kokoro: {
+            female: [
+                { value: "af_sarah", label: "US Female: Sarah" },
+                { value: "af_heart", label: "US Female: Heart" },
+                { value: "af_bella", label: "US Female: Bella" },
+                { value: "af_nova", label: "US Female: Nova" },
+                { value: "af_nicole", label: "US Female: Nicole" },
+                { value: "bf_emma", label: "UK Female: Emma" },
+                { value: "bf_isabella", label: "UK Female: Isabella" }
+            ],
+            male: [
+                { value: "am_michael", label: "US Male: Michael" },
+                { value: "am_fenrir", label: "US Male: Fenrir" },
+                { value: "am_puck", label: "US Male: Puck" },
+                { value: "am_adam", label: "US Male: Adam" },
+                { value: "bm_george", label: "UK Male: George" },
+                { value: "bm_lewis", label: "UK Male: Lewis" }
+            ],
+            default_female: "af_sarah",
+            default_male: "am_michael"
+        }
+    };
 
-    function onTTSEngineChange(selectedVoiceA = null, selectedVoiceB = null, autoFillEndpoint = true) {
-        const engine = document.getElementById('config-tts-engine').value;
+    function _populateGenderVoiceSelect(selectEl, voiceList, selectedVal, defaultVal) {
+        if (!selectEl) return;
+        selectEl.innerHTML = '';
+        (voiceList || []).forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.value;
+            opt.innerText = v.label;
+            selectEl.appendChild(opt);
+        });
+        if (selectedVal && (voiceList || []).some(v => v.value === selectedVal)) {
+            selectEl.value = selectedVal;
+        } else if (defaultVal && (voiceList || []).some(v => v.value === defaultVal)) {
+            selectEl.value = defaultVal;
+        } else if (voiceList && voiceList.length > 0) {
+            selectEl.value = voiceList[0].value;
+        }
+    }
+
+    function onTTSEngineChange(selectedVoiceA = null, selectedVoiceB = null) {
+        stopTTSVoicePreview();
+        const engine = (document.getElementById('config-tts-engine').value || 'edge').toLowerCase();
         const voiceASelect = document.getElementById('config-tts-voice-a');
         const voiceBSelect = document.getElementById('config-tts-voice-b');
         if (!voiceASelect || !voiceBSelect) return;
 
-        if (autoFillEndpoint) {
-            const urlInput = document.getElementById('config-tts-url');
-            if (urlInput) {
-                const savedEngine = (appConfig && appConfig.tts_engine) || 'kokoro';
-                const savedTtsUrl = (appConfig && appConfig.tts_url) ? appConfig.tts_url.trim() : '';
-                if (engine === savedEngine && savedTtsUrl) {
-                    urlInput.value = savedTtsUrl;
-                } else {
-                    // Preserve configured host IP if present in savedTtsUrl or api_url
-                    let host = 'localhost';
-                    try {
-                        const refUrl = savedTtsUrl || (appConfig && appConfig.api_url) || '';
-                        if (refUrl) host = new URL(refUrl).hostname || 'localhost';
-                    } catch (e) {}
-                    urlInput.value = engine === 'kokoro' 
-                        ? `http://${host}:8880/v1/audio/speech` 
-                        : `http://${host}:5050/v1/audio/speech`;
-                }
-            }
+        const applyCatalog = (cat) => {
+            if (!cat) return;
+            _populateGenderVoiceSelect(voiceASelect, cat.female || [], selectedVoiceA, cat.default_female);
+            _populateGenderVoiceSelect(voiceBSelect, cat.male || [], selectedVoiceB, cat.default_male);
+        };
+
+        const cachedCat = ttsVoiceCatalogs[engine];
+        if (cachedCat) {
+            applyCatalog(cachedCat);
         }
 
-        const voices = engine === 'kokoro' ? KOKORO_VOICES : EDGE_VOICES;
-        [voiceASelect, voiceBSelect].forEach((select, index) => {
-            select.innerHTML = '';
-            voices.forEach(v => {
-                const opt = document.createElement('option');
-                opt.value = v.value;
-                opt.innerText = v.label;
-                select.appendChild(opt);
-            });
-            const selVal = index === 0 ? selectedVoiceA : selectedVoiceB;
-            if (selVal && voices.some(v => v.value === selVal)) {
-                select.value = selVal;
-            } else if (voices.length > index) {
-                select.value = voices[index].value;
+        fetch(`/api/tts/voices?engine=${encodeURIComponent(engine)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data && data.voices) {
+                    ttsVoiceCatalogs[engine] = data.voices;
+                    const curA = selectedVoiceA || voiceASelect.value;
+                    const curB = selectedVoiceB || voiceBSelect.value;
+                    _populateGenderVoiceSelect(voiceASelect, data.voices.female || [], curA, data.voices.default_female);
+                    _populateGenderVoiceSelect(voiceBSelect, data.voices.male || [], curB, data.voices.default_male);
+                }
+            })
+            .catch(() => {});
+    }
+
+    let _ttsPreviewAudio = null;
+    let _ttsPreviewReqId = 0;
+
+    function stopTTSVoicePreview() {
+        _ttsPreviewReqId += 1;
+        if (_ttsPreviewAudio) {
+            try {
+                _ttsPreviewAudio.pause();
+                _ttsPreviewAudio.currentTime = 0;
+            } catch (e) {}
+            _ttsPreviewAudio = null;
+        }
+        const iconA = document.getElementById('tts-preview-icon-a');
+        const iconB = document.getElementById('tts-preview-icon-b');
+        if (iconA) iconA.className = 'bi bi-volume-up-fill';
+        if (iconB) iconB.className = 'bi bi-volume-up-fill';
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const settingsModalEl = document.getElementById('settings-modal');
+        if (settingsModalEl) {
+            settingsModalEl.addEventListener('hide.bs.modal', stopTTSVoicePreview);
+        }
+    });
+
+    function previewTTSVoice(slot) {
+        const engineEl = document.getElementById('config-tts-engine');
+        const selectEl = document.getElementById(slot === 'b' ? 'config-tts-voice-b' : 'config-tts-voice-a');
+        const iconEl = document.getElementById(slot === 'b' ? 'tts-preview-icon-b' : 'tts-preview-icon-a');
+        if (!engineEl || !selectEl) return;
+
+        const engine = engineEl.value || 'edge';
+        const voice = selectEl.value;
+        if (!voice) return;
+
+        stopTTSVoicePreview();
+        const reqId = ++_ttsPreviewReqId;
+
+        if (iconEl) iconEl.className = 'bi bi-hourglass-split';
+
+        fetch('/api/tts/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine, voice })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (reqId !== _ttsPreviewReqId) return;
+            if (iconEl) iconEl.className = 'bi bi-volume-up-fill';
+            if (data && data.success && data.audio_url) {
+                _ttsPreviewAudio = new Audio(data.audio_url);
+                _ttsPreviewAudio.play().catch(err => {
+                    showToast('Browser blocked audio playback: ' + err.message, 'error');
+                });
+            } else {
+                showToast((data && data.error) || 'Failed to preview voice', 'error');
             }
+        })
+        .catch(err => {
+            if (reqId !== _ttsPreviewReqId) return;
+            if (iconEl) iconEl.className = 'bi bi-volume-up-fill';
+            showToast('TTS preview failed: ' + err.message, 'error');
         });
     }
 

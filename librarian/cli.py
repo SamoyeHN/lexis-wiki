@@ -543,7 +543,7 @@ def main():
             url = f"http://{display_host}:{port}"
             print(f"Dashboard server is running at: {url}")
             print(f"LLM API endpoint (wiki_config.json): {config.get('api_url')} (model: {config.get('model')})")
-            print(f"TTS API endpoint (wiki_config.json): {config.get('tts_url')} (engine: {config.get('tts_engine')})")
+            print(f"TTS Engine (native Python): {config.get('tts_engine')} (Female: {config.get('tts_voice_a')}, Male: {config.get('tts_voice_b')})")
             print("Closing the browser window will automatically stop this server and free the port.")
             print("(Ctrl+C also works.)")
             
@@ -830,7 +830,7 @@ def main():
             print(f"🔑 SHA-256:        {sha}")
             if expected:
                 if sha == expected:
-                    print("✅ Matches expected_sha256 in wiki_config.json.")
+                    print("✅ Matches built-in expected_sha256.")
                 else:
                     print(f"⚠️  Differs from expected_sha256 ({expected}).")
                     sys.exit(1)

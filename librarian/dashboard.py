@@ -423,10 +423,23 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             response_data = {"success": True, "message": "Dashboard server is shutting down."}
 
         elif path == "/api/config":
+            from .tts import tts_service
             config.load_config()
+            tts_service._refresh()
             response_data = {
                 "config": config.data,
+                "tts_voices": tts_service.get_available_voices(),
                 "project_root": str(config.project_root)
+            }
+
+        elif path == "/api/tts/voices":
+            from .tts import tts_service
+            q = urllib.parse.parse_qs(query_str or "")
+            engine = (q.get("engine", [None])[0] or None)
+            force = str(q.get("refresh", ["0"])[0]).lower() in ("1", "true", "yes")
+            response_data = {
+                "success": True,
+                "voices": tts_service.get_available_voices(engine=engine, force_refresh=force),
             }
 
         elif path == "/api/models":
@@ -911,6 +924,26 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         response_data = {"success": False, "error": msg}
                         break
                 response_data["message"] = "Configuration updated successfully."
+
+            elif path == "/api/tts/preview":
+                import base64
+                from .tts import tts_service
+                data = json.loads(body) if body else {}
+                engine = data.get("engine") or config.get("tts_engine") or "edge"
+                voice = data.get("voice") or ""
+                text = data.get("text") or None
+                audio_bytes = tts_service.preview_voice(engine=engine, voice=voice, text=text)
+                if audio_bytes:
+                    b64 = base64.b64encode(audio_bytes).decode("ascii")
+                    response_data = {
+                        "success": True,
+                        "audio_url": f"data:audio/mp3;base64,{b64}",
+                    }
+                else:
+                    response_data = {
+                        "success": False,
+                        "error": f"Failed to synthesize preview for voice '{voice}' ({engine}).",
+                    }
 
             elif path == "/api/compile":
                 data = json.loads(body)

@@ -33,12 +33,9 @@ DEFAULT_CONFIG = {
         "concepts": 3,
         "max_parallel": 1
     },
-    "tts_engine": "kokoro",
-    "tts_url": "http://localhost:8880/v1/audio/speech",
-    "tts_voice_a": "af_sarah",
-    "tts_voice_b": "am_michael",
-    "tts_model": "tts-1",
-    "tts_api_key": "any_string",
+    "tts_engine": "edge",
+    "tts_voice_a": "en-US-AriaNeural",
+    "tts_voice_b": "en-GB-RyanNeural",
     "target_language": "Simplified Chinese",
     "enforce_gbnf": False,
     "enable_expert_audit": False,
@@ -48,18 +45,7 @@ DEFAULT_CONFIG = {
     "enable_authentic_cloze": True,
     "disable_pedlex": False,
     "disable_ldoce": False,
-    "dashboard_port": 8000,
-    "pedlex_distribution": {
-        "auto_download": True,
-        "auto_update": False,
-        "expected_sha256": "92f6f4b575cc8f5a1c50f0e6a678723d0c1692839ea2096d5b8c71254172c654",
-        "urls": [
-            "https://r2.airopen.org/pedlex.db.xz",
-            "https://huggingface.co/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
-            "https://hf-mirror.com/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz"
-        ],
-        "auth_token": ""
-    }
+    "dashboard_port": 8000
 }
 
 class Config:
@@ -100,8 +86,8 @@ class Config:
                             user_config["api_url"] = user_config.pop("ollama_url")
                         if isinstance(user_config.get("api_url"), str):
                             user_config["api_url"] = user_config["api_url"].strip().rstrip("/")
-                        if isinstance(user_config.get("tts_url"), str):
-                            user_config["tts_url"] = user_config["tts_url"].strip().rstrip("/")
+                        for legacy_key in ("tts_url", "tts_model", "tts_api_key", "pedlex_distribution"):
+                            user_config.pop(legacy_key, None)
                         
                         self.data.update(user_config)
                     self._config_mtime = current_mtime
@@ -164,7 +150,7 @@ class Config:
         """Generic config update helper."""
         self.load_config()
         config_path = self.project_root / "wiki_config.json"
-        if key in ("api_url", "tts_url") and isinstance(value, str):
+        if key == "api_url" and isinstance(value, str):
             value = value.strip().rstrip("/")
         self.data[key] = value
         try:

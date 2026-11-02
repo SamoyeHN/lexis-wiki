@@ -32,6 +32,9 @@ Thumbs.db
 *.db.tmp
 *.db.*.tmp
 *.db.sha256
+*.onnx
+*.bin
+librarian/data/kokoro/
 
 # =============================================================================
 # 4. Runtime Logs & Temporary Output

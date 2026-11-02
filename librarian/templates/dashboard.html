@@ -733,40 +733,33 @@
             <div class="settings-section-card">
                 <h6 class="fw-bold text-info mb-3"><i class="bi bi-headphones me-1"></i>TTS Voice & Engine</h6>
 
-                <!-- Row 1: Engine, Voice A (Primary), Voice B (Secondary) -->
-                <div class="row g-2 mb-2">
+                <!-- Row 1: Engine, Female Voice (Voice A), Male Voice (Voice B) -->
+                <div class="row g-2 mb-1">
                     <div class="col-md-4 col-sm-12">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">TTS Engine</label>
-                        <select id="config-tts-engine" class="form-select form-select-sm" onchange="onTTSEngineChange(null, null, true)">
-                            <option value="kokoro">Kokoro</option>
-                            <option value="edge">Edge TTS</option>
+                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">TTS Engine (Python Native)</label>
+                        <select id="config-tts-engine" class="form-select form-select-sm" onchange="onTTSEngineChange(null, null)">
+                            <option value="edge">Edge TTS (Default)</option>
+                            <option value="kokoro">Kokoro ONNX (Offline)</option>
                         </select>
                     </div>
                     <div class="col-md-4 col-sm-6">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Voice A (Primary)</label>
+                        <div class="d-flex justify-content-between align-items-center mb-0.5">
+                            <label class="text-on-surface mb-0" style="font-size: 9px;">Female Voice (Speaker A)</label>
+                            <button type="button" class="btn btn-link p-0 text-decoration-none text-info font-monospace" style="font-size: 9px;" onclick="previewTTSVoice('a')" title="Preview selected female voice">
+                                <i class="bi bi-volume-up-fill" id="tts-preview-icon-a"></i> Preview
+                            </button>
+                        </div>
                         <select id="config-tts-voice-a" class="form-select form-select-sm"></select>
                     </div>
                     <div class="col-md-4 col-sm-6">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">Voice B (Secondary)</label>
+                        <div class="d-flex justify-content-between align-items-center mb-0.5">
+                            <label class="text-on-surface mb-0" style="font-size: 9px;">Male Voice (Speaker B)</label>
+                            <button type="button" class="btn btn-link p-0 text-decoration-none text-info font-monospace" style="font-size: 9px;" onclick="previewTTSVoice('b')" title="Preview selected male voice">
+                                <i class="bi bi-volume-up-fill" id="tts-preview-icon-b"></i> Preview
+                            </button>
+                        </div>
                         <select id="config-tts-voice-b" class="form-select form-select-sm"></select>
                     </div>
-                </div>
-
-                <!-- Row 2: TTS Endpoint URL (Full Width) -->
-                <div class="row g-2 mb-2">
-                    <div class="col-12">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">TTS Endpoint URL</label>
-                        <input type="text" id="config-tts-url" class="form-control form-control-sm" placeholder="http://...:8880/v1/audio/speech">
-                    </div>
-                </div>
-
-                <!-- Row 3: TTS Model -->
-                <div class="row g-2 mb-2">
-                    <div class="col-md-6 col-sm-12">
-                        <label class="text-on-surface mb-0.5 d-block" style="font-size: 9px;">TTS Model</label>
-                        <input type="text" id="config-tts-model" class="form-control form-control-sm" value="tts-1">
-                    </div>
-                    <div class="col-md-6 col-sm-12"></div>
                 </div>
             </div>
         </div>

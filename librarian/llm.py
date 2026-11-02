@@ -45,15 +45,13 @@ def _prune_to_schema(schema: Any, data: Any) -> Any:
 
     additional = schema.get("additionalProperties", True)
     pruned = {}
-    for key, value in data.items():
-        if key in properties:
-            pruned[key] = _prune_to_schema(properties[key], value)
-        elif additional is False:
-            # additionalProperties: false -> drop the undeclared field.
-            continue
-        else:
-            # Not restricted -> keep as-is.
-            pruned[key] = value
+    for key, prop_schema in properties.items():
+        if key in data:
+            pruned[key] = _prune_to_schema(prop_schema, data[key])
+    if additional is not False:
+        for key, value in data.items():
+            if key not in properties:
+                pruned[key] = value
     return pruned
 
 

@@ -534,7 +534,7 @@ class TranslationQuiz:
 
 @dataclasses.dataclass
 class ListeningQuizTurn:
-    speaker: str = dataclasses.field(default="", metadata={"minLength": 1})
+    speaker: str = dataclasses.field(default="", metadata={"enum": ["{speaker_1_name}", "{speaker_2_name}"]})
     text: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
@@ -550,16 +550,16 @@ class ListeningQuizQuestion:
 class ListeningQuiz:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
     topic: str = dataclasses.field(default="", metadata={"minLength": 1})
-    speaker_1: str = dataclasses.field(default="", metadata={"minLength": 1})
-    speaker_2: str = dataclasses.field(default="", metadata={"minLength": 1})
-    script: List[ListeningQuizTurn] = dataclasses.field(default_factory=list)
-    questions: List[ListeningQuizQuestion] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
+    speaker_1: str = dataclasses.field(default="Aria", metadata={"enum": ["{speaker_1_name}"]})
+    speaker_2: str = dataclasses.field(default="Ryan", metadata={"enum": ["{speaker_2_name}"]})
     speaker_1_gender: str = dataclasses.field(default="female", metadata={"enum": ["{speaker_1_gender}"]})
     speaker_2_gender: str = dataclasses.field(default="male", metadata={"enum": ["{speaker_2_gender}"]})
-    speaker_1_role: str = dataclasses.field(default="Creative Director")
-    speaker_2_role: str = dataclasses.field(default="Technical Lead")
+    speaker_1_role: str = dataclasses.field(default="Creative Director", metadata={"minLength": 1})
+    speaker_2_role: str = dataclasses.field(default="Technical Lead", metadata={"minLength": 1})
     speaker_1_accent: str = dataclasses.field(default="Accent: British", metadata={"enum": ["{speaker_1_accent}"]})
     speaker_2_accent: str = dataclasses.field(default="Accent: American", metadata={"enum": ["{speaker_2_accent}"]})
+    script: List[ListeningQuizTurn] = dataclasses.field(default_factory=list)
+    questions: List[ListeningQuizQuestion] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 @dataclasses.dataclass
 class RoutingResult:

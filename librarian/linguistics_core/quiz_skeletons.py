@@ -5734,6 +5734,8 @@ class QuizSkeletonsMixin:
         cefr_level: str = "B2",
         speaker_1_role: str = "Speaker 1",
         speaker_2_role: str = "Speaker 2",
+        speaker_1_name: str = "",
+        speaker_2_name: str = "",
         forced_archetype_id: str = "",
         forced_trajectory_id: str = "",
         forced_scenario_id: str = "",
@@ -5830,11 +5832,6 @@ class QuizSkeletonsMixin:
         state_machine_lines.append(
             "\n#### 🔄 8-Turn Pragmatic Progression (Speaker 1 & Speaker 2) ####"
         )
-        state_machine_lines.extend([
-            "- **Cohesive Storyline & Natural Turn Uptake**: Keep ONE consistent topic/situation from Turn 1 to Turn 8. Every turn (Turns 2–8) must react naturally to what the other speaker just said before adding the next question or point.",
-            "- **Condensed Spoken Pattern Toolkit (Affirmative / Negative / Conditional Open)**: Treat the patterns below (e.g. `be quite light / tight on [day]`) as condensed syntactic building blocks. Freely choose affirmative, negative, or conditional directions, adapt slots to fit your story, or coin your own natural spoken phrasing—NEVER stitch disconnected textbook sentences together.",
-            "- **Anti-Repetition Rule**: Do NOT repeat the same spoken opener or pattern across different turns.",
-        ])
 
         turn_specs: List[Dict[str, Any]] = []
         used_turn_chunks: Set[str] = set()
@@ -5884,7 +5881,7 @@ class QuizSkeletonsMixin:
 
             state_machine_lines.append(
                 f"- **Turn {t_num} ({spk_label} — {move_name})**: {prag_func} "
-                f"Flexible Spoken Patterns (adapt freely or coin your own): {chunks_display}.{opt_display}"
+                f"Flexible Spoken Patterns: {chunks_display}.{opt_display}"
             )
             turn_specs.append({
                 "turn_number": t_num,
@@ -5969,10 +5966,7 @@ class QuizSkeletonsMixin:
 
         question_blueprints: List[Dict[str, Any]] = []
         question_lines = [
-            "### 🎯 DIALOGUE-DRIVEN QUESTION BLUEPRINTS (ADAPT TO ACTUAL DIALOGUE) ###",
-            f"Write EXACTLY {effective_q_count} comprehension questions based on the ACTUAL dialogue you just generated. "
-            "Adapt each question stem and its 3 distractors naturally to the specific details, polarity (affirmative/negative/conditional), "
-            "and storyline of your dialogue, while obeying each item's `Required Category` and `Prescribed Correct Answer Index`:",
+            "### 🎯 DIALOGUE-DRIVEN QUESTION BLUEPRINTS ###",
         ]
 
         option_letters = ["A", "B", "C", "D"]
@@ -6045,16 +6039,16 @@ class QuizSkeletonsMixin:
                     op_name, _ = trap_specs[s_i]
                     slot_operators_meta[s_i] = op_name
 
-            dist_slots_str = ", ".join(f"`options[{s}]` (Option {option_letters[s]})" for s in distractor_slots)
+            dist_slots_str = ", ".join(
+                f"Option {chr(65 + s)} (`options[{s}]`)" for s in distractor_slots
+            )
 
             q_block_lines = [
                 f"#### Question {q_idx + 1} Blueprint ####",
-                f"- Target Exchange & Suggested Focus: `{anchor_turn_str}` (`{target_speaker}`) — *{comp_focus}* (adapt question naturally to what actually happens in your dialogue; NEVER mention 'Turn X' or 'Speaker 1/2' in `question`—use speakers' names).",
+                f"- Target Exchange & Focus: `{anchor_turn_str}` (`{target_speaker}`) — *{comp_focus}*",
                 f"- Required Category (`category`): `{canonical_skill}` | 🔒 Prescribed Correct Answer Index (`correct_answer_index`): `{correct_slot}` (Option {correct_letter})",
-                f"- Option Guidelines (4 concise, grammatically parallel options grounded in your generated dialogue):",
-                f"  * `options[{correct_slot}]` (Option {correct_letter} — **CORRECT ANSWER**): {corr_instruction} (paraphrase naturally; NEVER copy 5+ consecutive words verbatim from a dialogue turn).",
-                f"  * {dist_slots_str} (**3 PLAUSIBLE DISTRACTORS**): Craft 3 realistic false choices that fit your dialogue using natural listening traps (such as `{d1_name}`, `{d2_name}`, or `{d3_name}`). Ensure none of the 3 distractors is accidentally true.",
-                f"- `explanation` & `design_audit`: Explain why Option {correct_letter} is true based on the dialogue and why the other 3 options are false; set `design_audit` to `AUDIT: [{target_speaker}, {anchor_turn_str}] -> [{canonical_skill}] -> [{d1_name} + {d2_name} + {d3_name}]`.",
+                f"- Correct Answer (Option {correct_letter} / `options[{correct_slot}]`): {corr_instruction}.",
+                f"- Distractor Traps ({dist_slots_str}): `{d1_name}` / `{d2_name}` / `{d3_name}`",
             ]
             question_lines.append("\n".join(q_block_lines))
 
@@ -6071,11 +6065,24 @@ class QuizSkeletonsMixin:
                 "micro_task_block": "\n".join(q_block_lines),
             })
 
-        combined_prompt_block = (
-            "\n".join(state_machine_lines)
-            + "\n\n"
-            + "\n\n".join(question_lines)
-        )
+        state_machine_str = "\n".join(state_machine_lines)
+        questions_str = "\n\n".join(question_lines)
+        combined_prompt_block = state_machine_str + "\n\n" + questions_str
+
+        s1_clean = str(speaker_1_name or "").strip()
+        s2_clean = str(speaker_2_name or "").strip()
+        if s1_clean and s1_clean.lower() not in ("speaker 1", "speaker1"):
+            state_machine_str = re.sub(r"\bSpeaker\s*1\b", s1_clean, state_machine_str)
+            questions_str = re.sub(r"\bSpeaker\s*1\b", s1_clean, questions_str)
+            combined_prompt_block = re.sub(r"\bSpeaker\s*1\b", s1_clean, combined_prompt_block)
+            for qb in question_blueprints:
+                qb["micro_task_block"] = re.sub(r"\bSpeaker\s*1\b", s1_clean, qb.get("micro_task_block", ""))
+        if s2_clean and s2_clean.lower() not in ("speaker 2", "speaker2"):
+            state_machine_str = re.sub(r"\bSpeaker\s*2\b", s2_clean, state_machine_str)
+            questions_str = re.sub(r"\bSpeaker\s*2\b", s2_clean, questions_str)
+            combined_prompt_block = re.sub(r"\bSpeaker\s*2\b", s2_clean, combined_prompt_block)
+            for qb in question_blueprints:
+                qb["micro_task_block"] = re.sub(r"\bSpeaker\s*2\b", s2_clean, qb.get("micro_task_block", ""))
 
         return {
             "cefr_level": cefr_upper,
@@ -6087,8 +6094,8 @@ class QuizSkeletonsMixin:
             "scenario_id": scenario.get("scenario_id", ""),
             "turn_specs": turn_specs,
             "questions": question_blueprints,
-            "state_machine_block": "\n".join(state_machine_lines),
-            "questions_block": "\n\n".join(question_lines),
+            "state_machine_block": state_machine_str,
+            "questions_block": questions_str,
             "combined_prompt_block": combined_prompt_block,
         }
 

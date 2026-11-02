@@ -586,8 +586,8 @@
             }
 
             renderWelcomeSpeakerProfiles() {
-                const s1 = this.data.speaker_1 || 'Speaker 1';
-                const s2 = this.data.speaker_2 || 'Speaker 2';
+                const s1 = this.data.speaker_1 || 'Aria';
+                const s2 = this.data.speaker_2 || 'Ryan';
                 const g1 = this.data.speaker_1_gender || 'female';
                 const g2 = this.data.speaker_2_gender || 'male';
                 const r1 = this.data.speaker_1_role || 'Creative Director';
@@ -605,7 +605,6 @@
                             <span class="speaker-name-bold">${s1}</span>
                             <span class="speaker-job">${r1}</span>
                             <div class="badge-row">
-                                <span class="badge-role">Speaker 1</span>
                                 <span class="badge-accent">${a1}</span>
                             </div>
                         </div>
@@ -619,7 +618,6 @@
                             <span class="speaker-name-bold">${s2}</span>
                             <span class="speaker-job">${r2}</span>
                             <div class="badge-row">
-                                <span class="badge-role">Speaker 2</span>
                                 <span class="badge-accent">${a2}</span>
                             </div>
                         </div>
@@ -628,10 +626,12 @@
             }
 
             renderSpeakerProfiles() {
-                const s1 = this.data.speaker_1 || 'Speaker 1';
-                const s2 = this.data.speaker_2 || 'Speaker 2';
+                const s1 = this.data.speaker_1 || 'Aria';
+                const s2 = this.data.speaker_2 || 'Ryan';
                 const g1 = this.data.speaker_1_gender || 'female';
                 const g2 = this.data.speaker_2_gender || 'male';
+                const r1 = this.data.speaker_1_role || 'Discussion Partner';
+                const r2 = this.data.speaker_2_role || 'Colleague';
                 
                 return `
                     <div class="speakers-section">
@@ -643,7 +643,7 @@
                                 </span>
                                 <div class="speaker-info">
                                     <span class="speaker-name">${s1}</span>
-                                    <span class="speaker-role">Speaker 1</span>
+                                    <span class="speaker-role">${r1}</span>
                                 </div>
                             </div>
                             <div class="speaker-badge">
@@ -652,7 +652,7 @@
                                 </span>
                                 <div class="speaker-info">
                                     <span class="speaker-name">${s2}</span>
-                                    <span class="speaker-role">Speaker 2</span>
+                                    <span class="speaker-role">${r2}</span>
                                 </div>
                             </div>
                         </div>

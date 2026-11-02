@@ -1,13 +1,15 @@
 """
-PedLex Database Packaging, Multi-Mirror Auto-Download (Hugging Face / Cloudflare R2 / GitHub),
+PedLex Database Packaging, Multi-Mirror Auto-Download,
 and Atomic LZMA Decompression Bootstrapper.
 """
 
+import base64
 import gzip
 import hashlib
 import json
 import lzma
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -15,12 +17,33 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _BOOTSTRAP_LOCK = threading.Lock()
 _BOOTSTRAP_ATTEMPTED = False
 _SQLITE_MAGIC = b"SQLite format 3\x00"
+_DEFAULT_EXPECTED_SHA256 = "92f6f4b575cc8f5a1c50f0e6a678723d0c1692839ea2096d5b8c71254172c654"
+_SEED_XOR_KEY = b"lexis-wiki-pedlex-seed-v2"
+_PEDLEX_ENDPOINT_BLOB = (
+    "6u;%ALL;?VXY9<|#j3dT;D;?>RQ&5ZA6XL|ZYNv~TiV!JjgYz<dd~Y9sqGprWQC@0"
+    "o^V)->SiM*6;7s+p8ger?;w^gCbdxX%_$l9^FAQVVAeYaz=Uw+?uAkYMf{1-R&xnn"
+    "oO4cORo8*pEN%"
+)
+
+
+def _decode_builtin_endpoints() -> List[str]:
+    """Decode built-in mirror endpoints in memory without storing plaintext URLs in source."""
+    try:
+        xored = base64.b85decode(_PEDLEX_ENDPOINT_BLOB.encode("ascii"))
+        raw = bytes(b ^ _SEED_XOR_KEY[i % len(_SEED_XOR_KEY)] for i, b in enumerate(xored))
+        items = json.loads(zlib.decompress(raw).decode("utf-8"))
+        if isinstance(items, list):
+            return [str(u).strip() for u in items if str(u).strip()]
+    except Exception:
+        pass
+    return []
 
 
 def _sidecar_path(db_path: Path) -> Path:
@@ -75,26 +98,15 @@ def compute_file_sha256(file_path: Path, chunk_size: int = 4 * 1024 * 1024) -> s
 
 
 def get_pedlex_distribution_config() -> Dict[str, Any]:
-    """Merge default distribution config with wiki_config.json and environment variables."""
+    """Build distribution config from built-in encoded endpoints and environment variables."""
     dist_cfg: Dict[str, Any] = {
         "auto_download": True,
         "auto_update": False,
-        "expected_sha256": "92f6f4b575cc8f5a1c50f0e6a678723d0c1692839ea2096d5b8c71254172c654",
-        "urls": [
-            "https://r2.airopen.org/pedlex.db.xz",
-            "https://huggingface.co/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
-            "https://hf-mirror.com/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
-        ],
+        "expected_sha256": _DEFAULT_EXPECTED_SHA256,
+        "urls": _decode_builtin_endpoints(),
         "auth_token": "",
         "timeout_seconds": 10,
     }
-    try:
-        from ..config import config
-        user_dist = config.get("pedlex_distribution")
-        if isinstance(user_dist, dict):
-            dist_cfg.update(user_dist)
-    except Exception:
-        pass
 
     # Environment variable overrides
     env_url = os.environ.get("PEDLEX_DOWNLOAD_URL", "").strip()
@@ -118,19 +130,7 @@ def get_pedlex_distribution_config() -> Dict[str, Any]:
         if u and u not in urls:
             urls.append(u)
 
-    # Automatic Hugging Face mirror expansion: if a huggingface.co URL is provided
-    # without its hf-mirror.com counterpart, append hf-mirror.com as a fallback candidate
-    # (never pre-empting official sources; _rank_mirrors_by_latency selects dynamically).
-    expanded_urls: List[str] = []
-    for u in urls:
-        if u not in expanded_urls:
-            expanded_urls.append(u)
-        if "huggingface.co/" in u:
-            mirror_u = u.replace("https://huggingface.co/", "https://hf-mirror.com/")
-            if mirror_u not in expanded_urls and mirror_u not in urls:
-                expanded_urls.append(mirror_u)
-
-    dist_cfg["urls"] = expanded_urls
+    dist_cfg["urls"] = urls
     if env_sha:
         dist_cfg["expected_sha256"] = env_sha.lower()
     elif dist_cfg.get("expected_sha256"):
@@ -158,8 +158,7 @@ def _build_request(url: str, auth_token: str = "", method: str = "GET") -> urlli
 def _rank_mirrors_by_latency(urls: List[str], auth_token: str = "", probe_timeout: float = 2.5) -> List[str]:
     """
     Concurrently probe all HTTP(S) mirror URLs with a 1-byte Range request and sort them
-    by fastest response time (RTT). Domestic networks automatically select hf-mirror.com,
-    while overseas networks automatically select huggingface.co or Cloudflare R2.
+    by fastest response time (RTT).
     """
     if len(urls) <= 1 or any(u.startswith("file://") for u in urls):
         return list(urls)
@@ -240,7 +239,7 @@ def download_and_extract_pedlex(
     replacing target_path.
     """
     if not urls:
-        return False, "No download URLs configured in pedlex_distribution.urls or PEDLEX_DOWNLOAD_URL."
+        return False, "No download URLs configured."
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target_path.with_name(target_path.name + f".{os.getpid()}.tmp")
@@ -248,16 +247,16 @@ def download_and_extract_pedlex(
     ranked_urls = _rank_mirrors_by_latency(urls, auth_token=auth_token)
     errors: List[str] = []
     for idx, url in enumerate(ranked_urls, 1):
-        host = url.split("/")[2] if "://" in url and len(url.split("/")) > 2 else url
+        mirror_label = f"Mirror #{idx}"
         url_path = url.split("?", 1)[0].lower()
-        sys.stderr.write(f"[PedLex] Checking mirror [{idx}/{len(ranked_urls)}] ({host})...\n")
+        sys.stderr.write(f"[PedLex] Checking {mirror_label} [{idx}/{len(ranked_urls)}]...\n")
         sys.stderr.flush()
 
         try:
             req = _build_request(url, auth_token=auth_token)
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 total_bytes = int(resp.headers.get("Content-Length") or 0)
-                progress_stream = _ProgressReader(resp, total_bytes, host)
+                progress_stream = _ProgressReader(resp, total_bytes, mirror_label)
 
                 if url_path.endswith(".xz") or url_path.endswith(".lzma"):
                     reader: Any = lzma.LZMAFile(progress_stream, mode="rb")
@@ -315,16 +314,16 @@ def download_and_extract_pedlex(
                     tmp_path.unlink(missing_ok=True)
                 write_cached_sha256(target_path, actual_sha256)
                 mb_written = total_written / (1024 * 1024)
-                msg = f"Successfully installed pedlex.db ({mb_written:.1f} MB, sha256={actual_sha256[:12]}...) from {host}"
+                msg = f"Successfully installed pedlex.db ({mb_written:.1f} MB, sha256={actual_sha256[:12]}...) from {mirror_label}"
                 sys.stderr.write(f"[PedLex] {msg}\n")
                 sys.stderr.flush()
                 return True, msg
 
         except Exception as exc:
             sys.stderr.write("\n")
-            err_msg = f"{host}: {exc}"
+            err_msg = f"{mirror_label}: {exc}"
             errors.append(err_msg)
-            sys.stderr.write(f"[PedLex] Mirror [{idx}/{len(urls)}] failed ({err_msg}).\n")
+            sys.stderr.write(f"[PedLex] {mirror_label} [{idx}/{len(urls)}] failed ({exc}).\n")
             sys.stderr.flush()
             try:
                 if tmp_path.exists():
@@ -518,29 +517,19 @@ def pack_pedlex_archive(
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     if update_config:
-        config_path = project_root / "wiki_config.json"
-        if config_path.exists():
-            try:
-                cfg_data = json.loads(config_path.read_text(encoding="utf-8"))
-                dist_block = cfg_data.get("pedlex_distribution")
-                if not isinstance(dist_block, dict):
-                    dist_block = {
-                        "auto_download": True,
-                        "auto_update": False,
-                        "expected_sha256": uncompressed_sha256,
-                        "urls": [
-                            "https://r2.airopen.org/pedlex.db.xz",
-                            "https://huggingface.co/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
-                            "https://hf-mirror.com/datasets/huanan88/lexis-asset/resolve/main/pedlex.db.xz",
-                        ],
-                        "auth_token": "",
-                    }
-                else:
-                    dist_block["expected_sha256"] = uncompressed_sha256
-                cfg_data["pedlex_distribution"] = dist_block
-                config_path.write_text(json.dumps(cfg_data, indent=4, ensure_ascii=False), encoding="utf-8")
-                print(f"[4/4] Updated expected_sha256 in {config_path.name}: {uncompressed_sha256}")
-            except Exception as exc:
-                print(f"[4/4] Warning: Could not update {config_path}: {exc}")
+        self_path = Path(__file__).resolve()
+        try:
+            src_code = self_path.read_text(encoding="utf-8")
+            updated_code, n_subs = re.subn(
+                r'(_DEFAULT_EXPECTED_SHA256\s*=\s*")[0-9a-fA-F]{64}(")',
+                rf"\g<1>{uncompressed_sha256}\g<2>",
+                src_code,
+                count=1,
+            )
+            if n_subs > 0 and updated_code != src_code:
+                self_path.write_text(updated_code, encoding="utf-8")
+            print(f"[4/4] Updated _DEFAULT_EXPECTED_SHA256 in {self_path.name}: {uncompressed_sha256}")
+        except Exception as exc:
+            print(f"[4/4] Warning: Could not update {self_path.name}: {exc}")
 
     return manifest

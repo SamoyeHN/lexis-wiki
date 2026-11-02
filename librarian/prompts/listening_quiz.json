@@ -11,11 +11,47 @@
     },
     "speaker_1": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "{speaker_1_name}"
+      ]
     },
     "speaker_2": {
       "type": "string",
+      "enum": [
+        "{speaker_2_name}"
+      ]
+    },
+    "speaker_1_gender": {
+      "type": "string",
+      "enum": [
+        "{speaker_1_gender}"
+      ]
+    },
+    "speaker_2_gender": {
+      "type": "string",
+      "enum": [
+        "{speaker_2_gender}"
+      ]
+    },
+    "speaker_1_role": {
+      "type": "string",
       "minLength": 1
+    },
+    "speaker_2_role": {
+      "type": "string",
+      "minLength": 1
+    },
+    "speaker_1_accent": {
+      "type": "string",
+      "enum": [
+        "{speaker_1_accent}"
+      ]
+    },
+    "speaker_2_accent": {
+      "type": "string",
+      "enum": [
+        "{speaker_2_accent}"
+      ]
     },
     "script": {
       "type": "array",
@@ -24,7 +60,10 @@
         "properties": {
           "speaker": {
             "type": "string",
-            "minLength": 1
+            "enum": [
+              "{speaker_1_name}",
+              "{speaker_2_name}"
+            ]
           },
           "text": {
             "type": "string",
@@ -93,36 +132,6 @@
         ],
         "additionalProperties": false
       }
-    },
-    "speaker_1_gender": {
-      "type": "string",
-      "enum": [
-        "{speaker_1_gender}"
-      ]
-    },
-    "speaker_2_gender": {
-      "type": "string",
-      "enum": [
-        "{speaker_2_gender}"
-      ]
-    },
-    "speaker_1_role": {
-      "type": "string"
-    },
-    "speaker_2_role": {
-      "type": "string"
-    },
-    "speaker_1_accent": {
-      "type": "string",
-      "enum": [
-        "{speaker_1_accent}"
-      ]
-    },
-    "speaker_2_accent": {
-      "type": "string",
-      "enum": [
-        "{speaker_2_accent}"
-      ]
     }
   },
   "required": [
@@ -130,14 +139,14 @@
     "topic",
     "speaker_1",
     "speaker_2",
-    "script",
-    "questions",
     "speaker_1_gender",
     "speaker_2_gender",
     "speaker_1_role",
     "speaker_2_role",
     "speaker_1_accent",
-    "speaker_2_accent"
+    "speaker_2_accent",
+    "script",
+    "questions"
   ],
   "additionalProperties": false
 }

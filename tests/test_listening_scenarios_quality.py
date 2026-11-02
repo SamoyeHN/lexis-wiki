@@ -271,6 +271,8 @@ def _build_listening_generation_prompt(sc: Dict[str, Any], bp: Dict[str, Any]) -
         "question_stem_guidance": stem_guidance,
         "option_complexity_guidance": opt_guidance,
         "skill_distribution_guidance": skill_guidance,
+        "speaker_1_name": "Aria",
+        "speaker_2_name": "Ryan",
         "speaker_1_gender": "female",
         "speaker_2_gender": "male",
         "speaker_1_accent": "Accent: American",
