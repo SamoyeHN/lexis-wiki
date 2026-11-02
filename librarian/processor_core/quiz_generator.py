@@ -1514,14 +1514,26 @@ class QuizGeneratorMixin:
                     quiz_obj.passage = data["passage"]
 
             if template_name == "video":
+                video_vocab = []
+                try:
+                    from ..linguistics import LinguisticEngine
+                    video_vocab = LinguisticEngine.extract_video_vocabulary(
+                        data.get("transcript", ""),
+                        target_count=12,
+                        enable_llm_disambiguation=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Video vocabulary extraction skipped: {e}")
                 if isinstance(quiz_obj, dict):
                     quiz_obj["video_url"] = data["video_url"]
                     quiz_obj["video_type"] = data["video_type"]
                     quiz_obj["transcript"] = data["transcript"]
+                    quiz_obj["vocabulary"] = video_vocab
                 else:
                     quiz_obj.video_url = data["video_url"]
                     quiz_obj.video_type = data["video_type"]
                     quiz_obj.transcript = data["transcript"]
+                    quiz_obj.vocabulary = video_vocab
 
             # 4.6. Two-Level Auditing: Pre-Audit L1 Code Gate & L2 Expert In-Place Surgical Cure
             if self.config.get("enable_expert_audit", False):
@@ -2235,8 +2247,9 @@ class QuizGeneratorMixin:
         # 1. Convert to dict if it's a dataclass
         if dataclasses.is_dataclass(quiz_obj):
             data_dict = dataclasses.asdict(quiz_obj)
-            if hasattr(quiz_obj, "_expert_audit") and getattr(quiz_obj, "_expert_audit"):
-                data_dict["_expert_audit"] = getattr(quiz_obj, "_expert_audit")
+            for extra_attr in ("_expert_audit", "passage", "transcript", "video_url", "video_type", "cefr_level", "vocabulary"):
+                if hasattr(quiz_obj, extra_attr) and getattr(quiz_obj, extra_attr) is not None:
+                    data_dict[extra_attr] = getattr(quiz_obj, extra_attr)
         else:
             data_dict = quiz_obj # It's already a dict from a JSON-file schema
             

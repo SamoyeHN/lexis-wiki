@@ -69,11 +69,16 @@ def main():
     video_import_parser.add_argument("--cookies", help="Path to a cookies.txt file to bypass blocks/logins")
     video_import_parser.add_argument("--subtitle", help="Path to a local .srt or .vtt subtitle file (optional)")
 
-    # Export Standalone EXE command
-    export_exe_parser = subparsers.add_parser("export-exe", help="Bundle an HTML quiz and its local media into a single-file standalone EXE")
+    # Export Portable Bundle command (with export-exe alias for backwards compatibility)
+    export_exe_parser = subparsers.add_parser(
+        "export-bundle",
+        aliases=["export-exe"],
+        help="Bundle an HTML video quiz and its companion media into a portable ZIP archive or directory",
+    )
     export_exe_parser.add_argument("html_path", help="Path to the HTML quiz handout")
     export_exe_parser.add_argument("media_path", nargs="?", help="Path to the companion video/audio file (optional)")
-    export_exe_parser.add_argument("--output", "-o", help="Custom output path or name for the built .exe file (optional)")
+    export_exe_parser.add_argument("--output", "-o", help="Custom output .zip path or folder path (optional)")
+    export_exe_parser.add_argument("--as-dir", action="store_true", help="Export as an uncompressed portable directory instead of a .zip archive")
 
     # Audit / Hero Board command
     audit_parser = subparsers.add_parser("audit", help="Run audit assessment on log files and display the LLM Hero Board")
@@ -672,12 +677,18 @@ def main():
         except Exception as e:
             print(f"Error importing video: {e}")
 
-    elif args.command == "export-exe":
+    elif args.command in ("export-bundle", "export-exe"):
         try:
-            from .exporter import export_standalone_exe
-            export_standalone_exe(args.html_path, video_path=args.media_path, output_path=args.output)
+            from .exporter import export_portable_bundle
+            out = export_portable_bundle(
+                args.html_path,
+                video_path=args.media_path,
+                output_path=args.output,
+                as_zip=not getattr(args, "as_dir", False),
+            )
+            print(f"✅ Portable bundle created at: {out}")
         except Exception as e:
-            print(f"Error compiling standalone EXE: {e}")
+            print(f"Error creating portable bundle: {e}")
 
     elif args.command == "rename":
         import json

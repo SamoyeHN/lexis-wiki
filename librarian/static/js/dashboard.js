@@ -730,8 +730,8 @@
                 const isVideoQuiz = cleanPath.toLowerCase().includes('_video_quiz') || cleanPath.toLowerCase().includes('_video_');
                 if (isVideoQuiz) {
                     buttonsHtml += `
-                        <button class="btn btn-sm btn-outline-warning py-1 px-2.5" style="font-size: 0.75rem;" onclick="bundleStandaloneExe('${esc(cleanPath)}')">
-                            <i class="bi bi-file-earmark-zip me-1"></i> Bundle EXE
+                        <button class="btn btn-sm btn-outline-warning py-1 px-2.5" style="font-size: 0.75rem;" onclick="bundleStandaloneExe('${esc(cleanPath)}')" title="Bundle HTML handout + local video into a portable ZIP">
+                            <i class="bi bi-file-earmark-zip me-1"></i> Bundle ZIP
                         </button>
                     `;
                 } else {
@@ -1465,7 +1465,7 @@
     }
 
     function bundleStandaloneExe(htmlPath) {
-        showToast('Building standalone EXE bundle...', 'info');
+        showToast('Bundling portable ZIP (HTML + Video)...', 'info');
         fetch('/api/export-exe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1474,7 +1474,7 @@
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                showToast(data.message || 'Standalone EXE generated successfully!', 'success');
+                showToast(data.message || 'Portable ZIP bundle ready!', 'success');
                 if (data.download_url) {
                     const a = document.createElement('a');
                     a.href = data.download_url;

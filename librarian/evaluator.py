@@ -145,6 +145,8 @@ FATAL_QA_FLAGS = (
     "deviates from the pre-extracted skeleton",
     "duplicates the source quote",
     "Audit truncated early",
+    "Comparative translation defect",
+    "Minimal-Pair contract violation",
 )
 
 # Module-level irregular verbs mapping (avoids re-allocation on every item)
@@ -1570,10 +1572,34 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             options_match_blueprint = True
             index_match_blueprint = True
             no_verb_inflection_clash = True
+            no_comparative_defect = True
+            comp_defect_reason = ""
 
 
-            if is_comparative_translation or is_comprehension:
-                # Comparative translation and Reading/Listening/Video comprehension questions do not require blanks
+            if is_comparative_translation:
+                has_blank_when_expected = True
+                idiom_txt = _safe_str(item.get("idiomatic_translation"))
+                flawed_txt = _safe_str(item.get("flawed_translation"))
+                t_gram = _safe_str(item.get("target_grammar") or item.get("design_audit"))
+                comp_defect = LinguisticEngine.detect_comparative_translation_defect(
+                    idiom_txt, flawed_txt, target_grammar=t_gram
+                )
+                if comp_defect:
+                    no_comparative_defect = False
+                    comp_defect_reason = comp_defect
+                    flags.append(
+                        f"❌ Quiz item '{target or question[:25]}': Comparative translation defect — {comp_defect}"
+                    )
+                else:
+                    mp_sim = LinguisticEngine.calculate_minimal_pair_similarity(idiom_txt, flawed_txt)
+                    if mp_sim < 0.80:
+                        no_comparative_defect = False
+                        comp_defect_reason = f"Minimal-Pair contract violation ({mp_sim:.0%} shared wording < 80%)"
+                        flags.append(
+                            f"❌ Quiz item '{target or question[:25]}': Minimal-Pair contract violation — idiomatic_translation and flawed_translation share only {mp_sim:.0%} wording"
+                        )
+            elif is_comprehension:
+                # Reading/Listening/Video comprehension questions do not require blanks
                 has_blank_when_expected = True
             elif is_translation:
                 if skeleton:
@@ -1798,7 +1824,8 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 no_verbatim_example and
                 no_in_list_recycling and
                 options_match_blueprint and
-                index_match_blueprint
+                index_match_blueprint and
+                no_comparative_defect
             )
 
             if item_passed:
@@ -1818,6 +1845,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not no_article_leak: reasons.append("indefinite article leakage before blank")
                 if not no_verb_inflection_clash: reasons.append("non-base verb inflection clash before blank")
                 if not no_verbatim_example: reasons.append(f"stem verbatim from {verbatim_label}")
+                if not no_comparative_defect: reasons.append(comp_defect_reason or "comparative translation defect")
                 if not options_match_blueprint:
                     reasons.append(f"prescribed options altered from blueprint {bp_info.get('prescribed_options')}")
                 if not index_match_blueprint:

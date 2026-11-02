@@ -133,6 +133,18 @@ _FIELD_RULES: Tuple[Tuple[Tuple[str, ...], str, str], ...] = (
      ARRAY_LEVEL,
      "The array is missing syllabus targets. Append one item per missing target and leave every "
      "existing item untouched."),
+    (("pure tail/head padding", "stacked preposition + to-infinitive", "minimal-pair contract violation"),
+     "flawed_translation",
+     "flawed_translation does not execute a single authentic grammatical error on the target locus. "
+     "Keep idiomatic_translation untouched and rewrite flawed_translation so it shares >= 85% of the "
+     "same words while mutating only the single prescribed grammar/lexical locus (never append extra "
+     "prepositional phrases or stack prepositions before to-infinitives)."),
+    (("post-comma adjunct must use a passive past participle",),
+     "idiomatic_translation",
+     "idiomatic_translation violates the target grammar formula ([Subject] + [VP], [V-ed Phrase]) by "
+     "using an active -ing phrase after the comma. Rewrite idiomatic_translation with a passive past "
+     "participial adjunct after the comma (e.g., ', followed by ...' or ', organized by ...') and "
+     "pair it with the corresponding active -ing trap in flawed_translation."),
 )
 
 _NOT_REPAIRABLE: Tuple[str, ...] = (

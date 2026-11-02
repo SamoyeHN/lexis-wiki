@@ -1749,8 +1749,18 @@ class ExtractionPipelineMixin:
                             # Avoid matching bare 'turn a blind eye to' when 'turn a blind eye' is the core idiom
                             if n_len == 5 and base_toks[-1] == "to" and by_key.get(" ".join(base_toks[:-1])):
                                 continue
+                            # Guard B: 'for a change' is only the discourse idiom when 'change' is NOT followed by a post-nominal PP ('in'/'of'/'to')
+                            if l_key == "for a change" and start_i + n_len < len(w_toks) and w_toks[start_i + n_len].text.lower() in ("in", "of", "to"):
+                                continue
+                            # Guard A: 'be made up' followed by 'of' is the compositional phrasal verb 'be made up of', not '[spoken informal] be made up'
+                            extra_cov_indices = []
+                            if l_key == "be made up" and start_i + n_len < len(w_toks) and w_toks[start_i + n_len].text.lower() == "of":
+                                p_name = "be made up of"
+                                p_formula = "be made up of [sth]"
+                                extra_cov_indices = [start_i + n_len]
                             if p_name in existing_phrases_in_sent:
                                 covered_indices.update(span_indices)
+                                covered_indices.update(extra_cov_indices)
                                 break
                             # Format trailing preposition object slot if the phrase ends with a preposition
                             final_formula = p_formula
@@ -1775,6 +1785,7 @@ class ExtractionPipelineMixin:
                             })
                             existing_phrases_in_sent.add(p_name)
                             covered_indices.update(span_indices)
+                            covered_indices.update(extra_cov_indices)
                             break
 
 
@@ -1792,7 +1803,7 @@ class ExtractionPipelineMixin:
             phrase = item.get("phrase", "").lower().strip()
             item_type = item.get("type")
             words = phrase.split()
-            if not words:
+            if not words or phrase in ("a lot of", "lots of"):
                 continue
 
             # Phrasal verbs and prepositional verbs (e.g. 'rely on', 'long for', 'worry about')
@@ -2627,6 +2638,8 @@ class ExtractionPipelineMixin:
                 surf_low = token.text.lower().strip()
                 lemma = token.lemma_.lower().strip()
                 if (lemma == "accord" and surf_low == "according") or (lemma == "depend" and surf_low == "depending"):
+                    continue
+                if lemma == "prime" and token.i + 1 < len(doc) and doc[token.i + 1].text.lower() in ("minister", "ministers"):
                     continue
                 if token.dep_ == "amod" and surf_low.endswith(("ing", "ed")) and surf_low != lemma:
                     surf_entry = cls.get_ldoce_entry(surf_low)
@@ -5494,6 +5507,220 @@ class ExtractionPipelineMixin:
                 })
 
             return results
+
+    @classmethod
+    def _find_surface_span_in_quote(cls, headword: str, quote: str) -> str:
+        """
+        Deterministically resolves the exact verbatim surface substring inside `quote`
+        corresponding to `headword` (handling inflections, `be` copula forms, and `[sth]`/`[sb]` slots).
+        """
+        if not headword or not quote:
+            return headword or ""
+        # Preserve internal possessive slots ([one's] -> one's) while stripping object placeholders ([sth], [sb])
+        clean_hw = re.sub(r"\[(one's|someone's|somebody's)\]", "one's", headword, flags=re.IGNORECASE)
+        clean_hw = re.sub(r"\[(?:sth|sb|something|somebody|[^\]]+)\]", "", clean_hw).strip()
+        clean_hw = re.sub(r"\s+", " ", clean_hw).strip()
+        if not clean_hw:
+            return headword
+
+        # Direct case-insensitive substring check first (with word boundaries)
+        m_direct = re.search(rf"\b{re.escape(clean_hw)}\b", quote, flags=re.IGNORECASE)
+        if m_direct:
+            return m_direct.group(0)
+
+        nlp = cls.get_spacy()
+        if not nlp:
+            return clean_hw
+
+        hw_toks = [t.lower() for t in re.findall(r"[A-Za-z']+", clean_hw)]
+        if not hw_toks:
+            return clean_hw
+
+        BE_FORMS = {"be", "am", "is", "are", "was", "were", "been", "being", "'m", "'s", "'re"}
+        HAVE_FORMS = {"have", "has", "had", "having", "'ve", "'d"}
+        ONES_FORMS = {"one's", "my", "your", "his", "her", "its", "our", "their"}
+
+        q_doc = nlp(quote)
+        q_words = [t for t in q_doc if not t.is_punct and not t.is_space]
+        if not q_words:
+            return clean_hw
+
+        def _tok_matches(hw_t: str, doc_tok) -> bool:
+            surf = doc_tok.text.lower()
+            lem = doc_tok.lemma_.lower()
+            if hw_t == surf or hw_t == lem:
+                return True
+            if hw_t == "be" and (surf in BE_FORMS or lem == "be"):
+                return True
+            if hw_t == "have" and (surf in HAVE_FORMS or lem == "have"):
+                return True
+            if hw_t in ("one's", "someone's", "somebody's") and surf in ONES_FORMS:
+                return True
+            if len(hw_t) >= 4 and (surf.startswith(hw_t[:4]) or lem.startswith(hw_t[:4])):
+                return True
+            return False
+
+        n_hw = len(hw_toks)
+        # 1. Contiguous token window match
+        if n_hw == 1:
+            for wt in q_words:
+                if _tok_matches(hw_toks[0], wt):
+                    return wt.text
+        else:
+            for i in range(len(q_words) - n_hw + 1):
+                if all(_tok_matches(hw_toks[j], q_words[i + j]) for j in range(n_hw)):
+                    start_char = q_words[i].idx
+                    end_char = q_words[i + n_hw - 1].idx + len(q_words[i + n_hw - 1].text)
+                    # Include contractions attached to the first word (e.g. "She's made up of" -> "'s made up of" or "is made up of")
+                    return quote[start_char:end_char]
+            # Allow 1 intervening modifier/adverb token inside multi-word expressions
+            for i in range(len(q_words)):
+                if not _tok_matches(hw_toks[0], q_words[i]):
+                    continue
+                cur_q = i
+                matched_all = True
+                for j in range(1, n_hw):
+                    found_next = False
+                    for step in (1, 2):
+                        if cur_q + step < len(q_words) and _tok_matches(hw_toks[j], q_words[cur_q + step]):
+                            cur_q = cur_q + step
+                            found_next = True
+                            break
+                    if not found_next:
+                        matched_all = False
+                        break
+                if matched_all:
+                    start_char = q_words[i].idx
+                    end_char = q_words[cur_q].idx + len(q_words[cur_q].text)
+                    return quote[start_char:end_char]
+
+        return clean_hw
+
+    @classmethod
+    def extract_video_vocabulary(
+        cls,
+        transcript_text: str,
+        target_count: int = 12,
+        enable_llm_disambiguation: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Deterministically extracts contextual single-word vocabulary and multi-word expressions
+        from a timestamped video transcript after sentence-level reflow (`VideoService.reflow_transcript_lines`).
+        Returns chronologically sorted items with timestamp, seconds, verbatim surface match,
+        definition, example_usage, pattern, and collocations (strictly without IPA or CEFR).
+        """
+        if not transcript_text or not transcript_text.strip():
+            return []
+
+        try:
+            from ..video import VideoService
+            reflowed = VideoService.reflow_transcript_lines(transcript_text)
+        except Exception:
+            reflowed = transcript_text
+
+        ts_line_re = re.compile(r"^\s*\[(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,3})?)\]\s*(.+)$")
+        ts_sentences: List[Tuple[str, float, str]] = []
+        for raw_line in reflowed.splitlines():
+            m = ts_line_re.match(raw_line)
+            if m:
+                raw_ts = m.group(1).strip()
+                sent_txt = m.group(2).strip()
+                if not sent_txt:
+                    continue
+                # Parse seconds
+                parts = raw_ts.split(":")
+                try:
+                    if len(parts) == 3:
+                        sec = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                    else:
+                        sec = int(parts[0]) * 60 + float(parts[1])
+                except ValueError:
+                    sec = 0.0
+                mm = int(sec // 60)
+                ss = int(sec % 60)
+                display_ts = f"{mm:02d}:{ss:02d}"
+                ts_sentences.append((display_ts, round(sec, 2), sent_txt))
+
+        if not ts_sentences:
+            return []
+
+        clean_passage = "\n".join(s[2] for s in ts_sentences)
+        expr_quota = max(4, target_count // 2)
+        expr_items = cls.extract_deterministic_expressions(
+            clean_passage,
+            target_count=expr_quota,
+            enable_llm_disambiguation=enable_llm_disambiguation,
+        )
+
+        # Exclude content words already covered by extracted expressions
+        covered_lemmas = set()
+        for ex_it in expr_items:
+            w_clean = re.sub(r"\[[^\]]+\]", "", ex_it.get("word", "")).lower()
+            for tok in re.findall(r"[a-z]{4,}", w_clean):
+                covered_lemmas.add(tok)
+
+        vocab_quota = max(4, target_count - len(expr_items))
+        vocab_items = cls.extract_deterministic_vocabulary(
+            clean_passage,
+            target_count=vocab_quota,
+            exclude_words=covered_lemmas,
+            enable_llm_disambiguation=enable_llm_disambiguation,
+        )
+
+        combined = list(expr_items) + list(vocab_items)
+        enriched_list: List[Dict[str, Any]] = []
+
+        for item in combined:
+            word = str(item.get("word") or "").strip()
+            pos = str(item.get("part_of_speech") or "").strip()
+            defn = str(item.get("definition") or "").strip()
+            quote = str(item.get("quoted_sentence") or "").strip()
+            ex_usage = str(item.get("example_usage") or "").strip()
+            if not word or not defn or not quote:
+                continue
+
+            # Match quote back to timestamped sentence
+            matched_ts = "00:00"
+            matched_sec = 0.0
+            norm_q = re.sub(r"\s+", " ", quote).strip().lower()
+            for d_ts, d_sec, s_txt in ts_sentences:
+                norm_s = re.sub(r"\s+", " ", s_txt).strip().lower()
+                if norm_q == norm_s or norm_q in norm_s or norm_s in norm_q:
+                    matched_ts = d_ts
+                    matched_sec = d_sec
+                    break
+
+            surface_match = cls._find_surface_span_in_quote(word, quote)
+            enrichment = {}
+            try:
+                enrichment = cls.get_vocab_card_enrichment(word, pos, defn, quote) or {}
+            except Exception:
+                enrichment = {}
+
+            pattern_str = str(enrichment.get("pattern_note") or "").strip()
+            collocs_raw = enrichment.get("collocations") or []
+            if isinstance(collocs_raw, str):
+                collocs_list = [c.strip() for c in collocs_raw.split(";") if c.strip()][:3]
+            elif isinstance(collocs_raw, list):
+                collocs_list = [str(c).strip() for c in collocs_raw if str(c).strip()][:3]
+            else:
+                collocs_list = []
+
+            enriched_list.append({
+                "word": word,
+                "surface_match": surface_match,
+                "part_of_speech": pos,
+                "timestamp": matched_ts,
+                "seconds": matched_sec,
+                "definition": defn,
+                "quoted_sentence": quote,
+                "example_usage": ex_usage,
+                "pattern": pattern_str,
+                "collocations": collocs_list,
+            })
+
+        enriched_list.sort(key=lambda x: (x["seconds"], x["word"]))
+        return enriched_list
 
     # =========================================================================
     # DECLARATIVE 3-BAND COBUILD GRAMMAR PROFILES & HOT-RELOAD LOADER

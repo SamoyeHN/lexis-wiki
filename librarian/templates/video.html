@@ -38,8 +38,10 @@
             --color-warning-border: #FDE68A;
             --color-warning-text: #B45309;
             --color-warning-icon-bg: #F59E0B;
-            --color-indigo-text: #818CF8;
-            --color-indigo-border: #6366F1;
+            --color-indigo-bg: #EEF2FF;
+            --color-indigo-text: #4F46E5;
+            --color-indigo-border: #C7D2FE;
+            --color-bg-card: #FFFFFF;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -403,9 +405,152 @@
             from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
         }
+
+        /* Vocabulary & Chunks Inline Highlight + Cards (No IPA, No CEFR) */
+        mark.vocab-hl {
+            background: rgba(79, 70, 229, 0.12);
+            color: var(--color-primary);
+            font-weight: 600;
+            padding: 1px 5px;
+            border-radius: 4px;
+            border-bottom: 2px solid rgba(79, 70, 229, 0.45);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        mark.vocab-hl:hover {
+            background: rgba(79, 70, 229, 0.22);
+            border-bottom-color: var(--color-primary);
+        }
+        .vocab-popover {
+            position: fixed;
+            z-index: 9999;
+            width: 340px;
+            max-width: calc(100vw - 24px);
+            background: #FFFFFF;
+            border: 1px solid var(--color-indigo-border);
+            border-radius: 16px;
+            padding: 18px 20px;
+            box-shadow: 0 14px 32px -4px rgba(15, 23, 42, 0.16), 0 8px 14px -6px rgba(15, 23, 42, 0.1);
+            display: none;
+            animation: fadeIn 0.15s ease-out;
+        }
+        .vocab-popover-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .vocab-popover-word {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--color-primary);
+        }
+        .vocab-pos-badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--color-indigo-bg);
+            color: var(--color-indigo-text);
+            border: 1px solid var(--color-indigo-border);
+            white-space: nowrap;
+        }
+        .vocab-card {
+            background: var(--color-bg-gray);
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .vocab-card:hover, .vocab-card.highlight-pulse {
+            border-color: var(--color-indigo-border);
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.1);
+        }
+        .vocab-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        .vocab-card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .vocab-card-word {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--color-text-main);
+        }
+        .vocab-ts-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: monospace;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: var(--color-indigo-bg);
+            color: var(--color-indigo-text);
+            border: 1px solid var(--color-indigo-border);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .vocab-ts-btn:hover {
+            background: var(--color-primary);
+            color: white;
+            border-color: var(--color-primary);
+        }
+        .vocab-def {
+            font-size: 14px;
+            line-height: 1.55;
+            color: var(--color-text-main);
+            margin-bottom: 10px;
+        }
+        .vocab-meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .vocab-meta-pill {
+            font-size: 12px;
+            padding: 3px 9px;
+            border-radius: 6px;
+            background: var(--color-bg-card);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-body-alt);
+        }
+        .vocab-quote-box {
+            font-size: 13px;
+            line-height: 1.5;
+            padding: 8px 12px;
+            border-left: 3px solid var(--color-primary);
+            background: var(--color-bg-card);
+            border-radius: 0 6px 6px 0;
+            color: var(--color-text-body-alt);
+            margin-bottom: 6px;
+        }
+        .vocab-example-box {
+            font-size: 13px;
+            line-height: 1.5;
+            padding: 6px 12px;
+            color: var(--color-text-muted);
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
+
+    <div id="vocab-popover" class="vocab-popover" onmouseenter="cancelHideVocabPopover()" onmouseleave="scheduleHideVocabPopover()" onclick="event.stopPropagation()"></div>
 
     <div class="header">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
@@ -423,21 +568,33 @@
             <div class="video-container" id="player-container">
                 <!-- Injected automatically by JS depending on video type -->
             </div>
-            <div style="font-size: 14px; color: var(--color-text-light);">
-                <strong>Pro-Tip:</strong> Click on any line of the transcript to seek the video player to that sentence.
+            <div style="font-size: 13px; color: var(--color-text-body-alt);">
+                <strong>Tip:</strong> Click any transcript sentence or <code>▶ MM:SS</code> badge to play; click again to pause. Hover or click highlighted words for meanings.
             </div>
         </div>
 
-        <!-- Right Panel: Tabs for Transcript and Quiz -->
+        <!-- Right Panel: Tabs for Transcript, Vocabulary & Chunks, and Quiz -->
         <div class="tab-panel">
             <div class="tab-headers">
                 <button class="tab-btn active" id="tab-transcript-btn" onclick="switchTab('transcript')">Transcript</button>
+                <button class="tab-btn" id="tab-vocab-btn" onclick="switchTab('vocab')">Vocabulary & Chunks</button>
                 <button class="tab-btn" id="tab-quiz-btn" onclick="switchTab('quiz')">Comprehension Quiz</button>
             </div>
 
             <!-- Scrollable Tab Contents -->
             <div class="tab-content" id="tab-transcript">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 14px; margin-bottom: 12px; background: var(--color-bg-gray); border: 1px solid var(--color-border); border-radius: 10px;">
+                    <span style="font-size: 12.5px; color: var(--color-text-body-alt);">Click any sentence below to play or pause from its timestamp.</span>
+                    <label style="display: inline-flex; align-items: center; gap: 7px; background: var(--color-indigo-bg); color: var(--color-indigo-text); border: 1px solid var(--color-indigo-border); padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none;" title="When enabled, clicking a sentence in the transcript plays only that single sentence and automatically pauses at the end.">
+                        <input type="checkbox" id="auto-pause-toggle" onchange="toggleSentenceAutoPause(this.checked)" style="accent-color: var(--color-primary); cursor: pointer;">
+                        <span>Play Single Transcript Sentence (Auto-pause)</span>
+                    </label>
+                </div>
                 <div id="transcript-lines-list"></div>
+            </div>
+
+            <div class="tab-content" id="tab-vocab" style="display: none;">
+                <div id="vocab-cards-list"></div>
             </div>
 
             <div class="tab-content" id="tab-quiz" style="display: none;">
@@ -459,6 +616,46 @@
         // Player seekers and handles
         let localPlayer = null;
         let ytPlayer = null;
+        let parsedTranscriptSegments = [];
+        let activeSeekKey = null;
+        let activeSegmentIdx = -1;
+        let activeSegmentStartSec = null;
+        let activeSegmentEndSec = null;
+        let lockedHighlightUntilMs = 0;
+        let sentenceAutoPause = false;
+        let rafMonitorId = null;
+        let popoverHideTimer = null;
+
+        function toggleSentenceAutoPause(checked) {
+            sentenceAutoPause = Boolean(checked);
+            if (sentenceAutoPause && isVideoPlaying()) {
+                const cur = getCurrentVideoTime();
+                const segIdx = findActiveSegmentIndex(cur);
+                if (segIdx >= 0 && parsedTranscriptSegments[segIdx]) {
+                    activeSegmentIdx = segIdx;
+                    activeSegmentStartSec = parsedTranscriptSegments[segIdx].seconds;
+                    activeSegmentEndSec = parsedTranscriptSegments[segIdx].endSeconds;
+                    startPlaybackMonitor();
+                }
+            } else if (!sentenceAutoPause) {
+                activeSegmentEndSec = null;
+            }
+        }
+
+        function cancelHideVocabPopover() {
+            if (popoverHideTimer) {
+                clearTimeout(popoverHideTimer);
+                popoverHideTimer = null;
+            }
+        }
+
+        function scheduleHideVocabPopover() {
+            cancelHideVocabPopover();
+            popoverHideTimer = setTimeout(() => {
+                const pop = document.getElementById('vocab-popover');
+                if (pop) pop.style.display = 'none';
+            }, 220);
+        }
 
         function renderAuditBadge() {
             const container = document.getElementById('l2-qa-badge-container');
@@ -505,10 +702,28 @@
             `;
         }
 
+        function escapeHtml(str) {
+            return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function escapeRegExp(str) {
+            return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
         function initApp() {
             document.getElementById('main-title').innerText = quizData.title;
-            const meta = `Type: ${quizData.video_type.toUpperCase()} | ${quizData.questions.length} Quiz Questions`;
+            const vocabCount = Array.isArray(quizData.vocabulary) ? quizData.vocabulary.length : 0;
+            const meta = `Type: ${quizData.video_type.toUpperCase()} | ${vocabCount} Key Expressions & Words | ${quizData.questions.length} Quiz Questions`;
             document.getElementById('main-meta').innerText = meta;
+
+            const vocabBtn = document.getElementById('tab-vocab-btn');
+            if (vocabBtn && vocabCount > 0) {
+                vocabBtn.innerText = `Vocabulary & Chunks (${vocabCount})`;
+            }
 
             // Clean markdown formatting artifacts in questions
             if (Array.isArray(quizData.questions)) {
@@ -518,9 +733,15 @@
                 });
             }
 
+            document.addEventListener('click', () => {
+                const pop = document.getElementById('vocab-popover');
+                if (pop) pop.style.display = 'none';
+            });
+
             renderAuditBadge();
             renderVideoPlayer();
             renderTranscript();
+            renderVocabulary();
             renderQuiz();
         }
 
@@ -628,51 +849,409 @@
                     </video>
                 `;
                 localPlayer = document.getElementById('local-player');
+                if (localPlayer) {
+                    localPlayer.addEventListener('play', () => {
+                        updatePlayButtonsUI();
+                        startPlaybackMonitor();
+                    });
+                    localPlayer.addEventListener('pause', () => {
+                        updatePlayButtonsUI();
+                        stopPlaybackMonitor();
+                    });
+                    localPlayer.addEventListener('ended', () => {
+                        activeSegmentEndSec = null;
+                        updatePlayButtonsUI();
+                        stopPlaybackMonitor();
+                    });
+                    localPlayer.addEventListener('timeupdate', handleVideoTimeUpdate);
+                }
             }
         }
 
-        function seekVideo(seconds) {
+        function getCurrentVideoTime() {
             if (localPlayer) {
-                localPlayer.currentTime = seconds;
-                localPlayer.play().catch(() => {});
-            } else if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
-                ytPlayer.seekTo(seconds, true);
-                ytPlayer.playVideo();
-            } else {
-                console.log(`Video player seeking only natively supported for Local and YouTube interfaces. Seeking to ${seconds}s.`);
+                return Number(localPlayer.currentTime || 0);
             }
+            if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+                return Number(ytPlayer.getCurrentTime() || 0);
+            }
+            return 0;
+        }
+
+        function isVideoPlaying() {
+            if (localPlayer) {
+                return !localPlayer.paused && !localPlayer.ended;
+            }
+            if (ytPlayer && typeof ytPlayer.getPlayerState === 'function') {
+                return ytPlayer.getPlayerState() === 1;
+            }
+            return false;
+        }
+
+        function pauseVideo() {
+            if (localPlayer) {
+                localPlayer.pause();
+            } else if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+                ytPlayer.pauseVideo();
+            }
+            stopPlaybackMonitor();
+            updatePlayButtonsUI();
+        }
+
+        function findBestSegmentForStart(startSec) {
+            let bestSeg = null;
+            let bestDiff = Infinity;
+            for (let i = 0; i < parsedTranscriptSegments.length; i++) {
+                const d = Math.abs(parsedTranscriptSegments[i].seconds - startSec);
+                if (d < bestDiff) {
+                    bestDiff = d;
+                    bestSeg = parsedTranscriptSegments[i];
+                }
+            }
+            return (bestSeg && bestDiff < 2.0) ? bestSeg : null;
+        }
+
+        function getEndSecForStart(startSec) {
+            const seg = findBestSegmentForStart(startSec);
+            return seg ? seg.endSeconds : (startSec + 6.0);
+        }
+
+        function findActiveSegmentIndex(cur) {
+            if (!parsedTranscriptSegments.length) return -1;
+            if (performance.now() < lockedHighlightUntilMs && activeSegmentIdx >= 0) {
+                return activeSegmentIdx;
+            }
+            for (let i = parsedTranscriptSegments.length - 1; i >= 0; i--) {
+                const seg = parsedTranscriptSegments[i];
+                if (cur >= seg.seconds - 0.05) {
+                    if (cur <= seg.nextStartSeconds + 0.1) {
+                        return seg.idx;
+                    }
+                    break;
+                }
+            }
+            return -1;
+        }
+
+        function updatePlayButtonsUI() {
+            const playing = isVideoPlaying();
+            document.querySelectorAll('.vocab-ts-btn[data-ts-key]').forEach(btn => {
+                const key = btn.getAttribute('data-ts-key');
+                const label = btn.getAttribute('data-ts-label') || '00:00';
+                if (playing && activeSeekKey === key) {
+                    btn.innerHTML = `⏸ ${escapeHtml(label)}`;
+                    btn.style.background = 'var(--color-primary)';
+                    btn.style.color = 'white';
+                } else {
+                    btn.innerHTML = `▶ ${escapeHtml(label)}`;
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }
+            });
+        }
+
+        function stopPlaybackMonitor() {
+            if (rafMonitorId !== null) {
+                cancelAnimationFrame(rafMonitorId);
+                rafMonitorId = null;
+            }
+        }
+
+        function startPlaybackMonitor() {
+            stopPlaybackMonitor();
+            function tick() {
+                if (!isVideoPlaying()) {
+                    rafMonitorId = null;
+                    return;
+                }
+                const cur = getCurrentVideoTime();
+                if (sentenceAutoPause && activeSegmentEndSec !== null) {
+                    // If user scrubbed manually far outside the active sentence, disarm previous boundary
+                    if (activeSegmentStartSec !== null && (cur < activeSegmentStartSec - 0.6 || cur > activeSegmentEndSec + 1.2)) {
+                        activeSegmentEndSec = null;
+                    } else if (cur >= activeSegmentEndSec) {
+                        activeSegmentEndSec = null;
+                        pauseVideo();
+                        return;
+                    }
+                }
+                rafMonitorId = requestAnimationFrame(tick);
+            }
+            rafMonitorId = requestAnimationFrame(tick);
+        }
+
+        function handleVideoTimeUpdate() {
+            if (!localPlayer) return;
+            const cur = localPlayer.currentTime;
+            if (sentenceAutoPause && activeSegmentEndSec !== null && cur >= activeSegmentEndSec) {
+                activeSegmentEndSec = null;
+                pauseVideo();
+                return;
+            }
+            // Auto-highlight corresponding transcript line while playing
+            if (!localPlayer.paused && parsedTranscriptSegments.length > 0) {
+                const activeIdx = findActiveSegmentIndex(cur);
+                if (activeIdx >= 0) {
+                    document.querySelectorAll('.transcript-line').forEach(el => el.classList.remove('active'));
+                    const currentLine = document.getElementById(`line-${activeIdx}`);
+                    if (currentLine) currentLine.classList.add('active');
+                }
+            }
+        }
+
+        function seekVideo(seconds, seekKey = null, endSeconds = null, segmentIdx = -1) {
+            const matchedSeg = (segmentIdx >= 0 && parsedTranscriptSegments[segmentIdx])
+                ? parsedTranscriptSegments[segmentIdx]
+                : findBestSegmentForStart(seconds);
+            const targetStart = matchedSeg ? matchedSeg.seconds : Number(seconds);
+            const resolvedEnd = endSeconds !== null
+                ? endSeconds
+                : (matchedSeg ? matchedSeg.endSeconds : (targetStart + 6.0));
+            const targetKey = seekKey || `sec-${targetStart.toFixed(2)}`;
+
+            // If user clicks the exact same line or button while video is playing, toggle pause!
+            if (activeSeekKey === targetKey && isVideoPlaying()) {
+                pauseVideo();
+                return;
+            }
+
+            // If user clicks the same line/button while paused inside the middle of that sentence, resume!
+            if (activeSeekKey === targetKey && localPlayer && localPlayer.paused) {
+                const cur = localPlayer.currentTime;
+                if (cur > targetStart + 0.25 && cur < resolvedEnd - 0.35) {
+                    activeSegmentStartSec = targetStart;
+                    activeSegmentEndSec = sentenceAutoPause ? resolvedEnd : null;
+                    localPlayer.play().catch(() => {});
+                    startPlaybackMonitor();
+                    updatePlayButtonsUI();
+                    return;
+                }
+            }
+
+            activeSeekKey = targetKey;
+            activeSegmentIdx = matchedSeg ? matchedSeg.idx : segmentIdx;
+            activeSegmentStartSec = targetStart;
+            activeSegmentEndSec = sentenceAutoPause ? resolvedEnd : null;
+            lockedHighlightUntilMs = performance.now() + 380;
+
+            if (activeSegmentIdx >= 0) {
+                highlightLine(activeSegmentIdx);
+            }
+
+            if (localPlayer) {
+                localPlayer.currentTime = targetStart;
+                localPlayer.play().catch(() => {});
+                startPlaybackMonitor();
+            } else if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
+                ytPlayer.seekTo(targetStart, true);
+                ytPlayer.playVideo();
+                startPlaybackMonitor();
+            } else {
+                console.log(`Seeking to ${targetStart}s.`);
+            }
+            updatePlayButtonsUI();
+        }
+
+        function highlightVocabInLine(lineText) {
+            let safeHtml = escapeHtml(lineText);
+            const vocabList = Array.isArray(quizData.vocabulary) ? quizData.vocabulary : [];
+            if (!vocabList.length) return safeHtml;
+
+            const normLine = lineText.replace(/\s+/g, ' ').trim().toLowerCase();
+            // Gather items whose quoted_sentence matches this transcript sentence (or whose surface_match appears in it)
+            const candidates = [];
+            vocabList.forEach((v, vIdx) => {
+                const surf = String(v.surface_match || v.word || '').replace(/\[[^\]]+\]/g, '').trim();
+                if (!surf) return;
+                const normQuote = String(v.quoted_sentence || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                if (normQuote && (normLine.includes(normQuote) || normQuote.includes(normLine))) {
+                    candidates.push({ vIdx, surf });
+                }
+            });
+            // Sort longer phrases first so multi-word chunks wrap before single words
+            candidates.sort((a, b) => b.surf.length - a.surf.length);
+
+            candidates.forEach(({ vIdx, surf }) => {
+                const escapedSurf = escapeHtml(surf);
+                const pattern = new RegExp(`(^|[^A-Za-z0-9_>])(${escapeRegExp(escapedSurf)})(?=$|[^A-Za-z0-9_<])`, 'i');
+                safeHtml = safeHtml.replace(pattern, (m, prefix, matchedWord) => {
+                    return `${prefix}<mark class="vocab-hl" data-vocab-idx="${vIdx}" onmouseenter="showVocabPopover(event, ${vIdx})" onmouseleave="scheduleHideVocabPopover()" onclick="event.stopPropagation(); showVocabPopover(event, ${vIdx})">${matchedWord}</mark>`;
+                });
+            });
+            return safeHtml;
+        }
+
+        function showVocabPopover(event, vIdx) {
+            cancelHideVocabPopover();
+            const vocabList = Array.isArray(quizData.vocabulary) ? quizData.vocabulary : [];
+            const v = vocabList[vIdx];
+            const pop = document.getElementById('vocab-popover');
+            if (!v || !pop) return;
+
+            const secVal = Number(v.seconds || 0);
+            const tsKey = `vocab-${vIdx}`;
+            const tsLabel = v.timestamp || '00:00';
+            const isPlayingThis = isVideoPlaying() && activeSeekKey === tsKey;
+
+            const patternHtml = v.pattern
+                ? `<div style="font-size: 12px; color: var(--color-text-body-alt); background: var(--color-bg-gray); padding: 5px 9px; border-radius: 6px; margin-bottom: 10px; border: 1px solid var(--color-border);"><strong>Pattern:</strong> <code>${escapeHtml(v.pattern)}</code></div>`
+                : '';
+
+            pop.innerHTML = `
+                <div class="vocab-popover-header">
+                    <span class="vocab-popover-word">${escapeHtml(v.word)}</span>
+                    <span class="vocab-pos-badge">${escapeHtml(v.part_of_speech)}</span>
+                </div>
+                <div style="font-size: 13.5px; line-height: 1.55; color: var(--color-text-main); margin-bottom: 10px;">
+                    ${escapeHtml(v.definition)}
+                </div>
+                ${patternHtml}
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--color-border);">
+                    <button class="vocab-ts-btn" data-ts-key="${tsKey}" data-ts-label="${escapeHtml(tsLabel)}" onclick="seekVideo(${secVal}, '${tsKey}')">
+                        ${isPlayingThis ? '⏸' : '▶'} ${escapeHtml(tsLabel)}
+                    </button>
+                    <button class="vocab-ts-btn" style="font-family: inherit;" onclick="jumpToVocabCard(${vIdx})">
+                        Full Card →
+                    </button>
+                </div>
+            `;
+
+            pop.style.display = 'block';
+            const rect = event.currentTarget.getBoundingClientRect();
+            const popWidth = 340;
+            let left = rect.left;
+            if (left + popWidth > window.innerWidth - 16) {
+                left = Math.max(12, window.innerWidth - popWidth - 16);
+            }
+            let top = rect.bottom + 8;
+            if (top + 200 > window.innerHeight - 16) {
+                top = Math.max(12, rect.top - 190);
+            }
+            pop.style.left = `${left}px`;
+            pop.style.top = `${top}px`;
+        }
+
+        function jumpToVocabCard(vIdx) {
+            const pop = document.getElementById('vocab-popover');
+            if (pop) pop.style.display = 'none';
+            switchTab('vocab');
+            const card = document.getElementById(`vocab-card-${vIdx}`);
+            if (card) {
+                document.querySelectorAll('.vocab-card').forEach(el => el.classList.remove('highlight-pulse'));
+                card.classList.add('highlight-pulse');
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function renderVocabulary() {
+            const container = document.getElementById('vocab-cards-list');
+            if (!container) return;
+            const vocabList = Array.isArray(quizData.vocabulary) ? quizData.vocabulary : [];
+            if (!vocabList.length) {
+                container.innerHTML = `
+                    <div class="quiz-intro">
+                        <h2>No Vocabulary Extracted</h2>
+                        <p>Re-compile this video handout to extract contextual vocabulary and expressions.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = vocabList.map((v, i) => {
+                const pills = [];
+                if (v.pattern) {
+                    pills.push(`<span class="vocab-meta-pill"><strong>Pattern:</strong> <code>${escapeHtml(v.pattern)}</code></span>`);
+                }
+                if (Array.isArray(v.collocations) && v.collocations.length > 0) {
+                    pills.push(`<span class="vocab-meta-pill"><strong>Collocations:</strong> ${escapeHtml(v.collocations.join(' · '))}</span>`);
+                }
+                const metaRow = pills.length ? `<div class="vocab-meta-row">${pills.join('')}</div>` : '';
+
+                // Bold the matched surface span inside the video quote
+                let quoteHtml = escapeHtml(v.quoted_sentence || '');
+                const surf = String(v.surface_match || '').trim();
+                if (surf) {
+                    const qPat = new RegExp(`(${escapeRegExp(escapeHtml(surf))})`, 'i');
+                    quoteHtml = quoteHtml.replace(qPat, '<strong style="color: var(--color-primary);">$1</strong>');
+                }
+
+                const exampleHtml = v.example_usage
+                    ? `<div class="vocab-example-box">📖 Dictionary example: "${escapeHtml(v.example_usage)}"</div>`
+                    : '';
+
+                const tsKey = `vocab-${i}`;
+                const tsLabel = v.timestamp || '00:00';
+                return `
+                    <div class="vocab-card" id="vocab-card-${i}">
+                        <div class="vocab-card-header">
+                            <div class="vocab-card-title-group">
+                                <span class="vocab-card-word">${escapeHtml(v.word)}</span>
+                                <span class="vocab-pos-badge">${escapeHtml(v.part_of_speech)}</span>
+                            </div>
+                            <button class="vocab-ts-btn" data-ts-key="${tsKey}" data-ts-label="${escapeHtml(tsLabel)}" onclick="seekVideo(${Number(v.seconds || 0)}, '${tsKey}')" title="Click to play sentence; click again to pause">
+                                ▶ ${escapeHtml(tsLabel)}
+                            </button>
+                        </div>
+                        <div class="vocab-def">${escapeHtml(v.definition)}</div>
+                        ${metaRow}
+                        <div class="vocab-quote-box">🎬 ${quoteHtml}</div>
+                        ${exampleHtml}
+                    </div>
+                `;
+            }).join('');
         }
 
         function renderTranscript() {
             const container = document.getElementById('transcript-lines-list');
-            const rawText = quizData.transcript;
+            const rawText = quizData.transcript || "";
             
             // Extract individual dialogue lines: e.g. [00:15.20] Hello World
             const lineRegex = /(\[[0-9:.]+\])\s*(.+)/g;
             let match;
-            let linesHtml = "";
+            const rawSegments = [];
             let idx = 0;
 
             while ((match = lineRegex.exec(rawText)) !== null) {
                 const timestamp = match[1];
                 const text = match[2];
                 const seconds = parseTimeToSeconds(timestamp);
-
-                linesHtml += `
-                    <div class="transcript-line" id="line-${idx}" onclick="seekVideo(${seconds}); highlightLine(${idx})">
-                        <span class="timestamp-badge">${timestamp.replace(/[\[\]]/g, '')}</span>
-                        <div class="line-text">${text}</div>
-                    </div>
-                `;
+                const formattedTs = timestamp.replace(/[\[\]]/g, '').replace(/\.\d+$/, '');
+                rawSegments.push({ idx, timestamp, formattedTs, text, seconds });
                 idx++;
             }
+
+            parsedTranscriptSegments = rawSegments.map((seg, i) => {
+                const nextStart = i + 1 < rawSegments.length ? rawSegments[i + 1].seconds : seg.seconds + 8.0;
+                const wordCount = Math.max(1, seg.text.trim().split(/\s+/).length);
+                const maxSpeechSpan = Math.max(3.5, wordCount * 0.52 + 1.8);
+                const rawSpan = Math.max(0.8, nextStart - seg.seconds);
+                const effectiveEnd = rawSpan > maxSpeechSpan
+                    ? seg.seconds + Math.max(2.8, wordCount * 0.45 + 1.1)
+                    : Math.max(seg.seconds + 0.6, nextStart - 0.06);
+                return {
+                    ...seg,
+                    nextStartSeconds: nextStart,
+                    endSeconds: effectiveEnd
+                };
+            });
+
+            let linesHtml = parsedTranscriptSegments.map(seg => {
+                const highlightedText = highlightVocabInLine(seg.text);
+                const lineKey = `line-${seg.idx}`;
+                return `
+                    <div class="transcript-line" id="line-${seg.idx}" onclick="seekVideo(${seg.seconds}, '${lineKey}', ${seg.endSeconds}, ${seg.idx})">
+                        <span class="timestamp-badge">${seg.formattedTs}</span>
+                        <div class="line-text">${highlightedText}</div>
+                    </div>
+                `;
+            }).join('');
 
             if (!linesHtml) {
                 // Fallback for simple line-by-line paragraph parsing
                 const simpleLines = rawText.split('\n').filter(l => l.trim().length > 0);
                 linesHtml = simpleLines.map((line, i) => `
                     <div class="transcript-line" id="line-${i}">
-                        <div class="line-text">${line}</div>
+                        <div class="line-text">${highlightVocabInLine(line)}</div>
                     </div>
                 `).join('');
             }
@@ -860,9 +1439,15 @@
 
         function switchTab(tab) {
             currentTab = tab;
+            const pop = document.getElementById('vocab-popover');
+            if (pop) pop.style.display = 'none';
             document.getElementById('tab-transcript-btn').classList.toggle('active', tab === 'transcript');
+            const vocabBtn = document.getElementById('tab-vocab-btn');
+            if (vocabBtn) vocabBtn.classList.toggle('active', tab === 'vocab');
             document.getElementById('tab-quiz-btn').classList.toggle('active', tab === 'quiz');
             document.getElementById('tab-transcript').style.display = tab === 'transcript' ? 'block' : 'none';
+            const vocabTab = document.getElementById('tab-vocab');
+            if (vocabTab) vocabTab.style.display = tab === 'vocab' ? 'block' : 'none';
             document.getElementById('tab-quiz').style.display = tab === 'quiz' ? 'block' : 'none';
         }
 

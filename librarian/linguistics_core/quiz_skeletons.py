@@ -4657,11 +4657,11 @@ class QuizSkeletonsMixin:
         bundle_pat = str((atomic_bundle.get("pattern") if isinstance(atomic_bundle, dict) else "") or "").strip()
         bundle_ex = str((atomic_bundle.get("example") if isinstance(atomic_bundle, dict) else "") or "").strip()
         if bundle_pat:
-            bundle_pat = re.sub(r"\s+\betc\.?\b", "", bundle_pat).strip()
+            bundle_pat = re.sub(r"\s+\betc\.?(?:\s+.*)?$", "", bundle_pat).strip()
 
         if not bundle_pat and isinstance(locked_sense, dict):
             sense_pats = [
-                re.sub(r"\s+\betc\.?\b", "", str(p)).strip()
+                re.sub(r"\s+\betc\.?(?:\s+.*)?$", "", str(p)).strip()
                 for p in (locked_sense.get("patterns") or [])
                 if str(p).strip()
             ]
@@ -4758,6 +4758,8 @@ class QuizSkeletonsMixin:
                 cf_low = cf.lower()
                 wf_low = str(t_obj.get("wrong_frame") or "").strip().lower()
                 if _dialogic_deictic_re.search(cf):
+                    return True
+                if "wrong preposition/complement" in wf_low or len(cf.split()) > 6:
                     return True
                 if t_type != "PREP_COLLOC_TRAP":
                     return False
@@ -4997,6 +4999,22 @@ class QuizSkeletonsMixin:
                 "constraint_note": "place parallel grammatical constituents immediately after `not only` and `but also`",
                 "zh_cue": "不仅……，而且……",
             }
+        if (
+            "past particip" in name_form_low
+            or bool(re.search(r"\[v(?:-ed|3)\s+phrase\]", form_low))
+        ):
+            return {
+                "flaw_label": "Participle Voice Trap in Post-Positioned Adjunct (using active `*, [V-ing]*` instead of passive `, [V-ed]`)",
+                "corruption_step": (
+                    "replacing the past participle `, [V-ed]` in the post-positioned adjunct with an ungrammatical active present participle "
+                    "`*, [V-ing]*` (e.g., `*following by*` instead of `followed by`, or `*organizing by*` instead of `organized by`)"
+                ),
+                "constraint_note": (
+                    "attach a passive past participial phrase `, [V-ed Phrase]` directly after a comma (e.g., `, followed by ...`, `, organized by ...`, `, held at ...`) "
+                    "— NEVER an active `-ing` phrase or nominative absolute (`*each person bringing*`)"
+                ),
+                "zh_cue": "……，由……组织 / 随后是……",
+            }
         if any(k in header_low for k in ("particip", "v-ing", "v-ed", "adjunct", "having +")):
             return {
                 "flaw_label": "Dangling Participle / Participle Voice Confusion",
@@ -5125,16 +5143,112 @@ class QuizSkeletonsMixin:
 
         c1, c2 = Counter(t1), Counter(t2)
         shared = sum((c1 & c2).values())
-        denom = max(min(len(t1), len(t2)), 1)
+        max_len = max(len(t1), len(t2))
+        min_len = min(len(t1), len(t2))
+        # If one sentence is a pure prefix/suffix extension of the other by >= 2 tokens
+        # (e.g. tacking 'at the church' onto the end of an untouched sentence), normalize by max_len
+        if min_len >= 4 and (max_len - min_len) >= 2 and (t2[:min_len] == t1[:min_len] or t2[-min_len:] == t1[-min_len:]):
+            denom = max(max_len, 1)
+        else:
+            denom = max(min_len, 1)
         multiset_overlap = shared / denom
         seq_ratio = difflib.SequenceMatcher(None, t1, t2).ratio()
         raw_sim = round(min(1.0, max(multiset_overlap, seq_ratio)), 4)
-        # In short A1/A2 sentences (4-6 words), a strict single-word minimal-pair edit
-        # (e.g. 5/6 shared = 0.8333) has only 1 unshared token and is a valid Minimal Pair.
-        max_len = max(len(t1), len(t2))
-        if min(len(t1), len(t2)) >= 4 and (max_len - shared) <= 1 and abs(len(t1) - len(t2)) <= 1:
-            return max(0.86, raw_sim)
+        # In short A1/A2 sentences (4-7 words), a strict single-locus minimal-pair edit
+        # (e.g. 5/6 shared = 0.8333, or passive 'be found' -> active '*find*') is a valid Minimal Pair.
+        if min_len >= 4 and abs(len(t1) - len(t2)) <= 1:
+            if (max_len - shared) <= 1:
+                return max(0.86, raw_sim)
+            if min_len <= 7 and (max_len - shared) <= 2:
+                return max(0.86, raw_sim)
         return raw_sim
+
+    @classmethod
+    def detect_comparative_translation_defect(
+        cls,
+        idiomatic: str,
+        flawed: str,
+        target_grammar: str = "",
+    ) -> Optional[str]:
+        """
+        Deterministically detects structural / syntactic minimal-pair defects in
+        Comparative Translation Appraisal (`idiomatic_translation` vs `flawed_translation`):
+        1. Pure Tail / Prefix Phrase Padding (`t2` leaves `t1` 100% intact and merely appends/drops
+           a >=2-word prepositional/adverbial tail like 'at the church').
+        2. Stacked Preposition + To-Infinitive Collision (e.g. '*volunteered with to help*' where a
+           preposition is stacked directly in front of 'to + verb').
+        3. Post-Positioned Past Participial Adjunct Mismatch (`[V-ed Phrase]` required by `target_grammar`,
+           yet the post-comma adjunct in `idiomatic_translation` uses an active `-ing` clause like
+           'each person bringing a dish' with no past participle).
+        """
+        id_str = str(idiomatic or "").strip()
+        fl_str = str(flawed or "").strip()
+        if not id_str or not fl_str:
+            return None
+
+        t1 = re.findall(r"[a-z0-9']+", id_str.lower())
+        t2 = re.findall(r"[a-z0-9']+", fl_str.lower())
+        if not t1 or not t2:
+            return None
+
+        # 1. Pure Tail Padding: flawed_translation starts with the exact tokens of idiomatic_translation
+        #    and merely appends >= 2 trailing tokens (e.g. 'at the church'), or vice versa.
+        min_l = min(len(t1), len(t2))
+        max_l = max(len(t1), len(t2))
+        if min_l >= 4 and (max_l - min_l) >= 2:
+            if t2[:min_l] == t1[:min_l]:
+                extra_tail = " ".join(t2[min_l:] if len(t2) > len(t1) else t1[min_l:])
+                return (
+                    f"pure tail/head padding in flawed_translation ('{extra_tail}' appended/dropped at end of sentence "
+                    f"without introducing a minimal-pair grammatical error inside the sentence)"
+                )
+
+        # 2. Stacked Preposition + To-Infinitive Collision (e.g. '*volunteered with to help*')
+        _prep_to_verb_re = re.compile(
+            r"\b(with|for|in|on|at|of|from|by|into|over)\s+to\s+([a-z]{2,})\b",
+            re.IGNORECASE,
+        )
+        m_stack = _prep_to_verb_re.search(fl_str)
+        if m_stack and not _prep_to_verb_re.search(id_str):
+            return (
+                f"stacked preposition + to-infinitive collision '*{m_stack.group(0)}*' in flawed_translation "
+                f"(replace 'to {m_stack.group(2)}' with an '-ing' gerund or a single wrong preposition instead of stacking both)"
+            )
+
+        # 3. Post-Positioned Past Participial Adjunct (`[V-ed Phrase]`) Voice Verification
+        g_low = str(target_grammar or "").lower()
+        if "past particip" in g_low or bool(re.search(r"\bv(?:-ed|3)\s+phrase\b", g_low)):
+            post_seg = id_str.rsplit(",", 1)[1].strip() if "," in id_str else id_str
+            post_low = post_seg.lower()
+            _irreg_vbn = {
+                "been", "born", "borne", "beaten", "become", "begun", "bent", "bitten", "blown",
+                "broken", "brought", "built", "burnt", "bought", "caught", "chosen", "come", "cost",
+                "cut", "dealt", "done", "drawn", "drunk", "driven", "eaten", "fallen", "fed", "felt",
+                "fought", "found", "flown", "forgotten", "forgiven", "frozen", "given", "gone", "grown",
+                "hung", "had", "heard", "hidden", "hit", "held", "hurt", "kept", "known", "laid",
+                "led", "left", "lent", "let", "lain", "lit", "lost", "made", "meant", "met", "paid",
+                "put", "read", "ridden", "rung", "risen", "run", "said", "seen", "sought", "sold",
+                "sent", "set", "shaken", "shone", "shot", "shown", "shut", "sung", "sunk", "sat",
+                "slept", "slid", "spoken", "spent", "spilt", "split", "spread", "stood", "stolen",
+                "stuck", "stung", "struck", "sworn", "swept", "swum", "taken", "taught", "torn",
+                "told", "thought", "thrown", "understood", "woken", "worn", "won", "written",
+            }
+            post_toks = re.findall(r"[a-z]+", post_low)
+            has_past_part = any(
+                (w.endswith("ed") and len(w) >= 4) or w in _irreg_vbn
+                for w in post_toks
+            )
+            has_ing_part = any(
+                w.endswith("ing") and len(w) >= 5 and w not in ("during", "nothing", "something", "anything", "everything", "morning", "evening", "building", "painting", "meeting")
+                for w in post_toks
+            )
+            if not has_past_part and has_ing_part:
+                return (
+                    f"post-comma adjunct must use a passive past participle '[V-ed Phrase]' (e.g. ', followed by...', ', organized by...'), "
+                    f"not an active '-ing' phrase ('{post_seg}')"
+                )
+
+        return None
 
     @classmethod
     def build_translation_micro_task_blueprints(
@@ -5331,7 +5445,6 @@ class QuizSkeletonsMixin:
                 prescribed_flaw_type = lex_info["flaw_label"]
                 flaw_category = "lexical"
                 primary_corruption = lex_info["corruption_step"]
-                secondary_alt = f", or {syn_info['corruption_step']}" if syn_info.get("corruption_step") else ""
                 critique_focus = (
                     f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation and `{g_name}` structure"
                 )
@@ -5339,11 +5452,6 @@ class QuizSkeletonsMixin:
                 prescribed_flaw_type = syn_info["flaw_label"]
                 flaw_category = "syntactic"
                 primary_corruption = syn_info["corruption_step"]
-                secondary_alt = (
-                    f", or misusing `{word}` ({lex_info['corruption_step']})"
-                    if lex_info.get("corruption_step")
-                    else ""
-                )
                 critique_focus = (
                     f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation"
                 )
@@ -5360,7 +5468,7 @@ class QuizSkeletonsMixin:
                 f"- 🎯 Micro-Task for LLM:",
                 f"  1. `translated_sentence`: Write a natural {target_language} sentence{zh_cue_str}.",
                 f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English integrating BOTH `{req_frame}` and `{g_formula}`{gram_constraint}.",
-                f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed flaw ({primary_corruption}{secondary_alt}).",
+                f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed flaw ({primary_corruption}).",
                 f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
             ]
             micro_task_block = "\n".join(micro_task_lines)

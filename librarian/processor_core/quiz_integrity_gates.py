@@ -1018,7 +1018,7 @@ class QuizIntegrityGatesMixin:
                         )
                         break
 
-                # 2.4b Single-Point Minimal-Pair Contract Gate (Comparative Appraisal)
+                # 2.4b Single-Point Minimal-Pair Contract & Syntactic Defect Gate (Comparative Appraisal)
                 if is_comparative:
                     mp_sim = LinguisticEngine.calculate_minimal_pair_similarity(idiomatic_trans, flawed_trans)
                     min_sim_threshold = 0.85 if enforce_minimal_pair else 0.50
@@ -1027,6 +1027,17 @@ class QuizIntegrityGatesMixin:
                         defect_messages.append(
                             f"Translation Item #{idx + 1}: Minimal-Pair contract violation — idiomatic_translation and "
                             f"flawed_translation share only {mp_sim:.0%} wording (< {min_sim_threshold:.0%} required)."
+                        )
+                    comp_defect = LinguisticEngine.detect_comparative_translation_defect(
+                        idiomatic_trans,
+                        flawed_trans,
+                        target_grammar=str(q_dict.get("target_grammar") or audit_str or ""),
+                    )
+                    if comp_defect:
+                        kw_label = str(q_dict.get("target_keyword") or (idx + 1)).strip()
+                        flagged_indices.add(idx)
+                        defect_messages.append(
+                            f"Translation Item #{idx + 1} ('{kw_label}'): Comparative translation defect — {comp_defect}"
                         )
 
             # 2.5 Answer index range

@@ -262,6 +262,13 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # Silence standard HTTP logger to keep terminal clean
         pass
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Normal when browser cancels in-flight media Range requests during seeking/single-sentence playback
+            self.close_connection = True
+
     def do_GET(self):
         # Keep the server alive only while the browser client is active
         DashboardState.touch()
@@ -359,20 +366,24 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 mime_type = "text/html; charset=utf-8"
 
             # Handle HTTP Range requests for video/audio seeking/scrubbing
+            size = resolved_file.stat().st_size
             range_header = self.headers.get("Range")
             if range_header and range_header.startswith("bytes="):
                 try:
-                    size = resolved_file.stat().st_size
-                    ranges = range_header.replace("bytes=", "").split("-")
+                    ranges = range_header.replace("bytes=", "").split(",")[0].split("-")
                     start = int(ranges[0]) if ranges[0] else 0
-                    end = int(ranges[1]) if ranges[1] else size - 1
-                    if start >= size:
+                    end = int(ranges[1]) if (len(ranges) > 1 and ranges[1]) else size - 1
+                    if start >= size or start < 0:
                         self.send_error(416, "Requested range not satisfiable")
                         return
                     if end >= size:
                         end = size - 1
                     length = end - start + 1
+                except ValueError:
+                    self.send_error(400, "Invalid Range header")
+                    return
 
+                try:
                     self.send_response(206)
                     self.send_header("Content-Type", mime_type)
                     self.send_header("Accept-Ranges", "bytes")
@@ -392,17 +403,27 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 break
                             self.wfile.write(data)
                             remaining -= len(data)
-                    return
-                except Exception as range_err:
-                    pass
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    self.close_connection = True
+                return
 
-            self.send_response(200)
-            self.send_header("Content-Type", mime_type)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", mime_type)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
 
-            with open(resolved_file, "rb") as f:
-                self.wfile.write(f.read())
+                with open(resolved_file, "rb") as f:
+                    buffer_size = 64 * 1024
+                    while True:
+                        data = f.read(buffer_size)
+                        if not data:
+                            break
+                        self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
         else:
             self.send_error(404, "File Not Found")
 
@@ -982,8 +1003,8 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     response_data = {"success": False, "error": "HTML handout path is required"}
                 else:
                     try:
-                        from .exporter import export_standalone_exe
-                        result_path = export_standalone_exe(html_path)
+                        from .exporter import export_portable_bundle
+                        result_path = export_portable_bundle(html_path)
                         if result_path:
                             try:
                                 rel_url = Path(result_path).relative_to(config.project_root).as_posix()
@@ -993,10 +1014,10 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             response_data = {
                                 "success": True,
                                 "download_url": download_url,
-                                "message": "Successfully bundled standalone EXE!"
+                                "message": "Successfully bundled portable ZIP (HTML + Video)!"
                             }
                         else:
-                            response_data = {"success": False, "error": "Standalone EXE packaging failed. Check PyInstaller installation."}
+                            response_data = {"success": False, "error": "Portable ZIP packaging failed."}
                     except Exception as e:
                         response_data = {"success": False, "error": str(e)}
 

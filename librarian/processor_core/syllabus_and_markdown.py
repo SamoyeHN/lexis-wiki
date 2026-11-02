@@ -1487,6 +1487,11 @@ class SyllabusAndMarkdownMixin:
 
             if not source_path or not source_path.exists(): return None
             with open(source_path, "r", encoding="utf-8") as f: transcript = f.read()
+            try:
+                from ..video import VideoService
+                transcript = VideoService.reflow_transcript_lines(transcript)
+            except Exception:
+                pass
             # Try multiple common keys for video URL (quoted or unquoted)
             for key in ["source_url", "video_url", "url", "source"]:
                 m_url = re.search(fr'{key}:\s*["\']?([^\n"\']+)["\']?', transcript)

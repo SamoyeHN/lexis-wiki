@@ -1,335 +1,139 @@
 import os
-import sys
 import re
 import shutil
-import tempfile
-import subprocess
+import urllib.parse
+import zipfile
 from pathlib import Path
 from .config import config
 
-LAUNCHER_TEMPLATE = """# -*- coding: utf-8 -*-
-import os
-import sys
-import threading
-import http.server
-import socketserver
-import webbrowser
-import socket
-import mimetypes
 
-def find_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-class RangeHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args, **kwargs):
-        pass # Silence verbose terminal logging
-
-    def translate_path(self, path):
-        if path.startswith('/api/media/'):
-            filename = path.split('/api/media/', 1)[1].split('?')[0].split('#')[0]
-            filename = os.path.basename(filename)
-            path = f'/raw/media/{filename}'
-        return super().translate_path(path)
-
-    def send_head(self):
-        path = self.translate_path(self.path)
-        if os.path.isdir(path):
-            return super().send_head()
-            
-        ctype = self.guess_type(path)
-        try:
-            f = open(path, 'rb')
-        except OSError:
-            self.send_error(404, "File not found")
-            return None
-            
-        range_header = self.headers.get('Range')
-        if range_header and range_header.startswith('bytes='):
-            try:
-                size = os.path.getsize(path)
-                ranges = range_header.replace('bytes=', '').split('-')
-                start = int(ranges[0]) if ranges[0] else 0
-                end = int(ranges[1]) if ranges[1] else size - 1
-                if start >= size:
-                    self.send_error(416, "Requested range not satisfiable")
-                    f.close()
-                    return None
-                if end >= size:
-                    end = size - 1
-                length = end - start + 1
-                
-                self.send_response(206)
-                self.send_header('Content-type', ctype)
-                self.send_header('Accept-Ranges', 'bytes')
-                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
-                self.send_header('Content-Length', str(length))
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                
-                self._range_start = start
-                self._range_end = end
-                return f
-            except Exception:
-                f.seek(0)
-                if hasattr(self, '_range_start'):
-                    del self._range_start
-                if hasattr(self, '_range_end'):
-                    del self._range_end
-                
-        return super().send_head()
-
-    def copyfile(self, source, outputfile):
-        if hasattr(self, '_range_start') and hasattr(self, '_range_end'):
-            source.seek(self._range_start)
-            remaining = self._range_end - self._range_start + 1
-            buffer_size = 64 * 1024
-            while remaining > 0:
-                chunk_size = min(buffer_size, remaining)
-                data = source.read(chunk_size)
-                if not data:
-                    break
-                outputfile.write(data)
-                remaining -= len(data)
-        else:
-            super().copyfile(source, outputfile)
-
-def main():
-    # Get the directory where PyInstaller unpacked the files
-    base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    
-    port = find_free_port()
-    os.chdir(base_dir)
-    
-    class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-        allow_reuse_address = True
-        
-    handler = RangeHTTPRequestHandler
-    
-    httpd = ThreadingHTTPServer(("", port), handler)
-    url = f"http://localhost:{port}/index.html"
-    
-    print("=" * 60)
-    print("               LEXIS STANDALONE HANDOUT VIEWER")
-    print("=" * 60)
-    print(f" * Serving Interactive Quiz on port {port}...")
-    print(f" * Opening default browser: {url}")
-    print(" * To close, simply close this console window.")
-    print("=" * 60)
-    
-    def open_browser():
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
-            
-    threading.Thread(target=open_browser, daemon=True).start()
-    
-    try:
-        httpd.serve_forever()
-    except (KeyboardInterrupt, SystemExit):
-        print("\\nServer shutting down.")
-
-if __name__ == '__main__':
-    main()
-"""
-
-def detect_video_path_from_html(html_content, html_path):
+def detect_video_path_from_html(html_content: str, html_path: Path):
     """
-    Scans the HTML file content or scans unit-specific sources/media to find referenced media files.
+    Accurately locates the local media file referenced by a video quiz HTML handout.
+    Prioritizes:
+      1. Exact `video_url` inside `const quizData = {...}`
+      2. Stem match inside `<unit_dir>/sources/media/`
+      3. Any media file inside `<unit_dir>/sources/media/`
     """
     html_path = Path(html_path)
-    # Check unit-specific media folder first!
     unit_dir = html_path.parent.parent
     media_dir = unit_dir / "sources" / "media"
+    media_exts = (".mp4", ".webm", ".ogg", ".mp3", ".wav", ".mkv", ".mov", ".avi")
+
+    # 1. Check explicit video_url in quizData JSON
+    m_vurl = re.search(r'"video_url"\s*:\s*"([^"]+)"', html_content)
+    if m_vurl:
+        raw_url = urllib.parse.unquote(m_vurl.group(1).strip())
+        if raw_url and not raw_url.startswith(("http://", "https://")):
+            rel_candidate = Path(config.project_root) / raw_url.lstrip("/")
+            if rel_candidate.exists() and rel_candidate.is_file():
+                return rel_candidate
+            base_name = os.path.basename(raw_url)
+            if media_dir.exists():
+                cand = media_dir / base_name
+                if cand.exists() and cand.is_file():
+                    return cand
+
+    # 2. Match by handout filename stem (e.g. <VideoStem>_video_quiz.html -> <VideoStem>.mp4)
+    clean_stem = re.sub(r"_(?:video_quiz|quiz|handout)$", "", html_path.stem, flags=re.IGNORECASE)
     if media_dir.exists() and media_dir.is_dir():
-        for f in media_dir.iterdir():
-            if f.is_file() and f.suffix in [".mp4", ".mp3", ".mkv", ".avi", ".mov"]:
+        for ext in media_exts:
+            cand = media_dir / f"{clean_stem}{ext}"
+            if cand.exists() and cand.is_file():
+                return cand
+        for f in sorted(media_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in media_exts:
+                if clean_stem.lower() in f.stem.lower() or f.stem.lower() in clean_stem.lower():
+                    return f
+        # 3. Fallback: first valid media file in unit's sources/media/
+        for f in sorted(media_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in media_exts:
                 return f
 
-    # Fallback: scan references in HTML
-    pattern = r'["\']/?(?:api/media|raw/media)/([^"\'\?#]+)["\']'
-    matches = re.findall(pattern, html_content)
-    if matches:
-        filename = matches[0]
-        if media_dir.exists() and media_dir.is_dir():
-            full_path = media_dir / filename
-            if full_path.exists():
-                return full_path
-                
-    # Fallback to search any mp4/mp3 inside raw/media/ just in case
-    html_stem = Path(html_path).stem.lower().replace("_quiz", "").replace("_handout", "")
-    legacy_media_dir = Path(config.project_root) / "raw" / "media"
-    if legacy_media_dir.exists():
-        for f in legacy_media_dir.glob("*.*"):
-            if html_stem in f.name.lower() or f.stem.lower() in html_stem:
-                return f
-                
     return None
 
-def export_standalone_exe(html_path, video_path=None, output_path=None):
+
+def make_portable_html_content(html_content: str, media_filename: str = None) -> str:
     """
-    Bundles an HTML quiz file and its associated media file into a single standalone EXE file using PyInstaller.
+    Rewrites `video_url` in the exported HTML copy to a relative same-folder filename
+    so opening the extracted `.html` directly via `file://` on Windows/macOS works immediately.
     """
-    # Resolve virtual URL paths (e.g., starting with /wiki/ or wiki/) to physical project paths
+    if not media_filename:
+        return html_content
+    escaped_name = media_filename.replace("\\", "\\\\").replace('"', '\\"')
+    return re.sub(
+        r'("video_url"\s*:\s*)"[^"]*"',
+        lambda m: f'{m.group(1)}"{escaped_name}"',
+        html_content,
+        count=1,
+    )
+
+
+def export_portable_bundle(html_path, video_path=None, output_path=None):
+    """
+    Packages an interactive video HTML handout and its companion local video/audio file
+    into a portable `.zip` archive (or copies them into a target folder if output_path is a directory).
+    """
     path_str = str(html_path).replace("\\", "/")
     if "wiki/" in path_str:
         relative_part = path_str.split("wiki/", 1)[1]
         resolved_path = Path(config.project_root) / "wiki" / relative_part
-        if resolved_path.exists():
-            html_path = resolved_path
-        else:
-            html_path = Path(html_path)
+        html_path = resolved_path if resolved_path.exists() else Path(html_path)
     else:
         if path_str.startswith("/"):
             path_str = path_str[1:]
         resolved_path = Path(config.project_root) / path_str
-        if resolved_path.exists():
-            html_path = resolved_path
-        else:
-            html_path = Path(html_path)
+        html_path = resolved_path if resolved_path.exists() else Path(html_path)
 
     if not html_path.exists():
-        # Search inside wiki/handouts/
-        handouts_dir = Path(config.project_root) / "wiki" / "handouts"
-        if handouts_dir.exists():
-            # 1. Exact match on filename
-            exact_match = handouts_dir / html_path.name
-            if exact_match.exists():
-                html_path = exact_match
-                print(f"Detected handout inside wiki/handouts: {html_path.name}")
-            else:
-                # 2. Fuzzy search (case-insensitive substring match)
-                matches = []
-                search_stem = html_path.stem.lower()
-                for f in handouts_dir.glob("*.html"):
-                    if search_stem in f.name.lower():
-                        matches.append(f)
-                
-                if len(matches) == 1:
-                    html_path = matches[0]
-                    print(f"Fuzzy-matched handout in wiki/handouts: {html_path.name}")
-                elif len(matches) > 1:
-                    print(f"Multiple matches found in wiki/handouts for '{html_path.name}':")
-                    for idx, m in enumerate(matches):
-                        print(f"  [{idx + 1}] {m.name}")
-                    html_path = matches[0]
-                    print(f"Defaulting to first match: {html_path.name}")
-                else:
-                    print(f"Error: HTML handout '{html_path}' not found directly or fuzzy-matched in {handouts_dir}")
-                    return False
-        else:
-            print(f"Error: HTML handout not found at '{html_path}' and handouts directory {handouts_dir} does not exist.")
-            return False
+        print(f"Error: HTML handout not found at '{html_path}'")
+        return False
 
-    with open(html_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
+    html_content = html_path.read_text(encoding="utf-8")
 
-    # 1. Resolve video path
+    # Resolve companion video file
     resolved_video = None
     if video_path:
-        resolved_video = Path(video_path)
-        if not resolved_video.exists():
-            # Try finding in raw/media/
-            resolved_video = Path(config.project_root) / "raw" / "media" / video_path
-            if not resolved_video.exists():
-                print(f"Warning: Specified video path '{video_path}' not found. Attempting auto-detection.")
-                resolved_video = None
-
+        cand = Path(video_path)
+        if cand.exists() and cand.is_file():
+            resolved_video = cand
     if not resolved_video:
         resolved_video = detect_video_path_from_html(html_content, html_path)
 
-    if resolved_video:
-        print(f"Found associated media file: {resolved_video.name} ({resolved_video.stat().st_size / 1024 / 1024:.2f} MB)")
+    media_filename = resolved_video.name if resolved_video else None
+    portable_html = make_portable_html_content(html_content, media_filename)
+
+    html_stem = html_path.stem
+    if output_path:
+        out_p = Path(output_path)
+        # If output_path is an existing directory or has no suffix, copy files directly into that folder
+        if out_p.is_dir() or not out_p.suffix:
+            out_p.mkdir(parents=True, exist_ok=True)
+            dst_html = out_p / html_path.name
+            dst_html.write_text(portable_html, encoding="utf-8")
+            if resolved_video and resolved_video.exists():
+                shutil.copy2(resolved_video, out_p / resolved_video.name)
+            return dst_html
+        target_zip_path = out_p if out_p.suffix.lower() == ".zip" else out_p.with_suffix(".zip")
+        target_zip_path.parent.mkdir(parents=True, exist_ok=True)
     else:
-        print("Note: No local video/audio file detected for this handout. Packing HTML only.")
-
-    # 2. Check for PyInstaller dependency
-    try:
-        subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    except Exception:
-        print("\nError: PyInstaller is required to export standalone EXEs.")
-        print("Please install it on your computer by running:")
-        print("  pip install pyinstaller")
-        return False
-
-    # 3. Create a temporary build workspace
-    temp_dir = Path(tempfile.mkdtemp(prefix="lexis_build_"))
-    try:
-        # Copy HTML to index.html in build workspace
-        shutil.copy2(html_path, temp_dir / "index.html")
-
-        # Write the launcher script
-        launcher_file = temp_dir / "launcher.py"
-        with open(launcher_file, "w", encoding="utf-8") as f:
-            f.write(LAUNCHER_TEMPLATE)
-
-        # Set output file name and directory
-        html_stem = html_path.stem
-        exe_name = f"{html_stem}_standalone"
-        
-        if output_path:
-            target_output_dir = Path(output_path).parent
-            final_exe_name = Path(output_path).name
-        else:
-            # Save inside the unit's actual local handouts directory
-            target_output_dir = html_path.parent
-            final_exe_name = f"{exe_name}.exe"
-            
+        target_output_dir = html_path.parent
         target_output_dir.mkdir(parents=True, exist_ok=True)
-        final_exe_path = target_output_dir / final_exe_name
+        target_zip_path = target_output_dir / f"{html_stem}_bundle.zip"
 
-        print(f"Building single-file standalone EXE...")
-        print("This may take up to a minute depending on the video file size...")
+    # Write portable HTML + companion video into ZIP archive
+    with zipfile.ZipFile(target_zip_path, "w") as zf:
+        zf.writestr(
+            zipfile.ZipInfo(html_path.name),
+            portable_html.encode("utf-8"),
+            compress_type=zipfile.ZIP_DEFLATED,
+        )
+        if resolved_video and resolved_video.exists():
+            # Video files are already compressed; ZIP_STORED packages 50MB in <0.05s with zero CPU overhead
+            zf.write(resolved_video, arcname=resolved_video.name, compress_type=zipfile.ZIP_STORED)
 
-        # Setup PyInstaller arguments
-        cmd = [
-            sys.executable,
-            "-m",
-            "PyInstaller",
-            "--onefile",
-            "--name", exe_name,
-            f"--add-data={temp_dir / 'index.html'};.",
-            "--distpath", str(target_output_dir),
-            "--workpath", str(temp_dir / "build"),
-            "--specpath", str(temp_dir),
-            "--clean"
-        ]
+    return target_zip_path
 
-        # Add the media file to the virtual raw/media/ directory inside the EXE
-        if resolved_video:
-            # Under Windows, PyInstaller --add-data syntax is: "source_path;destination_subfolder"
-            cmd.append(f"--add-data={resolved_video};raw/media")
 
-        # Point to launcher entry point
-        cmd.append(str(launcher_file))
-
-        # Run compilation
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
-        if result.returncode == 0:
-            # Rename if custom output path is provided
-            default_built_exe = target_output_dir / f"{exe_name}.exe"
-            if default_built_exe.exists() and default_built_exe.resolve() != final_exe_path.resolve():
-                if final_exe_path.exists():
-                    os.remove(final_exe_path)
-                shutil.move(default_built_exe, final_exe_path)
-
-            print("\n" + "="*50)
-            print(" SUCCESS: Standalone EXE package built successfully!")
-            print(f" Standalone File: {final_exe_path}")
-            print("="*50 + "\n")
-            print("Share this single file with anyone! They can double-click it to run the quiz and stream the video.")
-            return final_exe_path
-        else:
-            print("\nError during PyInstaller packaging:")
-            print(result.stdout)
-            return False
-
-    finally:
-        # Clean up temporary build workspace
-        try:
-            shutil.rmtree(temp_dir)
-        except Exception:
-            pass
+# Backward-compatible alias used by dashboard and CLI
+export_standalone_exe = export_portable_bundle
