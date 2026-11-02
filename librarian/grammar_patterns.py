@@ -44,6 +44,28 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "dummy_it", "RIGHT_ATTRS": {"LOWER": "it", "DEP": {"IN": ["nsubj", "expl"]}}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep"]}, "LOWER": {"NOT_IN": ["time"]}}},
                 {"LEFT_ID": "focal_elem", "REL_OP": ">", "RIGHT_ID": "cleft_clause", "RIGHT_ATTRS": {"DEP": "relcl"}},
+            ],
+            [
+                {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "dummy_it", "RIGHT_ATTRS": {"LOWER": "it", "DEP": {"IN": ["nsubj", "expl"]}}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_elem", "RIGHT_ATTRS": {"DEP": {"IN": ["attr", "dobj", "pobj", "prep"]}, "LOWER": {"NOT_IN": ["time"]}}},
+                {"LEFT_ID": "focal_elem", "REL_OP": ">>", "RIGHT_ID": "focal_pobj", "RIGHT_ATTRS": {"DEP": "pobj"}},
+                {"LEFT_ID": "focal_pobj", "REL_OP": ">", "RIGHT_ID": "cleft_clause", "RIGHT_ATTRS": {"DEP": "relcl"}},
+            ]
+        ]
+    },
+    {
+        "id": "pseudo_cleft_what_be",
+        "category": "Rhetoric & Emphasis",
+        "priority": 92,
+        "name": "Wh-Cleft (Pseudo-Cleft) Focus Construction",
+        "formula": "What + [Clause] + [be] + [Focal Element]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "csubj_verb", "RIGHT_ATTRS": {"DEP": {"IN": ["csubj", "csubjpass", "nsubj"]}}},
+                {"LEFT_ID": "csubj_verb", "REL_OP": ">>", "RIGHT_ID": "what_pron", "RIGHT_ATTRS": {"LOWER": "what"}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "focal_comp", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "attr", "acomp", "xcomp"]}}},
             ]
         ]
     },
@@ -252,9 +274,9 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         "formula": "It + [be] + [Adj/NP] + [to-V] / that + [Clause]",
         "tree_patterns": [
             [
-                {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": "be"}},
+                {"RIGHT_ID": "copula", "RIGHT_ATTRS": {"LEMMA": {"IN": ["be", "remain", "seem", "appear", "prove", "become"]}}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "dummy_it", "RIGHT_ATTRS": {"LOWER": "it", "DEP": {"IN": ["nsubj", "expl"]}}},
-                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "eval_adj", "RIGHT_ATTRS": {"DEP": {"IN": ["acomp", "attr"]}}},
+                {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "eval_adj", "RIGHT_ATTRS": {"DEP": {"IN": ["acomp", "attr", "oprd"]}}},
                 {"LEFT_ID": "copula", "REL_OP": ">", "RIGHT_ID": "extraposed_clause", "RIGHT_ATTRS": {"DEP": {"IN": ["ccomp", "csubj", "xcomp", "advcl"]}}},
             ]
         ]
@@ -350,6 +372,24 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                 {"LEFT_ID": "rel_verb", "REL_OP": ">", "RIGHT_ID": "rel_pron", "RIGHT_ATTRS": {
                     "LEMMA": {"IN": ["which", "who", "whom", "whose", "that"]},
                     "DEP": {"IN": ["nsubj", "nsubjpass", "dobj", "pobj"]}
+                }},
+            ]
+        ]
+    },
+    {
+        "id": "piedpipe_prep_rel",
+        "category": "Information Packaging",
+        "priority": 88,
+        "name": "Pied-Piped Prepositional Relative Clause (Prep + which/whom)",
+        "formula": "[NP] + [Prep] + which/whom + [Clause]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "antecedent", "RIGHT_ATTRS": {"POS": {"IN": ["NOUN", "PROPN", "PRON"]}}},
+                {"LEFT_ID": "antecedent", "REL_OP": ">", "RIGHT_ID": "rel_verb", "RIGHT_ATTRS": {"DEP": {"IN": ["relcl", "acl"]}}},
+                {"LEFT_ID": "rel_verb", "REL_OP": ">>", "RIGHT_ID": "pied_prep", "RIGHT_ATTRS": {"DEP": {"IN": ["prep", "agent"]}}},
+                {"LEFT_ID": "pied_prep", "REL_OP": ">", "RIGHT_ID": "rel_pron", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["which", "whom", "whose"]},
+                    "DEP": {"IN": ["pobj", "poss"]}
                 }},
             ]
         ]
@@ -689,9 +729,26 @@ class GrammarPatternEngine:
                 if next_after_neg not in ("only", "merely", "just", "simply"):
                     continue
 
-            if string_id == "evaluative_dummy_it_subject":
+            if string_id == "pseudo_cleft_what_be":
                 tokens = [doc[i] for i in token_indices]
                 cop_tok = next((t for t in tokens if t.lemma_ == "be"), None)
+                what_tok = next((t for t in tokens if t.lower_ == "what"), None)
+                focal_tok = next((t for t in tokens if t != cop_tok and t != what_tok and t.dep_ in ("ccomp", "attr", "acomp", "xcomp")), None)
+                if not cop_tok or not what_tok or not focal_tok or not (what_tok.i < cop_tok.i < focal_tok.i):
+                    continue
+
+            if string_id == "piedpipe_prep_rel":
+                tokens = [doc[i] for i in token_indices]
+                ant_tok = tokens[0] if tokens else None
+                rel_v = next((t for t in tokens if t.dep_ in ("relcl", "acl")), None)
+                prep_tok = next((t for t in tokens if t.dep_ in ("prep", "agent")), None)
+                pron_tok = next((t for t in tokens if t.lemma_.lower() in ("which", "whom", "whose")), None)
+                if not (ant_tok and rel_v and prep_tok and pron_tok and ant_tok.i < prep_tok.i < pron_tok.i < rel_v.i):
+                    continue
+
+            if string_id == "evaluative_dummy_it_subject":
+                tokens = [doc[i] for i in token_indices]
+                cop_tok = next((t for t in tokens if t.lemma_ in ("be", "remain", "seem", "appear", "prove", "become")), None)
                 eval_tok = next((t for t in tokens if t != cop_tok and t.dep_ in ("acomp", "attr", "oprd") and t.pos_ in ("ADJ", "NOUN")), None)
                 ext_tok = next((t for t in tokens if t != cop_tok and t != eval_tok and t.dep_ in ("ccomp", "csubj", "xcomp")), None)
                 if not cop_tok or not eval_tok or not ext_tok or ext_tok.i <= eval_tok.i:
@@ -748,7 +805,7 @@ class GrammarPatternEngine:
         # an enclosing cleft_it_be_relcl or resultative_so_such_that construction
         higher_order_tokens: Set[int] = set()
         for r in matched_results:
-            if r["pattern_id"] in ("cleft_it_be_relcl", "resultative_so_such_that"):
+            if r["pattern_id"] in ("cleft_it_be_relcl", "resultative_so_such_that", "piedpipe_prep_rel"):
                 higher_order_tokens.update(r["token_indices"])
         if higher_order_tokens:
             matched_results = [
@@ -810,6 +867,17 @@ class GrammarPatternEngine:
                 shell = next((t for t in tokens if t.pos_ == "NOUN"), None)
                 n_lemma = shell.lemma_.lower() if shell else "fact"
                 return f"The + {n_lemma} + that/of + [Proposition Clause]"
+            elif pattern_id == "piedpipe_prep_rel":
+                prep_tok = next((t for t in tokens if t.dep_ in ("prep", "agent")), None)
+                pron_tok = next((t for t in tokens if t.lemma_.lower() in ("which", "whom", "whose")), None)
+                p_str = prep_tok.lower_ if prep_tok else "in"
+                w_str = pron_tok.lower_ if pron_tok else "which"
+                return f"[NP] + {p_str} + {w_str} + [Clause]"
+            elif pattern_id == "pseudo_cleft_what_be":
+                focal_tok = next((t for t in tokens if t.dep_ in ("ccomp", "attr", "acomp", "xcomp")), None)
+                if focal_tok and any(c.lower_ == "that" and c.dep_ == "mark" for c in focal_tok.children):
+                    return "What + [Clause] + is/was + that + [Clause]"
+                return "What + [Clause] + is/was + [Focal Element]"
             elif pattern_id == "complex_transitive_adj_complement":
                 caus = next((t for t in tokens if t.pos_ in ("VERB", "AUX")), None)
                 v_lemma = caus.lemma_.lower() if caus else "make"

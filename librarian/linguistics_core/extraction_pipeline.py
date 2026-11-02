@@ -1675,6 +1675,108 @@ class ExtractionPipelineMixin:
                     "score": match.get("priority", 8),
                 })
 
+            # 2. PedLex Sense-Unit Multi-Word Expression Scan (3..5 tokens)
+            # Recovers attested idioms, light-verb phrases, and complex prepositions ('turn a blind eye',
+            # 'make a living', 'take advantage of', 'for the sake of', 'a roof over one's head')
+            # directly from in-memory ldoce_phrase_index ('sense_unit' tier) in O(1) per n-gram.
+            if cls._ensure_in_memory_phrase_index() and cls._phrase_by_key_cache:
+                by_key = cls._phrase_by_key_cache
+                w_toks = [t for t in doc if not t.is_punct and not t.is_space]
+                existing_phrases_in_sent = {
+                    c["phrase"].lower() for c in raw_candidates if c.get("sid") == sid
+                }
+                covered_indices: Set[int] = set()
+                _poss_dets = {"my", "your", "his", "her", "its", "our", "their"}
+                for n_len in (5, 4, 3):
+                    if len(w_toks) < n_len:
+                        continue
+                    for start_i in range(len(w_toks) - n_len + 1):
+                        span_indices = set(range(start_i, start_i + n_len))
+                        if span_indices & covered_indices:
+                            continue
+                        span_t = w_toks[start_i : start_i + n_len]
+                        # Must not cross internal punctuation boundaries
+                        if any(
+                            dt.is_punct and dt.text not in ("-", "'", "\u2019")
+                            for dt in doc[span_t[0].i : span_t[-1].i + 1]
+                        ):
+                            continue
+                        # Must contain at least one open-class content word
+                        if not any(t.pos_ in ("NOUN", "VERB", "ADJ") for t in span_t):
+                            continue
+                        # Must not start or end with a determiner/pronoun unless start is 'a'/'an'/'the' in a noun idiom
+                        if span_t[-1].pos_ in ("DET", "PRON", "AUX", "CCONJ", "SCONJ"):
+                            continue
+                        surf_toks = [t.text.lower() for t in span_t]
+                        lem0 = (
+                            span_t[0].lemma_.lower()
+                            if span_t[0].pos_ in ("VERB", "AUX")
+                            else surf_toks[0]
+                        )
+                        base_toks = [lem0] + surf_toks[1:]
+                        # Check for internal possessive determiner ('a roof over their heads' -> 'a roof over your head')
+                        has_internal_poss = any(t in _poss_dets for t in base_toks[1:-1])
+                        cand_lookup_keys: List[Tuple[str, str, str]] = []
+                        b_key = " ".join(base_toks)
+                        cand_lookup_keys.append((b_key, b_key, b_key))
+                        if has_internal_poss:
+                            your_toks = [
+                                "your" if (0 < idx_k < n_len - 1 and tk in _poss_dets) else tk
+                                for idx_k, tk in enumerate(base_toks)
+                            ]
+                            ones_toks = [
+                                "[one's]" if (0 < idx_k < n_len - 1 and tk in _poss_dets) else tk
+                                for idx_k, tk in enumerate(base_toks)
+                            ]
+                            last_lem = span_t[-1].lemma_.lower()
+                            your_sing = your_toks[:-1] + [last_lem]
+                            ones_sing = ones_toks[:-1] + [last_lem]
+                            cand_lookup_keys.insert(
+                                0,
+                                (
+                                    " ".join(your_sing),
+                                    " ".join(your_sing).replace("your", "one's"),
+                                    " ".join(ones_sing),
+                                ),
+                            )
+                        for l_key, p_name, p_formula in cand_lookup_keys:
+                            rows = by_key.get(l_key)
+                            if not rows:
+                                continue
+                            su_rows = [r for r in rows if r[2] == "sense_unit"]
+                            if not su_rows:
+                                continue
+                            # Avoid matching bare 'turn a blind eye to' when 'turn a blind eye' is the core idiom
+                            if n_len == 5 and base_toks[-1] == "to" and by_key.get(" ".join(base_toks[:-1])):
+                                continue
+                            if p_name in existing_phrases_in_sent:
+                                covered_indices.update(span_indices)
+                                break
+                            # Format trailing preposition object slot if the phrase ends with a preposition
+                            final_formula = p_formula
+                            if span_t[-1].pos_ == "ADP" and not final_formula.endswith("]"):
+                                raw_u = str(su_rows[0][3] or "").lower()
+                                if "somebody/something" in raw_u or "something/somebody" in raw_u:
+                                    final_formula = f"{p_formula} [sth/sb]"
+                                elif "somebody" in raw_u:
+                                    final_formula = f"{p_formula} [sb]"
+                                else:
+                                    final_formula = f"{p_formula} [sth]"
+                            m_type_su = cls.classify_expression_type(p_name, sent_clean) or "set phrase"
+                            raw_candidates.append({
+                                "sid": sid,
+                                "quote": sent_clean,
+                                "phrase": p_name,
+                                "type": m_type_su,
+                                "pattern_formula": final_formula,
+                                "pobj": None,
+                                "pobj_proper": False,
+                                "score": 92,
+                            })
+                            existing_phrases_in_sent.add(p_name)
+                            covered_indices.update(span_indices)
+                            break
+
 
         # PedLex attestation gate: a candidate ships only when PedLex itself states the unit.
         # The old gate asked the Oxford Collocations file whether it had a headword for the
@@ -5293,7 +5395,7 @@ class ExtractionPipelineMixin:
                         continue
                 sid = s.get("sid", "S-1")
                 quote = s.get("quote", "")
-                expr_type = s.get("type", "collocation")
+                expr_type = cls.classify_expression_type(formula, quote) or cls.classify_expression_type(phrase, quote) or s.get("type", "collocation")
 
                 discourse_ctx = ""
                 if sid and sent_pool:

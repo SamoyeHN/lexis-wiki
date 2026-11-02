@@ -46,8 +46,38 @@ class WsdEngineMixin:
         # short codes callers hand in directly (WordNet uses 'a'/'s'/'r')
         "n": "n", "v": "v", "a": "adj", "s": "adj", "adj": "adj",
         "r": "adv", "adv": "adv", "prep": "prep", "conj": "conj",
-        "det": "det", "pron": "pron", "excl": "excl",
+        "det": "det", "pron": "pron", "excl": "excl", "interj": "excl",
     }
+
+    _CANONICAL_POS_MAP = {
+        "n": "noun", "noun": "noun", "noun count": "noun", "noun mass": "noun", "number": "noun",
+        "v": "verb", "verb": "verb", "modal verb": "verb",
+        "a": "adjective", "s": "adjective", "adj": "adjective", "adjective": "adjective",
+        "r": "adverb", "adv": "adverb", "adverb": "adverb",
+        "prep": "preposition", "preposition": "preposition",
+        "conj": "conjunction", "conjunction": "conjunction",
+        "pron": "pronoun", "pronoun": "pronoun",
+        "det": "determiner", "determiner": "determiner", "predeterminer": "determiner", "article": "determiner",
+        "excl": "interjection", "interj": "interjection", "interjection": "interjection", "exclamation": "interjection",
+        "phrasal verb": "phrasal verb", "phrasal_verb": "phrasal verb",
+        "collocation": "collocation",
+        "set phrase": "set phrase", "set_phrase": "set phrase",
+        "idiom": "idiom",
+        "phrase": "phrase",
+    }
+
+    @classmethod
+    def normalize_pos(cls, label: Optional[str]) -> str:
+        """Canonicalize any POS tag or short code ('adj' -> 'adjective', 'prep' -> 'preposition',
+        'n' -> 'noun', 'v' -> 'verb', etc.) into the project-wide full POS label."""
+        raw = re.sub(r"\s+", " ", re.sub(r"\[.*?\]", " ", (label or ""))).strip().lower()
+        if not raw:
+            return ""
+        if "/" in raw and raw not in cls._CANONICAL_POS_MAP:
+            first_part = raw.split("/")[0].strip()
+            if first_part in cls._CANONICAL_POS_MAP:
+                return cls._CANONICAL_POS_MAP[first_part]
+        return cls._CANONICAL_POS_MAP.get(raw, raw)
 
     @classmethod
     def _pos_code(cls, label: Optional[str]) -> str:
@@ -63,7 +93,7 @@ class WsdEngineMixin:
 
     @classmethod
     def _sense_pos_codes(cls, sense: Dict[str, Any]) -> Set[str]:
-        """Return all normalized POS codes declared on a sense (`pos` + `all_poses`)."""
+        """Return all normalized POS codes declared on a sense (`pos` + `all_poses` + `licensed_poses`)."""
         codes: Set[str] = set()
         if not isinstance(sense, dict):
             return codes
@@ -71,6 +101,10 @@ class WsdEngineMixin:
         if p0:
             codes.add(p0)
         for p in (sense.get("all_poses") or []):
+            pc = cls._pos_code(p)
+            if pc:
+                codes.add(pc)
+        for p in (sense.get("licensed_poses") or []):
             pc = cls._pos_code(p)
             if pc:
                 codes.add(pc)
@@ -731,7 +765,7 @@ class WsdEngineMixin:
                         if (
                             s_cand.get("definition") == p_defn
                             and not s_cand.get("sensenum")
-                            and s_cand.get("homograph_num") in (None, 0)
+                            and (s_cand.get("homograph_num") in (None, 0) or s_cand.get("from_phrasal_verb"))
                         ):
                             pv_sense_map[s_idx] = p_words
 

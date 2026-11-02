@@ -1404,10 +1404,13 @@ class SyllabusAndMarkdownMixin:
             if not fresh_v_items:
                 return None
             source_content = source_path.read_text(encoding="utf-8")
+            summary_path = unit_dir / "extractions" / f"{core_name}_summary.md"
+            summary_txt = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
             return {
                 "vocab_list": fresh_v_items,
-                "summary_content": "",
+                "summary_content": summary_txt,
                 "source_content": clean_source or source_content,
+                "raw_source_content": source_content,
                 "unit_core_name": core_name,
                 "cefr_level": cefr
             }

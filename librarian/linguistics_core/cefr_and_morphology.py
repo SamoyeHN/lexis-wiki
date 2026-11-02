@@ -73,7 +73,7 @@ class CefrAndMorphologyMixin:
     # - adverbial: Independent discourse adverbial adjunct
     _FUNCTION_WORD_PARADIGMS = {
         "concession": {
-            "clausal": ["although", "though", "even though", "while", "whereas"],
+            "clausal": ["although", "though", "even though", "while", "whereas", "albeit"],
             "prepositional": ["despite", "in spite of", "regardless of", "notwithstanding"],
             "adverbial": ["however", "nevertheless", "nonetheless"]
         },
@@ -783,7 +783,13 @@ class CefrAndMorphologyMixin:
 
         for raw in word_re.findall(text or ""):
             token = raw.lower()
-            if len(token) < floor or token in allowed or token in seen:
+            if (
+                len(token) < floor
+                or token in allowed
+                or token in cls._CEFR_FUNCTION_WORDS
+                or token in cls._CEFR_NOISE_ABBREVS
+                or token in seen
+            ):
                 continue
             seen.add(token)
             if any(mark in token for mark in ("'", "\u2019")):
@@ -1460,10 +1466,50 @@ class CefrAndMorphologyMixin:
         "{w} it every day",
     )
 
+    _INVARIANT_PLURAL_NOUNS = frozenset({
+        "species", "series", "means", "headquarters", "aircraft", "spacecraft",
+        "offspring", "corps", "chassis", "rendezvous", "apparatus", "crossroads",
+        "barracks", "gallows", "innings",
+    })
+
+    @classmethod
+    def _is_base_verb_lemma(cls, w: str) -> bool:
+        """Returns True if `w` is an attested base/infinitive verb lemma in WordNet or PedLex."""
+        if not w:
+            return False
+        if w in cls._IRREGULAR_VERB_FORMS:
+            return True
+        try:
+            wn = cls.get_wordnet()
+            if wn and any(wo.lemma().lower() == w for wo in wn.words(w, pos="v")):
+                return True
+        except Exception:
+            pass
+        if any(w in forms for base, forms in cls._IRREGULAR_VERB_FORMS.items() if base != w):
+            return False
+        ent = cls.get_ldoce_entry(w)
+        if ent and (ent.get("word") or "").strip().lower() == w:
+            all_p = [cls._pos_code(p) for p in (ent.get("all_poses") or [ent.get("pos") or ""])]
+            if "v" in all_p:
+                v_defs = [
+                    str(s.get("definition") or "").strip().lower()
+                    for s in (ent.get("senses") or [])
+                    if "verb" in str(s.get("pos") or ent.get("pos") or "").lower()
+                ]
+                if v_defs and all(
+                    d.startswith(("the past ", "past tense", "past participle", "the present participle", "3rd person"))
+                    for d in v_defs
+                ):
+                    return False
+                return True
+        return False
+
     @classmethod
     @lru_cache(maxsize=32768)
     def _analyse_word_form_cached(cls, w: str) -> Tuple[Optional[str], str]:
         if not w or " " in w:
+            return (None, w)
+        if w in cls._INVARIANT_PLURAL_NOUNS or (len(w) > 4 and w.endswith("ics")):
             return (None, w)
         nlp = cls.get_spacy()
         if not nlp:
@@ -1477,6 +1523,28 @@ class CefrAndMorphologyMixin:
                 bare_lemma = (tok.lemma_ or w).lower()
         except Exception:
             pass
+        if bare_lemma != w:
+            if (
+                bare_lemma in cls._INVARIANT_PLURAL_NOUNS
+                or (not cls._wordnet_pos(bare_lemma) and not cls.is_exact_pedlex_headword(bare_lemma))
+            ):
+                bare_lemma = w
+                bare_tag = None
+            elif bare_tag and not cls._is_base_verb_lemma(bare_lemma):
+                bare_tag = None
+                bare_lemma = w
+            elif (
+                bare_tag
+                and "v" not in cls._wordnet_pos(w)
+                and cls._wordnet_pos(w)
+                and cls._inflect_verb(bare_lemma, bare_tag) != w
+            ):
+                bare_tag = None
+                bare_lemma = w
+        elif bare_tag in ("VBD", "VBN", "VBG", "VBZ") and w not in cls._IRREGULAR_VERB_FORMS.get(w, ()):
+            bare_tag = None
+        elif bare_tag in ("VB", "VBP") and not cls._is_base_verb_lemma(w):
+            bare_tag = None
         if bare_tag:
             return (bare_tag, bare_lemma)
         if bare_lemma != w:
@@ -1493,7 +1561,27 @@ class CefrAndMorphologyMixin:
                 continue
             tok = next((t for t in doc if t.text.lower() == w), None)
             if tok is not None and tok.pos_ == "VERB":
-                return (tok.tag_, (tok.lemma_ or w).lower())
+                cand_lemma = (tok.lemma_ or w).lower()
+                cand_tag = tok.tag_
+                if not cls._is_base_verb_lemma(cand_lemma):
+                    continue
+                if cand_lemma != w:
+                    if (
+                        cls._inflect_verb(cand_lemma, cand_tag) != w
+                        and w not in cls._IRREGULAR_VERB_FORMS.get(cand_lemma, ())
+                    ):
+                        continue
+                else:
+                    if cand_tag in ("VBD", "VBN", "VBG", "VBZ") and w not in cls._IRREGULAR_VERB_FORMS.get(w, ()):
+                        continue
+                    if (
+                        cand_tag in ("VB", "VBP")
+                        and w.endswith(("ed", "ing"))
+                        and "a" in cls._wordnet_pos(w)
+                        and not cls._is_base_verb_lemma(w)
+                    ):
+                        continue
+                return (cand_tag, cand_lemma)
         return (None, bare_lemma)
 
     @classmethod
@@ -1565,6 +1653,20 @@ class CefrAndMorphologyMixin:
         tag = (tag or "").upper()
         if not w:
             return None
+        # Normalize already-inflected verb forms (e.g. 'led' -> 'lead', 'broken' -> 'break', 'walked' -> 'walk')
+        # unless `w` is itself an attested base verb lemma (e.g. 'lay', 'found', 'fell', 'wind', 'saw').
+        if not cls._is_base_verb_lemma(w):
+            for _irr_base, _irr_forms in cls._IRREGULAR_VERB_FORMS.items():
+                if w in _irr_forms:
+                    w = _irr_base
+                    break
+            else:
+                try:
+                    _b_tag, _b_lem = cls._analyse_word_form_cached(w)
+                    if _b_lem and _b_lem != w and _b_tag in ("VBD", "VBN", "VBG", "VBZ") and cls._is_base_verb_lemma(_b_lem):
+                        w = _b_lem
+                except Exception:
+                    pass
         if tag in ("VB", "VBP"):
             return w
         irregular = cls._IRREGULAR_VERB_FORMS.get(w)
@@ -1656,6 +1758,10 @@ class CefrAndMorphologyMixin:
         tag = (tag or "").upper()
         if not b or not f:
             return False
+        if b in cls._IRREGULAR_VERB_FORMS and b not in {"found", "wind", "ground", "fell", "saw", "bound", "lie"}:
+            expected_irr = cls._inflect_verb(b, tag)
+            if expected_irr and f != expected_irr:
+                return False
         if not cls.is_attested_form(f):
             return False
         nlp = cls.get_spacy()
@@ -3582,21 +3688,34 @@ class CefrAndMorphologyMixin:
         key = " ".join(cls._unit_tokens(phrase))
         if len(key.split()) < 2:
             return ""
+        cand_keys = {key}
+        poss_norm = re.sub(
+            r"\b(?:\[one's\]|one's|ones|somebody's|someone's|sb's|my|his|her|their|our|its)\b",
+            "your",
+            str(phrase or "").lower().replace("\u2019", "'").replace("\u2018", "'"),
+        )
+        poss_key = " ".join(cls._unit_tokens(poss_norm))
+        if len(poss_key.split()) >= 2:
+            cand_keys.add(poss_key)
+            p_toks = poss_key.split()
+            last_lem = cls._surface_lemma(p_toks[-1]) or cls.lemmatize_headword(p_toks[-1])
+            if last_lem and last_lem != p_toks[-1]:
+                cand_keys.add(" ".join(p_toks[:-1] + [last_lem]))
         for head in cls._phrase_headwords(key, headword):
             entry = cls.get_ldoce_entry(head)
             if not entry:
                 continue
             for block in entry.get("phrasal_verbs") or []:
                 if not isinstance(block, dict):
-                    if key in cls._declared_unit_spellings(block):
+                    if cand_keys & cls._declared_unit_spellings(block):
                         return "phrasal_verb"
                     continue
                 names = [block.get("phrase"), block.get("headword")] \
                     + list(block.get("variants") or []) + list(block.get("alternates") or [])
-                if any(key in cls._declared_unit_spellings(name) for name in names):
+                if any(cand_keys & cls._declared_unit_spellings(name) for name in names):
                     return "phrasal_verb"
             for item in entry.get("phrases") or []:
-                if key in cls._declared_unit_spellings(item):
+                if cand_keys & cls._declared_unit_spellings(item):
                     return "phrase"
         return ""
 

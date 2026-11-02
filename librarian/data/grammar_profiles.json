@@ -280,6 +280,29 @@
         }
       }
     },
+    "propositional_encapsulation_which": {
+      "name": "Propositional Encapsulation (, which + verb + that)",
+      "category": "Cohesion & Framing",
+      "pattern_formula": ", which + [Reporting/Epistemic Verb (means/suggests/indicates)] + that + [Clause]",
+      "priority": { "A1_A2": 82, "B1_B2": 90, "C1_C2": 93 },
+      "tiers": {
+        "A1_A2": {
+          "pedagogical_function": "Uses ', which means/shows that...' after a comma to explain what the whole preceding statement means.",
+          "imitation_example": "The train arrived ten minutes early, which meant that we caught our connecting bus easily.",
+          "common_mistakes": "Grammar Warning (Anaphoric Sentential ', which' Clauses): Learners frequently use 'that' or omit the comma when referring back to a whole clause: \"The bus broke down on the highway, [INCORRECT: that meant we were late -> CORRECT: which meant that we were late].\" (Note: Always use ', which' after a comma—never 'that'—to refer back to an entire preceding clause)."
+        },
+        "B1_B2": {
+          "pedagogical_function": "Encapsulates the entire preceding proposition via ', which suggests/indicates/means that...' to introduce an analytical conclusion or implication.",
+          "imitation_example": "Manufacturing output fell for a third consecutive quarter, which suggests that higher borrowing costs are slowing industrial investment.",
+          "common_mistakes": "Grammar Warning (Propositional Encapsulation ', which + Verb + that'): Learners frequently substitute 'what' for ', which' or use a plural verb when the antecedent is a whole clause: \"Consumer confidence rebounded sharply in May, [INCORRECT: what indicate that -> CORRECT: which indicates that] household spending is stabilizing.\" (Note: A clausal antecedent takes ', which' plus a singular third-person verb such as 'indicates', 'suggests', or 'means')."
+        },
+        "C1_C2": {
+          "pedagogical_function": "Condenses a complex multi-clause empirical claim into the grammatical subject of an epistemic or interpretive matrix verb (', which implies/demonstrates/underscores that...').",
+          "imitation_example": "Antibiotic resistance genes were detected in isolated permafrost strata, which demonstrates that such evolutionary mechanisms predated clinical antimicrobial use.",
+          "common_mistakes": "Grammar Warning (Sentential ', which' vs. Free Relative 'what' & Comma Splice): Learners frequently write an uncoordinated pronoun ('this shows that') after a comma or misuse 'what': \"The control group exhibited identical neural plasticity, [INCORRECT: this implies that -> CORRECT: which implies that] the intervention was not the primary causal driver.\" (Note: Joining two finite clauses with a comma and demonstrative 'this' creates a comma splice; use the relative encapsulator ', which' instead)."
+        }
+      }
+    },
     "object_complement_adj": {
       "name": "Complex Transitive Structures (Verb + Object + Adjective)",
       "category": "Information Packaging",

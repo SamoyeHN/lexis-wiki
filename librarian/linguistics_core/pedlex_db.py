@@ -217,6 +217,50 @@ class PedlexDbMixin:
                     ],
                 })
                 data["senses"] = s_list
+
+        # Promote phrasal_verbs senses into entry["senses"] when an entry has phrasal_verbs
+        # but 0 verb senses in data["senses"] (e.g., 'account' where verb senses live solely under
+        # 'account for something' in phrasal_verbs). Setting sensenum="" and homograph_num=None
+        # activates _lock_sense's Phrasal Verb Particle Gate (pv_sense_map) and keeps entry["senses"][idx] valid.
+        pv_blocks = data.get("phrasal_verbs")
+        if isinstance(pv_blocks, list) and pv_blocks:
+            cur_senses = list(data.get("senses") or [])
+            has_verb_sense = any(
+                cls._pos_code(s.get("pos")) == "v"
+                for s in cur_senses
+                if isinstance(s, dict)
+            )
+            if not has_verb_sense:
+                existing_hnums = [
+                    int(s["homograph_num"])
+                    for s in cur_senses
+                    if isinstance(s, dict) and isinstance(s.get("homograph_num"), int) and s.get("homograph_num") > 0
+                ]
+                next_hnum = (max(existing_hnums) + 1) if existing_hnums else None
+                for pv_blk in pv_blocks:
+                    if not isinstance(pv_blk, dict):
+                        continue
+                    pv_phrase = str(pv_blk.get("phrase") or pv_blk.get("headword") or "").strip()
+                    for pv_s in (pv_blk.get("senses") or []):
+                        if not isinstance(pv_s, dict) or not str(pv_s.get("definition") or "").strip():
+                            continue
+                        promoted = dict(pv_s)
+                        promoted["pos"] = "verb"
+                        promoted["sensenum"] = ""
+                        promoted["homograph_num"] = next_hnum
+                        promoted["from_phrasal_verb"] = True
+                        if pv_phrase:
+                            units = list(promoted.get("units") or [])
+                            if pv_phrase not in units:
+                                units.insert(0, pv_phrase)
+                            promoted["units"] = units
+                            pats = list(promoted.get("patterns") or [])
+                            if pv_phrase not in pats:
+                                pats.insert(0, pv_phrase)
+                            promoted["patterns"] = pats
+                        cur_senses.append(promoted)
+                data["senses"] = cur_senses
+
         cls._ldoce_cache[w_clean] = data
         return data
 
@@ -1499,6 +1543,26 @@ class PedlexDbMixin:
             if rows:
                 return rows[0]
 
+        # Track 2b: Possessive slot normalization ('a roof over one\'s head' / 'a roof over their heads' -> 'a roof over your head')
+        poss_norm = re.sub(
+            r"\b(?:\[one's\]|one's|ones|somebody's|someone's|sb's|my|his|her|their|our|its)\b",
+            "your",
+            raw.lower().replace("\u2019", "'").replace("\u2018", "'"),
+        )
+        poss_key = " ".join(cls._unit_tokens(poss_norm))
+        if poss_key and poss_key != canon_key:
+            rows = by_key.get(poss_key)
+            if rows:
+                return rows[0]
+            p_toks = poss_key.split()
+            if len(p_toks) >= 3:
+                last_lem = cls._surface_lemma(p_toks[-1]) or cls.lemmatize_headword(p_toks[-1])
+                if last_lem and last_lem != p_toks[-1]:
+                    sing_key = " ".join(p_toks[:-1] + [last_lem])
+                    rows = by_key.get(sing_key)
+                    if rows:
+                        return rows[0]
+
         # Track 3: Lemmatized headword/verb fallback (e.g. "banked up" -> "bank up")
         words = raw.split()
         if words:
@@ -2659,9 +2723,10 @@ class PedlexDbMixin:
             c_placeholders = ",".join("?" for _ in contrasts)
             params: List[Any] = list(contrasts)
             pos_clause = ""
-            if pos and pos.strip().lower() not in ("phrase", "other"):
+            norm_p = cls.normalize_pos(pos) if pos else ""
+            if norm_p and norm_p not in ("phrase", "other"):
                 pos_clause = " AND pos = ?"
-                params.append(pos.strip().lower())
+                params.append(norm_p)
             ban_clause = ""
             if bans:
                 b_placeholders = ",".join("?" for _ in bans)
@@ -2694,7 +2759,7 @@ class PedlexDbMixin:
         w_clean = (word or "").strip().lower()
         if not w_clean or not cls._ensure_ldoce_conn():
             return []
-        p_low = pos.strip().lower() if pos else ""
+        p_low = cls.normalize_pos(pos) if pos else ""
         out: List[Dict[str, Any]] = []
         if cls._ldoce_table_exists("pedlex_error_traps"):
             try:

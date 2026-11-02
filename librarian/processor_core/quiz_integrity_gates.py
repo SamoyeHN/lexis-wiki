@@ -627,17 +627,19 @@ class QuizIntegrityGatesMixin:
         quiz_obj: Any,
         script_text: str = "",
         cefr_level: str = "B2",
-        unit_headwords: List[str] = None
+        unit_headwords: List[str] = None,
+        blueprint_specs: List[Dict[str, Any]] = None,
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Listening Comprehension Quiz.
-        Enforces 5 physical ground-truth invariants:
+        Enforces physical and symbolic ground-truth invariants:
         1. Dialogue Script Integrity: At least 4 speaker turns in script.
         2. Structural Option Bounds: Exactly 4 distinct, non-empty options.
         3. Option Complexity & Length Bounds based on CEFR.
         4. CEFR Vocabulary Difficulty Ceiling (cefrpy) for Foundational CEFR (A1, A2).
-        5. Answer Index Integrity: Bound [0, 3] check.
-        6. Category Integrity: Detail, Main Idea, or Inference.
+        5. Answer Index Integrity: Bound [0, 3] check (plus blueprint prescribed index check if supplied).
+        6. Category Integrity: Detail, Main Idea, or Inference (plus blueprint skill check if supplied).
+        7. Forbidden Verbatim Turn-Copy Gate: Flags options that copy a dialogue turn verbatim (>= 6 words).
         Returns:
             (flagged_indices, defect_messages)
         """
@@ -658,17 +660,39 @@ class QuizIntegrityGatesMixin:
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
             "dialogue", "conversation", "reason", "purpose", "detail", "meaning", "option", "correct",
-            "opinion", "suggest", "agree", "disagree", "talk", "true", "false", "about"
+            "opinion", "suggest", "agree", "disagree", "talk", "true", "false", "about",
+            "allergy", "allergies", "allergic", "runny", "gargle", "gargles", "lozenge", "lozenges",
+            "sprain", "sprained", "swelling", "upcoming", "reschedule", "rescheduled", "refund", "refunds",
+            "receipt", "pharmacy", "pharmacist", "clinic", "campus", "roommate", "dorm", "cafeteria",
+            "textbook", "textbooks", "handout", "handouts", "signup", "login", "online", "website",
+            "laptop", "charger", "helmet", "symptom", "symptoms", "workload", "caffeine",
+            "painkiller", "painkillers", "antibiotic", "antibiotics", "toothache", "stomachache", "backache",
         }
 
         # 1. Script checks
+        normalized_turns: List[str] = []
         script_items = quiz_obj.get("script") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "script", None)
         if script_items is not None and isinstance(script_items, list):
             if len(script_items) < 4:
                 defect_messages.append(f"Listening Script Gate: Dialogue script contains fewer than 4 turns ({len(script_items)} turns).")
             # Always merge dialogue turn words into clean_script_words so script vocabulary is licensed
-            all_turn_text = " ".join([str(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")) for item in script_items])
+            turn_texts = []
+            for item in script_items:
+                t_str = str(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", ""))
+                turn_texts.append(t_str)
+                norm_t = re.sub(r"[^\w\s]", "", t_str.lower()).strip()
+                norm_t = re.sub(r"\s+", " ", norm_t)
+                if norm_t:
+                    normalized_turns.append(norm_t)
+            all_turn_text = " ".join(turn_texts)
             clean_script_words.update(re.findall(r"\b[a-zA-Z]{4,}\b", all_turn_text.lower()))
+        elif script_text:
+            for line in script_text.splitlines():
+                raw_line = re.sub(r"^[^:]{1,25}:\s*", "", line).strip()
+                norm_t = re.sub(r"[^\w\s]", "", raw_line.lower()).strip()
+                norm_t = re.sub(r"\s+", " ", norm_t)
+                if norm_t:
+                    normalized_turns.append(norm_t)
 
         combined_allow = clean_script_words | headword_whitelist | meta_whitelist
 
@@ -680,6 +704,7 @@ class QuizIntegrityGatesMixin:
             options = q_dict.get("options") or []
             correct_idx = q_dict.get("correct_answer_index")
             cat = str(q_dict.get("category", "")).strip().lower()
+            spec = (blueprint_specs[idx] if isinstance(blueprint_specs, list) and idx < len(blueprint_specs) else None) or {}
 
             # 2.1 Option Bounds
             if len(options) != 4:
@@ -716,10 +741,33 @@ class QuizIntegrityGatesMixin:
                         )
                         break
 
-            # 2.2 Key Index Bounds
+                # 2.1.3 Forbidden Verbatim Turn-Copy Gate (when correct option copies >= 6 consecutive words verbatim from a dialogue turn)
+                if isinstance(correct_idx, int) and 0 <= correct_idx < 4 and normalized_turns:
+                    corr_opt_norm = re.sub(r"[^\w\s]", "", str(options[correct_idx]).lower()).strip()
+                    corr_opt_norm = re.sub(r"\s+", " ", corr_opt_norm)
+                    corr_words = corr_opt_norm.split()
+                    if len(corr_words) >= 6:
+                        has_verbatim_span = False
+                        for k in range(len(corr_words) - 5):
+                            span_6 = " ".join(corr_words[k : k + 6])
+                            if any(span_6 in turn_n for turn_n in normalized_turns):
+                                has_verbatim_span = True
+                                break
+                        if has_verbatim_span:
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Listening Item #{idx + 1}: Correct option is a verbatim copy of a dialogue turn (violates Paraphrase Operator): \"{options[correct_idx][:50]}\""
+                            )
+
+            # 2.2 Key Index Bounds & Blueprint Slot Check
             if not isinstance(correct_idx, int) or correct_idx not in (0, 1, 2, 3):
                 flagged_indices.add(idx)
                 defect_messages.append(f"Listening Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+            elif spec.get("correct_answer_index") in (0, 1, 2, 3) and correct_idx != spec["correct_answer_index"]:
+                flagged_indices.add(idx)
+                defect_messages.append(
+                    f"Listening Item #{idx + 1}: correct_answer_index ({correct_idx}) does not match blueprint prescribed index ({spec['correct_answer_index']})."
+                )
 
             # 2.3 Stem Quality & CEFR Ceiling
             if len(stem.split()) < 4:

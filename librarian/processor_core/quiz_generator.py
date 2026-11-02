@@ -321,6 +321,161 @@ class QuizGeneratorMixin:
         return quiz_obj
 
     @classmethod
+    def hydrate_listening_blueprint_items(
+        cls,
+        quiz_obj: Any,
+        blueprint_specs: List[Dict[str, Any]],
+    ) -> Any:
+        """
+        Deterministically hydrates and reconciles blueprint-owned fields on ListeningQuiz items:
+        - Enforces `category` from `spec["target_skill"]` ("Detail", "Main Idea", "Inference").
+        - Reconciles the true option position with the CRC32-prescribed `spec["correct_answer_index"]`:
+          if the LLM placed the true answer at a different index `actual_idx`, swaps
+          `options[actual_idx]` <-> `options[prescribed_idx]`, sets `correct_answer_index = prescribed_idx`,
+          and atomically remaps `Option A/B/C/D` references in `explanation`.
+        - Intentionally does NOT attach `target_word` onto question items so `evaluator.py`
+          treats them as listening comprehension questions rather than fill-in-the-blank items.
+        """
+        if not quiz_obj or not blueprint_specs:
+            return quiz_obj
+
+        # 0. Auto-heal any script turns missing the `speaker` field (alternating speaker_1 / speaker_2)
+        script_list = (
+            quiz_obj.get("script", [])
+            if isinstance(quiz_obj, dict)
+            else getattr(quiz_obj, "script", [])
+        )
+        if isinstance(script_list, list) and script_list:
+            spk1 = str(
+                (quiz_obj.get("speaker_1") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_1", ""))
+                or ""
+            ).strip()
+            spk2 = str(
+                (quiz_obj.get("speaker_2") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "speaker_2", ""))
+                or ""
+            ).strip()
+            for t_idx, t_item in enumerate(script_list):
+                t_spk = str(
+                    (t_item.get("speaker") if isinstance(t_item, dict) else getattr(t_item, "speaker", ""))
+                    or ""
+                ).strip()
+                if t_spk:
+                    if t_idx % 2 == 0 and not spk1:
+                        spk1 = t_spk
+                    elif t_idx % 2 == 1 and not spk2:
+                        spk2 = t_spk
+            spk1 = spk1 or "Speaker 1"
+            spk2 = spk2 or "Speaker 2"
+            for t_idx, t_item in enumerate(script_list):
+                t_is_dict = isinstance(t_item, dict)
+                t_spk = str(
+                    (t_item.get("speaker") if t_is_dict else getattr(t_item, "speaker", ""))
+                    or ""
+                ).strip()
+                if not t_spk:
+                    expected_spk = spk1 if (t_idx % 2 == 0) else spk2
+                    if t_is_dict:
+                        t_item["speaker"] = expected_spk
+                    else:
+                        setattr(t_item, "speaker", expected_spk)
+
+        q_list = (
+            quiz_obj.get("questions", [])
+            if isinstance(quiz_obj, dict)
+            else getattr(quiz_obj, "questions", [])
+        )
+        if not isinstance(q_list, list):
+            return quiz_obj
+
+        for q_i, q_item in enumerate(q_list):
+            if q_i >= len(blueprint_specs):
+                break
+            spec = blueprint_specs[q_i] or {}
+            is_dict = isinstance(q_item, dict)
+
+            def _get(field: str, default: Any = "") -> Any:
+                return q_item.get(field, default) if is_dict else getattr(q_item, field, default)
+
+            def _set(field: str, val: Any) -> None:
+                if is_dict:
+                    q_item[field] = val
+                else:
+                    setattr(q_item, field, val)
+
+            # 1. Enforce prescribed category ("Detail", "Main Idea", "Inference") and sanitize stem
+            target_skill = str(spec.get("target_skill") or "").strip()
+            if target_skill in ("Detail", "Main Idea", "Inference"):
+                _set("category", target_skill)
+
+            raw_stem = str(_get("question", "") or "").strip()
+            if raw_stem:
+                clean_stem = re.sub(r"\s+in\s+[Tt]urns?\s+\d+(?:\s*[–-]\s*\d+)?", "", raw_stem)
+                if spk1 and spk1 != "Speaker 1":
+                    clean_stem = re.sub(r"\bSpeaker\s*1\b", spk1, clean_stem, flags=re.IGNORECASE)
+                if spk2 and spk2 != "Speaker 2":
+                    clean_stem = re.sub(r"\bSpeaker\s*2\b", spk2, clean_stem, flags=re.IGNORECASE)
+                clean_stem = re.sub(r"\s{2,}", " ", clean_stem).strip()
+                if clean_stem != raw_stem:
+                    _set("question", clean_stem)
+
+            # 2. Reconcile true answer slot with CRC32-prescribed correct_answer_index
+            raw_opts = _get("options", [])
+            if not isinstance(raw_opts, list) or len(raw_opts) != 4:
+                continue
+            opts = list(raw_opts)
+
+            prescribed_idx = spec.get("correct_answer_index")
+            if not isinstance(prescribed_idx, int) or prescribed_idx not in (0, 1, 2, 3):
+                continue
+
+            declared_idx = _get("correct_answer_index", prescribed_idx)
+            try:
+                declared_idx = int(declared_idx)
+            except (TypeError, ValueError):
+                declared_idx = prescribed_idx
+            if declared_idx not in (0, 1, 2, 3):
+                declared_idx = prescribed_idx
+
+            cur_exp = str(_get("explanation", "") or "")
+            cur_audit = str(_get("design_audit", "") or "")
+            full_text = f"{cur_audit}\n{cur_exp}"
+
+            # Check if explanation explicitly names a specific option letter as the true answer
+            actual_idx = declared_idx
+            m_lead_opt = re.search(
+                r"\bOption\s+([A-D])\b[^\.\n]*?\b(?:is\s+the\s+only|correctly\s+(?:captures|identifies|paraphrases|states|reflects|matches|summarizes)|is\s+(?:the\s+)?correct\b)",
+                cur_exp,
+                re.IGNORECASE,
+            )
+            inferred_letter = None
+            if m_lead_opt:
+                inferred_letter = m_lead_opt.group(1).upper()
+            else:
+                m_opt = re.search(
+                    r"(?:(?:correct\s+answer\s+is|supporting|matches|aligned\s+with|only)\s+Option\s+([A-D])\b)",
+                    full_text,
+                    re.IGNORECASE,
+                )
+                if m_opt:
+                    inferred_letter = m_opt.group(1).upper()
+
+            inferred_idx = (ord(inferred_letter) - 65) if inferred_letter else None
+            if inferred_idx is not None and 0 <= inferred_idx < 4:
+                actual_idx = inferred_idx
+
+            if actual_idx != prescribed_idx:
+                # Swap options so the true option physically resides at prescribed_idx
+                opts[actual_idx], opts[prescribed_idx] = opts[prescribed_idx], opts[actual_idx]
+                _set("options", opts)
+                if cur_exp:
+                    swap_map = {actual_idx: prescribed_idx, prescribed_idx: actual_idx}
+                    _set("explanation", cls._remap_explanation_labels(cur_exp, swap_map))
+
+            _set("correct_answer_index", prescribed_idx)
+
+        return quiz_obj
+
+    @classmethod
     def shuffle_quiz_options(cls, quiz_obj: Any, preserve_blueprint_order: bool = False) -> Any:
         """
         Sanitizes options and ensures robust answer key distribution.
@@ -1051,43 +1206,61 @@ class QuizGeneratorMixin:
             cefr = (data.get("cefr_level") or "B2").upper()
             kwargs["cefr_level"] = cefr
 
-            if cefr in ("A1", "A2"):
+            if cefr in ("A1", "A2", "A2+"):
                 kwargs["dialogue_style_guidance"] = (
-                    "Conversational, everyday campus or life interactions (e.g. discussing schedules, course plans, or collaborative assignments). "
-                    "Keep speaker turns short and clear (8 to 15 words per turn), using accessible phrasing and concrete dialogue markers."
+                    "Conversational, everyday social or campus service interactions (e.g. discussing schedules, course plans, making arrangements, or solving daily problems). "
+                    "Keep speaker turns short and natural (8 to 15 words per turn), using accessible S1/S2 spoken phrasing and concrete dialogue markers."
                 )
                 kwargs["question_stem_guidance"] = (
-                    "Use direct, unambiguous question stems (e.g. 'What does Speaker 1 want to do?', 'Why is Speaker 2 calling?'). "
+                    "Use direct, unambiguous question stems (e.g. 'What does Speaker 1 want to do?', 'Why is Speaker 2 concerned?'). "
                     "Avoid complex speculative or hypothetical framing."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options concise, simple, and direct (ideally 3 to 8 words). Never use obscure academic vocabulary."
+                    "Keep options concise, simple, and direct (ideally 3 to 8 words), using only basic everyday A1-A2 vocabulary "
+                    "(such as 'work hours', 'schedule', 'sign in', 'next', 'cold', 'rest', 'water', 'doctor')."
                 )
                 kwargs["skill_distribution_guidance"] = (
                     "     * `Detail`: 2 to 3 questions assessing concrete facts, explicitly stated intentions, or direct causes.\n"
                     "     * `Main Idea`: 1 to 2 questions assessing the overall topic or mutual agreement.\n"
                     "     * `Inference`: 0 to 1 question assessing a straightforward, obvious conclusion."
                 )
-            elif cefr == "B1":
+            elif cefr in ("B1", "B1+"):
                 kwargs["dialogue_style_guidance"] = (
-                    "Standard academic or semi-formal exchange (e.g. tutorial discussion, study group analysis). "
-                    "Turns should be moderately detailed (14 to 22 words per turn), presenting reasoning and practical opinions."
+                    "Everyday study-group, campus, or practical colleague conversation using natural spoken English and contractions (`I'm`, `we've`, `that's`). "
+                    "Keep turns conversational and concise (10 to 16 words per turn), expressing clear opinions and practical suggestions without stiff formal jargon."
                 )
                 kwargs["question_stem_guidance"] = (
                     "Use clear question stems assessing explicit facts, speaker reasoning, and immediate deductions."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "Keep options standard and clear (ideally 5 to 12 words), with natural everyday vocabulary."
+                    "Keep options standard and clear (ideally 5 to 10 words), with natural everyday vocabulary."
                 )
                 kwargs["skill_distribution_guidance"] = (
                     "     * `Detail`: 2 questions assessing specific rationale or facts stated by a speaker.\n"
                     "     * `Main Idea`: 1 to 2 questions assessing the core theme or conclusion.\n"
-                    "     * `Inference`: 1 question assessing speaker attitude or logical takeaway."
+                    "     * `Inference`: 1 to 2 questions assessing speaker attitude or logical takeaway."
+                )
+            elif cefr == "B2":
+                kwargs["dialogue_style_guidance"] = (
+                    "Natural, idiomatic spoken conversation between peers, colleagues, or student and advisor. "
+                    "Use high-frequency spoken English (S1/S2 vocabulary and natural contractions like `we've`, `that's`, `I'd`) at 12 to 18 words per turn. "
+                    "Difficulty at B2 comes from tracking pragmatic stance shifts, polite hedges, and conversational updates—NEVER from dense academic/corporate jargon (avoid stiff phrases like 'qualitative methodology' or 'unexpected logistical delays')."
+                )
+                kwargs["question_stem_guidance"] = (
+                    "Use clear, natural question stems testing speaker intention, stance shifts, and agreed next steps."
+                )
+                kwargs["option_complexity_guidance"] = (
+                    "Keep options clear and idiomatic (ideally 6 to 12 words), paraphrasing spoken meaning without overly formal or bookish vocabulary."
+                )
+                kwargs["skill_distribution_guidance"] = (
+                    "     * `Detail`: 2 questions assessing specific rationale or constraints stated by a speaker.\n"
+                    "     * `Main Idea`: 1 question assessing the opening purpose or overall topic.\n"
+                    "     * `Inference`: 2 questions assessing speaker attitude, hedged disagreement, or final outcome."
                 )
             else:
                 kwargs["dialogue_style_guidance"] = (
-                    "Intellectually engaging academic debate or seminar discussion. "
-                    "Turns are detailed and articulated (18 to 32 words per turn), featuring subtle distinctions, counter-arguments, and nuanced concessions."
+                    "University seminar, tutorial consultation, or analytical discussion (e.g. IELTS Listening Section 3 / TOEFL academic discussion where two students, colleagues, or a tutor and student evaluate research findings, policy trade-offs, or project feasibility). "
+                    "Turns are articulated yet genuinely spoken (18 to 30 words per turn), focusing on broader feasibility, methodology, and practical trade-offs rather than obscure engineering or textbook trivia."
                 )
                 kwargs["question_stem_guidance"] = (
                     "Use rigorous assessment stems testing speaker stance, implicit qualifications, and analytical deductions."
@@ -1101,21 +1274,34 @@ class QuizGeneratorMixin:
                     "     * `Main Idea`: 1 question assessing the overarching academic consensus or disagreement."
                 )
 
-            # Extract only Core Concepts 1, 2, 3 from Summary
+            # Resolve broad thematic topic from source frontmatter (unit_title / text_title) or Summary Core Concepts
             summary_txt = data.get("summary_content", "")
+            raw_src_txt = data.get("raw_source_content") or data.get("source_content") or ""
             core_unit = data.get("unit_core_name", core_name)
-            
+
             thematic_concepts = []
+            if raw_src_txt:
+                m_u_title = re.search(r'^unit_title:\s*["\']?([^"\'\r\n]+)["\']?', raw_src_txt, re.MULTILINE)
+                m_t_title = re.search(r'^text_title:\s*["\']?([^"\'\r\n]+)["\']?', raw_src_txt, re.MULTILINE)
+                m_doc_title = re.search(r'^title:\s*["\']?([^"\'\r\n]+)["\']?', raw_src_txt, re.MULTILINE)
+                u_t = m_u_title.group(1).strip() if m_u_title else ""
+                t_t = m_t_title.group(1).strip() if m_t_title else (m_doc_title.group(1).strip() if m_doc_title else "")
+                if u_t and t_t and u_t.lower() != t_t.lower():
+                    thematic_concepts.append(f"1. {u_t} ({t_t})")
+                elif u_t or t_t:
+                    thematic_concepts.append(f"1. {u_t or t_t}")
+
             if summary_txt:
                 concept_matches = re.findall(r'###\s*\[\[(.*?)\]\]', summary_txt)
                 if not concept_matches:
                     concept_matches = re.findall(r'###\s*([^\n]+)', summary_txt)
                 if concept_matches:
                     clean_concepts = [
-                        c.strip() for c in concept_matches 
+                        c.strip() for c in concept_matches
                         if c.strip() and not c.strip().lower().startswith("narrative")
                     ]
-                    for idx, c in enumerate(clean_concepts[:3], 1):
+                    start_idx = len(thematic_concepts) + 1
+                    for idx, c in enumerate(clean_concepts[:2], start_idx):
                         thematic_concepts.append(f"{idx}. {c}")
 
             if not thematic_concepts:
@@ -1159,6 +1345,22 @@ class QuizGeneratorMixin:
             kwargs["speaker_2_gender"] = g2
             kwargs["speaker_1_accent"] = a1
             kwargs["speaker_2_accent"] = a2
+
+            try:
+                listening_bp = LinguisticEngine.build_listening_micro_task_blueprints(
+                    raw_v,
+                    thematic_topic=thematic_topic_str,
+                    target_count=count,
+                    cefr_level=cefr,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to build listening micro-task blueprints: {e}")
+                listening_bp = None
+
+            if isinstance(listening_bp, dict) and listening_bp.get("combined_prompt_block"):
+                kwargs["vocabulary_content"] = listening_bp["combined_prompt_block"]
+                blueprint_specs = listening_bp.get("questions") or []
+                has_prescribed_options = True
 
         elif template_name == "video":
             kwargs["transcript_content"] = data["transcript"]
@@ -1210,6 +1412,8 @@ class QuizGeneratorMixin:
             if blueprint_specs:
                 if template_name == "translation":
                     quiz_obj = self.hydrate_translation_blueprint_items(quiz_obj, blueprint_specs)
+                elif template_name == "listening":
+                    quiz_obj = self.hydrate_listening_blueprint_items(quiz_obj, blueprint_specs)
                 else:
                     q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
                     if isinstance(q_list, list):

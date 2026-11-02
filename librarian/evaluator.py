@@ -332,8 +332,16 @@ def auto_remap_grammar_category(item: Dict[str, Any]) -> Tuple[Dict[str, Any], O
     has_correlative = bool(re.search(r"\b(?:not\s+only\b.*?\bbut\s+also|either\b.*?\bor\b|neither\b.*?\bnor\b)\b", quote, re.IGNORECASE))
     has_fronted_inversion = bool(re.search(r"^\s*(?:not\s+only|only\s+(?:if|when|after|by)|never|seldom|hardly|scarcely)\b", quote, re.IGNORECASE))
     has_cleft = bool(
-        re.search(r"\bIt\s+(?:is|was|were|'s)\s+(?:only|not\s+only|because|when|in|on|at|by|with|[a-z]{3,}\s+who|[a-z]{3,}\s+that)\b", quote, re.IGNORECASE)
-        and not re.search(r"\bIt\s+(?:is|was|were|'s)\s+(?:said|thought|believed|reported|expected|suggested|indicated|argued|claimed|known|important|essential|necessary|likely|clear|obvious|vital|crucial|apparent|natural|possible)\s+that\b", quote, re.IGNORECASE)
+        re.search(
+            r"\bIt\s+(?:is|was|were|'s)\s+(?:only|not\s+only|because|when|in|on|at|by|with|(?:(?:a|an|the|this|that|these|those|my|your|his|her|its|our|their|[a-z]{2,})\s+){1,8}(?:who|whom|that))\b",
+            quote,
+            re.IGNORECASE,
+        )
+        and not re.search(
+            r"\bIt\s+(?:is|was|were|'s)\s+(?:(?:not|also|still|only|even|very|quite|highly|widely|generally|commonly)\s+)*(?:said|thought|believed|reported|expected|suggested|indicated|argued|claimed|known|assumed|estimated|found|shown|noted|agreed|important|essential|necessary|likely|unlikely|clear|obvious|vital|crucial|apparent|natural|possible|impossible|true|certain|evident|surprising|remarkable|common|rare|normal|strange|odd|sad|pity|shame|wonder|secret|mystery|doubt|fact|time)\b",
+            quote,
+            re.IGNORECASE,
+        )
     )
     
     if (has_antithesis or has_correlative or has_fronted_inversion or has_cleft) and category != "Rhetoric & Emphasis":
@@ -1086,6 +1094,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 break
         return False, wanted
 
+    src_cefr_level, src_passage_words = _cefr_source_ceiling(user_prompt) if task_type == "quiz" else (None, set())
+    src_cefr_rank = LinguisticEngine.CEFR_ORDER.get(src_cefr_level or "", 6)
+
     for item in items:
         if task_type == "vocabulary":
             word = _safe_str(item.get("word"))
@@ -1626,34 +1637,6 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
 
                 bp_info = prompt_blueprints.get(target.lower(), {}) if prompt_blueprints else {}
 
-                # Non-Base Verb Inflection Slot Gate (prevents 'to ____' or modal 'will/can ____' before past-tense VBD / 3sg VBZ verb options)
-                bp_pos = bp_info.get("part_of_speech", "")
-                bp_infl = bp_info.get("inflection", "")
-                is_non_base_finite_verb = (
-                    bp_pos in ("verb", "phrase")
-                    and (
-                        "past tense" in bp_infl
-                        or "third-person singular" in bp_infl
-                        or (
-                            bp_pos == "verb"
-                            and options
-                            and len(options) == 4
-                            and all(str(o).strip().lower().endswith("ed") for o in options if str(o).strip())
-                        )
-                    )
-                )
-                if is_non_base_finite_verb:
-                    m_inf_clash = re.search(
-                        r"\b(to|will|would|can|could|shall|should|may|might|must|did|does|do)\s+(?:not\s+|never\s+|always\s+|also\s+)?_{2,}\b",
-                        question,
-                        flags=re.IGNORECASE,
-                    )
-                    if m_inf_clash:
-                        no_verb_inflection_clash = False
-                        flags.append(
-                            f"❌ Quiz item '{target}': Non-base verb inflection clash — '{m_inf_clash.group(1)} ____' requires a base-form verb, but options are inflected ({bp_infl or 'past tense -ed'})."
-                        )
-
                 # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer
                 # may only author the stem, explanation and audit.
@@ -1774,6 +1757,28 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                                 break
 
             no_in_list_recycling = len(recycled_in_distractors) == 0
+
+            # 6. CEFR Lexical Ceiling Gate (flags obscure C2 vocabulary in A1/A2/B1 non-blueprint quiz options/stems)
+            if src_cefr_level and src_cefr_rank <= 3 and not bp_for_item.get("prescribed_options"):
+                cefr_outliers = []
+                for o_idx, opt in enumerate(options if isinstance(options, list) else []):
+                    if o_idx == idx:
+                        continue
+                    opt_w = str(opt).strip().lower()
+                    if (
+                        " " not in opt_w
+                        and opt_w.isalpha()
+                        and len(opt_w) >= 5
+                        and opt_w not in src_passage_words
+                        and opt_w not in prompt_headwords
+                    ):
+                        w_lvl = LinguisticEngine.get_word_cefr(opt_w)
+                        if w_lvl and LinguisticEngine.CEFR_ORDER.get(w_lvl, 0) >= max(5, src_cefr_rank + 2):
+                            cefr_outliers.append(f"{opt_w} ({w_lvl})")
+                if cefr_outliers:
+                    flags.append(
+                        f"⚠️ Quiz item '{target or question[:25]}': Distractor exceeds passage CEFR ceiling ({src_cefr_level}): {', '.join(cefr_outliers)}"
+                    )
 
             # Level-1 pass list. Every term below is a field-to-field or
             # string-to-string comparison on LLM-authored fields.
@@ -1923,7 +1928,23 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             )
             passes = max(0, passes - len(missing_targets))
 
-    raw_score = round((passes / max(checks, len(prompt_blueprints) if task_type == "quiz" and prompt_blueprints else checks)) * W_PEDAGOGY, 1)
+    # Enforce 100% question blueprint count for listening/reading/video quizzes with numbered Question Blueprints
+    expected_q_blueprints = len(
+        re.findall(r"#{3,4}\s*Question\s+\d+\s+Blueprint\s*#{3,4}", user_prompt or "", re.IGNORECASE)
+    ) if task_type == "quiz" and not prompt_blueprints else 0
+    if expected_q_blueprints > 0 and len(items) < expected_q_blueprints:
+        missing_q_count = expected_q_blueprints - len(items)
+        flags.append(
+            f"❌ Incomplete question coverage: generated {len(items)}/{expected_q_blueprints} required blueprint questions "
+            f"(missing {missing_q_count} question(s))"
+        )
+        passes = max(0, passes - missing_q_count)
+
+    denom_count = max(
+        checks,
+        len(prompt_blueprints) if (task_type == "quiz" and prompt_blueprints) else expected_q_blueprints,
+    )
+    raw_score = round((passes / max(1, denom_count)) * W_PEDAGOGY, 1)
     # Apply soft deduction for auto-remapped grammar categories (2.0 pts per remapped item)
     if task_type == "grammar":
         remap_count = sum(1 for f in flags if "Deterministic Auto-Remap" in f)
@@ -2029,6 +2050,17 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
             if repeated:
                 rep_details = ", ".join(f"'{w}' ({c}x)" for w, c in list(repeated.items())[:3])
                 unique_flags.append(f"❌ Distractors recycled repeatedly across quiz: {rep_details}")
+
+        ans_indices = [
+            item.get("correct_answer_index")
+            for item in items
+            if isinstance(item.get("correct_answer_index"), int)
+        ]
+        if len(ans_indices) >= 4 and len(set(ans_indices)) == 1:
+            unique_flags.append(
+                f"⚠️ Quiz answer-key clustering: all {len(ans_indices)} items share identical correct_answer_index ({ans_indices[0]})"
+            )
+            earned = max(0.0, earned - 4.0)
     return earned, unique_flags
 
 
