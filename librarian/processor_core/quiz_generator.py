@@ -1516,7 +1516,6 @@ class QuizGeneratorMixin:
             if template_name == "video":
                 video_vocab = []
                 try:
-                    from ..linguistics import LinguisticEngine
                     video_vocab = LinguisticEngine.extract_video_vocabulary(
                         data.get("transcript", ""),
                         target_count=12,
