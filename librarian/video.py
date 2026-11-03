@@ -643,45 +643,19 @@ class VideoService:
                 print(f"Error loading local subtitle file: {sub_err}")
                 local_sub_file = None
 
-        if yt_id:
-            print(f"Detected YouTube video ID: {yt_id}")
-            video_type = "youtube"
-            source_url = f"https://www.youtube.com/watch?v={yt_id}"
-            if not local_sub_file:
-                try:
-                    transcript_text = self.fetch_youtube_transcript(yt_id)
-                    title = f"YouTube Video {yt_id}"
-                except Exception as e:
-                    print(f"Could not fetch native transcripts ({type(e).__name__}). Trying fallback via yt-dlp...")
-                    temp_dir = tempfile.mkdtemp()
-                    try:
-                        title, transcript_text = self.fetch_via_ytdlp(source_url, temp_dir, cookies_from_browser, cookies)
-                    except Exception as ytdlp_err:
-                        print(f"yt-dlp subtitle fallback failed ({type(ytdlp_err).__name__}). Attempting audio/video download + Whisper...")
-                        try:
-                            dl_title, dl_media, dl_sub_text = self.download_video_via_ytdlp(
-                                source_url, temp_dir, cookies_from_browser, cookies
-                            )
-                            title = dl_title or f"YouTube Video {yt_id}"
-                            if dl_sub_text:
-                                transcript_text = dl_sub_text
-                            else:
-                                _, transcript_text = self.transcribe_local_file(dl_media)
-                        except Exception:
-                            title = f"YouTube Video {yt_id}"
-                            transcript_text = "[00:00.00] (YouTube transcript could not be automatically downloaded. Please play the video on the dashboard and add subtitles manually.)"
-                            has_subtitles = False
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-        elif remote_non_yt:
-            print(f"Downloading remote video via yt-dlp: {url_or_path}")
+        if yt_id or remote_non_yt:
+            remote_url = f"https://www.youtube.com/watch?v={yt_id}" if yt_id else url_or_path
+            if yt_id:
+                print(f"Detected YouTube video ID: {yt_id}. Downloading video via yt-dlp: {remote_url}")
+            else:
+                print(f"Downloading remote video via yt-dlp: {remote_url}")
             remote_temp_dir = tempfile.mkdtemp()
             try:
                 dl_title, dl_media_path, dl_sub_text = self.download_video_via_ytdlp(
-                    url_or_path, remote_temp_dir, cookies_from_browser, cookies
+                    remote_url, remote_temp_dir, cookies_from_browser, cookies
                 )
                 if not local_sub_file or title == "Video Transcript":
-                    title = dl_title or "Video Transcript"
+                    title = dl_title or (f"YouTube Video {yt_id}" if yt_id else "Video Transcript")
 
                 safe_title = custom_name or title
                 safe_title = re.sub(r'[\\/*?:"<>| ]', '_', safe_title)
@@ -718,6 +692,12 @@ class VideoService:
                 if not transcript_text and dl_sub_text:
                     transcript_text = dl_sub_text
 
+                if not transcript_text and yt_id:
+                    try:
+                        transcript_text = self.fetch_youtube_transcript(yt_id)
+                    except Exception:
+                        pass
+
                 if not transcript_text:
                     clean_title = safe_title.replace("_", " ").title()
                     placeholder_content = f"""---
@@ -736,6 +716,24 @@ category: "video_transcript"
 
                     lang, transcript_text = self.transcribe_local_file(dest_media_path)
                     print(f"Transcription complete (detected language: {lang}).")
+            except Exception as dl_err:
+                if not yt_id:
+                    raise
+                print(f"YouTube video download failed ({type(dl_err).__name__}: {dl_err}). Falling back to YouTube embed mode...")
+                video_type = "youtube"
+                source_url = remote_url
+                if not local_sub_file:
+                    try:
+                        transcript_text = self.fetch_youtube_transcript(yt_id)
+                        title = f"YouTube Video {yt_id}"
+                    except Exception as e:
+                        print(f"Could not fetch native transcripts ({type(e).__name__}). Trying fallback via yt-dlp...")
+                        try:
+                            title, transcript_text = self.fetch_via_ytdlp(source_url, remote_temp_dir, cookies_from_browser, cookies)
+                        except Exception:
+                            title = f"YouTube Video {yt_id}"
+                            transcript_text = "[00:00.00] (YouTube transcript could not be automatically downloaded. Please play the video on the dashboard and add subtitles manually.)"
+                            has_subtitles = False
             finally:
                 shutil.rmtree(remote_temp_dir, ignore_errors=True)
         else:
@@ -821,13 +819,15 @@ category: "video_transcript"
                 lang, transcript_text = self.transcribe_local_file(local_path)
                 print(f"Transcription complete (detected language: {lang}).")
 
-        # Sanitize Title for file naming (already done for local, but needed for youtube)
-        if yt_id:
+        # Sanitize Title for file naming (already done for local, but needed for youtube embed fallback)
+        if video_type == "youtube":
             safe_title = custom_name or title
             safe_title = re.sub(r'[\\/*?:"<>| ]', '_', safe_title)
             safe_title = re.sub(r'_+', '_', safe_title).strip('_')
             if len(safe_title) > 40:
                 safe_title = safe_title[:40].strip('_')
+            if not safe_title:
+                safe_title = "Imported_Video"
 
             # Determine the unit stem robustly from safe_title or current_unit using helper
             if current_unit:
