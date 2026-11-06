@@ -274,7 +274,10 @@ def test_extract_lexical_network_phrase_pros_and_cons():
 def test_extract_lexical_network_quantifier_piece_of():
     res = extract_lexical_network("a piece of", target_pos="quantifier")
     assert res["is_phrase"] is True
-    assert "a bit of" in res["phrase_distractors"] or "a slice of" in res["phrase_distractors"]
+    # Zero double-key invariant: direct synonyms like 'a bit of' / 'a slice of' are filtered out
+    # in favor of non-colliding authentic quantifier frames ('a stroke of', 'a battery of', etc.)
+    assert len(res["phrase_distractors"]) >= 3
+    assert all(d.startswith("a ") and d.endswith(" of") for d in res["phrase_distractors"])
     card = format_lexical_reference_card(res)
     print("\n--- Card for Quantifier Frame 'a piece of' ---")
     print(card)

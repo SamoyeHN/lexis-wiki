@@ -1096,7 +1096,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 break
         return False, wanted
 
-    src_cefr_level, src_passage_words = _cefr_source_ceiling(user_prompt) if task_type == "quiz" else (None, set())
+    src_cefr_level, src_passage_words = _cefr_source_ceiling(user_prompt) if task_type in ("quiz", "grammar") else (None, set())
     src_cefr_rank = LinguisticEngine.CEFR_ORDER.get(src_cefr_level or "", 6)
 
     for item in items:
@@ -1331,6 +1331,16 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     # Slash-alternative slots like [V-ing / V-ed Phrase], [Participle/Adj/PrepP], or [V-ing/NP]
                     # accept -ing, -ed/-en past participles, adjectives, or prepositional/noun complements.
                     pass
+
+            # Ceiling Gate — imitation_example may not exceed the passage CEFR ceiling
+            if src_cefr_level and imitation:
+                over = LinguisticEngine.over_ceiling_tokens(imitation, src_cefr_level, mode="text", allow=src_passage_words)
+                if over:
+                    offenders = ", ".join(f"'{w}' ({lvl})" for w, lvl in over[:3])
+                    band = LinguisticEngine.cefr_ceiling(src_cefr_level, mode="text")
+                    reason_msg = f"imitation_example exceeds the CEFR {band} ceiling of the CEFR {src_cefr_level} source passage: {offenders}"
+                    reasons.append(reason_msg)
+                    flags.append(f"❌ Grammar pattern '{pattern[:40]}': {reason_msg}")
 
             # Degenerate Slot Gate — '[NP/NP]' names the same constituent
             # twice, teaches nothing, and is never mined by the lexicon.
@@ -1615,9 +1625,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Quiz item '{target}': Multiple blanks ({len(blanks)}) detected in question stem (only exactly ONE blank permitted)"
                     )
 
-                # Scaffolding & Meta-Instruction Leakage Gate: stem cannot contain prompt template strings
+                # Scaffolding & Meta-Instruction Leakage Gate: stem cannot contain prompt template strings or unreplaced bracketed placeholders
                 scaffold_leak = re.search(
-                    r"\b(?:Fit into frame|Fit into the Pattern|Plural noun slot required|Complete predicate required|Write a natural sentence|Model:)\b",
+                    r"(?:\b(?:Fit into frame|Fit into the Pattern|Plural noun slot required|Complete predicate required|Write a natural sentence|Model:)\b"
+                    r"|\[(?:concrete\s+physical|physical\s+(?:object|person)|sb|sth|doing\s+sth|someone|something)[^\]]*\])",
                     question,
                     flags=re.IGNORECASE,
                 )

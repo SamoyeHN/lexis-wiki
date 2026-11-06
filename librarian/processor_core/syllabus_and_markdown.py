@@ -1498,40 +1498,74 @@ class SyllabusAndMarkdownMixin:
                 if m_url and m_url.group(1).strip():
                     video_url = m_url.group(1).strip()
                     break
-                    
+
             m_type = re.search(r'video_type:\s*["\']?([^\n"\']+)["\']?', transcript)
             if m_type:
                 video_type = m_type.group(1).strip()
-            elif video_url:
-                # Auto-detect type based on URL
-                url_lower = video_url.lower()
-                if "youtube" in url_lower or "youtu.be" in url_lower:
-                    video_type = "youtube"
-                elif url_lower.endswith((".mp4", ".webm", ".ogg", ".mp3", ".wav")) or "/media/" in url_lower:
-                    video_type = "local"
-                else:
-                    video_type = "youtube"  # default fallback if URL exists
 
-            # If video_url is still empty and file is inside the media folder, resolve local companion
-            if not video_url and ("media" in source_path.parts or (active_media_name and source_path.name == active_media_name)):
-                parent_dir = source_path.parent
-                for ext in [".mp4", ".mp3", ".webm", ".ogg", ".wav"]:
-                    companion = parent_dir / f"{source_path.stem}{ext}"
-                    if companion.exists():
-                        video_url = f"/wiki/{core_name}/sources/media/{companion.name}"
-                        video_type = "local"
+            media_dir = unit_wiki_dir / "sources" / "media"
+            local_media_file = None
+            for search_dir in ([source_path.parent, media_dir] if source_path.parent != media_dir else [media_dir]):
+                if not search_dir.exists():
+                    continue
+                for ext in [".mp4", ".webm", ".mkv", ".m4a", ".mp3", ".ogg", ".wav"]:
+                    cand = search_dir / f"{source_path.stem}{ext}"
+                    if cand.exists():
+                        local_media_file = cand
                         break
-            
-            # For video quiz, if there is no valid video_url, skip video quiz gracefully rather than emitting 404 target
-            if quiz_type == "video" and not video_url:
-                return None
+                if local_media_file:
+                    break
+                if video_url and not video_url.lower().startswith(("http://", "https://")):
+                    import os
+                    cand_by_url = search_dir / os.path.basename(video_url)
+                    if cand_by_url.exists():
+                        local_media_file = cand_by_url
+                        break
 
-            # Rewrite local video URL to point to /wiki/<UnitName>/sources/media/
-            if video_type == "local" and video_url:
-                import os
-                video_filename = os.path.basename(video_url)
-                video_url = f"/wiki/{core_name}/sources/media/{video_filename}"
-                
+            # If no local media file exists yet and video_url is a remote URL (e.g. YouTube), download it as local MP4.
+            # Per user policy: if the video cannot be downloaded locally, do NOT generate a video quiz.
+            if not local_media_file and video_url and video_url.lower().startswith(("http://", "https://")):
+                import tempfile
+                import shutil
+                from ..video import video_service
+                tmp_dl_dir = tempfile.mkdtemp()
+                try:
+                    dl_title, dl_media_path, _ = video_service.download_video_via_ytdlp(video_url, tmp_dl_dir)
+                    media_dir.mkdir(parents=True, exist_ok=True)
+                    dest_media = media_dir / f"{source_path.stem}{dl_media_path.suffix}"
+                    shutil.move(str(dl_media_path), str(dest_media))
+                    local_media_file = dest_media
+                    # Upgrade transcript frontmatter from remote embed to local media
+                    try:
+                        raw_md = source_path.read_text(encoding="utf-8")
+                        updated_md = re.sub(r'video_type:\s*["\']?[^\n"\']+["\']?', 'video_type: "local"', raw_md)
+                        updated_md = re.sub(
+                            r'source_url:\s*["\']?[^\n"\']+["\']?',
+                            f'source_url: "/api/media/{dest_media.name}"',
+                            updated_md,
+                        )
+                        if dl_title and f'title: "YouTube Video ' in updated_md:
+                            safe_dl_title = dl_title.replace('"', '\\"')
+                            updated_md = re.sub(r'title:\s*"YouTube Video [^"]+"', f'title: "{safe_dl_title}"', updated_md)
+                        if updated_md != raw_md:
+                            source_path.write_text(updated_md, encoding="utf-8")
+                    except Exception:
+                        pass
+                except Exception as dl_err:
+                    raise RuntimeError(
+                        f"Video could not be downloaded locally ({dl_err}); skipping video quiz generation."
+                    ) from dl_err
+                finally:
+                    shutil.rmtree(tmp_dl_dir, ignore_errors=True)
+
+            if not local_media_file or not local_media_file.exists():
+                raise RuntimeError(
+                    f"No local playable video file found for '{source_path.name}'; skipping video quiz generation."
+                )
+
+            video_type = "local"
+            video_url = f"/wiki/{core_name}/sources/media/{local_media_file.name}"
+
             return {"transcript": transcript, "video_url": video_url, "video_type": video_type, "cefr_level": cefr, "source_stem": source_path.stem}
 
         return None

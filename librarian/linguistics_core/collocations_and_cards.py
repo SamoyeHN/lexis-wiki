@@ -119,12 +119,23 @@ class CollocationsAndCardsMixin:
                 raw_pats.append(u["phrase"])
 
         for pat in raw_pats:
-            pat_clean = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", str(pat).lower())
+            pat_l_raw = str(pat).lower()
+            if norm_pos == "adjective" and re.search(rf"\bit\s+is\s+{re.escape(w_clean)}\b.*\bto\b", pat_l_raw):
+                continue
+            pat_clean = re.sub(r"\bto\s+[a-z]+(?:\s+something|\s+somebody|\s+sb|\s+sth)?\b", "", pat_l_raw)
             pat_clean = re.sub(r"^(?:be\s+[a-z]+(?:ed|en)|be\s+pleased|be\s+likely)\s+to\b", "", pat_clean)
             for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at", "into", "against", "over", "towards", "under", "upon"):
-                if re.search(rf"\b{p}\b", pat_clean):
-                    if p not in res["prep"]:
-                        res["prep"].append(p)
+                if norm_pos == "adjective":
+                    has_p = bool(
+                        re.search(
+                            rf"\b{re.escape(w_clean)}(?:\s*/\s*[a-z]+)*\s+(?:[a-z]+\s*/\s*)*{p}\b",
+                            pat_clean,
+                        )
+                    )
+                else:
+                    has_p = bool(re.search(rf"\b{p}\b", pat_clean))
+                if has_p and p not in res["prep"]:
+                    res["prep"].append(p)
 
         # 2. Collocation boxes in PedLex
         for it in colls.get("verbs", []):
@@ -907,9 +918,9 @@ class CollocationsAndCardsMixin:
                 for tok in doc
             )
             has_copular_clause = any(
-                tok.pos_ in ("AUX", "VERB")
+                tok.pos_ in ("AUX", "VERB", "ADJ")
                 and (tok.dep_ in ("ROOT", "cop") or tok.head == tok)
-                and any(c.dep_ in ("acomp", "attr", "dobj", "prep") for c in tok.children)
+                and any(c.dep_ in ("acomp", "attr", "dobj", "prep", "advmod") for c in tok.children)
                 and any(c.dep_ in ("nsubj", "nsubjpass") for c in tok.children)
                 for tok in doc
             )
@@ -1628,6 +1639,7 @@ class CollocationsAndCardsMixin:
                 _downward_mods = {"less", "fewer", "reduce", "reducing", "save", "saving", "not", "never", "avoid", "stop", "without"}
                 best_sec_idx = sec_indices[0]
                 best_sec_score = -999.0
+                sec_scores = {}
                 for _sec_i in sec_indices:
                     _sec_items = [t for t in pos_matched_thes if int(t.get("section_index", 0) or 0) == _sec_i]
                     if not _sec_items:
@@ -1649,10 +1661,12 @@ class CollocationsAndCardsMixin:
                             _sec_score -= 2.0
                     if _sec_concept and locked_def:
                         _sec_score += 0.5 * cls._definition_overlap_ratio(_sec_concept, locked_def)
+                    sec_scores[_sec_i] = _sec_score
                     if _sec_score > best_sec_score:
                         best_sec_score = _sec_score
                         best_sec_idx = _sec_i
-                thes_list = [t for t in thes_list if int(t.get("section_index", 0) or 0) == best_sec_idx]
+                if any(s < 0 for s in sec_scores.values()):
+                    thes_list = [t for t in thes_list if int(t.get("section_index", 0) or 0) == best_sec_idx]
 
             self_indices = [
                 idx_t for idx_t, t in enumerate(thes_list)
@@ -2091,11 +2105,11 @@ class CollocationsAndCardsMixin:
         tw = target_word.strip().lower()
         p_low = (pos or "").lower()
         tok_pos = target_tok.pos_
-        p_key = ("verb" if tok_pos in ("VERB", "AUX") else
+        p_key = ("adj" if p_low.startswith("adj") else
+                 "verb" if tok_pos in ("VERB", "AUX") else
                  "adj" if tok_pos == "ADJ" else
                  "adv" if tok_pos == "ADV" else
                  "noun" if tok_pos in ("NOUN", "PROPN") else
-                 "adj" if p_low.startswith("adj") else
                  "verb" if p_low.startswith("v") else
                  "adv" if p_low.startswith("adv") else "noun")
 
@@ -2122,6 +2136,79 @@ class CollocationsAndCardsMixin:
                     lem = usable(child)
                     if lem:
                         return lem, "object", f"prepositional complement {lem}"
+                    if child.dep_ == "prep" and child.text.lower() in (
+                        "for", "to", "on", "at", "about", "with", "over", "into", "of", "from", "in"
+                    ):
+                        p_str = child.text.lower()
+                        return p_str, "prep", f"governing preposition {p_str}"
+
+        if p_key == "adv":
+            if target_tok.i + 1 < len(target_tok.doc):
+                next_adj = target_tok.doc[target_tok.i + 1]
+                if next_adj.pos_ == "ADJ" and not next_adj.text[:1].isupper():
+                    lem_adj = usable(next_adj)
+                    if lem_adj:
+                        return lem_adj, "modifies_adj", f"modifying adj {lem_adj}"
+            if head is not None and head.pos_ in ("VERB", "ADJ", "ADV"):
+                if not (head.pos_ == "ADJ" and head.text[:1].isupper() and head.i > 0):
+                    lem = usable(head)
+                    if lem:
+                        atype = "modifies_adj" if head.pos_ in ("ADJ", "ADV") else "modifies_verb"
+                        return lem, atype, f"modifying {head.pos_.lower()} {lem}"
+            if target_tok.i + 1 < len(target_tok.doc):
+                next_tok = target_tok.doc[target_tok.i + 1]
+                if next_tok.pos_ in ("ADJ", "VERB") and not (next_tok.pos_ == "ADJ" and next_tok.text[:1].isupper()):
+                    lem = usable(next_tok)
+                    if lem:
+                        atype = "modifies_adj" if next_tok.pos_ == "ADJ" else "modifies_verb"
+                        return lem, atype, f"modifying {next_tok.pos_.lower()} {lem}"
+            if target_tok.i > 0:
+                prev_tok = target_tok.doc[target_tok.i - 1]
+                if prev_tok.pos_ in ("ADJ", "VERB", "ADV") and not (prev_tok.pos_ == "ADJ" and prev_tok.text[:1].isupper() and prev_tok.i > 0):
+                    lem = usable(prev_tok)
+                    if lem:
+                        atype = "modifies_adj" if prev_tok.pos_ in ("ADJ", "ADV") else "modifies_verb"
+                        return lem, atype, f"modifying {prev_tok.pos_.lower()} {lem}"
+            return None, None, None
+
+        if p_key == "adj":
+            # Climb past coordinated adjectives ('cold, formal, and impersonal' -> head of 'cold')
+            eff_head = head
+            while eff_head is not None and eff_head.dep_ == "conj" and eff_head.head.pos_ == "ADJ" and eff_head.head != eff_head:
+                eff_head = eff_head.head
+            if eff_head is not None and eff_head.pos_ == "ADJ" and eff_head.head != eff_head:
+                eff_head = eff_head.head
+            # 1. Attributive noun modification (`amod`, `compound`, or coordinated `conj` modifying a noun)
+            if eff_head is not None and eff_head.pos_ in ("NOUN", "PROPN") and target_tok.dep_ in ("amod", "compound", "conj"):
+                lem = usable(eff_head)
+                if lem:
+                    return lem, "modified_noun", f"modifying noun {lem}"
+            # 2. Post-adjective bound preposition valency (`prep` child)
+            for child in target_tok.children:
+                if child.dep_ == "prep" and child.i > target_tok.i and child.text.lower() in (
+                    "of", "to", "for", "with", "about", "from", "in", "on", "at", "into", "against", "over", "towards", "under", "upon"
+                ):
+                    p_str = child.text.lower()
+                    return p_str, "prep", f"followed by bound preposition {p_str}"
+            # 3. Predicative / Causative verb complement or subject noun through copula
+            if (target_tok.dep_ in ("acomp", "attr", "oprd", "agent", "rcmod", "conj")
+                    and eff_head is not None and eff_head.pos_ in ("AUX", "VERB")):
+                v_lem_a = (eff_head.lemma_ or eff_head.text).lower()
+                if v_lem_a in (
+                    "make", "render", "find", "deem", "keep", "consider",
+                    "feel", "sound", "seem", "remain", "stay", "become", "grow", "turn", "prove",
+                ):
+                    return v_lem_a, "verb_copula", f"predicate complement of verb {v_lem_a}"
+                for child in eff_head.children:
+                    if child.dep_ in ("nsubj", "nsubjpass", "expl") and child.pos_ in ("NOUN", "PROPN"):
+                        lem = usable(child)
+                        if lem:
+                            return lem, "modified_noun", f"predicative complement of {lem}"
+                if eff_head.head is not None and eff_head.head.pos_ in ("NOUN", "PROPN"):
+                    lem = usable(eff_head.head)
+                    if lem:
+                        return lem, "modified_noun", f"predicative complement of {lem}"
+            return None, None, None
 
         # 'parents who are too permissive': the adjective reaches its noun through a copula.
         if (target_tok.dep_ in ("acomp", "attr", "oprd", "agent", "rcmod")
@@ -2183,12 +2270,14 @@ class CollocationsAndCardsMixin:
         pos: str = "noun",
         definition: Optional[str] = None,
         quote: Optional[str] = None,
-        distractors: Optional[List[str]] = None
+        distractors: Optional[List[str]] = None,
+        locked_sense: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
-        Last-resort anchor and authentic example, taken from the dictionary's own sense
-        examples. Sense order is re-ranked by _lock_sense so the example always
-        illustrates the meaning this item teaches, never an unrelated homograph.
+        Last-resort anchor and authentic example, taken strictly from the locked sense's
+        own dictionary examples so polysemous entries never leak cross-sense or cross-POS
+        examples (e.g. 'recognized the symptoms' for the 'publicly honour' sense of 'recognize',
+        or 'will be online' [adj] for the adverb 'online').
         Returns (anchor_word, anchor_type, frame_description, authentic_example).
         """
         tw = target_word.strip().lower()
@@ -2200,16 +2289,20 @@ class CollocationsAndCardsMixin:
 
         dists = [d.strip().lower() for d in (distractors or []) if d.strip()]
         senses = entry.get("senses") or []
-        locked = cls._lock_sense(entry, definition=definition, quote=quote, target_pos=pos)
         ordered: List[Dict[str, Any]] = []
-        if locked is not None and 0 <= locked < len(senses):
-            ordered.append(senses[locked])
-        ordered.extend(s for i, s in enumerate(senses) if i != locked)
+        if locked_sense is not None:
+            ordered = [locked_sense]
+        else:
+            locked = cls._lock_sense(entry, definition=definition, quote=quote, target_pos=pos)
+            if locked is not None and 0 <= locked < len(senses):
+                ordered = [senses[locked]]
+            elif len(senses) == 1:
+                ordered = list(senses)
 
         pool: List[str] = []
         for sense in ordered:
             pool.extend(sense.get("examples") or [])
-        if not pool:
+        if not pool and len(senses) <= 1:
             pool.extend(entry.get("corpus_examples") or [])
             pool.extend(entry.get("other_dict_examples") or [])
 
@@ -2308,10 +2401,8 @@ class CollocationsAndCardsMixin:
             try:
                 nlp = cls.get_spacy()
                 self_forms = {tw_clean} | {t.lemma_.lower() for t in nlp(tw_clean)}
-                s_text = (
+                s_def_text = (
                     (locked_sense.get("definition") or "")
-                    + " "
-                    + " ".join(str(x) for x in (locked_sense.get("examples") or []))
                     + " "
                     + (locked_sense.get("signpost") or "")
                     + " "
@@ -2319,11 +2410,22 @@ class CollocationsAndCardsMixin:
                     + " "
                     + " ".join(str(x) for x in (locked_sense.get("patterns") or []))
                 ).lower()
+                s_text = (
+                    s_def_text
+                    + (
+                        ""
+                        if is_polysemous
+                        else (" " + " ".join(str(x) for x in (locked_sense.get("examples") or []))).lower()
+                    )
+                )
                 sense_lemmas = {
                     tok.lemma_.lower()
                     for tok in nlp(s_text)
                     if tok.is_alpha and not tok.is_stop and len(tok.lemma_) >= 3
-                } - self_forms - cls._ANCHOR_STOPWORDS
+                } - self_forms - cls._ANCHOR_STOPWORDS - {
+                    "member", "members", "group", "groups", "organization", "organizations",
+                    "system", "systems", "part", "parts", "number", "amount", "kind", "type", "form"
+                }
                 if is_polysemous:
                     other_chunks = []
                     for idx_o, s_other in enumerate(senses):
@@ -2340,7 +2442,7 @@ class CollocationsAndCardsMixin:
                         )
                     if other_chunks:
                         o_text = " ".join(other_chunks).lower()
-                        other_sense_lemmas = (
+                        raw_other_lemmas = (
                             {
                                 tok.lemma_.lower()
                                 for tok in nlp(o_text)
@@ -2348,8 +2450,11 @@ class CollocationsAndCardsMixin:
                             }
                             - self_forms
                             - cls._ANCHOR_STOPWORDS
-                            - sense_lemmas
                         )
+                        disc_sense_lemmas = sense_lemmas - raw_other_lemmas
+                        if disc_sense_lemmas:
+                            sense_lemmas = disc_sense_lemmas
+                        other_sense_lemmas = raw_other_lemmas - sense_lemmas
             except Exception:
                 sense_lemmas = set()
                 other_sense_lemmas = set()
@@ -2385,78 +2490,119 @@ class CollocationsAndCardsMixin:
             except Exception:
                 return 0
 
-        # 1. Adjective Cascades (prep valency >> modified_noun >> adv_mod)
+        # 1. Adjective Cascades (Instance-Aware: modified_noun >> prep when quote is attributive; prep >> modified_noun when predicative)
         if p_low.startswith("adj") or p_low == "a":
-            # Level 1: Preposition valency from locked sense grammar patterns (e.g. 'proud of', 'aware of', 'serious about')
-            for s in candidate_senses:
-                for pat in s.get("patterns", []):
-                    for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at"):
-                        if re.search(rf"\b{p}\b", pat.lower()):
-                            if p == "to":
-                                m_inf = re.search(r"\bto\s+([a-z]+)", pat.lower())
-                                if m_inf and m_inf.group(1) not in (
-                                    "sb", "sth", "someone", "something", "oneself", "himself", "herself", "them", "the", "a", "an"
-                                ):
-                                    continue  # Infinitive pattern (e.g. 'simple to use'), NOT a bound preposition
-                            # Select example that directly demonstrates the bound preposition
-                            matching_exs = [e for e in s.get("examples", []) if re.search(rf"\b{p}\b", e.lower())]
-                            ex = matching_exs[0] if matching_exs else (s.get("examples", [""])[0] if s.get("examples") else "")
-                            if not any(cls.double_key_collision(tw_clean, d, anchor=p, anchor_type="prep", pos="adj")[0] for d in dists):
-                                anchor = p
-                                atype = "prep"
-                                frame_desc = f"followed by bound preposition {p}"
-                                authentic_ex = ex
-                                break
-                    if anchor:
-                        break
-                if anchor:
-                    break
-
-            # Level 1.5: Modified nouns extracted from locked sense authentic examples (e.g. 'firm mattress')
-            if not anchor and candidate_senses:
+            quote_adj_is_attributive = any(
+                "only before noun" in str(s.get("grammar") or "").lower()
+                for s in candidate_senses
+                if isinstance(s, dict)
+            )
+            if not quote_adj_is_attributive and quote:
                 try:
                     nlp = cls.get_spacy()
-                    quote_lower = (quote or "").lower()
-                    cand_nouns = []
-                    for s in candidate_senses:
-                        for ex in s.get("examples", []):
-                            doc_ex = nlp(ex)
-                            for tok in doc_ex:
-                                if tok.lemma_.lower() == tw_clean:
-                                    if tok.dep_ == "amod" and tok.head.pos_ in ("NOUN", "PROPN"):
-                                        cand_n = tok.head.lemma_.lower()
-                                        if cand_n not in cls._ANCHOR_STOPWORDS and len(cand_n) >= 3:
-                                            cand_nouns.append((cand_n, ex))
-                    cand_nouns.sort(key=lambda x: (1 if quote_lower and x[0] in quote_lower else 0), reverse=True)
-                    for cand_n, ex in cand_nouns:
-                        if not any(cls.double_key_collision(tw_clean, d, anchor=cand_n, anchor_type="modified_noun", pos="adj")[0] for d in dists):
-                            anchor = cand_n
-                            atype = "modified_noun"
-                            frame_desc = f"modifying noun {cand_n}"
-                            authentic_ex = ex
-                            break
+                    if nlp:
+                        doc_q_adj = nlp(quote)
+                        for tok_q in doc_q_adj:
+                            if cls._is_target_form(tok_q, tw_clean):
+                                has_q_prep = any(ch.dep_ == "prep" and ch.i > tok_q.i for ch in tok_q.children)
+                                if tok_q.dep_ == "amod" and tok_q.head.pos_ in ("NOUN", "PROPN") and not has_q_prep:
+                                    quote_adj_is_attributive = True
+                                break
                 except Exception:
                     pass
 
-            if not anchor and entry.get("collocations", {}).get("nouns"):
-                colloc_nouns = list(entry["collocations"]["nouns"])
-                if sense_lemmas:
-                    if is_polysemous:
-                        colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
-                    colloc_nouns.sort(key=_score_colloc_item, reverse=True)
-                for it in colloc_nouns:
-                    c_str = it.get("collocation", "").lower()
-                    ex = it.get("example", "")
-                    tok_n = cls._pick_anchor_token([c_str], target_word=tw_clean, prefer_pos="noun")
-                    if tok_n and len(tok_n) >= 3 and tok_n not in cls._ANCHOR_STOPWORDS:
-                        if not any(cls.double_key_collision(tw_clean, d, anchor=tok_n, anchor_type="modified_noun", pos="adj")[0] for d in dists):
-                            anchor = tok_n
-                            atype = "modified_noun"
-                            frame_desc = f"modifying noun {tok_n}"
-                            authentic_ex = ex
+            def _try_adj_prep_anchor() -> None:
+                nonlocal anchor, atype, frame_desc, authentic_ex
+                for s in candidate_senses:
+                    for pat in s.get("patterns", []):
+                        pat_l_a = re.sub(r"\[.*?\]|\(.*?\)", "", pat).strip().lower()
+                        if re.search(rf"\bit\s+is\s+{re.escape(tw_clean)}\b.*\bto\b", pat_l_a):
+                            continue
+                        for p in ("of", "to", "for", "with", "about", "from", "in", "on", "at"):
+                            if re.search(rf"\b{re.escape(tw_clean)}(?:\s*/\s*[a-z]+)*\s+(?:[a-z]+\s*/\s*)*{p}\b", pat_l_a):
+                                if p == "to":
+                                    m_inf = re.search(r"\bto\s+([a-z]+)", pat_l_a)
+                                    if m_inf and m_inf.group(1) not in (
+                                        "sb", "sth", "someone", "something", "oneself", "himself", "herself", "them", "the", "a", "an"
+                                    ):
+                                        continue  # Infinitive pattern (e.g. 'simple to use'), NOT a bound preposition
+                                # Select example that directly demonstrates the bound preposition following the adjective
+                                matching_exs = [
+                                    e for e in s.get("examples", [])
+                                    if re.search(rf"\b{re.escape(tw_clean)}\w*(?:\s+[a-z]+){{0,2}}\s+{p}\b", e.lower())
+                                ]
+                                ex = matching_exs[0] if matching_exs else (s.get("examples", [""])[0] if s.get("examples") else "")
+                                if not any(cls.double_key_collision(tw_clean, d, anchor=p, anchor_type="prep", pos="adj")[0] for d in dists):
+                                    anchor = p
+                                    atype = "prep"
+                                    frame_desc = f"followed by bound preposition {p}"
+                                    authentic_ex = ex
+                                    break
+                        if anchor:
                             break
+                    if anchor:
+                        break
 
-            # Level 2.5: Causative / Predicative Verb Frames (e.g. 'make it possible', 'render possible', 'find possible')
+            def _try_adj_modified_noun_anchor() -> None:
+                nonlocal anchor, atype, frame_desc, authentic_ex
+                if not anchor and candidate_senses:
+                    try:
+                        nlp = cls.get_spacy()
+                        quote_lower = (quote or "").lower()
+                        cand_nouns = []
+                        for s in candidate_senses:
+                            for ex in s.get("examples", []):
+                                doc_ex = nlp(ex)
+                                for tok in doc_ex:
+                                    if cls._is_target_form(tok, tw_clean):
+                                        eff_h = tok.head
+                                        while eff_h is not None and eff_h.dep_ == "conj" and eff_h.head.pos_ == "ADJ" and eff_h.head != eff_h:
+                                            eff_h = eff_h.head
+                                        if eff_h is not None and eff_h.pos_ == "ADJ" and eff_h.head != eff_h:
+                                            eff_h = eff_h.head
+                                        if tok.dep_ in ("amod", "conj") and eff_h is not None and eff_h.pos_ in ("NOUN", "PROPN") and tok.i < eff_h.i:
+                                            cand_n = eff_h.lemma_.lower()
+                                            if cand_n not in cls._ANCHOR_STOPWORDS and len(cand_n) >= 3:
+                                                cand_nouns.append((cand_n, ex))
+                        cand_nouns.sort(key=lambda x: (1 if quote_lower and x[0] in quote_lower else 0), reverse=True)
+                        for cand_n, ex in cand_nouns:
+                            if not any(cls.double_key_collision(tw_clean, d, anchor=cand_n, anchor_type="modified_noun", pos="adj")[0] for d in dists):
+                                anchor = cand_n
+                                atype = "modified_noun"
+                                frame_desc = f"modifying noun {cand_n}"
+                                authentic_ex = ex
+                                break
+                    except Exception:
+                        pass
+
+                if not anchor and entry.get("collocations", {}).get("nouns"):
+                    colloc_nouns = list(entry["collocations"]["nouns"])
+                    if sense_lemmas:
+                        if is_polysemous:
+                            colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
+                        colloc_nouns.sort(key=_score_colloc_item, reverse=True)
+                    for it in colloc_nouns:
+                        c_str = it.get("collocation", "").lower()
+                        ex = it.get("example", "")
+                        tok_n = cls._pick_anchor_token([c_str], target_word=tw_clean, prefer_pos="noun")
+                        if tok_n and len(tok_n) >= 3 and tok_n not in cls._ANCHOR_STOPWORDS:
+                            if not any(cls.double_key_collision(tw_clean, d, anchor=tok_n, anchor_type="modified_noun", pos="adj")[0] for d in dists):
+                                anchor = tok_n
+                                atype = "modified_noun"
+                                frame_desc = f"modifying noun {tok_n}"
+                                authentic_ex = ex
+                                break
+
+            if quote_adj_is_attributive:
+                _try_adj_modified_noun_anchor()
+                if not anchor:
+                    _try_adj_prep_anchor()
+            else:
+                _try_adj_prep_anchor()
+                if not anchor:
+                    _try_adj_modified_noun_anchor()
+
+            # Level 2.5: Causative / Linking Predicative Verb Frames (e.g. 'make it possible', 'keep silent', 'feel surprised')
             if not anchor and entry.get("collocations", {}).get("phrases"):
                 colloc_phrases = list(entry["collocations"]["phrases"])
                 if is_polysemous and sense_lemmas:
@@ -2464,7 +2610,10 @@ class CollocationsAndCardsMixin:
                 for it in colloc_phrases:
                     c_str = it.get("collocation", "").lower()
                     ex = it.get("example", "")
-                    for cv in ("make", "render", "find", "deem", "keep", "consider"):
+                    for cv in (
+                        "make", "render", "find", "deem", "keep", "consider",
+                        "feel", "sound", "seem", "remain", "stay", "become", "grow", "turn", "prove",
+                    ):
                         if re.search(rf"\b{cv}\b", c_str):
                             if not any(cls.double_key_collision(tw_clean, d, anchor=cv, anchor_type="verb_copula", pos="adj")[0] for d in dists):
                                 anchor = cv
@@ -2590,7 +2739,9 @@ class CollocationsAndCardsMixin:
             if not anchor:
                 for s in candidate_senses:
                     for pat in s.get("patterns", []):
-                        pat_l = pat.lower()
+                        # Strip infinitival `to do` so patterns like 'offer to do something'
+                        # are never mistaken for governing preposition 'to'.
+                        pat_l = re.sub(r"\bto\s+do\b.*", "", pat.lower())
                         for p in ("to", "on", "at", "about", "for", "with", "over", "into", "of", "from", "in"):
                             if re.search(rf"\b{p}\b", pat_l):
                                 matching_exs = [e for e in s.get("examples", []) if re.search(rf"\b{p}\b", e.lower())]
@@ -2752,12 +2903,19 @@ class CollocationsAndCardsMixin:
                                 for tok in doc:
                                     if tok.lemma_.lower() == tw_clean or tok.text.lower() == tw_clean:
                                         head = tok.head
+                                        cand_tok = None
                                         if head and head.pos_ == req_pos and head.lemma_.lower() not in cls._ANCHOR_STOPWORDS and head.lemma_.lower() != tw_clean:
-                                            cand_head = head.lemma_.lower()
+                                            cand_tok = head
+                                        elif tok.i > 0 and doc[tok.i - 1].pos_ == req_pos and doc[tok.i - 1].lemma_.lower() not in cls._ANCHOR_STOPWORDS and doc[tok.i - 1].lemma_.lower() != tw_clean:
+                                            cand_tok = doc[tok.i - 1]
+                                        elif tok.i + 1 < len(doc) and doc[tok.i + 1].pos_ == req_pos and doc[tok.i + 1].lemma_.lower() not in cls._ANCHOR_STOPWORDS and doc[tok.i + 1].lemma_.lower() != tw_clean:
+                                            cand_tok = doc[tok.i + 1]
+                                        if cand_tok is not None:
+                                            cand_head = cand_tok.lemma_.lower()
                                             if not any(cls.double_key_collision(tw_clean, d, anchor=cand_head, anchor_type=req_atype, pos="adv", quote=quote)[0] for d in dists):
                                                 anchor = cand_head
                                                 atype = req_atype
-                                                frame_desc = f"modifying {head.pos_.lower()} {cand_head}"
+                                                frame_desc = f"modifying {cand_tok.pos_.lower()} {cand_head}"
                                                 authentic_ex = ex
                                                 break
                                 if anchor:
@@ -2773,7 +2931,7 @@ class CollocationsAndCardsMixin:
         if not anchor:
             anchor, atype, frame_desc, authentic_ex = cls._anchor_from_sense_example(
                 tw_clean, entry, pos=p_low, definition=definition,
-                quote=quote, distractors=dists
+                quote=quote, distractors=dists, locked_sense=locked_sense,
             )
 
         if anchor:

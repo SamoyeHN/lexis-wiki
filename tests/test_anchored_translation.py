@@ -250,9 +250,9 @@ class TestAnchoredTranslation(unittest.TestCase):
             target_keyword="defy",
             target_grammar="Concessive clause",
             idiomatic_translation="Despite facing immense pressure, they summoned the courage to defy the unjust directives.",
-            flawed_translation="Although facing big pressure, but they took courage to defy the unjust orders.",
+            flawed_translation="Although facing immense pressure, but they summoned the courage to defy the unjust directives.",
             flaw_type="Chinglish syntax & redundant connective (Although... but)",
-            diagnostic_critique="Version B commits an L1 negative-transfer error by pairing 'Although' with 'but'. Furthermore, 'took courage' is a weak translation compared to 'summoned the courage'."
+            diagnostic_critique="Version B commits an L1 negative-transfer error by pairing 'Although' with 'but'."
         )
         self.assertEqual(q.target_keyword, "defy")
         self.assertEqual(q.idiomatic_translation, "Despite facing immense pressure, they summoned the courage to defy the unjust directives.")

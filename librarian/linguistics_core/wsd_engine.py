@@ -602,6 +602,8 @@ class WsdEngineMixin:
         target_tok_morph_number = None
         target_tok_is_predicative = False
         target_tok_is_attributive = False
+        target_v_has_dobj = False
+        target_v_is_bare_active_intrans = False
         doc_q = None
         if quote and len(senses) > 1:
             try:
@@ -618,6 +620,16 @@ class WsdEngineMixin:
                 if matching_toks:
                     mt0 = matching_toks[0]
                     has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in mt0.children)
+                    if mt0.pos_ in ('VERB', 'AUX'):
+                        _measure_nouns = {'time', 'times', 'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 'hour', 'hours', 'minute', 'minutes', 'moment', 'way', 'ways', 'mile', 'miles', 'step', 'steps', 'lot', 'bit'}
+                        _dobj_ch = [ch for ch in mt0.children if ch.dep_ in ('dobj', 'obj', 'dative') and ch.lemma_.lower() not in _measure_nouns]
+                        if _dobj_ch or any(ch.dep_ in ('nsubjpass', 'nsubj:pass', 'auxpass') for ch in mt0.children):
+                            target_v_has_dobj = True
+                        elif (
+                            mt0.dep_ not in ('relcl', 'acl', 'amod')
+                            and not any(ch.dep_ in ('dobj', 'obj', 'dative', 'ccomp', 'xcomp', 'oprd', 'nsubjpass', 'auxpass', 'agent') for ch in mt0.children)
+                        ):
+                            target_v_is_bare_active_intrans = True
                     if mt0.pos_ == 'NOUN':
                         target_tok_morph_number = mt0.morph.get('Number')
                     if mt0.dep_ in ('acomp', 'oprd') or (
@@ -850,6 +862,13 @@ class WsdEngineMixin:
                     score -= 60
             elif target_tok_is_attributive and "[not before noun]" in s_gram:
                 score -= 60
+            if eff_p == "v" and s_gram:
+                _s_has_intrans = bool(re.search(r"\bintransitive\b", s_gram))
+                _s_has_trans = bool(re.search(r"\btransitive\b", s_gram))
+                if target_v_has_dobj and _s_has_intrans and not _s_has_trans:
+                    score -= 45
+                elif target_v_is_bare_active_intrans and _s_has_trans and not _s_has_intrans:
+                    score -= 35
 
             # 0c. Spoken Register Invariant Gate:
             # If sense is marked as [spoken] / conversational formula, penalize in standard narrative or exposition
@@ -932,11 +951,11 @@ class WsdEngineMixin:
                 if has_constructive_frame and not has_pejorative_cue:
                     score -= 50
 
-            # 1. Quote token overlap against sense examples & patterns
+            # 1. Quote token overlap against sense examples, patterns & units
             ex_tokens = set()
             for ex in s.get("examples", []):
                 ex_tokens.update(re.findall(r"\b[a-zA-Z]{3,}\b", ex.lower()))
-            for pat in s.get("patterns", []):
+            for pat in list(s.get("patterns") or []) + list(s.get("units") or []):
                 ex_tokens.update(re.findall(r"\b[a-zA-Z]{3,}\b", pat.lower()))
             
             # meta_stopwords is computed once above, before the cue-index query, so
@@ -1024,7 +1043,10 @@ class WsdEngineMixin:
             if quote:
                 target_w_clean = entry.get("word", "").lower()
                 any_sense_pat_matched = False
+                sense_selectional_violation = False
                 for pat in s.get("patterns", []):
+                    if sense_selectional_violation:
+                        break
                     pat_clean = pat.lower().strip()
                     branches = cls.clean_and_expand_pattern_slashes(pat)
 
@@ -1044,8 +1066,16 @@ class WsdEngineMixin:
                                 if not v_toks:
                                     v_toks = [t for t in doc_q if t.pos_ in ("VERB", "AUX")]
                                 
-                                # Check if any matching verb governs a direct object or prepositional object
-                                governing_objs = [c for v in v_toks for c in v.children if c.dep_ in ("dobj", "obj")]
+                                # Check if any matching verb governs a direct object, passive Patient (nsubjpass), or relative/participial head
+                                governing_objs = [
+                                    c for v in v_toks for c in v.children
+                                    if c.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass")
+                                ]
+                                if not governing_objs:
+                                    governing_objs = [
+                                        v.head for v in v_toks
+                                        if v.dep_ in ("relcl", "acl", "amod") and v.head.pos_ in ("NOUN", "PROPN", "PRON")
+                                    ]
                                 if not governing_objs:
                                     governing_objs = [
                                         gc for v in v_toks for c in v.children if c.dep_ == "prep"
@@ -1062,27 +1092,34 @@ class WsdEngineMixin:
                                     if not has_passive_or_rel_obj:
                                         continue
                                 else:
-                                    # Enforce selectional restrictions: human vs inanimate
+                                    # Enforce selectional restrictions: human vs inanimate (across active dobj AND passive nsubjpass)
                                     has_sb = "somebody" in br or " sb " in f" {br} "
                                     has_sth = "something" in br or " sth " in f" {br} "
                                     if has_sb and not has_sth:
-                                        # Requires human object
+                                        # Requires human object/patient
                                         is_human = any(
-                                            c.text.lower() in ("him", "her", "me", "us", "someone", "somebody", "person", "people", "man", "woman", "child", "friend", "player")
+                                            c.text.lower() in ("him", "her", "me", "us", "you", "who", "whom", "someone", "somebody", "person", "people", "man", "woman", "child", "friend", "player")
                                             or c.ent_type_ == "PERSON"
+                                            or "noun.person" in (cls.get_wordnet_supersenses(c.lemma_.lower(), pos="n") or set())
                                             for c in governing_objs
                                         )
                                         if not is_human:
-                                            continue
+                                            score -= 65
+                                            matched_pat = False
+                                            sense_selectional_violation = True
+                                            break
                                     elif has_sth and not has_sb:
-                                        # Requires non-human/inanimate object
+                                        # Requires non-human/inanimate object/patient
                                         is_pure_human = any(
-                                            c.text.lower() in ("him", "her", "me", "us", "someone", "somebody")
+                                            c.text.lower() in ("him", "her", "me", "us", "who", "whom", "someone", "somebody")
                                             or c.ent_type_ == "PERSON"
                                             for c in governing_objs
                                         )
                                         if is_pure_human:
-                                            continue
+                                            score -= 65
+                                            matched_pat = False
+                                            sense_selectional_violation = True
+                                            break
                             except Exception:
                                 pass
 
@@ -1218,7 +1255,10 @@ class WsdEngineMixin:
                     if not (_ctx_tokens & _pol_triggers):
                         score -= 45
 
+                _sense_pat_set = {p.lower().strip() for p in (s.get("patterns") or []) if p}
                 for u in s.get("units", []):
+                    if any_sense_pat_matched and str(u).lower().strip() in _sense_pat_set:
+                        continue
                     # Capitalized Proper-Noun Unit Guard (e.g. 'the Passion' vs lowercase 'the passion')
                     _u_words = re.findall(r"[A-Za-z]+", str(u))
                     _cap_non_initial = [w for w in _u_words[1:] if w[0].isupper()]
@@ -1334,7 +1374,19 @@ class WsdEngineMixin:
                                     best_unit_bonus = max(best_unit_bonus, 45)
                                     any_unit_matched = True
                                     break
-                            elif cls._quote_has_frame(q_seq, words, window=(cls.PATTERN_FRAME_WINDOW if has_infix_slot else 1)):
+                            elif cls._quote_has_frame(
+                                q_seq,
+                                words,
+                                window=(
+                                    cls.PATTERN_FRAME_WINDOW
+                                    if (
+                                        has_infix_slot
+                                        or "etc" in u_interior
+                                        or (eff_p == "v" and len(words) >= 3 and words[-1] in cls._PATTERN_PREPS)
+                                    )
+                                    else 1
+                                ),
+                            ):
                                 # Fixed Idiom Invariant: if target word in quote has an intervening/modifying
                                 # content noun or adjective (e.g. 'voice message', 'text message'), it is NOT
                                 # the figurative idiom 'get the message' — UNLESS the unit explicitly specifies an infix slot ('in a ... fashion')!
@@ -1673,6 +1725,15 @@ class WsdEngineMixin:
                             mod_noun = ""
                             if tok.head and tok.head.pos_ in ("NOUN", "PROPN"):
                                 mod_noun = tok.head.lemma_.lower()
+                            elif (
+                                tok.dep_ in ("amod", "compound")
+                                and tok.head
+                                and tok.head.i > tok.i
+                                and tok.head.i + 2 < len(q_doc)
+                                and q_doc[tok.head.i + 1].text in ("-", "–", "—")
+                                and q_doc[tok.head.i + 2].pos_ in ("NOUN", "PROPN")
+                            ):
+                                mod_noun = q_doc[tok.head.i + 2].lemma_.lower()
                             elif tok.dep_ in ("acomp", "attr") and tok.head and tok.head.pos_ in ("AUX", "VERB"):
                                 # Copula predicate: e.g. "work style is not conventional" -> style
                                 for ch in tok.head.children:
@@ -1905,8 +1966,15 @@ class WsdEngineMixin:
                                         if conj_dobjs:
                                             surface_dobjs = conj_dobjs
                                             break
-                            if not surface_dobjs and eff_p == "v" and tok.dep_ in ("amod", "compound") and tok.head.pos_ in ("NOUN", "PROPN") and tok.head.i > tok.i:
-                                surface_dobjs = [tok.head]
+                            if not surface_dobjs and eff_p == "v" and tok.dep_ in ("amod", "compound") and tok.head.i > tok.i:
+                                if tok.head.pos_ in ("NOUN", "PROPN"):
+                                    surface_dobjs = [tok.head]
+                                elif (
+                                    tok.head.i + 2 < len(q_doc)
+                                    and q_doc[tok.head.i + 1].text in ("-", "–", "—")
+                                    and q_doc[tok.head.i + 2].pos_ in ("NOUN", "PROPN")
+                                ):
+                                    surface_dobjs = [q_doc[tok.head.i + 2]]
                             if not surface_dobjs and eff_p == "v" and tok.dep_ == "conj":
                                 _r_head = (
                                     tok.head if tok.head.dep_ == "ROOT"
@@ -1950,7 +2018,7 @@ class WsdEngineMixin:
 
                             surface_nsubjs = [ch for ch in tok.children if ch.dep_ in ("nsubj", "csubj")]
                             if not surface_nsubjs and eff_p == "v" and tok.dep_ == "xcomp":
-                                surface_nsubjs = [ch for ch in tok.head.children if ch.dep_ in ("nsubj", "csubj", "dobj", "obj")]
+                                surface_nsubjs = [ch for ch in tok.head.children if ch.dep_ in ("nsubj", "nsubjpass", "nsubj:pass", "csubj", "dobj", "obj")]
                             if not surface_nsubjs and eff_p == "v":
                                 left_nom_children = [
                                     ch for ch in tok.children
@@ -2005,7 +2073,7 @@ class WsdEngineMixin:
                                 return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\s+to\s+(?:do|make|have|be)\b", t_clean))
 
                             # Distinguish direct object requirement from complex complements or non-finite verbal complements
-                            def _requires_direct_object(txt: str) -> bool:
+                            def _requires_direct_object(txt: str, require_quote_lex_match: bool = False) -> bool:
                                 t_clean = re.sub(r"\(.*?\)", "", txt)
                                 t_clean = re.sub(r"\b(?:somebody|someone|something|sb|sth)(?:/(?:somebody|someone|something|sb|sth))*\s+to\s+(?:do|make|have|be)\s+(?:something|sth|somebody|sb)?\b", "", t_clean)
                                 t_clean = re.sub(r"\b(?:to|and)\s+(?:do|make|have)\s+(?:something|sth|somebody|sb)\b", "", t_clean)
@@ -2019,7 +2087,27 @@ class WsdEngineMixin:
                                     "",
                                     t_clean,
                                 )
-                                return bool(re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean))
+                                if re.search(r"\b(?:somebody|someone|something|sb|sth)\b", t_clean):
+                                    return True
+                                if not t_clean.strip().lower().startswith("be "):
+                                    rem_words = [
+                                        w for w in re.findall(r"[a-z]{2,}", t_clean.lower())
+                                        if w not in cls._PATTERN_PREPS
+                                        and w not in cls._PATTERN_PARTICLES
+                                        and w not in cls._PATTERN_FUNCTION_WORDS
+                                        and w not in ("be", "become", "get", "grow", "do", "doing", "etc")
+                                        and not cls.form_matches(w, target_w_clean)
+                                        and w not in target_inflections
+                                    ]
+                                    if rem_words:
+                                        if require_quote_lex_match:
+                                            return any(
+                                                cls.form_matches(rw, qw)
+                                                for rw in rem_words
+                                                for qw in q_seq
+                                            )
+                                        return True
+                                return False
 
                             # Check if definition shows ergative or intransitive conditional usage:
                             # e.g. 'if a situation, game etc turns around, or if someone turns it around', 'if a situation picks up, it improves'
@@ -2096,12 +2184,15 @@ class WsdEngineMixin:
                                     req_preps = [t for t in p_toks if t in _all_pat_preps]
                                     return (not req_preps) or any(rp in q_seq for rp in req_preps)
 
-                                has_trans_pat = any(_requires_direct_object(p) and _pat_preps_satisfied(p) for p in s_pats)
+                                has_trans_pat = any(
+                                    _requires_direct_object(p, require_quote_lex_match=True) and _pat_preps_satisfied(p)
+                                    for p in all_pat_units
+                                )
                                 has_strictly_intrans_prep_pat = any(
                                     not _requires_direct_object(p)
                                     and len(p.lower().split()) >= 2
                                     and p.lower().split()[1] in cls._PATTERN_PREPS
-                                    for p in s_pats
+                                    for p in all_pat_units
                                 )
                                 if has_trans_pat:
                                     score += 35
@@ -2134,11 +2225,12 @@ class WsdEngineMixin:
                             # Direct object argument matching (governs deep_dobj_tokens, supporting passive projection)
                             for ch in deep_dobj_tokens:
                                 obj_lem = ch.lemma_.lower()
-                                if obj_lem in s_def_tokens:
+                                obj_txt = ch.text.lower()
+                                if obj_lem in s_def_tokens or obj_txt in s_def_tokens or any(cls.form_matches(dt, obj_lem) for dt in s_def_tokens):
                                     score += 35
                                 elif any(re.search(rf"\b{re.escape(obj_lem)}\b", ex.lower()) for ex in s.get("examples", [])):
                                     score += 30
-                                elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in s.get("patterns", [])):
+                                elif any(re.search(rf"\b{re.escape(obj_lem)}\b", p.lower()) for p in all_pat_units):
                                     score += 30
 
                                 if obj_lem in ("dream", "dreams", "ambition", "goal", "potential", "hope", "desire", "plan", "aim", "vision", "aspiration"):
@@ -2156,6 +2248,16 @@ class WsdEngineMixin:
                                 # Supersenses selectional restrictions for dobj:
                                 obj_supersenses = cls.get_wordnet_supersenses(obj_lem, pos="n")
                                 if obj_supersenses:
+                                    if "noun.food" in obj_supersenses:
+                                        if any(k in s_defn or k in sp for k in ("food", "eat", "drink", "cook", "meal", "meat", "preserve")):
+                                            score += 45
+                                        elif "liquid" in s_defn or "liquid" in sp:
+                                            score += 20
+                                    elif "noun.substance" in obj_supersenses:
+                                        if any(k in s_defn or k in sp for k in ("liquid", "substance", "solid", "food", "eat", "drink", "cook")):
+                                            score += 45
+                                    if "noun.body" not in obj_supersenses and "part of your body" in s_defn:
+                                        score -= 40
                                     if "noun.communication" in obj_supersenses or "noun.possession" in obj_supersenses:
                                         if any(k in s_defn for k in ("give", "award", "prize", "gift", "medal", "money", "present", "degree")):
                                             score += 40
@@ -2184,7 +2286,10 @@ class WsdEngineMixin:
                                     # Check if preposition / particle is explicitly in sense patterns (e.g. 'for', 'by', 'in', 'around', 'down', 'back', 'away')
                                     # If pattern contains content words or wh-markers (e.g. 'appear in a film', 'where somebody is coming from'), they must also be present
                                     pat_matched = False
-                                    for pat in s.get("patterns", []):
+                                    sense_person_violation = False
+                                    for pat in list(s.get("patterns") or []) + list(s.get("units") or []):
+                                        if sense_person_violation:
+                                            break
                                         branches = cls.clean_and_expand_pattern_slashes(pat)
                                         has_etc_locative = (
                                             "etc" in pat.lower().split()
@@ -2210,7 +2315,7 @@ class WsdEngineMixin:
                                                 if wh_markers and not any(w in q_seq for w in wh_markers):
                                                     continue
                                                 # Selectional restriction: if pattern requires person object (e.g. 'coming from him/her/you etc' or 'put somebody out')
-                                                # and context prepositional or direct object is inanimate / non-person, skip this pattern
+                                                # and context prepositional or direct/passive object is inanimate / non-person, skip this sense's patterns
                                                 has_person_constraint = any(w in ("him", "her", "you", "someone", "somebody", "sb") for w in pw) and not any(w in ("something", "sth", "what") for w in pw)
                                                 if has_person_constraint:
                                                     p_objs = [pc for pc in ch.children if pc.dep_ in ("pobj", "pcomp")] or list(deep_dobj_tokens)
@@ -2223,14 +2328,15 @@ class WsdEngineMixin:
                                                             for pc in p_objs
                                                         )
                                                         if not is_pobj_person:
-                                                            continue
+                                                            sense_person_violation = True
+                                                            break
                                                 content_pw = [w for w in pw if w not in cls._PATTERN_PREPS and w not in cls._PATTERN_PARTICLES and w not in cls._PATTERN_FUNCTION_WORDS and w not in ("be", "become", "get", "grow") and w not in target_inflections]
                                                 req_prep_prt = [w for w in pw if w in cls._PATTERN_PREPS or w in cls._PATTERN_PARTICLES]
                                                 if req_prep_prt and not all(rp in q_seq for rp in req_prep_prt):
                                                     continue
                                                 if _requires_direct_object(br) and not has_effective_obj:
                                                     continue
-                                                if not _requires_direct_object(br) and has_direct_obj and _any_sib_has_trans_pat and not has_trans_gram:
+                                                if not _requires_direct_object(br) and has_effective_obj and _any_sib_has_trans_pat and not has_trans_gram:
                                                     continue
                                                 if not content_pw or any(any(cls.form_matches(tok_q, cpw) for tok_q in q_seq) for cpw in content_pw):
                                                     # When particle/preposition matches pattern (or open-ended locative pattern)
@@ -2368,7 +2474,8 @@ class WsdEngineMixin:
                                             p_supersenses = cls.get_wordnet_supersenses(p_ch_lem, pos="n")
                                             is_financial_or_goods = (
                                                 p_ch_lem in ("dollar", "dollars", "euro", "euros", "pound", "pounds", "cash", "credit", "card", "cheque", "check", "coin", "cent", "bill", "dinner", "ticket", "tickets", "meal", "lunch", "drink", "food", "rent", "tax", "fare", "fee", "goods", "service", "lesson", "lessons", "car")
-                                                or (p_supersenses and any(ss in p_supersenses for ss in ("noun.possession", "noun.food", "noun.artifact")))
+                                                or (p_supersenses and "noun.possession" in p_supersenses)
+                                                or (p_lem == "for" and p_supersenses and any(ss in p_supersenses for ss in ("noun.food", "noun.artifact")))
                                             )
                                             is_wrongdoing_or_penalty = (
                                                 p_ch_lem in ("mistake", "mistakes", "crime", "crimes", "sin", "sins", "error", "errors", "fault", "wrong", "damage", "foolishness", "carelessness", "neglect", "misdeed", "offense", "offence")
@@ -2529,12 +2636,15 @@ class WsdEngineMixin:
                                     if is_birth_defn:
                                         score -= 30
                                     # Selectional restriction: physical body movement senses (signpost 'your body' or definition 'move your body')
-                                    # require human/animate subjects. Non-human/abstract/corporate subjects (company, economy, market, crisis, etc.)
+                                    # or interpersonal social visiting ('to visit someone you know') require human/animate subjects.
+                                    # Non-human/abstract/corporate subjects (company, economy, market, crisis, temperature, etc.)
                                     # cannot perform physical body movements unless explicit body parts are mentioned.
                                     is_body_movement_sense = "your body" in (s.get("signpost") or "").lower() or any(k in s_defn for k in ("move your body", "using your body", "part of your body"))
                                     has_body_part_in_quote = any(bw in q_low_all for bw in ("body", "head", "face", "neck", "shoulder", "arm", "leg", "eye", "eyes", "heel", "back"))
                                     if is_body_movement_sense and not has_body_part_in_quote:
                                         score -= 40
+                                    if "visit someone" in s_defn:
+                                        score -= 50
 
                                     # Quantitative / Financial / Abstract Metric Subject vs. Physical Gravity / Spatial Relocation:
                                     is_metric_or_abstract_subj = (

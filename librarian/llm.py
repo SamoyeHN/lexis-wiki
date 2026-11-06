@@ -1129,15 +1129,34 @@ class LLMClient:
                                                 # Replace target with blank and restore the misplaced blank to a neutral verb/word or drop it
                                                 pass
 
-                                # Auto-heal pre-blank indefinite article leakage (e.g. 'a ____' or 'an ____' with mixed vowel/consonant options)
+                                # Auto-heal pre-blank indefinite article leakage (e.g. 'a ____', 'an ____', 'a(n) ____', or 'a/an ____')
                                 options = q_item.get("options")
-                                if isinstance(options, list) and options and re.search(r"\b(?:a|an)\s+_{2,}\b", stem, flags=re.IGNORECASE):
+                                if isinstance(options, list) and options and re.search(r"\b(?:a\(n\)|a/an|a|an)\s+_{2,}\b", stem, flags=re.IGNORECASE):
                                     initials = {str(opt).strip()[:1].lower() for opt in options if str(opt).strip()}
                                     has_vowel_init = any(init in 'aeiou' for init in initials)
                                     has_cons_init = any(init.isalpha() and init not in 'aeiou' for init in initials)
                                     if has_vowel_init and has_cons_init:
-                                        # Self-heal to 'a(n) ____' to preserve grammaticality and eliminate test-wiseness leakage
-                                        stem = re.sub(r"\b(?:a|an)\s+(_{2,})\b", r"a(n) \1", stem, flags=re.IGNORECASE)
+                                        # Self-heal to 'the ____' to preserve grammaticality and avoid evaluator fatal flag on 'a(n) ____'
+                                        stem = re.sub(
+                                            r"\b(a\(n\)|a/an|a|an)\s+(_{2,})\b",
+                                            lambda m: ("The " if m.group(1)[0].isupper() else "the ") + m.group(2),
+                                            stem,
+                                            flags=re.IGNORECASE,
+                                        )
+                                    elif has_cons_init and not has_vowel_init:
+                                        stem = re.sub(
+                                            r"\b(a\(n\)|a/an|an)\s+(_{2,})\b",
+                                            lambda m: ("A " if m.group(1)[0].isupper() else "a ") + m.group(2),
+                                            stem,
+                                            flags=re.IGNORECASE,
+                                        )
+                                    elif has_vowel_init and not has_cons_init:
+                                        stem = re.sub(
+                                            r"\b(a\(n\)|a/an|a)\s+(_{2,})\b",
+                                            lambda m: ("An " if m.group(1)[0].isupper() else "an ") + m.group(2),
+                                            stem,
+                                            flags=re.IGNORECASE,
+                                        )
 
                                 if "question" in q_item:
                                     q_item["question"] = stem

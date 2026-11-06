@@ -143,7 +143,7 @@ _FIELD_RULES: Tuple[Tuple[Tuple[str, ...], str, str], ...] = (
      "idiomatic_translation",
      "idiomatic_translation violates the target grammar formula ([Subject] + [VP], [V-ed Phrase]) by "
      "using an active -ing phrase after the comma. Rewrite idiomatic_translation with a passive past "
-     "participial adjunct after the comma (e.g., ', followed by ...' or ', organized by ...') and "
+     "participial adjunct ([V-ed Phrase]) after the comma and "
      "pair it with the corresponding active -ing trap in flawed_translation."),
 )
 

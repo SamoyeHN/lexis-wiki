@@ -81,6 +81,12 @@
                 if (previewFrame) {
                     previewFrame.src = '';
                 }
+                const mdContainer = document.getElementById('markdown-preview-container');
+                if (mdContainer) {
+                    mdContainer.querySelectorAll('video, audio').forEach(el => {
+                        try { el.pause(); el.removeAttribute('src'); el.load(); } catch (_) {}
+                    });
+                }
             });
         }
 
@@ -503,10 +509,10 @@
             // 2. Transcripts from unit media
             if (compiledUnits.media) {
                 compiledUnits.media.forEach(mPath => {
-                    const cleanPath = mPath.replace(/\\/g, '/');
+                    const cleanPath = mPath.replace(/\\/g, '/').replace(/^\/+/, '');
                     const parts = cleanPath.split('/');
                     const wikiIdx = parts.indexOf('wiki');
-                    const mUnit = (wikiIdx !== -1 && wikiIdx + 1 < parts.length) ? parts[wikiIdx + 1] : '';
+                    const mUnit = (wikiIdx !== -1 && wikiIdx + 1 < parts.length) ? parts[wikiIdx + 1] : (parts.length > 1 ? parts[0] : '');
                     if (mUnit.toLowerCase() === baseName.toLowerCase() && cleanPath.endsWith('.md')) {
                         const mFileName = cleanPath.split('/').pop();
                         const mTitle = mFileName.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
@@ -523,14 +529,14 @@
             // Also check supplemental files for companion markdown transcripts if any
             if (compiledUnits.supplemental) {
                 compiledUnits.supplemental.forEach(sPath => {
-                    const cleanPath = sPath.replace(/\\/g, '/');
+                    const cleanPath = sPath.replace(/\\/g, '/').replace(/^\/+/, '');
                     const parts = cleanPath.split('/');
                     const wikiIdx = parts.indexOf('wiki');
-                    const sUnit = (wikiIdx !== -1 && wikiIdx + 1 < parts.length) ? parts[wikiIdx + 1] : '';
+                    const sUnit = (wikiIdx !== -1 && wikiIdx + 1 < parts.length) ? parts[wikiIdx + 1] : (parts.length > 1 ? parts[0] : '');
                     if (sUnit.toLowerCase() === baseName.toLowerCase() && cleanPath.endsWith('.md')) {
                         const sFileName = cleanPath.split('/').pop();
                         const sTitle = sFileName.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
-                        const sUrl = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+                        const sUrl = cleanPath.startsWith('wiki/') ? `/${cleanPath}` : `/wiki/${cleanPath}`;
                         if (!unitSources.some(s => s.url === sUrl || s.filename === sFileName)) {
                             unitSources.push({
                                 url: sUrl,
@@ -690,6 +696,15 @@
             if (mdContainer) {
                 mdContainer.classList.remove('d-none');
                 renderMarkdownNode(cleanPath, mdContainer);
+            }
+        } else if (/\.(mp4|webm|mkv|mov)$/i.test(cleanPath)) {
+            if (previewFrame) {
+                previewFrame.classList.add('d-none');
+                previewFrame.src = '';
+            }
+            if (mdContainer) {
+                mdContainer.classList.remove('d-none');
+                mdContainer.innerHTML = `<div class="p-3 d-flex justify-content-center align-items-center" style="min-height: 60vh;"><video src="${cleanPath}" controls preload="metadata" style="width: 100%; max-height: 78vh; border-radius: 0.5rem; background: #000;"></video></div>`;
             }
         } else {
             if (mdContainer) {
@@ -2794,9 +2809,10 @@
                                                  const mName = mediaPath.split('/').pop();
                                                  const isActive = activeMediaMap[unit.id] === mName;
                                                  const isMd = mName.toLowerCase().endsWith('.md');
+                                                 const targetUnitName = unit.rawFile ? esc(unit.rawFile.name) : esc(unit.id);
                                                  const clickAction = isMd
-                                                     ? `openUnitWorkspace('${unit.rawFile ? esc(unit.rawFile.name) : esc(unit.id)}'); loadWorkspaceSourceDoc('/wiki/${esc(mediaPath)}', '${esc(mName)}'); switchWorkspaceSubTab('raw')`
-                                                     : `openUnitWorkspace('${unit.rawFile ? esc(unit.rawFile.name) : esc(unit.id)}'); loadHandoutPreview('/wiki/${esc(mediaPath)}')`;
+                                                     ? `(currentUnit === '${targetUnitName}' ? null : openUnitWorkspace('${targetUnitName}')); loadWorkspaceSourceDoc('/wiki/${esc(mediaPath)}', '${esc(mName)}'); switchWorkspaceSubTab('raw')`
+                                                     : `(currentUnit === '${targetUnitName}' ? null : openUnitWorkspace('${targetUnitName}')); loadHandoutPreview('/wiki/${esc(mediaPath)}')`;
                                                  return `
                                                  <div class="d-flex align-items-center gap-1 my-0.5" style="border-radius: var(--radius-sm); overflow: hidden;">
                                                      <input type="radio" name="active-media-${unit.id}" class="form-check-input my-0 ms-1" style="width: 0.72rem; height: 0.72rem; cursor: pointer; flex-shrink: 0;" ${isActive ? 'checked' : ''} onclick="event.stopPropagation(); selectActiveMedia('${esc(unit.id)}', '${esc(mName)}')" />

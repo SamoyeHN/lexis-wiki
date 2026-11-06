@@ -84,6 +84,9 @@ COLLOCATION_VERB_PREPS: Dict[str, str] = {
 }
 
 ADJ_DEPENDENT_PREPS: Dict[str, str] = {
+    "full": "of",
+    "short": "of",
+    "devoid": "of",
     "aware": "of",
     "conscious": "of",
     "capable": "of",

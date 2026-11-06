@@ -218,8 +218,8 @@ def test_vocab_card_enrichment_and_semantic_discriminator():
 
 def test_main_entry_and_sense_grammar_edge_cases():
     """Verify compound adjective grammar isolation, partial-sense grammar disambiguation, and _verb_takes_object grammar awareness."""
-    # 1. Compound adjective synthesized from verb ('energy-saving') must NOT inherit verb '[transitive]'
-    es_entry = LE.get_ldoce_entry("energy-saving")
+    # 1. Compound adjective ('energy-efficient') must NOT inherit verb '[transitive]'
+    es_entry = LE.get_ldoce_entry("energy-efficient")
     assert es_entry is not None
     assert all("[transitive]" not in (s.get("grammar") or "") for s in es_entry.get("senses", []))
 
@@ -240,7 +240,7 @@ def test_main_entry_and_sense_grammar_edge_cases():
         assert LE._verb_takes_object(intr_v) is False, f"{intr_v} should be intransitive"
     assert LE._verb_takes_object("achieve") is True
 
-    # 4. Derived entries with runon_gram preserve their own grammar rather than dropping it or copying base verb grammar
+    # 4. Derived entries with runon_gram preserve their own kind and base_word
     synth_derived = LE._resolve_ldoce_kind(
         "test-derived",
         "test-derived",
@@ -249,40 +249,27 @@ def test_main_entry_and_sense_grammar_edge_cases():
         "achieve",
         depth=0,
     )
-    assert synth_derived["senses"][0].get("grammar") == "[uncountable]"
+    assert synth_derived["kind"] == "derived"
+    assert synth_derived["base_word"] == "achieve"
+    assert synth_derived["senses"] == []
 
 
 def test_derived_ly_ing_definitions_and_examples():
-    """Verify derived -ly, -ing, and other entries in pedlex.db properly resolve definitions and examples."""
-    # 1. Previously empty derived definitions (-ly adverbs and -ing nouns) now synthesize clean definitions from base_word
+    """Verify derived -ly, -ing, and other entries in pedlex.db adhere to strict derived exclusion contract."""
+    # 1. Run-on derived entries in LDOCE lack independent dictionary definitions and examples (commit b36c9426)
     for w in ("blushingly", "complaisantly", "discernibly", "ergonomically", "insouciantly", "psychokinetically",
               "belly dancing", "clanking", "kayaking", "strip mining", "terracing", "troubleshooting", "vlogging"):
         e = LE.get_ldoce_entry(w)
-        assert e is not None and e.get("senses"), f"Missing entry/senses for {w}"
-        defn = LE.format_ldoce_definition(e["senses"][0]) or e["senses"][0].get("definition", "")
-        assert len(defn.strip()) > 10, f"Empty/short definition for {w}: {defn!r}"
+        assert e is not None, f"Missing entry for {w}"
+        assert e.get("kind") == "derived", f"Expected kind=derived for {w}, got {e.get('kind')}"
+        assert e.get("senses") == [], f"Expected empty senses for derived entry {w}, got {e.get('senses')}"
 
-    # 2. Previously polluted derived definitions have trailing '<base_word> <prep>/<prep>' pattern leaks stripped
+    # 2. Derived entries properly preserve base_word linkage
     for w, bw in (("agonizing", "agonize"), ("benchmarking", "benchmark"), ("fumbling", "fumble"), ("milking", "milk"), ("piggybacking", "piggyback")):
         e = LE.get_ldoce_entry(w)
-        defn = e["senses"][0].get("definition", "")
-        assert not defn.lower().endswith(bw), f"Pattern leak still present in {w}: {defn!r}"
-        assert "/" not in defn.split()[-1], f"Slash pattern leak in {w}: {defn!r}"
+        assert e is not None and e.get("base_word") == bw, f"Mismatched base_word for {w}"
 
-    # 3. Derived entries harvest authentic examples containing the derived word from base_data collocations/senses/corpus
-    for w in ("striving", "enlightening", "increasing", "sharing"):
-        e = LE.get_ldoce_entry(w)
-        exs = e["senses"][0].get("examples") or []
-        assert len(exs) >= 1, f"Expected harvested examples for {w}, got {exs}"
-
-    # 4. ensure_distinct_example resolves authentic examples for derived -ly and -ing words via corpus and WordNet
-    for w, pos in (("attentively", "adverb"), ("intensively", "adverb"), ("persevering", "adjective"), ("radiantly", "adverb"), ("ruthlessly", "adverb")):
-        e = LE.get_ldoce_entry(w)
-        s0 = e["senses"][0]
-        ex = LE.ensure_distinct_example(w, pos, s0, f"Stub quote with {w}.")
-        assert ex and w in ex.lower(), f"Failed to resolve distinct example for {w} ({pos}): {ex!r}"
-
-    # 5. determine_contextual_pos accurately distinguishes participial adjective ('persevering') and verbal noun ('His striving')
+    # 3. determine_contextual_pos accurately distinguishes participial adjective ('persevering') and verbal noun ('His striving')
     assert LE.determine_contextual_pos("persevering", "with persevering industry she revived the failing business") == "adjective"
     assert LE.determine_contextual_pos("striving", "His constant striving for perfection inspired the team.") == "noun"
 

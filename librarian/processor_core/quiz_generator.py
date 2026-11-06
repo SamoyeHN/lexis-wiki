@@ -1076,6 +1076,14 @@ class QuizGeneratorMixin:
                     micro_task_str = s.get("micro_task", "")
                     frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
                     pattern_line = f"- Required Stem Frame: {frame_str}\n"
+                    extra_note = re.sub(
+                        r"^Fit into (?:frame\s+'[^']*'|the Required Stem Frame above)\.\s*",
+                        "",
+                        micro_task_str,
+                    ).strip()
+                    if extra_note.startswith("(") and extra_note.endswith(")."):
+                        extra_note = extra_note[1:-2].strip() + "."
+                    note_line = f"\n- 🎯 Slot / Grammar Note: {extra_note}" if extra_note else ""
                     skeleton_bullets.append(
                         f"### Item {idx} ###\n"
                         f"- Target Word: {s['target_word']}\n"
@@ -1083,8 +1091,8 @@ class QuizGeneratorMixin:
                         f"- Contextual Definition: {s['definition']}\n"
                         + pattern_line
                         + f"- Prescribed Options: [{opts_str}]\n"
-                        f"- Correct Answer Index: {s.get('correct_answer_index', 0)}\n"
-                        f"- 🎯 Micro-Task for LLM: {micro_task_str}"
+                        f"- Correct Answer Index: {s.get('correct_answer_index', 0)}"
+                        + note_line
                     )
 
                 kwargs["vocabulary_content"] = (

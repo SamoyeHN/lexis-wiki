@@ -1,6 +1,6 @@
 # Lexis Wiki Project Instructions
 
-> **Purpose**: This document serves as the single source of truth for the Lexis Wiki project — a neuro-symbolic educational knowledge base and interactive assessment generator that transforms primary texts, audio, and video into Obsidian-style wiki nodes and psychometrically audited HTML quizzes.
+> **Purpose**: Single source of truth for the Lexis Wiki project — a neuro-symbolic educational knowledge base and interactive assessment generator that transforms primary texts, audio, and video into Obsidian-style wiki nodes and psychometrically audited HTML quizzes.
 
 ---
 
@@ -8,212 +8,119 @@
 
 ### 1.1 Quad-Tier Separation of Responsibilities
 1. **Symbolic Grounding & Lexical Corpus (`LinguisticEngine` + `pedlex.db` + WordNet + `cefrpy`)**:
-   - Serves as the **100% authoritative semantic truth and constraint engine**.
-   - Combines offline computational NLP (`spaCy` syntactic dependency trees, POS tagging, morphological inflection) with the Pedagogical Lexicon (`pedlex.db` + 106,738-entry `pedlex_phrase_index`), WordNet (`oewn:2025+`), and `cefrpy`.
-   - Deterministically extracts vocabulary, multi-word expressions, and syntactic grammar patterns, and pre-computes single-fit collocational anchors, parallel inflected options, and zero-collision distractors.
+   - 100% authoritative semantic truth and constraint engine.
+   - Combines offline computational NLP (`spaCy` dependency parsing, POS tagging, morphological inflection) with Pedagogical Lexicon (`pedlex.db` + 106k `pedlex_phrase_index` + `pedlex_cxn_index` + `pedlex_error_traps`), WordNet (`oewn:2025+`), and `cefrpy`.
+   - Deterministically extracts vocabulary, multi-word expressions, and syntactic patterns; pre-computes single-fit collocational anchors, inflected options, and zero-collision distractors.
 2. **Code Gate & Invariant Enforcement (`processor.py`, `evaluator.py`)**:
-   - Enforces physical invariants at zero token cost (<5ms): verbatim quotation checks, single-blank constraints (`re.findall(r'_{2,}', stem) == 1`), option cardinality, CRC32 deterministic slot assignment, and CEFR lexical ceiling gates.
-   - Performs instant programmatic self-healing and category auto-remapping without burning LLM retry tokens.
+   - Enforces physical invariants at zero token cost (<5ms): verbatim quotation checks, single-blank constraints (`re.findall(r'_{2,}', stem) == 1`), option cardinality (exactly 4 options), CRC32 deterministic slot assignment, and CEFR lexical ceiling gates.
+   - Executes instant programmatic self-healing and category auto-remapping without burning LLM retry tokens.
 3. **Pedagogical Prompting (`librarian/prompts/*.md`)**:
-   - Focuses exclusively on Second Language Acquisition (SLA) standards, contextual stem crafting, and psychometric discrimination.
-   - Executes pre-computed `🎯 Micro-Task for LLM` blueprints (for quizzes) or discourse synthesis (for summaries/mind maps) without mechanical formatting or distractor-inventing burdens.
+   - Focuses strictly on Second Language Acquisition (SLA) standards, contextual stem crafting, and psychometric discrimination.
+   - Executes pre-computed `🎯 Micro-Task for LLM` blueprints (for quizzes) or discourse synthesis (for summaries/mind maps) without distractor-inventing burdens.
 4. **Schema Enforcement (`schemas.py`)**:
-   - Defines strict `snake_case` JSON structures and array bounds via Prompt-Guided JSON Mode (`format: "json"` by default, with automatic fallback from `enforce_gbnf` if needed).
-   - Historical two-turn Prose-to-JSON (`enable_prose_pipeline`) is permanently removed in favor of **Unified One-Shot Direct Structured Output** (2.2× faster, 0 secondary-turn drift).
+   - Defines strict `snake_case` JSON structures via Prompt-Guided JSON Mode (`format: "json"`).
 
-### 1.2 Architectural Discipline, Anti-Patching & Theory-First Correction Mandate
-- **Zero Tolerance for Band-Aid Bloat**:
-  - Developers and AI agents must NEVER accumulate brittle word-specific regex hacks, ad-hoc `if-else` patches, or arbitrary exception branches when rule-based heuristics hit a competence ceiling.
-- **First-Principles Escalation**:
-  - When a linguistic or pedagogical edge case cannot be cleanly resolved by general syntactic/lexical invariants, proactively flag the structural limitation and escalate to a clean neuro-symbolic mechanism (such as Top-$K$ symbolic candidate filtering + 1-token LLM arbitration).
-- **Mandatory Correction of Flawed / Anti-Commonsense Theories & Methods (`违背常识与既有学科理论的方法必须主动纠偏`)**:
-  - Whenever the user or an existing design proposes an approach that violates domain common sense, cognitive load principles, or established linguistic, SLA, Conversation Analysis, or psychometric theory, the AI agent **MUST NEVER blindly execute it**.
-  - The agent must proactively challenge and correct the flawed assumption, explain *why* it fails in practice (e.g., why extracting concrete plotlines or full sentences from reference books turns LLMs into unnatural "orators/speechmakers" who stitch disconnected textbook plots together), and replace it with established theoretical models (e.g., Conversation Analysis **Three-Part Turn Micro-Structure**, Lexical Approach **3–6 word semi-open skeletons**, **Light/Heavy Turn Alternation**, and Cambridge/IELTS **`Bait → Real Key` listening signposts**).
+### 1.2 Architectural Discipline & Theory-First Correction Mandate
+- **Zero Tolerance for Band-Aid Bloat**: Never accumulate brittle word-specific regex hacks, ad-hoc `if-else` patches, or arbitrary exception branches.
+- **First-Principles Escalation**: Proactively escalate linguistic edge cases to clean neuro-symbolic mechanisms (Top-$K$ symbolic candidate filtering + 1-token LLM arbitration).
+- **Mandatory Correction of Flawed Methods (`违背常识与既有学科理论的方法必须主动纠偏`)**:
+  - Never blindly execute requests that violate SLA, Conversation Analysis, cognitive load, or psychometric theory.
+  - Proactively challenge flawed assumptions (e.g., plotline-stitching in listening) and enforce established theoretical models (Conversation Analysis Three-Part Turn Micro-Structure, Lexical Approach semi-open skeletons, Light/Heavy Turn Alternation, and Cambridge/IELTS `Bait → Real Key` listening signposts).
 
 ---
 
-## 2. Sense-First Unified Extraction & WSD Architecture
+## 2. Sense-First Extraction & WSD Architecture
 
-### 2.1 Deterministic Code-Driven Extraction & Evidence-Completeness Gate ("宁缺勿滥")
-- **Vocabulary & Multi-Word Expressions (`extract_deterministic_vocabulary`, `extract_deterministic_expressions`)**:
-  - Extracted deterministically from `sources/<Unit>.md` + syllabus wordlists via `spaCy` dependency trees and `pedlex.db`, eliminating LLM extraction hallucinations and omissions.
-  - **Multi-Word Expression Typing (`classify_expression_type`)**: Multi-word units are never labeled with token-level POS (`verb`/`noun`); they are strictly classified into `phrasal verb`, `collocation`, `set phrase`, or `idiom`.
-  - **Multi-Slash Syllabus Preservation (`parse_raw_headwords`)**: Slash-separated alternatives (e.g., `get / feel / be lost`) are normalized prior to standalone `/IPA/` stripping so middle variants are never lost.
-- **Quality-Over-Quantity Evidence-Completeness Gate ("宁缺勿滥")**:
-  - Every candidate word or expression (including syllabus items such as `hybridize`, `crossbreed`, `domesticate`, or `compromise` under an unattested sense) must pass a strict **Three-Gate Selection Pipeline**:
-    1. **Gate 1 — Sense Locking (Top-$K$ Symbolic + 1-Token LLM WSD)**: Locks the exact contextual `Sense` in `pedlex.db` (or WordNet) matching the passage quote's POS, syntactic frame, and semantics.
-    2. **Gate 2 — Sense-Isolated Authentic Example Gate (`ensure_distinct_example`)**: The locked `Sense` must provide an authentic dictionary example distinct from the source quote (via the locked sense's own `examples`/`pattern_bundles`, or inflection-aware corpus search `search_corpus_examples` for monosemous items). **Cross-sense example stealing is strictly forbidden** for polysemous words. Any item with a definition but 0 authentic examples for its locked sense is **immediately dropped and replaced** by a better candidate (`[DROP_INCOMPLETE_LEXICON]`).
-    3. **Gate 3 — Collocational Anchor & Zero Double-Key Gate**: Candidates lacking discriminative context/collocational anchors or prone to synonym double-key collisions (e.g. `crossbreed` vs `hybridize`) are dropped before quiz generation.
-  - **Zero Hardcoded Example/Sense Tables**: Hardcoded Python dictionaries (`curated_examples`, `priority_sense_examples`, `supplemental_vocab_senses`) are permanently prohibited so dictionary gaps and retrieval bugs are never masked.
-- **Grammar Extraction (`extract_deterministic_grammar`)**:
-  - Deterministically mines structural patterns and COBUILD syntactic formulas across **Four Macro Functional Domains**:
-    1. `Rhetoric & Emphasis` (inversion, clefts, antithesis/parallelism)
-    2. `Cohesion & Framing` (shell nouns, appositive/complement `that`-clauses, anaphoric `, which means/suggests that`)
-    3. `Information Packaging` (participial adjuncts, nominalizations, `it`-extraposition, elaborative relative clauses)
-    4. `Logic & Stance` (conditionals, concessive clauses, epistemic hedging)
-  - All pedagogical pitfalls use the unified prefix `Grammar Warning (<TOPIC>): ...`.
+### 2.1 Deterministic Extraction & Evidence-Completeness Gate ("宁缺勿滥")
+- **Deterministic Extraction (`extract_deterministic_vocabulary`, `extract_deterministic_expressions`, `extract_deterministic_grammar`)**:
+  - Extracted deterministically from `sources/<Unit>.md` + syllabus via `spaCy` dependency trees and `pedlex.db`.
+  - Multi-word expressions are strictly typed (`phrasal verb`, `collocation`, `set phrase`, `idiom`), never labeled with token-level POS. Slash alternatives (`get / feel / be lost`) are normalized prior to `/IPA/` stripping.
+- **Three-Gate Quality Pipeline**:
+  1. **Gate 1 — Sense Locking**: Locks the exact contextual `Sense` in `pedlex.db` (or WordNet) matching POS, syntactic frame, and semantics.
+  2. **Gate 2 — Sense-Isolated Authentic Example Gate (`ensure_distinct_example`)**: Polysemous words must draw authentic examples exclusively from their locked sense's own `examples`/`pattern_bundles`. Monosemous words may use inflection-aware `search_corpus_examples`. Any item with 0 authentic examples for its locked sense is dropped (`[DROP_INCOMPLETE_LEXICON]`). Zero hardcoded Python example/sense dictionaries.
+  3. **Gate 3 — Collocational Anchor & Zero Double-Key Gate**: Candidates lacking discriminative context anchors or prone to synonym collisions (e.g. `crossbreed` vs `hybridize`) are dropped before quiz generation.
 
-### 2.2 True Neuro-Symbolic Sense & Pattern Reranker (WSD)
-- **Elimination of Dense Embedding Models**:
-  - The 80MB `all-MiniLM-L6-v2` sentence-transformer is **permanently removed** (avoiding thematic/domain bias such as misclassifying *"Punctuality pays!"* into financial payment senses).
-- **Two-Stage Sense Locking (`_lock_sense` + `disambiguate_via_llm`)**:
-  1. **Stage 1 — Symbolic Candidate Pool (`pedlex.db` + WordNet + Syntactic Gates, 0ms / 0 tokens)**:
-     - Applies POS hard gates (with automatic cross-homograph resolution `word_1`..`word_6` and coordinated subject recovery), `<gram>` slot constraints, conversational/spoken/pejorative register gates (`[spoken]`, `[disapproving]`), **Universal Conditional-Subject Ontology Gate** (`if a <Subject-Class> <verb>s` vs. passage subject WordNet supersenses), syntactic pattern/preposition intersection, and Lesk lemma overlap to build a Top-$K$ ($K \le 4$) candidate pool.
-     - **~71% Single-Sense Fast Path & Cross-Lexicon Pool Fusion**: Normal monosemous entries under the target POS lock instantaneously in 0ms at 0 token cost; when a sole PedLex sense is pragmatically restricted (`[disapproving]`, `[spoken]`, `[informal]`, `if a piece of ...`), attested WordNet (`oewn:2025+`) synsets with examples are fused into the pool to prevent single-dictionary blind spots.
-  2. **Stage 2 — 1-Token Local LLM Arbitration (~29% Polysemous Cases)**:
-     - Formats the Top-$K$ ($K \le 4$) dictionary senses — explicitly surfacing lexicographic `[SIGNPOST]` cues (e.g., `[FAIL]` vs. `[STRUCTURE]`), `<gram>` tags, attitude/register labels (`[disapproving]`, `[technical]`), and syntactic patterns — alongside the quoted passage sentence and `±2` surrounding sentences into a ~100-token multiple-choice prompt, resolved via a 1-token (`A`/`B`/`C`/`D`) local LLM call (~0.28s–0.40s on 8B models, 100% benchmark accuracy).
-     - LLM has **zero free-generation authority** and can only select among authentic `pedlex.db` / `oewn:2025+` candidates.
+### 2.2 Two-Stage Neuro-Symbolic Sense Locking (WSD)
+1. **Stage 1 — Symbolic Candidate Pool (`pedlex.db` + WordNet, 0ms / 0 tokens)**:
+   - Applies POS hard gates (cross-homograph resolution `word_1`..`word_6`), `<gram>` slot constraints (`[only before noun]`, `[uncountable]`), register/attitude gates (`[spoken]`, `[disapproving]`), conditional-subject ontology gates, and syntactic pattern intersection to build a Top-$K$ ($K \le 4$) candidate pool.
+   - ~71% monosemous entries lock instantaneously at 0 token cost.
+2. **Stage 2 — 1-Token Local LLM Arbitration (~29% Polysemous Cases)**:
+   - Formats Top-$K$ ($K \le 4$) senses with lexicographic `[SIGNPOST]` cues and syntactic patterns alongside passage context into a multiple-choice prompt resolved via a 1-token (`A`/`B`/`C`/`D`) local LLM call. Zero free-generation authority.
 
 ---
 
-## 3. Single Source of Truth & Sense-First Quiz Blueprint Pipeline
+## 3. Modular Sense-First Quiz Blueprint Pipeline
 
-### 3.1 Fresh Deterministic Extraction for Assessments
-- **Downstream Markdown Decoupling**:
-  - `extractions/<Unit>_{vocabulary,grammar}.md` are presentation artifacts for reading in Obsidian/Web Dashboard and may be edited or translated by users.
-  - Assessment pipelines (`vocabulary_quiz`, `translation_quiz`) **never trust downstream Markdown as semantic truth**; they ground directly on `sources/<Unit>.md` via fresh deterministic extraction.
+### 3.1 Downstream Markdown Decoupling
+- `extractions/<Unit>_{vocabulary,grammar}.md` are user-facing presentation artifacts; assessment pipelines ground directly on `sources/<Unit>.md` via fresh deterministic extraction.
 
-### 3.2 Atomic Sense-First Quiz Blueprint (`build_precomputed_target_skeletons`)
-- **Zero Drift Between Extraction and Assessment (`0 DEF_DRIFT`, `0 POS_DRIFT`)**:
-  - **Step 0 Sense-First Grounding**: Locks the target headword to its exact `locked_sense` and `canonical_pos` using the upstream-verified `definition` (stripping register/region prefixes before matching), `quote`, and `part_of_speech` (resolving POS homographs and base lemmas for inflected targets like `absorbed` $\rightarrow$ `absorb`) before any collocation or distractor lookup occurs.
-  - **Definition Conservation**: Preserves authoritative multi-word/derived definitions and register labels (`[formal]`, `[spoken]`) without allowing fallback single-word senses to overwrite them.
-- **Six-Source Optimal Example Pre-Selection & Example-Derived Cloze Slot Frame Architecture**:
-  - **Six-Source Sense-Isolated Candidate Pool**: Before generating a quiz item, the engine gathers candidate `(example, pattern_hint, source_type)` bundles across all six `pedlex.db` compartments — (1) `grammar_boxes`, (2) `Sense.pattern_bundles` (`source: "gramexa"` vs. `"colloinexa"`) & `Sense.examples`, (3) `LDOCE Thesaurus` (`entry.thesaurus`), (4) `Language Activator` (`entry.language_activator`), (5) `Oxford Thesaurus` (`oxford_thesaurus`), and (6) `entry.collocations` / `entry.cross_collocations` (gated by single-sense status or lexical overlap with `locked_sense` so polysemous entries like `plot` never leak cross-sense collocations).
-  - **Deterministic Optimal Example Scoring**: Candidates are scored on clause completeness (full finite sentences strongly outranking 2–4 word fragments like `"earthy language"` or `"a loan of £60,000"`), syntactic slot compatibility with distractors and the passage quote (e.g., selecting attributive pre-noun examples for `unparalleled` / `tedious` and countable `verb + a/an + noun` examples for `loan`), and valency explicitness (`gramexa` patterns outranking narrow `colloinexa` idioms like `weird and wonderful` unless attested in the passage).
-  - **Direct Example-to-Slot-Frame Slicing (`0 None Frames`, `0 Slash Choices`)**: `cloze_slot_frame` is sliced directly from the winning example's immediate syntactic neighborhood around the target word (`... their ____ achievement`, `... take out a ____`, `... a ____ for`, `... the ____ task`), guaranteeing at least one concrete left or right context word/POS anchor, zero pattern–example desync (`0 PAT_EX_PREP_DESYNC`), and resolving `[sb/sth]` slash placeholders against the winning example's actual object (`... ____ someone` or `... ____ something`, never `... ____ someone/something`).
-- **Valency Cascades & Post-Inflection Double-Key Screening**:
-  - **POS Valency Cascades**: Nouns use narrative context clues & `plurale tantum` symmetry; transitive verbs prioritize `object` $\gg$ `prep` $\gg$ `adv_mod`; intransitive verbs prioritize `prep` $\gg$ `adv_mod`; adjectives prioritize `prep` / `modified_noun`; closed-class connectors enforce clausal vs. prepositional complement contrast.
-  - **Multi-Word Phrase Distractors (`generate_phrase_distractors`)**: Queries the 106k `pedlex_phrase_index` for structurally symmetric distractors (tail-sharing clusters, light-verb constructs, phrasal verb particle/verb contrasts, quantifier head-noun blanking `a ____ of`, and Strategy A2 `one's` idiom skeletons with complete `sense_unit`/`phrase_row` prioritization and trailing preposition/particle symmetry).
-  - **Whole-Idiom Preservation + Concrete Possessive Pronoun & Tense Synchronization**: Multi-word idioms containing internal `one's` / `somebody's` slots (`come to one's aid`, `a roof over one's head`, `come into one's mind`, `turn one's attention to`) are kept whole in `____` rather than split into single words; `_reconcile_prescribed_inflection` synchronizes all 4 options to a concrete 3rd-person possessive determiner (`her`/`his`/`their`/`its`, with a Singular Countable Head-Noun Agreement Guard preventing `*a roof over their head`) and parallel leading-verb tense (`VBD`/`VBZ`/`VBG`/`VBN`/`VB`, e.g., `["came to her aid", "got to her feet", "had to her credit", "looked to her laurels"]`).
-  - **Post-Inflection Collision Gate**: After `_reconcile_prescribed_inflection` aligns all 4 options to the target's inflectional morphology (`VBD`/`VBN`/`VBG`/`VBZ`/`NNS`), `double_key_collision` re-verifies the inflected forms (catching synset overlaps like `disguised` vs. `veiled`) and refills any colliding distractor (`0 DOUBLE_KEY_SURVIVED`).
-- *(Detailed methodology: [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md))*.
+### 3.2 Modular Blueprint Mixins & Pure Five-Source LDOCE Pool
+- **Modular Architecture (`librarian/linguistics_core/`)**:
+  - `quiz_patterns.py`: Five-source authentic example pre-selection and atomic pattern bundles.
+  - `quiz_frames.py`: First-principles verb patient ontology and example-derived cloze slot frame slicing.
+  - `quiz_vocab.py`: Target skeleton assembly, option coordination, and universal double-key screening.
+  - `quiz_translation.py`: Translation minimal-pair micro-task blueprints and error-injection specs.
+  - `quiz_listening.py`: Functional dialogue trajectories and listening comprehension blueprints.
+  - `quiz_skeletons.py`: Unified Facade Mixin exposing backward-compatible public APIs.
+- **Five-Source Sense-Isolated LDOCE Pool (`select_optimal_five_source_example`)**:
+  - Draws candidate examples strictly across 5 LDOCE compartments: (1) `grammar_boxes`, (2) locked `Sense.pattern_bundles` (`gramexa`) & `Sense.examples`, (3) `LDOCE Thesaurus`, (4) `Language Activator`, and (5) curated `collocations` (gated by single-sense or lexical overlap). Oxford Thesaurus and unedited BNC dumps are excluded.
+  - Full finite clauses strongly outrank fragments. Attributive vs predicative slot constraints and valency patterns are strictly enforced.
+- **Example-Derived Cloze Slot Frame Slicing (`derive_cloze_slot_frame_from_example`)**:
+  - Sliced directly from the winning example's syntactic neighborhood (`... their ____ achievement`, `... ____ [concrete physical object] into`). Zero `None` frames, zero unexpanded slash choices.
+- **Distractor Architecture & Universal Post-Assembly Double-Key Guard**:
+  - Valency cascades: nouns use SLA context clues; transitive verbs prioritize patient object $\gg$ prep; intransitive verbs prioritize prep $\gg$ adv; adjectives enforce attributive (`[only before noun]`) vs predicative (`[not before noun]`) complements.
+  - Multi-word phrases use symmetric tail-sharing, particle contrasts, and possessive pronoun & tense synchronization (`come to one's aid` $\rightarrow$ `came to her aid`).
+  - Dynamic CEFR fallback pool (`_ensure_corpus_fallback_index`, 8,102 core words) replaces hardcoded fallback lists.
+  - Post-assembly screening verifies `double_key_collision` and `evaluate_syntactic_slot_clash` across ALL options against the final context anchor, auto-refilling any colliding distractor.
 
 ---
 
-## 4. Deterministic CEFR Calibration & Two-Level QA Audit
+## 4. Deterministic CEFR Calibration & QA Audit
 
-### 4.1 Zero-LLM-Burden CEFR Calibration (`cefrpy`)
-- All output schemas (`schemas.py`) strip out `cefr_level` / `overall_cefr_level` so LLMs never guess difficulty ratings.
-- `LinguisticEngine.calculate_text_cefr` and `get_word_cefr` deterministically compute passage and headword CEFR levels (`A1`–`C2`), persisting `overall_cefr_level` in frontmatter and injecting `{cefr_level}` constraints into all 5 quiz modalities (`vocabulary`, `reading`, `translation`, `listening`, `video`).
-- Offline `cefrpy` + Zipf frequency gates eliminate obscure C1/C2 words from A1–B1 distractors and stems.
+### 4.1 Zero-LLM CEFR Calibration (`cefrpy`)
+- Headword and passage CEFR levels (`A1`–`C2`) are computed deterministically via `cefrpy` + Zipf frequency gates; output schemas exclude CEFR fields so LLMs never guess difficulty.
 
-### 4.2 Two-Level QA Quality Audit Architecture
+### 4.2 Two-Level QA Quality Audit
 1. **Level 1: Deterministic Code Gate (`evaluator.py`, <5ms, 0 tokens)**:
-   - Enforces structural invariants, option length/CEFR bounds across all 5 quiz types, Fisher-Yates option shuffling with atomic answer-index remapping, and deterministic grammar category auto-remapping (-2.0 pt soft penalty instead of 30s LLM retry).
+   - Structural invariants, option length bounds, Fisher-Yates shuffling with atomic answer-index remapping, deterministic grammar category remapping.
 2. **Level 2: Expert Model Semantic Audit (`expert_auditor.py`, LLM-as-a-Judge)**:
-   - Optional (`enable_expert_audit` in `wiki_config.json`), powered by `judge_model` (`num_predict: 16384`).
-   - Performs blind-solver resolution and 3-tier triage: **Tier 3 `PASS`** (80–100), **Tier 2 `REPAIR`** (60–79, surgical distractor replacement), **Tier 1 `REWRITE`** (20–59, regeneration).
-3. **Transparent Delivery Status (`qa_status`)**:
-   - No `_quarantine/` folders; files deliver directly to `extractions/` or `handouts/` with frontmatter `qa_status` (`"passed"`, `"review_needed"`, or `"failed"`).
+   - Optional (`enable_expert_audit` in `wiki_config.json`). Blind solver resolution with 3-tier triage: Tier 3 `PASS` (80–100), Tier 2 `REPAIR` (60–79), Tier 1 `REWRITE` (20–59).
+3. **Delivery Status**: Direct delivery to `extractions/` or `handouts/` with frontmatter `qa_status: "passed" | "review_needed" | "failed"`.
 
 ---
 
-## 5. Stateless Storage, Configuration & Conventions
+## 5. Stateless Storage & Hardware Conventions
 
-### 5.1 Self-Contained Stateless Directory Layout
+### 5.1 Self-Contained Directory Layout
 ```text
 wiki/<UnitName>/
 ├── sources/              # Primary text (<UnitName>.md) and media/
 ├── extractions/          # <UnitName>_{vocabulary,grammar,summary}.md & <UnitName>_mindmap.json
 └── handouts/             # <UnitName>_{vocabulary,reading,translation,listening,video}_quiz.html
 ```
-- **Immutable Physical Keys**: Folder slug `<UnitName>` is the primary key (`normalize_name()`); display titles live in YAML frontmatter (`title: "..."`). No `raw/` directory, no `unit.json`, and zero background filesystem scans.
+- Folder slug `<UnitName>` is the immutable physical key (`normalize_name()`). Display titles live in YAML frontmatter (`title: "..."`).
 
-### 5.2 Live Configuration & Hardware Alignment (`wiki_config.json`)
-- **Hot-Reloading**: `config.py` monitors `st_mtime` of `wiki_config.json`; changes take effect immediately without server restarts.
-- **VRAM Concurrency**: $\le 12\text{GB}$ VRAM uses `max_parallel: 1` (`OLLAMA_NUM_PARALLEL=1`); $\ge 24\text{GB}$ VRAM scales to `max_parallel: 2`.
-- **TTS Endpoints**: Kokoro (`http://localhost:8880/v1/audio/speech`, `af_sarah`/`am_michael`) and Edge-TTS (`http://localhost:5050/v1/audio/speech`, `en-US-AriaNeural`/`en-GB-RyanNeural`).
-- **Dual-Distribution Compliance**: All `.db`/`.sqlite`/`.mdx` lexical binaries are git-ignored; when `pedlex.db` is absent or `DISABLE_PEDLEX=1`, `LinguisticEngine` smoothly falls back to `spaCy` + `cefrpy` + WordNet (`oewn:2025+`).
-
-### 5.3 Naming & Formatting Conventions
-- **JSON & Schemas**: Strict `snake_case` keys (`concepts`, `part_of_speech`, `explanation`, `target_language`).
-- **Markdown**: Headwords and grammar names wrapped in `[[ ]]`; YAML frontmatter includes `source: "[[<UnitName>.md]]"`, `category`, and `overall_cefr_level`.
+### 5.2 Runtime Configuration (`wiki_config.json`)
+- **Hot-Reloading**: `config.py` monitors `st_mtime` of `wiki_config.json`.
+- **VRAM Concurrency**: $\le 12\text{GB}$ VRAM uses `max_parallel: 1`; $\ge 24\text{GB}$ scales to `max_parallel: 2`.
+- **Dual-Distribution Compliance**: All `.db`/`.sqlite` binaries are git-ignored; when `pedlex.db` is absent or `DISABLE_PEDLEX=1`, `LinguisticEngine` falls back to `spaCy` + `cefrpy` + WordNet (`oewn:2025+`).
 
 ---
 
-## 6. Documentation Index & Roadmap
+## 6. Technical Documentation & Roadmap
 
-### 6.1 Technical Documentation (`docs/`)
-- [docs/pedlex-database-architecture.md](docs/pedlex-database-architecture.md): PedLex SQLite schema, 106k phrase inverted index, WSD scoring, and phrase distractor algorithms.
-- [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md): Valency cascades, single-fit collocational anchors, and distractor generation methodology.
-- [docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md): Four Pragmatic Interaction Paradigms (`四大语用互动范式`), Condensed Bi-Directional Spoken Patterns (`浓缩双向句型骨架 — 肯定/否定/条件开放`), scope of conflict-resolution across `arch_01`–`arch_14`, and Dialogue-Driven Question Blueprints.
+### 6.1 Documentation Index (`docs/`)
+- [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md): Single source of truth for candidate extraction, POS resolution, optimal example selection principles across parts of speech, valency cascades, distractor generation, and the 8 lexico-syntactic construction families.
+- [docs/pedlex-database-architecture.md](docs/pedlex-database-architecture.md): PedLex SQLite database schemas (`ldoce`, `pedlex_phrase_index`, `pedlex_cxn_index`, `pedlex_error_traps`), JSON payload specifications, and runtime query interfaces.
+- [docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md): Four pragmatic interaction paradigms, 14 functional dialogue archetypes, conversation analysis turn structures, and listening blueprints.
 - [docs/audit-scores-guide.md](docs/audit-scores-guide.md): Level 1 deterministic code gate and Level 2 expert evaluator rubrics.
 - [docs/cli.md](docs/cli.md): CLI commands, compilation flags, and dashboard workflows.
 
 ### 6.2 Project Roadmap
-- [x] **100% Deterministic Extraction Pipeline**: Vocabulary, multi-word expressions, and syntactic grammar extracted via `LinguisticEngine` + `pedlex.db` + `spaCy`.
-- [x] **True Neuro-Symbolic Sense Reranker**: Pure symbolic Top-$K$ ($K \le 4$) filtering + 1-token Local LLM arbitration (80MB embedding model removed; 100% benchmark accuracy).
-- [x] **Sense-First Quiz Blueprint Closure**: Zero `DEF_DRIFT`, zero `POS_DRIFT`, atomic Pattern–Example–Anchor binding, and post-inflection double-key collision screening verified across Books 2, 3, and 4.
-- [x] **Unified One-Shot Structured Output & CEFR Grounding**: Direct JSON output + `cefrpy` text/word calibration + Dual-Distribution open-source adapter.
-- [x] **Zero-Token Vocabulary Card Enrichment, Syntactic Slot Grammar Gating & Stage 6 Cross-POS Isolation**: Enrich Markdown vocabulary cards with `get_vocab_card_enrichment` (`Pattern` / `Grammar Box`, `Collocations`, `Thesaurus Note`), enforce entryhead/sense `<gram>` constraints (`[only before noun]`, `[not before noun]`, `[uncountable]`, `[intransitive]`/`[transitive]`) across `_lock_sense` and `evaluate_syntactic_slot_clash`, resolve definitions/examples across all 5,678 `derived` (`-ly`/`-ing`) entries, and enforce Stage 6 Cross-POS Asset Borrowing Guard (`_attests_derived` and multi-POS homograph isolation so `derived` words and homograph nouns/verbs never leak base-word `collocations`, `grammar_boxes`, or `thesaurus` boxes).
-- [x] **PedLex v2 Database Schema & Runtime Query Layer (`pedlex_cxn_index` & `pedlex_error_traps`)**: Offline-compiled `pedlex.db` (48,960 consolidated `ldoce` entries with unpacked `1a`/`1b` subsenses, `derived_forms`, `verb_table`, `pronunciations`, `cxn_specs`, `register_tags`, `domain_tags`, `attitude_tags`, `syntax_codes`, `selectional_restrictions`, `synonyms`/`antonyms`, plus 2,635 `pedlex_cxn_index` rows and 16,759 `pedlex_error_traps` rows) and exposed <0.2ms runtime methods (`get_word_cxn_specs`, `query_cxn_contrast_distractors`, `get_word_error_traps`) in `LinguisticEngine`.
-- [x] **Orthographic / Paronym Distractor Tier (with Cognate Near-Synonym Guard)**: Introduce an orthographic look-alike (`形近词`) fallback/blending tier in `generate_vocab_distractors` for sparse synsets, strictly guarded by WordNet synset/hypernym disjointness and `double_key_collision` checks so root-sharing near-synonyms (e.g., `historic`/`historical`, `classic`/`classical`, `economic`/`economical`, `continual`/`continuous`) never create ambiguous double keys. But Paronyms like adapt / adopt / adept、complement / compliment、simulate / stimulate、thorough / through. 同根但语义域完全正交：如 specimen（标本/怪人） vs.  spectrum（光谱/范围） vs. spectacle（壮观场面/奇观） vs. speculation（推测/投机）
-- [x] **Symbolic Listening Micro-Task Blueprint (`listening_quiz` — 14 Functional Dialogue Archetypes, Four Pragmatic Paradigms & Condensed Bi-Directional Spoken Patterns)**:
-  - **COBUILD Spoken Pragmatics & 14 Functional Dialogue Archetypes (`speaking_skills_a2.json`, `speaking_skills_b1plus.json`, `functional_dialogue_archetypes.json`)**: Compiles 40 speaking units into 14 CEFR/EAP functional dialogue archetypes (`arch_01`..`arch_14`, 28 register-isolated `A1_A2` informal & `B1_C2` formal/neutral 8-turn trajectories) governed by **Four Pragmatic Interaction Paradigms (`四大语用互动范式`)** (`Conflict → Trade-off → Compromise`, `Probe → Candid Nuance → Mutual Fit`, `Inquiry/Symptom → Boundary/Pitfall → Action Plan`, and `Sharing/Stance → Empathy/Perspective Shift → Warm Wrap-Up`) and **Condensed Bi-Directional Spoken Skeletons (`3–6 词浓缩双向句型骨架 — 肯定/否定/条件开放`)** (`be quite light / tight on [day]`, `[Affirmative]` vs. `[Negative / Transferable]`) so textbook plotlines are never extracted into prompts to turn LLMs into artificial "orators" (`[docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md)`).
-  - **Conversation Analysis Turn Micro-Structure, Golden Chunk Density & 8-Turn State Machine (`build_listening_micro_task_blueprints`)**: Enforces the natural **Three-Part Spoken Turn Micro-Structure** (`[1. Light Uptake (1–3 words)] + [2. Condensed Functional Skeleton (3–6 words)] + [3. Propositional Story Content & Unit Target Word W_k]`), **Light/Heavy Turn Alternation** (1 core functional move per 2-turn Phase acting as a Cambridge/IELTS `Bait → Real Key` listening signpost, while initiating/follow-up turns use lightweight conversational glue), and natural turn-by-turn uptake (`先承接上一句，再推进本轮意图`).
-  - **Dialogue-Driven Question Blueprints, Adaptive Fallacy Operators & Deterministic Hydration (`hydrate_listening_blueprint_items`)**: Pre-assigns each question an immutable `Anchor Span`, `Target Speaker`, `Target Skill` (`Detail`, `Main Idea`, `Inference`), CRC32-balanced `Prescribed Correct Answer Index` (`0..3`), and content-adaptive option-slot operators (`Paraphrase Operator` with `Forbidden Verbatim Copy`, `Speaker / Role Swap`, `Opposite Detail / Polarity Flip`, `Cross-Turn Detail Mix-up`, `Condition / Availability Flip`, `Overstatement Trap`, and `Timeline / Action Mix-up`), with post-generation code hydration and `audit_listening_integrity` verification.
-- [ ] **Pending — Paired Listening–Speaking Input–Output Closed-Loop Workbench (`listening_quiz` + Interactive Speaking Role-Play & Cross-Scenario Transfer)**:
-  - **Two-Act Receptive-to-Productive Pairing (`Act I: Listening Input` $\rightarrow$ `Act II: Speaking Output`)**: Pair listening comprehension and speaking production inside a unified interactive workflow grounded on the same `arch_01`..`arch_14` 8-turn pragmatic trajectory (`4 Rounds` of `Speaker A` Initiator `[Turns 1, 3, 5, 7]` $\leftrightarrow$ `Speaker B` Responder `[Turns 2, 4, 6, 8]`).
-  - **Mode 1 — Same-Scenario 3-Level Progressive Fading Role-Play (Zero Extra LLM Token Cost)**:
-    - *Prompt (`Speaker A`, Odd Turns `1, 3, 5, 7`)*: Displays `Speaker A`'s text prompt + plays TTS audio as the conversational trigger.
-    - *User Response (`Speaker B`, Even Turns `2, 4, 6, 8`) with 3-Level Fading Scaffolding*:
-      1. **Full Cue Card (`Level 1`)**: Surfaces `Communicative Goal` (`discourse_role`) + `Functional Spoken Chunk` (`recommended_chunks`) + `Target Word Collocational Frame` ($W_k$).
-      2. **Acoustic Cloze Skeleton (`Level 2`)**: Displays `Speaker B`'s sentence skeleton with the functional chunk and target lexical frame blanked out for spoken slot-filling.
-      3. **Blind Pragmatic Production (`Level 3`)**: Displays only the `Communicative Goal` and `Target Word` for unscripted spoken response.
-    - *Acoustic Self-Check & Native Model Reveal*: Supports browser microphone recording (`MediaRecorder` playback comparison) + one-click reveal of `Speaker B`'s **Standard Model Answer** (text with highlighted chunk/collocation + TTS audio + `Pragmatic Contrast` `❌ Avoid L1 Literal` vs. `✅ Prefer Idiomatic`).
-    - *Bi-Directional Role Swap*: Allows flipping between responding (`Speaker B`, Even Turns) and initiating/probing (`Speaker A`, Odd Turns).
-  - **Mode 2 — Cross-Scenario Pragmatic Transfer (`Same Archetype, Alternate Scenario Anchor`)**:
-    - Keeps the identical `arch_XX` 8-turn functional state machine, `recommended_chunks`, and unit target vocabulary, but switches to a secondary `scenario_anchor` from `functional_dialogue_archetypes.json` (e.g., transferring `arch_12` *Conditional Compromise* from project scheduling to lease/budget negotiation), testing whether learners can transfer spoken functional frames into a fresh context.
-- [ ] **Pending — Prerequisite Extraction Gate for Quiz Generation**:
-  - Gate quiz generation (`listening_quiz`, `vocabulary_quiz`, `translation_quiz`, `reading_quiz`) on the presence of the unit's corresponding `extractions/<Unit>_{summary,vocabulary,grammar}.md` once the codebase stabilizes, ensuring `thematic_topic` always receives verified `### [[Concept]]` headings and preventing premature/false topic triggers.
-- [ ] **Pending — Symbolic Reading Discourse Micro-Task Blueprint (`reading_quiz`)**:
-  - **Rhetorical & Span Anchoring (`spaCy` Discourse Markers)**: Pre-scan passage paragraphs and rhetorical transitions (causality, contrast/concession, stance/attribution, thesis) to deterministically assign each question an immutable `Anchor Span` (Paragraph + Sentence) and `Target Skill` (`Detail`, `Inference`, `Author's Stance/Purpose`, `Main Idea`), eliminating question clustering and full-text blind spots.
-  - **Symbolic Distractor Fallacy Operators & Cross-Paragraph Lexical Bait**: Pre-assign propositional truth/fallacy operators to each option slot alongside a CRC32-locked `Prescribed Correct Answer Index`:
-    - *Correct Slot (`Paraphrase Operator`)*: Enforce syntactic/lexical paraphrasing of the anchor span with a deterministic `Forbidden Verbatim Copy` list of core content words to prevent `Ctrl+F` surface matching.
-    - *Distractor Slot 1 (`Cross-Paragraph Scrambling`)*: Inject authentic noun phrases extracted from non-anchor paragraphs as `Cross-Paragraph Bait Terms` to construct high-discrimination false associations.
-    - *Distractor Slot 2 (`Polarity / Causal Reversal`)*: Invert the causal direction or affirmative/negative polarity of the anchor proposition.
-    - *Distractor Slot 3 (`Modality / Scope Overgeneralization`)*: Escalate hedged modality (`may`, `tend to`, `some`) into absolute claims (`exclusively`, `inevitably`, `never`).
-- [x] **Symbolic Translation Micro-Task Blueprint (`translation_quiz`)**:
-  - **Step 1 — Register-Aligned Lexical & Syntactic Pairing (`Symbolic Pair Matching`)**: Deterministically pair each `Target Keyword` with a register-compatible `Target Grammar Pattern` (e.g., matching `[spoken]`/`[informal]` phrasal verbs like `wind up`/`pack up` with conversational clauses, and `[formal]` items like `originate`/`regulatory` with academic participial adjuncts, concessive clauses, or inversions) to prevent awkward "forced marriages".
-  - **Step 2 — Single-Point Minimal-Pair Corruption Operator (`Targeted Error-Injection Spec` via `pedlex_error_traps`)**: Pre-assign a single deterministic flaw operator derived from `pedlex_error_traps` (`get_word_error_traps` — `PREP_COLLOC_TRAP`, `SYNTAX_COMP_TRAP`, `GRAM_BOX_DONTSAY`, `GRAM_PROPERTY_TRAP`) or `Grammar Warning (<TOPIC>)`:
-    - *Lexical Valency / Property Trap*: e.g., preposition substitution (`originate in` $\rightarrow$ `*originate from/at*`) or `<gram>` violation (`[uncountable]` pluralization, `[only before noun]` predicative misuse `*is regulatory*`).
-    - *Syntactic L1 Negative-Transfer Trap*: e.g., conjunction redundancy (`Although ... *but* ...`), clause-preposition confusion (`Despite + *finite clause*`), or dangling participle / comma splice.
-    - Enforce a strict **Minimal Pair** contract: `idiomatic_translation` and `flawed_translation` must share $\ge 85\%$ identical non-target wording and differ **exclusively** at the prescribed trap locus (100% blind-solver discrimination, zero unfocused random typos).
-  - **Step 3 — Zero-Redundancy Schema Pruning (~40% Token Reduction)**: Strip duplicate/blueprint-owned fields (`target_keyword`, `target_grammar`, `flaw_type`, `options`, `correct_answer_index`, `explanation`) from [`translation_quiz.json`](librarian/prompts/translation_quiz.json); have the LLM output only `design_audit`, `translated_sentence`, `idiomatic_translation`, `flawed_translation`, and `diagnostic_critique`, and hydrate `options` (CRC32-ordered `[idiomatic, flawed]`) and `explanation` deterministically in code.
-  - **Canonical `🎯 Micro-Task` Blueprint Example**:
-    ```markdown
-    ### Item 2 Specification ###
-    - Target Keyword: originate (verb) — "to come from a particular place or start in a particular situation"
-    - Required Lexical Frame: originate in [place/situation] (Model: "Many Christmas traditions originated in Germany.")
-    - Target Grammar Pattern: Concessive Clause (`Although / Even though + Subject + Verb, Main Clause`)
-    - Prescribed Flaw Type: L1 Conjunction Redundancy (`Although ... but ...` double conjunction)
-    - 🎯 Micro-Task for LLM:
-      1. `translated_sentence`: Write a natural Chinese sentence meaning "虽然...（含 originate 词义：起源于某地/某种情况），但...".
-      2. `idiomatic_translation`: Translate into natural CEFR B1 English integrating BOTH `originate in` and `Although + Clause, Main Clause` (NO 'but' in main clause).
-      3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair, ONLY introducing the prescribed flaw (adding redundant `but` before the main clause, or misusing `originate`).
-      4. `diagnostic_critique`: Contrast the two versions by pointing out the exact `Although ... but ...` redundancy and confirming the `originate in` collocation.
-    ```
-- [x] **Unified Eight Lexico-Syntactic Construction Families (`vocabulary_quiz` & `extractions` Blueprint Wiring)**:
-  - **0. [x] Core Data-Driven Engine — Two-Tier `pedlex.db` Construction Tagging & Reverse Subcategorization Index (`pedlex_cxn_index` — Completed)**:
-    - *Forward Trigger (Two-Tier Attachment)*: Monosemous multi-word constructions (Families 1A, 2, 6, 7) attach `cxn_spec` (`canonical_blank`, `canonical_pattern`, `cloze_frame`) at the **Entry / Phrase level** (`sense_idx = -1`); polysemous single words (`hard`, `necessary`, `remind`, `avoid`, `ability`, `insist`) attach `cxn_spec` at the **`Sense -> pattern_bundle` level** (`sense_idx >= 0`), queried via `get_word_cxn_specs` when `pick_atomic_pattern_bundle` matches the passage `Quoted Sentence` to that constructional pattern.
-    - *Reverse Distractor Pool (`subcat_group` Set-Difference)*: Offline scanning of `pedlex.db` `senses[].patterns` and `<gram>` partitions the lexicon into 2,635 indexed rows across mutually exclusive syntactic equivalence classes (`ADJ_IT_EXTRAPOS` vs. `ADJ_ANIMATE_CONTROL`, `V_GERUND_ONLY` vs. `V_INF_ONLY`, `N_SHELL_TO_DO` vs. `N_SHELL_OF_DOING` vs. `N_SHELL_THAT_ONLY`, `PHR_FRONTED_INV` vs. `PHR_NON_INV_PP`), enabling <0.2ms SQL lookup via `query_cxn_contrast_distractors` (`contrast_groups \ ban_groups`) with zero hardcoded word lists in Python.
-  - **1. Family 1A — Preparatory-Object Extraposition (`make / find / keep / leave [sth] <adj>` $\rightarrow$ `<V> it <adj> ... to do [sth]`)**:
-    - *Extraction*: Extracted as **Vocabulary / Multi-Word Expressions** (`extractions/<Unit>_vocabulary.md`).
-    - *Quiz Blueprint*: Contiguous 3-word blank (`make it possible`, `make it easy`, `find it hard`) with comparative-to-base normalization (`make it easier` $\rightarrow$ `make it easy`), frame `... ____ ... to do [sth]`, and same-verb complement-contrasting distractors (`make it clear / known / certain / plain`; `find it strange / odd / clear / funny`) while banning all other infinitive-licensing adjectives (`easy`, `hard`, `difficult`, `impossible`).
-  - **2. Family 1B — Preparatory-Subject `it`-Extraposition (`It is <adj> (for/of sb) to do [sth]`)**:
-    - *Extraction*: Extracted as **Syntactic Grammar** (`Information Packaging: it-extraposition` in `extractions/<Unit>_grammar.md`), never as a multi-word vocabulary phrase. Enters `vocabulary_quiz` when a single-word syllabus adjective (`hard`, `easy`, `difficult`, `necessary`, `essential`, `possible`, `rare`, `dangerous`) has an `It is <adj> (for/of sb) to do` quote/example.
-    - *Quiz Blueprint*: Intercept `<adj> + for/of + NP + to + V` (`For-To` Infinitival Guard), normalize truncated patterns (`It's difficult` $\rightarrow$ `it is difficult (for [sb]) to do [sth]`), ban same-slot extraposition adjectives (`hard`/`difficult`/`easy`/`simple`/`possible`/`necessary`), and prioritize animate-subject control/experiencer adjectives (`eager`, `willing`, `reluctant`, `afraid`, `anxious`, `proud`, `capable`, `allergic`, `fond` — Chomsky's `easy` vs. `eager` contrast) plus `[only before noun]` foils.
-  - **3. Family 2 — Discontinuous Correlatives & Paired Frames (`not only ... but (also)`, `either ... or`, `neither ... nor`, `so/such ... that`, `hardly/scarcely ... when`, `no sooner ... than`)**:
-    - *Quiz Blueprint*: Never strip into ungrammatical contiguous fragments; blank the **first arm** (`not only`, `neither`, `no sooner`, `hardly`) while locking the **second correlative arm** inside the `Cloze Slot Frame` (`... ____ ... but also ...`, `... ____ ... nor ...`, `... ____ ... than ...`), paired with cross-correlative mismatched distractors.
-  - **4. Family 3 — Discontinuous `Verb + [sb/sth] + Prep / Particle` Frames (`remind [sb] of`, `provide [sb] with`, `accuse [sb] of`, `blame [sb] for`, `prevent/stop/keep [sb] from doing`)**:
-    - *Quiz Blueprint*: Blank the governing verb (`____`) while locking `[sb/sth] + <Prep> (+ [doing sth])` in the frame, pairing with semantically adjacent verbs that govern incompatible prepositions (`explain/mention/suggest to`, `forbid to do`).
-  - **5. Family 4 — Catenae & Non-Finite Verb Complementation (`look forward to doing`, `be used to doing`, `devote oneself to doing`, `have difficulty (in) doing`, `spend [time] doing`, `avoid/admit/deny doing` vs. `manage/afford/refuse to do`)**:
-    - *Quiz Blueprint*: Preserve `[doing sth]` or `to do [sth]` in the Cloze Slot Frame (`... ____ [doing sth]`) and invert non-finite subcategorization in distractors (pairing gerund-requiring targets with infinitive-only distractors and vice versa, while banning dual-complement aspectual verbs like `begin`/`start`/`continue`).
-  - **6. Family 5 — Shell Nouns & Post-Nominal Clausal Licensing (`the ability/tendency/attempt/effort to do`, `the habit/risk/intention of doing`, `the fact/belief/assumption that...`)**:
-    - *Quiz Blueprint*: Lock the post-nominal complement (`the ____ to do [sth]`, `the ____ of [doing sth]`, `the ____ that ...`), filter co-licensing synonyms (`attempt` vs. `effort`), and select abstract noun distractors with clashing complementation (`*the possibility to do` vs. `the ability to do`).
-  - **7. Family 6 — Delexical Light-Verb + Noun + Preposition Triads (`take advantage of`, `make use of`, `pay attention to`, `keep track of`, `catch sight of`, `give rise to`, `have an impact on`, `play a role in`)**:
-    - *Quiz Blueprint*: Support full 3-word blanking (filtering synonymous triads via `_PHRASE_SYNONYMS_CACHE`) and internal noun blanking (`pay [close] ____ to`) when an internal adjective modifier is present in the passage quote.
-  - **8. Families 7 & 8 — Negative Polarity Items (`let alone`, `much less`, `at all`), Fronted Inversion Triggers (`under no circumstances`, `by no means`, `on no account`), & Mandative Subjunctives (`insist/demand/vital that S (should) V_base`, `would rather S V_past`, `it is high time S V_past`)**:
-    - *Quiz Blueprint*: Enforce negative polarity, fronted `Aux + S + V` inversion (paired with non-inverting PP distractors like `in addition`, `by accident`, `on purpose`), or subordinate subjunctive verb forms in `🎯 Micro-Task`, and register as minimal-pair grammar traps in `translation_quiz`.
-  - *(Full specification: [docs/vocabulary-selection-and-distractor-methodology.md §5](docs/vocabulary-selection-and-distractor-methodology.md#5-eight-lexico-syntactic-construction-families-unified-architecture))*.
-- [ ] **Ongoing**: Expand discourse-level grammar pattern coverage and multi-word construction blanking families.
+- [x] **100% Deterministic Extraction & Neuro-Symbolic WSD**: Pure symbolic Top-$K$ + 1-token LLM arbitration.
+- [x] **Sense-First Quiz Blueprint Closure**: Five-source LDOCE pool, modular architecture (`quiz_vocab.py` etc.), zero drift, universal post-assembly double-key collision screening verified across Books 1–4 (30 units, 300 items, 100% pass rate).
+- [x] **Verb Patient Ontology & Dynamic Fallback Pool**: WordNet supersense + cognitive subdomains for patient slots; 8,102-word dynamic core lexicon fallback.
+- [x] **Symbolic Translation & Listening Blueprints**: Minimal-pair error-injection (`translation_quiz`); 14 dialogue archetypes with pragmatic turn structures (`listening_quiz`).
+- [ ] **Paired Listening–Speaking Workbench**: Two-act receptive-to-productive pairing (`Act I: Listening` $\rightarrow$ `Act II: Speaking`) with 3-level progressive fading scaffolding (Cue Card $\rightarrow$ Acoustic Cloze $\rightarrow$ Blind Production) and cross-scenario transfer.
+- [ ] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts.
+- [ ] **Symbolic Reading Discourse Blueprint**: Pre-assign rhetorical span anchors (`spaCy` transitions) and deterministic distractor fallacy operators (cross-paragraph bait, causal reversal, modality overgeneralization).

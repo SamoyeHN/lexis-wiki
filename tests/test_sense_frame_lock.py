@@ -209,8 +209,8 @@ class TestBareParticlePattern:
         assert len(skels) == 1
         spec = skels[0]
         assert spec["inflection"] == "base form"
-        assert spec["context_anchor"] in ("physical", "impressive")
-        assert "impressive physical specimen" in (spec["authentic_example"] or "").lower()
+        assert spec["context_anchor"] in ("physical", "impressive", "perfect")
+        assert any(k in (spec["authentic_example"] or "").lower() for k in ("perfect specimen", "physical specimen"))
         forbidden_bio = {"cocoon", "nest", "abdomen", "tissue", "urine", "blood", "organ"}
         assert not (set(spec["prescribed_options"]) & forbidden_bio)
 

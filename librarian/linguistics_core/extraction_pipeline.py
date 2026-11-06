@@ -2075,6 +2075,16 @@ class ExtractionPipelineMixin:
                 ):
                     continue
 
+                # Compositional Direct-Question Copular Clauses Guard:
+                # Inverted interrogative clauses built solely from wh-word + copula/auxiliary + pronoun
+                # (e.g., 'how was it?', 'what is it?', 'where are they?') lack open-class lexical heads
+                # and cannot be embedded into declarative cloze stems without breaking word order.
+                if re.match(
+                    r"^(?:how|what|where|when|who|why)\s+(?:is|was|are|were|am|did|do|does)\s+(?:it|this|that|he|she|they|you|we|i)\b[?.!]*$",
+                    e_lower,
+                ):
+                    continue
+
                 # Family 1A Preparatory-Object Extraposition & Causative Resultative ('make/find/keep/leave [sth/it] <adj>')
                 _fam1a_comp_map = {
                     "easier": "easy",
@@ -2114,7 +2124,7 @@ class ExtractionPipelineMixin:
                     "as a result", "for instance", "for example", "at least",
                     "at most", "at last", "upside down", "side by side",
                     "peace of mind", "pros and cons", "no exaggeration",
-                    "not up to par", "up to par", "how was it?", "how was it"
+                    "not up to par", "up to par"
                 }
 
                 if any(idiom in e_lower for idiom in KNOWN_IDIOMS):
@@ -3076,6 +3086,16 @@ class ExtractionPipelineMixin:
                         continue
                     u_clean_no_slot = re.sub(r"\b(?:somebody's|someone's|something's|somebody|someone|something|sb's|sb|sth|one's|oneself|etc)\b\.?", "", u_clean).strip()
                     u_toks = [t for t in re.findall(r"[a-z]+", u_clean_no_slot) if t not in ("a", "an", "the", "some", "any", "doing")]
+                    # For predicative adjective valency units starting with a copula/linking verb
+                    # (e.g. 'be accustomed to (doing) something', 'be aware of', 'be fond of'),
+                    # strip the leading copula so the unit is evaluated on its '<adj> + <prep>' core.
+                    if (
+                        s_p == "adj"
+                        and len(u_toks) >= 2
+                        and u_toks[0] in ("be", "get", "become", "grow", "feel", "seem", "look", "remain", "stay")
+                        and cls.form_matches(u_toks[1], w_low)
+                    ):
+                        u_toks = u_toks[1:]
                     # Preserve 2-word nominal compound <modifier> + <headword> or <headword> + <noun> (e.g. 'postage stamp', 'comic book')
                     if (
                         s_p == "n"

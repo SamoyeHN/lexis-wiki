@@ -45,22 +45,29 @@
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            height: 100vh;
+            overflow: hidden;
+        }
         body {
             font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-            min-height: 100vh;
             background: var(--color-bg-page);
             color: var(--color-text-main);
-            padding: 24px;
+            padding: 14px 20px;
+            display: flex;
+            flex-direction: column;
         }
         .header {
-            max-width: 1400px;
-            margin: 0 auto 20px auto;
+            width: 100%;
+            max-width: 1500px;
+            margin: 0 auto 12px auto;
             text-align: left;
             border-bottom: 1px solid var(--color-border);
-            padding-bottom: 15px;
+            padding-bottom: 10px;
+            flex-shrink: 0;
         }
         .header h1 {
-            font-size: 28px;
+            font-size: 22px;
             font-weight: 700;
             background: var(--color-gradient-primary);
             -webkit-background-clip: text;
@@ -68,33 +75,46 @@
         }
         .header p {
             color: var(--color-text-muted);
-            font-size: 14px;
-            margin-top: 5px;
+            font-size: 13px;
+            margin-top: 3px;
         }
         .main-layout {
-            max-width: 1400px;
+            width: 100%;
+            max-width: 1500px;
             margin: 0 auto;
+            flex: 1;
+            min-height: 0;
             display: grid;
-            grid-template-columns: 1.2fr 1fr;
-            gap: 24px;
-            height: calc(100vh - 120px);
-            min-height: 550px;
+            grid-template-columns: minmax(300px, 1.15fr) minmax(300px, 1fr);
+            grid-template-rows: minmax(0, 1fr);
+            gap: 18px;
         }
-        @media (max-width: 1024px) {
+        @media (max-width: 640px) {
+            html, body {
+                height: auto;
+                overflow: auto;
+            }
             .main-layout {
                 grid-template-columns: 1fr;
+                grid-template-rows: auto;
                 height: auto;
+            }
+            .tab-panel {
+                height: 65vh !important;
             }
         }
         .video-panel {
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 12px;
             background: white;
             border: 1px solid var(--color-border);
             border-radius: 16px;
-            padding: 20px;
+            padding: 16px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+            height: 100%;
+            min-height: 0;
+            overflow-y: auto;
         }
         .video-container {
             position: relative;
@@ -104,6 +124,7 @@
             border-radius: 12px;
             overflow: hidden;
             box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            flex-shrink: 0;
         }
         .video-container iframe, .video-container video {
             position: absolute;
@@ -118,28 +139,30 @@
             background: white;
             border: 1px solid var(--color-border);
             border-radius: 16px;
-            padding: 20px;
+            padding: 16px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.04);
             display: flex;
             flex-direction: column;
             overflow: hidden;
             height: 100%;
+            min-height: 0;
         }
         .tab-headers {
             display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
+            gap: 8px;
+            margin-bottom: 12px;
             border-bottom: 1px solid var(--color-border);
             padding-bottom: 10px;
             flex-shrink: 0;
+            flex-wrap: wrap;
         }
         .tab-btn {
             background: none;
             border: none;
             color: var(--color-text-muted);
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
-            padding: 8px 16px;
+            padding: 7px 14px;
             cursor: pointer;
             border-radius: 8px;
             transition: all 0.2s;
@@ -153,9 +176,11 @@
             background: var(--color-primary);
         }
         .tab-content {
-            flex-grow: 1;
+            flex: 1;
+            min-height: 0;
             overflow-y: auto;
-            padding-right: 5px;
+            padding-right: 6px;
+            position: relative;
         }
         .tab-content::-webkit-scrollbar {
             width: 6px;
@@ -193,20 +218,13 @@
             font-weight: 500;
         }
         .transcript-toolbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
+            flex-direction: column;
             gap: 10px;
-            padding: 10px 14px;
-            margin-bottom: 12px;
+            padding: 12px 14px;
             background: #F9FAFB;
             border: 1px solid var(--color-border);
             border-radius: 10px;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
         }
         .timestamp-badge {
             background: var(--color-primary-active);
@@ -588,13 +606,25 @@
     </div>
 
     <div class="main-layout">
-        <!-- Left Panel: Video Player -->
+        <!-- Left Panel: Video Player & Playback Controls -->
         <div class="video-panel">
             <div class="video-container" id="player-container">
                 <!-- Injected automatically by JS depending on video type -->
             </div>
-            <div style="font-size: 13px; color: var(--color-text-body-alt);">
-                <strong>Tip:</strong> Click any transcript sentence or <code>▶ MM:SS</code> badge to play; click again to pause. Hover or click highlighted words for meanings.
+            <div class="transcript-toolbar" id="transcript-toolbar">
+                <div style="font-size: 13px; color: var(--color-text-body-alt); line-height: 1.5;">
+                    <strong>Tip:</strong> Click any sentence on the right or <code>▶ MM:SS</code> badge to play or pause from its timestamp. Hover or click highlighted words for meanings.
+                </div>
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <label style="display: inline-flex; align-items: center; gap: 7px; background: var(--color-indigo-bg); color: var(--color-indigo-text); border: 1px solid var(--color-indigo-border); padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none;" title="Keep the active transcript line locked, highlighted, and scrolled into view while the video plays.">
+                        <input type="checkbox" id="transcript-lock-toggle" checked onchange="toggleTranscriptLock(this.checked)" style="accent-color: var(--color-primary); cursor: pointer;">
+                        <span>Lock Transcript (Auto-scroll)</span>
+                    </label>
+                    <label style="display: inline-flex; align-items: center; gap: 7px; background: var(--color-indigo-bg); color: var(--color-indigo-text); border: 1px solid var(--color-indigo-border); padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none;" title="When enabled, clicking a sentence in the transcript plays only that single sentence and automatically pauses at the end.">
+                        <input type="checkbox" id="auto-pause-toggle" onchange="toggleSentenceAutoPause(this.checked)" style="accent-color: var(--color-primary); cursor: pointer;">
+                        <span>Play Single Transcript Sentence (Auto-pause)</span>
+                    </label>
+                </div>
             </div>
         </div>
 
@@ -608,19 +638,6 @@
 
             <!-- Scrollable Tab Contents -->
             <div class="tab-content" id="tab-transcript">
-                <div class="transcript-toolbar" id="transcript-toolbar">
-                    <span style="font-size: 12.5px; color: var(--color-text-body-alt);">Click any sentence below to play or pause from its timestamp.</span>
-                    <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
-                        <label style="display: inline-flex; align-items: center; gap: 7px; background: var(--color-indigo-bg); color: var(--color-indigo-text); border: 1px solid var(--color-indigo-border); padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none;" title="Keep the active transcript line locked, highlighted, and scrolled into view while the video plays.">
-                            <input type="checkbox" id="transcript-lock-toggle" checked onchange="toggleTranscriptLock(this.checked)" style="accent-color: var(--color-primary); cursor: pointer;">
-                            <span>Lock Transcript (Auto-scroll)</span>
-                        </label>
-                        <label style="display: inline-flex; align-items: center; gap: 7px; background: var(--color-indigo-bg); color: var(--color-indigo-text); border: 1px solid var(--color-indigo-border); padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none;" title="When enabled, clicking a sentence in the transcript plays only that single sentence and automatically pauses at the end.">
-                            <input type="checkbox" id="auto-pause-toggle" onchange="toggleSentenceAutoPause(this.checked)" style="accent-color: var(--color-primary); cursor: pointer;">
-                            <span>Play Single Transcript Sentence (Auto-pause)</span>
-                        </label>
-                    </div>
-                </div>
                 <div id="transcript-lines-list"></div>
             </div>
 
@@ -809,124 +826,42 @@
             const type = quizData.video_type;
             const url = quizData.video_url;
 
-            if (!url || type === 'none' || type === '') {
-                container.innerHTML = `
-                    <div style="padding: 24px; color: var(--color-text-main); background: var(--color-bg-gray); border: 1px solid var(--color-border); border-radius: 12px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
-                        <div style="background: var(--color-disabled-text); color: white; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 4px;">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-                        </div>
-                        <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--color-text-body-alt);">No Video Source Found</h3>
-                        <p style="font-size: 13px; color: var(--color-text-muted); max-width: 480px; margin: 0; line-height: 1.5;">
-                            This unit's source material does not specify an interactive video URL in its frontmatter (using <code>video_url</code> or <code>source_url</code>).
-                        </p>
-                        <div style="font-size: 12px; text-align: left; color: var(--color-text-muted); background: white; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); width: 100%; max-width: 480px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                            <strong style="color: var(--color-text-body-alt); display: block; margin-bottom: 4px;">To attach a video to this quiz:</strong>
-                            <ol style="margin: 0; padding-left: 18px; line-height: 1.6;">
-                                <li>Open the raw unit markdown file in <code>sources/</code>.</li>
-                                <li>Add <code style="background: var(--color-bg-gray); padding: 1px 4px; border-radius: 3px;">video_url: "YOUR_YOUTUBE_LINK"</code> to the YAML frontmatter.</li>
-                                <li>Re-compile this unit using the Lexis Dashboard.</li>
-                            </ol>
-                        </div>
-                    </div>
-                `;
+            if (!url || type !== 'local') {
+                const videoPanel = document.querySelector('.video-panel');
+                if (videoPanel) videoPanel.style.display = 'none';
                 return;
             }
 
-            if (type === 'youtube') {
-                let videoId = url;
-                if (url.includes('v=')) {
-                    videoId = url.split('v=')[1].split('&')[0];
-                } else if (url.includes('youtu.be/')) {
-                    videoId = url.split('youtu.be/')[1].split('?')[0];
-                }
-                // If loaded via file:// protocol, show beautiful local warning and fallback link
-                if (window.location.protocol === 'file:') {
-                    container.innerHTML = `
-                        <div style="padding: 24px; color: var(--color-text-main); background: var(--color-warning-bg); border: 1px solid var(--color-warning-border); border-radius: 12px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
-                            <div style="background: var(--color-warning-icon-bg); color: white; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 4px;">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                            </div>
-                            <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--color-warning-text);">Local File Protocol Restriction</h3>
-                            <p style="font-size: 13px; color: var(--color-text-body-alt); max-width: 480px; margin: 0; line-height: 1.5;">
-                                YouTube's security features block embedded video playback when opening HTML files directly from local disks (using <code>file://</code> URLs).
-                            </p>
-                            <div style="font-size: 12px; text-align: left; color: var(--color-text-body-alt); background: white; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); width: 100%; max-width: 480px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                                <strong style="color: var(--color-text-main); display: block; margin-bottom: 4px;">To view the video, please do one of the following:</strong>
-                                <ul style="margin: 0; padding-left: 18px; line-height: 1.6;">
-                                    <li>View inside the <strong>Lexis Dashboard</strong> (which serves files via local server).</li>
-                                    <li>Run a Python command in this folder: <code style="background: var(--color-bg-gray); padding: 1px 4px; border-radius: 3px;">python -m http.server 8000</code> and visit <a href="http://localhost:8000" target="_blank" style="color: var(--color-primary); font-weight: 600;">localhost:8000</a>.</li>
-                                    <li>Open in VS Code and use the <strong>Live Server</strong> extension.</li>
-                                </ul>
-                            </div>
-                            <a href="https://www.youtube.com/watch?v=${videoId}" target="_blank" style="text-decoration: none; font-size: 14px; font-weight: 600; margin-top: 4px; background: var(--color-danger-border); color: white; border: none; padding: 10px 20px; border-radius: 8px; display: inline-flex; align-items: center; gap: 8px; transition: background 0.2s, transform 0.2s; box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2);" onmouseover="this.style.background='var(--color-primary-hover)'; this.style.transform='scale(1.02)'" onmouseout="this.style.background='var(--color-danger-border)'; this.style.transform='scale(1)'">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                                Watch Video on YouTube
-                            </a>
-                        </div>
-                    `;
-                    return;
-                }
-
-                let embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?enablejsapi=1`;
-                if (window.location.origin && window.location.origin !== 'null' && window.location.protocol !== 'file:') {
-                    embedUrl += `&origin=${encodeURIComponent(window.location.origin)}`;
-                }
-                container.innerHTML = `<iframe id="yt-player-iframe" src="${embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-                
-                // Initialize Youtube IFrame API
-                window.onYouTubeIframeAPIReady = function() {
-                    ytPlayer = new YT.Player('yt-player-iframe', {
-                        events: {
-                            onStateChange: function(event) {
-                                if (event && event.data === 1) {
-                                    updatePlayButtonsUI();
-                                    syncActiveTranscriptLine(getCurrentVideoTime(), true);
-                                    startPlaybackMonitor();
-                                } else {
-                                    updatePlayButtonsUI();
-                                    stopPlaybackMonitor();
-                                }
-                            }
-                        }
-                    });
-                };
-                const tag = document.createElement('script');
-                tag.src = "https://www.youtube.com/iframe_api";
-                const firstScriptTag = document.getElementsByTagName('script')[0];
-                firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-            } else {
-                // Local HTML5 Video Player
-                const filename = url.substring(url.lastIndexOf('/') + 1);
-                container.innerHTML = `
-                    <video id="local-player" controls preload="metadata">
-                        <source src="${url}" type="video/mp4">
-                        <source src="../../raw/media/${filename}" type="video/mp4">
-                        <source src="${filename}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                `;
-                localPlayer = document.getElementById('local-player');
-                if (localPlayer) {
-                    localPlayer.addEventListener('play', () => {
-                        updatePlayButtonsUI();
-                        syncActiveTranscriptLine(localPlayer.currentTime, true);
-                        startPlaybackMonitor();
-                    });
-                    localPlayer.addEventListener('pause', () => {
-                        updatePlayButtonsUI();
-                        stopPlaybackMonitor();
-                    });
-                    localPlayer.addEventListener('ended', () => {
-                        activeSegmentEndSec = null;
-                        updatePlayButtonsUI();
-                        stopPlaybackMonitor();
-                    });
-                    localPlayer.addEventListener('seeked', () => {
-                        syncActiveTranscriptLine(localPlayer.currentTime, true);
-                    });
-                    localPlayer.addEventListener('timeupdate', handleVideoTimeUpdate);
-                }
+            // Local HTML5 Video Player
+            const filename = url.substring(url.lastIndexOf('/') + 1);
+            container.innerHTML = `
+                <video id="local-player" controls preload="metadata">
+                    <source src="${url}" type="video/mp4">
+                    <source src="../sources/media/${filename}" type="video/mp4">
+                    <source src="${filename}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            `;
+            localPlayer = document.getElementById('local-player');
+            if (localPlayer) {
+                localPlayer.addEventListener('play', () => {
+                    updatePlayButtonsUI();
+                    syncActiveTranscriptLine(localPlayer.currentTime, true);
+                    startPlaybackMonitor();
+                });
+                localPlayer.addEventListener('pause', () => {
+                    updatePlayButtonsUI();
+                    stopPlaybackMonitor();
+                });
+                localPlayer.addEventListener('ended', () => {
+                    activeSegmentEndSec = null;
+                    updatePlayButtonsUI();
+                    stopPlaybackMonitor();
+                });
+                localPlayer.addEventListener('seeked', () => {
+                    syncActiveTranscriptLine(localPlayer.currentTime, true);
+                });
+                localPlayer.addEventListener('timeupdate', handleVideoTimeUpdate);
             }
         }
 
@@ -998,17 +933,10 @@
         function scrollLineIntoTranscriptView(lineEl, smooth = true) {
             const container = document.getElementById('tab-transcript');
             if (!container || !lineEl || currentTab !== 'transcript') return;
-            const toolbar = document.getElementById('transcript-toolbar');
-            const toolbarHeight = toolbar ? toolbar.offsetHeight : 0;
-            const containerRect = container.getBoundingClientRect();
-            const lineRect = lineEl.getBoundingClientRect();
-            const visibleTop = containerRect.top + toolbarHeight + 10;
-            const visibleHeight = Math.max(80, containerRect.height - toolbarHeight - 20);
-            const currentTopInVisible = lineRect.top - visibleTop;
-            const desiredTopInVisible = Math.max(12, (visibleHeight - lineRect.height) * 0.35);
-            const delta = currentTopInVisible - desiredTopInVisible;
-            if (Math.abs(delta) > 6) {
-                const targetScrollTop = Math.max(0, container.scrollTop + delta);
+            const visibleHeight = Math.max(80, container.clientHeight);
+            const desiredTop = Math.max(12, (visibleHeight - lineEl.offsetHeight) * 0.35);
+            const targetScrollTop = Math.max(0, lineEl.offsetTop - desiredTop);
+            if (Math.abs(container.scrollTop - targetScrollTop) > 6) {
                 container.scrollTo({
                     top: targetScrollTop,
                     behavior: smooth ? 'smooth' : 'auto'
@@ -1043,13 +971,9 @@
             // While playing the same segment, ensure the active line never drifts out of the visible viewport
             const container = document.getElementById('tab-transcript');
             if (container) {
-                const toolbar = document.getElementById('transcript-toolbar');
-                const toolbarHeight = toolbar ? toolbar.offsetHeight : 0;
-                const containerRect = container.getBoundingClientRect();
-                const lineRect = currentLine.getBoundingClientRect();
-                const visibleTop = containerRect.top + toolbarHeight + 8;
-                const visibleBottom = containerRect.bottom - 10;
-                if (lineRect.top < visibleTop || lineRect.bottom > visibleBottom) {
+                const lineTop = currentLine.offsetTop - container.scrollTop;
+                const lineBottom = lineTop + currentLine.offsetHeight;
+                if (lineTop < 8 || lineBottom > container.clientHeight - 10) {
                     scrollLineIntoTranscriptView(currentLine, true);
                 }
             }

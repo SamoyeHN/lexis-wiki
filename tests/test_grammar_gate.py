@@ -11,7 +11,7 @@ from librarian.evaluator import (
 )
 
 SAMPLE_SOURCE = """CONTENT:
-Considered one of the toughest marathon events in the world, the 875-kilometer annual Australian race, a route from Sydney to Melbourne, was a harsh test of endurance for the world's top athletes, regardless of their age.
+Considered one of the hardest marathon races in the world, the 875-kilometer annual Australian race, a route from Sydney to Melbourne, was a test of endurance for the world's top athletes, regardless of their age.
 Although he was still far behind the world-class athletes, he kept at it.
 It was said that Cliff Young had never kept a single prize.
 As the famous saying goes, "Where there's a will, there's a way!"

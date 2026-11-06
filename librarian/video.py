@@ -317,13 +317,15 @@ class VideoService:
         ydl_opts = {
             'writesubtitles': True,
             'writeautomaticsub': True,
-            'subtitleslangs': ['all', '-danmaku'],
+            'subtitleslangs': ['en.*', 'en', 'ai-en', '-danmaku'],
             'skip_download': True,
             'outtmpl': os.path.join(temp_dir, 'subtitle_temp.%(ext)s'),
             'conffile': False,
             'nocheckcertificate': True,
             'quiet': True,
             'no_warnings': True,
+            'js_runtimes': {'node': {}},
+            'remote_components': ['ejs:github'],
             'http_headers': self._build_ytdlp_headers(url),
         }
 
@@ -372,16 +374,18 @@ class VideoService:
             raise ImportError("Please install yt-dlp: pip install yt-dlp")
 
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best[ext=mp4]/best',
+            'format': 'bestvideo[ext=mp4][vcodec^=avc][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc][height<=720]/best[ext=mp4][height<=720]/best[ext=mp4]/best',
             'merge_output_format': 'mp4',
             'writesubtitles': True,
             'writeautomaticsub': True,
-            'subtitleslangs': ['all', '-danmaku'],
+            'subtitleslangs': ['en.*', 'en', 'ai-en', '-danmaku'],
             'outtmpl': os.path.join(temp_dir, 'video_temp.%(ext)s'),
             'conffile': False,
             'nocheckcertificate': True,
             'quiet': True,
             'no_warnings': True,
+            'js_runtimes': {'node': {}},
+            'remote_components': ['ejs:github'],
             'http_headers': self._build_ytdlp_headers(url),
         }
 
@@ -390,13 +394,24 @@ class VideoService:
         if cookies:
             ydl_opts['cookiefile'] = cookies
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if isinstance(info, dict) and 'entries' in info and info['entries']:
                     info = info['entries'][0]
                 title = (info.get('title') if isinstance(info, dict) else None) or 'Video Transcript'
-            except Exception as e:
+        except Exception as e:
+            if 'subtitles' in str(e).lower() or '429' in str(e):
+                retry_opts = dict(ydl_opts, writesubtitles=False, writeautomaticsub=False)
+                try:
+                    with yt_dlp.YoutubeDL(retry_opts) as ydl_retry:
+                        info = ydl_retry.extract_info(url, download=True)
+                        if isinstance(info, dict) and 'entries' in info and info['entries']:
+                            info = info['entries'][0]
+                        title = (info.get('title') if isinstance(info, dict) else None) or 'Video Transcript'
+                except Exception as e2:
+                    raise RuntimeError(f"yt-dlp failed to download video: {e2}")
+            else:
                 raise RuntimeError(f"yt-dlp failed to download video: {e}")
 
         media_file = None
@@ -429,8 +444,9 @@ class VideoService:
         return title, Path(media_file), transcript_text
 
     def parse_vtt(self, content):
-        """Simple WebVTT parser."""
+        """Simple WebVTT parser with multi-line roll-up caption deduplication."""
         lines = []
+        recent_seen_lines = []
         # Match timestamp lines like "00:01:20.000 --> 00:01:23.000"
         blocks = re.split(r'\n\s*\n', content)
         for block in blocks:
@@ -454,9 +470,19 @@ class VideoService:
                 ms = int(time_match.group(4))
                 total_seconds = hrs * 3600 + mins * 60 + secs + ms / 1000.0
                 time_str = self.format_timestamp(total_seconds)
-                text = " ".join(text_lines).strip()
-                # Clean HTML tags like <c> or <i>
-                text = re.sub(r'<[^>]+>', '', text)
+                deduped_sub_lines = []
+                for tl in text_lines:
+                    # Clean HTML tags like <c> or <00:00:02.500>
+                    clean_tl = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', tl)).strip()
+                    if not clean_tl:
+                        continue
+                    if clean_tl in recent_seen_lines:
+                        continue
+                    deduped_sub_lines.append(clean_tl)
+                    recent_seen_lines.append(clean_tl)
+                    if len(recent_seen_lines) > 8:
+                        recent_seen_lines.pop(0)
+                text = " ".join(deduped_sub_lines).strip()
                 if text:
                     lines.append(f"{time_str} {text}")
         return self.reflow_transcript_lines(lines)
@@ -689,14 +715,14 @@ class VideoService:
                 video_type = "local"
                 source_url = f"/api/media/{dest_media_path.name}"
 
-                if not transcript_text and dl_sub_text:
-                    transcript_text = dl_sub_text
-
                 if not transcript_text and yt_id:
                     try:
                         transcript_text = self.fetch_youtube_transcript(yt_id)
                     except Exception:
                         pass
+
+                if not transcript_text and dl_sub_text:
+                    transcript_text = dl_sub_text
 
                 if not transcript_text:
                     clean_title = safe_title.replace("_", " ").title()
@@ -717,23 +743,7 @@ category: "video_transcript"
                     lang, transcript_text = self.transcribe_local_file(dest_media_path)
                     print(f"Transcription complete (detected language: {lang}).")
             except Exception as dl_err:
-                if not yt_id:
-                    raise
-                print(f"YouTube video download failed ({type(dl_err).__name__}: {dl_err}). Falling back to YouTube embed mode...")
-                video_type = "youtube"
-                source_url = remote_url
-                if not local_sub_file:
-                    try:
-                        transcript_text = self.fetch_youtube_transcript(yt_id)
-                        title = f"YouTube Video {yt_id}"
-                    except Exception as e:
-                        print(f"Could not fetch native transcripts ({type(e).__name__}). Trying fallback via yt-dlp...")
-                        try:
-                            title, transcript_text = self.fetch_via_ytdlp(source_url, remote_temp_dir, cookies_from_browser, cookies)
-                        except Exception:
-                            title = f"YouTube Video {yt_id}"
-                            transcript_text = "[00:00.00] (YouTube transcript could not be automatically downloaded. Please play the video on the dashboard and add subtitles manually.)"
-                            has_subtitles = False
+                raise RuntimeError(f"Failed to download video from {remote_url}: {dl_err}") from dl_err
             finally:
                 shutil.rmtree(remote_temp_dir, ignore_errors=True)
         else:

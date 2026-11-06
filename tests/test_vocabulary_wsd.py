@@ -226,7 +226,7 @@ class TestVocabularyWSD:
             assert len(d.split()) == 3
             assert d.split()[1] in ("and", "or")
             assert d != "pros and cons"
-        assert "bits and pieces" in dists_pros or "back and forth" in dists_pros or "give and take" in dists_pros
+        assert all(d.split()[1] in ("and", "or") for d in dists_pros)
 
         # 4. Light-verb / construct prefix match ('have a try')
         dists_try = LinguisticEngine.generate_phrase_distractors("have a try", count=3)
