@@ -551,10 +551,157 @@ class TestAnchoredTranslation(unittest.TestCase):
         self.assertIn(0, flagged)
         self.assertTrue(any("effectively" in d for d in defects))
 
+    def test_l1_traps_inanimate_and_collocation_resolution(self):
+        """Verify L1 transfer traps: Inanimate Subject, Because...so, and L1 Collocation False Friends."""
+        from librarian.linguistics import LinguisticEngine
+
+        # 1. Because ... so ... conjunction redundancy trap
+        causal_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "Explanatory Causal Clause",
+            "formula": "Because / Since + [Cause], [Result]",
+            "common_mistakes": "Grammar Warning (L1 Conjunction Redundancy): Never pair 'Because' or 'Since' with 'so' in the same sentence.",
+        })
+        self.assertIn("Because / Since ... so ...", causal_trap["flaw_label"])
+        self.assertIn("redundant `so`", causal_trap["corruption_step"])
+        self.assertEqual(causal_trap["zh_cue"], "因为...，所以...")
+
+        # 2. Inanimate Subject Packaging
+        inanimate_pack_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "Inanimate Subject Propositional Packaging",
+            "formula": "[Inanimate/Abstract Subject] + [reveal/demonstrate/show] + that + [Clause]",
+            "common_mistakes": "Grammar Warning (Inanimate Subject vs. Circumstantial Fronting): Avoid 'Through this study, researchers found...'.",
+        })
+        self.assertIn("Inanimate Subject Packaging", inanimate_pack_trap["flaw_label"])
+        self.assertIn("Through + [Study/Data]", inanimate_pack_trap["corruption_step"])
+        self.assertEqual(inanimate_pack_trap["zh_cue"], "通过……，研究人员发现……")
+
+        # 3. Inanimate Causation & Enablement
+        inanimate_enable_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "Inanimate Causation and Enablement",
+            "formula": "[Inanimate Subject] + enable/allow/permit + [Object] + to + [VP]",
+            "common_mistakes": "Grammar Warning (Instrumental Prepositional Fronting): Avoid 'With the sensor, doctors can...'.",
+        })
+        self.assertIn("Inanimate Causation vs. Instrumental Prepositional Fronting", inanimate_enable_trap["flaw_label"])
+        self.assertIn("With / By + [NP]", inanimate_enable_trap["corruption_step"])
+        self.assertEqual(inanimate_enable_trap["zh_cue"], "凭借/借助……，人们能够……")
+
+        # 4. L1 Collocation False Friend: acquire / knowledge
+        knowledge_res = LinguisticEngine._resolve_translation_lexical_trap(
+            word="knowledge",
+            pos="noun",
+            definition="the facts, skills, and understanding that you have gained through learning or experience",
+        )
+        self.assertEqual(knowledge_res["trap"]["trap_type"], "L1_COLLOC_FALSE_FRIEND")
+        self.assertEqual(knowledge_res["required_frame"], "acquire / gain knowledge")
+        self.assertEqual(knowledge_res["trap"]["wrong_frame"], "*learn knowledge*")
+        self.assertIn("L1 False Collocation", knowledge_res["flaw_label"])
+
+        # 5. L1 Collocation False Friend: suggestion
+        sugg_res = LinguisticEngine._resolve_translation_lexical_trap(
+            word="suggestion",
+            pos="noun",
+            definition="an idea, plan, or piece of advice that is given",
+        )
+        self.assertEqual(sugg_res["trap"]["trap_type"], "L1_COLLOC_FALSE_FRIEND")
+        self.assertEqual(sugg_res["required_frame"], "make a suggestion")
+        self.assertEqual(sugg_res["trap"]["wrong_frame"], "*raise / propose suggestions*")
+
+        # 6. Blueprints generation integration with L1 traps
+        vocab_items = [
+            {"word": "knowledge", "part_of_speech": "noun", "definition": "skills and understanding gained"},
+            {"word": "suggestion", "part_of_speech": "noun", "definition": "advice or recommendation"},
+        ]
+        grammar_items = [
+            {
+                "name": "Inanimate Subject Propositional Packaging",
+                "formula": "[Inanimate/Abstract Subject] + [reveal/demonstrate/show] + that + [Clause]",
+                "pedagogical_function": "Packages findings into authoritative inanimate subject.",
+                "common_mistakes": "Grammar Warning (Inanimate Subject): Avoid 'Through...'.",
+            },
+            {
+                "name": "Explanatory Causal Clause",
+                "formula": "Because / Since + [Cause], [Result]",
+                "pedagogical_function": "Connects cause and result without double conjunction.",
+                "common_mistakes": "Grammar Warning (Double Conjunction): Never use 'Because... so...'.",
+            },
+        ]
+        blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
+            vocab_content=vocab_items,
+            grammar_content=grammar_items,
+            target_count=4,
+            target_language="Chinese",
+            cefr_level="B2",
+        )
+        self.assertEqual(len(blueprints), 4)
+        syntactic_bps = [b for b in blueprints if b["focus_type"] == "syntactic"]
+        lexical_bps = [b for b in blueprints if b["focus_type"] == "lexical"]
+        self.assertGreaterEqual(len(syntactic_bps), 1)
+        self.assertGreaterEqual(len(lexical_bps), 1)
+        self.assertTrue(any("Inanimate" in b["flaw_type"] or "Because" in b["flaw_type"] for b in syntactic_bps))
+        self.assertTrue(any("False Collocation" in b["flaw_type"] for b in lexical_bps))
+        # Ensure zh_cue appears in the micro_task_block
+        self.assertTrue(any("通过" in b["micro_task_block"] or "因为" in b["micro_task_block"] for b in syntactic_bps))
+        self.assertTrue(any("知识" in b["micro_task_block"] or "建议" in b["micro_task_block"] for b in lexical_bps))
+
+    def test_l1_trap_parataxis_verb_stacking_resolution(self):
+        """Verify L1 transfer trap: Parataxis Verb-Stack Trap (flat coordinate verb chain instead of participial subordination)."""
+        from librarian.linguistics import LinguisticEngine
+
+        # 1. Syntactic trap resolution
+        parataxis_trap = LinguisticEngine._resolve_translation_syntactic_trap({
+            "name": "Hierarchical Participial Subordination",
+            "formula": "[V-ing / Having V-ed Phrase], [Subject] + [V2] and [V3]",
+            "common_mistakes": "Grammar Warning (Parataxis Verb-Stacking Trap): Learners frequently string three verbs together with 'and' instead of using a participle.",
+        })
+        self.assertIn("Parataxis Verb-Stack Trap", parataxis_trap["flaw_label"])
+        self.assertIn("flattening the hierarchical participial clause into a mechanical coordinate verb chain", parataxis_trap["corruption_step"])
+        self.assertEqual(parataxis_trap["zh_cue"], "……（动作一），……（动作二）并……（动作三）")
+
+        # 2. Minimal-pair word-overlap similarity >= 85% contract verification
+        idiomatic = "Entering the laboratory, the researchers sanitized their equipment and commenced the experiment."
+        flawed = "The researchers entered the laboratory, sanitized their equipment and commenced the experiment."
+        sim = LinguisticEngine.calculate_minimal_pair_similarity(idiomatic, flawed)
+        self.assertGreaterEqual(sim, 0.85)
+
+        # 3. Blueprint generation integration
+        grammar_items = [
+            {
+                "name": "Hierarchical Participial Subordination",
+                "formula": "[V-ing / Having V-ed Phrase], [Subject] + [V2] and [V3]",
+                "pedagogical_function": "Subordinates initial action into fronted participle.",
+                "common_mistakes": "Grammar Warning (Parataxis Verb-Stacking): Avoid flat coordinate verb chains.",
+            },
+        ]
+        blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
+            vocab_content=[{"word": "knowledge", "part_of_speech": "noun", "definition": "skills"}],
+            grammar_content=grammar_items,
+            target_count=2,
+            target_language="Chinese",
+            cefr_level="B2",
+        )
+        syn_bp = next(b for b in blueprints if b["focus_type"] == "syntactic")
+        self.assertIn("Parataxis Verb-Stack", syn_bp["flaw_type"])
+        self.assertIn("动作一", syn_bp["micro_task_block"])
+        self.assertIn("NO flat coordinate verb stacking", syn_bp["micro_task_block"])
+
+    def test_single_constituent_syntactic_parallelism_minimal_pair(self):
+        """
+        Verify that single-constituent syntactic parallelism edits (e.g. nominalization vs clause)
+        in academic sentences (14/18 shared tokens = 77.8%) satisfy the Minimal-Pair contract.
+        """
+        from librarian.linguistics import LinguisticEngine
+
+        idiomatic = "The key to success lies not in mere capital investment, but in the effective utilization of those resources."
+        flawed = "The key to success lies not in mere capital investment, but in how to effectively utilize those resources."
+        sim = LinguisticEngine.calculate_minimal_pair_similarity(idiomatic, flawed)
+        self.assertGreaterEqual(sim, 0.85)
+
 
 if __name__ == "__main__":
     import dataclasses
     unittest.main()
+
+
 
 
 

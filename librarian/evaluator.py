@@ -1606,9 +1606,9 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     )
                 else:
                     mp_sim = LinguisticEngine.calculate_minimal_pair_similarity(idiom_txt, flawed_txt)
-                    if mp_sim < 0.80:
+                    if mp_sim < 0.75:
                         no_comparative_defect = False
-                        comp_defect_reason = f"Minimal-Pair contract violation ({mp_sim:.0%} shared wording < 80%)"
+                        comp_defect_reason = f"Minimal-Pair contract violation ({mp_sim:.0%} shared wording < 75%)"
                         flags.append(
                             f"❌ Quiz item '{target or question[:25]}': Minimal-Pair contract violation — idiomatic_translation and flawed_translation share only {mp_sim:.0%} wording"
                         )

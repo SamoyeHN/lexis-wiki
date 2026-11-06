@@ -5897,6 +5897,15 @@ class ExtractionPipelineMixin:
                 return _resolve_profile("nominative_absolute")
         if any(f_lower.startswith(p) for p in ("although +", "though +", "even though +", "even if +", "while +", "whereas +", "despite +", "in spite of +", "much as +", "albeit +", "notwithstanding +")):
             return _resolve_profile("subordinate_concessive")
+        if any(f_lower.startswith(p) for p in ("because +", "since +", "because/since", "because/since/as")):
+            if "explanatory_causal_clause" in profiles:
+                return _resolve_profile("explanatory_causal_clause")
+        if "inanimate" in f_lower or "enable/allow/permit" in f_lower or "[inanimate" in f_lower:
+            if "enable" in f_lower or "allow" in f_lower or "causation" in f_lower:
+                if "inanimate_causation_enablement" in profiles:
+                    return _resolve_profile("inanimate_causation_enablement")
+            if "inanimate_subject_packaging" in profiles:
+                return _resolve_profile("inanimate_subject_packaging")
         if any(f_lower.startswith(p) for p in ("as long as +", "provided that +", "on condition that +", "so long as +")):
             return _resolve_profile("conditional_clause_as_long_as")
         if any(f_lower.startswith(p) for p in ("if +", "once +", "unless +", "if/unless +")):
@@ -5909,6 +5918,9 @@ class ExtractionPipelineMixin:
             return _resolve_profile("correlative_comparative_as_as")
         if "by + [v-ing" in f_lower:
             return _resolve_profile("prepositional_means_by_ving")
+        if any(k in f_lower for k in ("parataxis", "verb-stack", "verb stack", "and [v3]", "and v3")):
+            if "parataxis_verb_stacking" in profiles:
+                return _resolve_profile("parataxis_verb_stacking")
         if "[v-ing / gerund phrase]" in f_lower or "[v-ing phrase] + [v]" in f_lower:
             return _resolve_profile("gerund_subject_nominalization")
         if "[subject] + [vp], [" in f_lower and ("v-ing" in f_lower or "having +" in f_lower):

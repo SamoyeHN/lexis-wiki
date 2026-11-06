@@ -16,6 +16,140 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 
+# -----------------------------------------------------------------------------
+# High-Yield L1 False Collocation & Delexical Calque Catalog (Chinese -> English)
+# Grounded in Contrastive SLA Error Taxonomies & PedLex Collocations
+# -----------------------------------------------------------------------------
+L1_FALSE_COLLOCATION_CATALOG: Dict[str, Dict[str, str]] = {
+    "knowledge": {
+        "correct_frame": "acquire / gain knowledge",
+        "wrong_frame": "*learn knowledge*",
+        "pedagogical_note": "In English, 'knowledge' collocates with 'acquire' or 'gain', never '*learn knowledge*' (a direct calque of Chinese '学知识').",
+        "model_example": "Interdisciplinary collaboration helps young scholars acquire broader specialized knowledge.",
+        "zh_cue": "学/汲取知识",
+    },
+    "acquire": {
+        "correct_frame": "acquire knowledge",
+        "wrong_frame": "*learn knowledge*",
+        "pedagogical_note": "Pair 'acquire' with abstract nouns like 'knowledge' or 'skills'; avoid literal L1 translation '*learn knowledge*'.",
+        "model_example": "Young researchers must acquire specialized knowledge through empirical practice.",
+        "zh_cue": "汲取/学到知识",
+    },
+    "suggestion": {
+        "correct_frame": "make a suggestion",
+        "wrong_frame": "*raise / propose suggestions*",
+        "pedagogical_note": "English conventionally uses the delexical verb 'make a suggestion'; '*raise suggestions*' is an unidiomatic literal transfer of Chinese '提建议'.",
+        "model_example": "During the review meeting, the consultant made several viable suggestions regarding cost reduction.",
+        "zh_cue": "提建议",
+    },
+    "effort": {
+        "correct_frame": "make an effort",
+        "wrong_frame": "*pay effort / take effort*",
+        "pedagogical_note": "In English, one 'makes an effort'; '*pay effort*' is an unidiomatic literal transfer of Chinese '付出努力'.",
+        "model_example": "Both departments made a concerted effort to meet the project deadline.",
+        "zh_cue": "做出/付出努力",
+    },
+    "role": {
+        "correct_frame": "play a role in",
+        "wrong_frame": "*act a role in / take a role in*",
+        "pedagogical_note": "Use 'play a role in' (or 'play a part in'); '*act a role*' is an unidiomatic calque of Chinese '扮演/起角色作用'.",
+        "model_example": "Early childhood education plays a crucial role in cognitive development.",
+        "zh_cue": "起……作用 / 扮演……角色",
+    },
+    "measure": {
+        "correct_frame": "take measures to",
+        "wrong_frame": "*adopt measures / make measures*",
+        "pedagogical_note": "English conventionally uses 'take measures'; '*adopt measures*' or '*make measures*' is an unidiomatic transfer of Chinese '采取措施'.",
+        "model_example": "The municipal authority took decisive measures to curb traffic congestion.",
+        "zh_cue": "采取措施",
+    },
+    "progress": {
+        "correct_frame": "make progress",
+        "wrong_frame": "*get progress / gain progress*",
+        "pedagogical_note": "'Progress' is uncountable and pairs with 'make' ('make significant progress'); avoid '*get / gain progress*' (transfer of Chinese '取得进步').",
+        "model_example": "The research team has made substantial progress in renewable battery storage.",
+        "zh_cue": "取得进步",
+    },
+    "contribution": {
+        "correct_frame": "make a contribution to",
+        "wrong_frame": "*do a contribution to / give a contribution to*",
+        "pedagogical_note": "Use the delexical verb 'make a contribution'; '*do / give a contribution*' is an unidiomatic calque of Chinese '做贡献'.",
+        "model_example": "Pioneering scientists made an enduring contribution to theoretical physics.",
+        "zh_cue": "做贡献",
+    },
+    "damage": {
+        "correct_frame": "cause / do damage to",
+        "wrong_frame": "*make damage to*",
+        "pedagogical_note": "In English, one 'causes damage' or 'does damage to'; '*make damage*' is an unidiomatic transfer of Chinese '造成/制造破坏'.",
+        "model_example": "Severe coastal storms caused extensive damage to public infrastructure.",
+        "zh_cue": "造成破坏/损害",
+    },
+    "decision": {
+        "correct_frame": "make a decision",
+        "wrong_frame": "*do a decision*",
+        "pedagogical_note": "English uses 'make a decision'; '*do a decision*' is a literal transfer of Chinese '做决定'.",
+        "model_example": "The executive committee made a prudent decision after reviewing the quarterly audit.",
+        "zh_cue": "做决定",
+    },
+    "mistake": {
+        "correct_frame": "make a mistake",
+        "wrong_frame": "*do a mistake / commit a mistake*",
+        "pedagogical_note": "Pair 'mistake' with 'make' ('make a careless mistake'); avoid '*do a mistake*'.",
+        "model_example": "Even experienced translators can make a subtle mistake in register.",
+        "zh_cue": "犯错误",
+    },
+    "price": {
+        "correct_frame": "high / low price",
+        "wrong_frame": "*expensive / cheap price*",
+        "pedagogical_note": "In English, goods are 'expensive/cheap', but prices are 'high/low'; '*expensive price*' is a direct calque of Chinese '价格贵'.",
+        "model_example": "Commodity goods remained at a relatively high price throughout the winter quarter.",
+        "zh_cue": "价格高/昂贵",
+    },
+    "traffic": {
+        "correct_frame": "heavy / light traffic",
+        "wrong_frame": "*big / crowded / many traffic*",
+        "pedagogical_note": "Traffic volume is described as 'heavy' or 'light'; '*big / crowded traffic*' is an unidiomatic calque of Chinese '交通大/拥挤'.",
+        "model_example": "Urban commuters encountered exceptionally heavy traffic during morning rush hour.",
+        "zh_cue": "交通拥堵/车流量大",
+    },
+    "attention": {
+        "correct_frame": "pay attention to",
+        "wrong_frame": "*give attention to / take attention to*",
+        "pedagogical_note": "English idiom requires 'pay attention to'; avoid '*give / take attention to*' (transfer of Chinese '给予注意').",
+        "model_example": "Engineers must pay close attention to structural tolerances under thermal stress.",
+        "zh_cue": "注意/予以关注",
+    },
+    "importance": {
+        "correct_frame": "attach importance to",
+        "wrong_frame": "*pay importance to / give importance to*",
+        "pedagogical_note": "Use 'attach importance to' (or 'place importance on'); '*pay importance*' is an unidiomatic transfer of Chinese '给予/重视'.",
+        "model_example": "Leading universities attach great importance to interdisciplinary research ethics.",
+        "zh_cue": "重视/予以高度重视",
+    },
+    "research": {
+        "correct_frame": "conduct / carry out research",
+        "wrong_frame": "*make research / do research*",
+        "pedagogical_note": "In formal English, one 'conducts' or 'carries out research'; avoid informal or unidiomatic '*make research*'.",
+        "model_example": "Independent laboratories conducted extensive research on the environmental impact.",
+        "zh_cue": "开展/进行研究",
+    },
+    "habit": {
+        "correct_frame": "develop / form a habit",
+        "wrong_frame": "*keep a habit / raise a habit*",
+        "pedagogical_note": "In English, one 'develops' or 'forms' a habit; '*raise a habit*' is a calque of Chinese '养成习惯'.",
+        "model_example": "Early reading programs help children develop a lifelong reading habit.",
+        "zh_cue": "养成习惯",
+    },
+    "problem": {
+        "correct_frame": "solve / address a problem",
+        "wrong_frame": "*resolve a question / answer a problem*",
+        "pedagogical_note": "Pair 'solve / address' with 'problem', and 'answer' with 'question'; avoid confusing 'problem' and 'question'.",
+        "model_example": "Multilateral diplomacy helped address the cross-border environmental problem.",
+        "zh_cue": "解决问题",
+    },
+}
+
+
 class QuizTranslationMixin:
     # =========================================================================
     # SYMBOLIC TRANSLATION MICRO-TASK BLUEPRINTS (translation_quiz)
@@ -226,71 +360,97 @@ class QuizTranslationMixin:
                     bundle_pat = f"{w_clean} {m_vp.group(1).lower()} [sth]"
         required_frame = bundle_pat or w_clean
 
+        # 1.5 Check L1 False Collocation Catalog (direct SLA contrastive catalog)
+        best_trap: Optional[Dict[str, Any]] = None
+        w_low = w_clean.lower()
+        cat_key = None
+        if w_low in L1_FALSE_COLLOCATION_CATALOG:
+            cat_key = w_low
+        else:
+            for tok in w_low.split():
+                if tok in L1_FALSE_COLLOCATION_CATALOG:
+                    cat_key = tok
+                    break
+
+        if cat_key:
+            cat_entry = L1_FALSE_COLLOCATION_CATALOG[cat_key]
+            best_trap = {
+                "trap_type": "L1_COLLOC_FALSE_FRIEND",
+                "correct_frame": cat_entry["correct_frame"],
+                "wrong_frame": cat_entry["wrong_frame"],
+                "pedagogical_note": cat_entry["pedagogical_note"],
+                "model_example": cat_entry["model_example"],
+                "zh_cue": cat_entry.get("zh_cue", ""),
+            }
+            required_frame = cat_entry["correct_frame"]
+            if not model_example or not re.search(r"[a-z]", model_example):
+                model_example = cat_entry["model_example"]
+
         # 2. Query pedlex_error_traps with strict POS and sense_idx isolation
         # Focus strictly on high-diagnostic collocation, dependent preposition, and authentic usage traps
         # (Exclude morphological trivia like uncountable noun pluralization '*packagings*' which degrade translation into spelling checks)
-        traps = cls.get_word_error_traps(w_clean, pos=pos_str or None, sense_idx=s_idx)
-        best_trap: Optional[Dict[str, Any]] = None
-        if traps:
-            priority_order = {
-                "GRAM_BOX_DONTSAY": 0,
-                "GRAMBOX_BADEXA": 0,
-                "GRAMBOX_RULE_TRAP": 1,
-                "PREP_COLLOC_TRAP": 2,
-                "SYNTAX_COMP_TRAP": 3,
-                "LEXICAL_VALENCY_FRAME": 4,
-            }
-            def _is_invalid_prep_or_dialogic_trap(t_obj: Dict[str, Any]) -> bool:
-                t_type = str(t_obj.get("trap_type") or "")
-                cf = str(t_obj.get("correct_frame") or "").strip()
-                cf_low = cf.lower()
-                wf_low = str(t_obj.get("wrong_frame") or "").strip().lower()
-                if _dialogic_deictic_re.search(cf):
-                    return True
-                if "wrong preposition/complement" in wf_low or len(cf.split()) > 6:
-                    return True
-                if t_type != "PREP_COLLOC_TRAP":
+        if not best_trap:
+            traps = cls.get_word_error_traps(w_clean, pos=pos_str or None, sense_idx=s_idx)
+            if traps:
+                priority_order = {
+                    "GRAM_BOX_DONTSAY": 0,
+                    "GRAMBOX_BADEXA": 0,
+                    "GRAMBOX_RULE_TRAP": 1,
+                    "PREP_COLLOC_TRAP": 2,
+                    "SYNTAX_COMP_TRAP": 3,
+                    "LEXICAL_VALENCY_FRAME": 4,
+                }
+                def _is_invalid_prep_or_dialogic_trap(t_obj: Dict[str, Any]) -> bool:
+                    t_type = str(t_obj.get("trap_type") or "")
+                    cf = str(t_obj.get("correct_frame") or "").strip()
+                    cf_low = cf.lower()
+                    wf_low = str(t_obj.get("wrong_frame") or "").strip().lower()
+                    if _dialogic_deictic_re.search(cf):
+                        return True
+                    if "wrong preposition/complement" in wf_low or len(cf.split()) > 6:
+                        return True
+                    if t_type != "PREP_COLLOC_TRAP":
+                        return False
+                    # Reject generic nominal 'Noun + of' preposition traps (e.g. 'emblem of' vs '*emblem from*',
+                    # 'population of' vs '*population from*'), which force artificial tautologies on standalone nouns.
+                    if pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(cf):
+                        return True
+                    if not re.search(r"\bto\b", cf_low):
+                        return False
+                    # If 'to' is at the end of the frame (e.g. 'Is it possible to', 'able to') or followed by a bare verb ('to do', 'to be'),
+                    # it is an infinitive marker rather than a preposition governing a noun phrase.
+                    if re.search(r"\bto\s*$", cf_low) or re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", cf_low):
+                        return True
+                    if ("for/with" in wf_low or "for" in wf_low) and pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", cf_low):
+                        return True
                     return False
-                # Reject generic nominal 'Noun + of' preposition traps (e.g. 'emblem of' vs '*emblem from*',
-                # 'population of' vs '*population from*'), which force artificial tautologies on standalone nouns.
-                if pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(cf):
-                    return True
-                if not re.search(r"\bto\b", cf_low):
-                    return False
-                # If 'to' is at the end of the frame (e.g. 'Is it possible to', 'able to') or followed by a bare verb ('to do', 'to be'),
-                # it is an infinitive marker rather than a preposition governing a noun phrase.
-                if re.search(r"\bto\s*$", cf_low) or re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", cf_low):
-                    return True
-                if ("for/with" in wf_low or "for" in wf_low) and pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", cf_low):
-                    return True
-                return False
 
-            valid_traps = [
-                t for t in traps
-                if str(t.get("trap_type") or "") in priority_order and not _is_invalid_prep_or_dialogic_trap(t)
-            ]
-            if valid_traps:
-                sorted_traps = sorted(
-                    valid_traps,
-                    key=lambda t: priority_order.get(str(t.get("trap_type") or ""), 99)
-                )
-                best_trap = dict(sorted_traps[0])
-                c_f = str(best_trap.get("correct_frame") or "").strip()
-                t_type_sel = str(best_trap.get("trap_type") or "")
-                if (
-                    c_f
-                    and required_frame == w_clean
-                    and t_type_sel in ("PREP_COLLOC_TRAP", "SYNTAX_COMP_TRAP")
-                    and "[" not in c_f
-                    and not c_f.endswith((".", "!", "?"))
-                    and not _dialogic_deictic_re.search(c_f)
-                    and not (pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(c_f))
-                    and len(c_f.split()) <= 6
-                ):
-                    required_frame = c_f
-                trap_mod_ex = str(best_trap.get("model_example") or "").strip()
-                if trap_mod_ex and not model_example and not _dialogic_deictic_re.search(trap_mod_ex):
-                    model_example = trap_mod_ex
+                valid_traps = [
+                    t for t in traps
+                    if str(t.get("trap_type") or "") in priority_order and not _is_invalid_prep_or_dialogic_trap(t)
+                ]
+                if valid_traps:
+                    sorted_traps = sorted(
+                        valid_traps,
+                        key=lambda t: priority_order.get(str(t.get("trap_type") or ""), 99)
+                    )
+                    best_trap = dict(sorted_traps[0])
+                    c_f = str(best_trap.get("correct_frame") or "").strip()
+                    t_type_sel = str(best_trap.get("trap_type") or "")
+                    if (
+                        c_f
+                        and required_frame == w_clean
+                        and t_type_sel in ("PREP_COLLOC_TRAP", "SYNTAX_COMP_TRAP")
+                        and "[" not in c_f
+                        and not c_f.endswith((".", "!", "?"))
+                        and not _dialogic_deictic_re.search(c_f)
+                        and not (pos_str.lower() in ("noun", "n") and _generic_noun_of_re.match(c_f))
+                        and len(c_f.split()) <= 6
+                    ):
+                        required_frame = c_f
+                    trap_mod_ex = str(best_trap.get("model_example") or "").strip()
+                    if trap_mod_ex and not model_example and not _dialogic_deictic_re.search(trap_mod_ex):
+                        model_example = trap_mod_ex
 
         # 3. Deterministic fallback for common bound-preposition collocation frames
         if not best_trap:
@@ -350,7 +510,10 @@ class QuizTranslationMixin:
             c_frame = str(best_trap.get("correct_frame") or required_frame).strip()
             w_frame = str(best_trap.get("wrong_frame") or "").strip()
             dont_say = str(best_trap.get("dont_say") or best_trap.get("bad_example") or "").strip()
-            if t_type == "PREP_COLLOC_TRAP":
+            if t_type == "L1_COLLOC_FALSE_FRIEND":
+                lex_flaw_label = f"L1 False Collocation / Calque Trap (`{c_frame}` vs `{w_frame}`)"
+                lex_corruption_step = f"using the literal L1 calque `{w_frame}` instead of `{c_frame}`"
+            elif t_type == "PREP_COLLOC_TRAP":
                 lex_flaw_label = f"Lexical Valency / Preposition Trap (`{c_frame}` vs `{w_frame}`)"
                 lex_corruption_step = f"substituting the wrong preposition `{w_frame}` instead of `{c_frame}`"
             elif t_type == "SYNTAX_COMP_TRAP":
@@ -370,6 +533,7 @@ class QuizTranslationMixin:
             "trap": best_trap,
             "flaw_label": lex_flaw_label,
             "corruption_step": lex_corruption_step,
+            "zh_cue": best_trap.get("zh_cue", "") if best_trap else "",
         }
 
     @classmethod
@@ -396,6 +560,47 @@ class QuizTranslationMixin:
                 "corruption_step": "adding redundant `but` before the main clause in an `Although / Even though` sentence",
                 "constraint_note": "NO 'but' in main clause",
                 "zh_cue": "虽然...，但...",
+            }
+        if (
+            any(k in header_low for k in ("because", "since", "as a result of", "causal", "cause and effect", "reason clause", "explanatory causal"))
+            and "because of" not in header_low
+        ):
+            return {
+                "flaw_label": "L1 Conjunction Redundancy (`Because / Since ... so ...` double conjunction)",
+                "corruption_step": "adding redundant `so` before the main clause in a `Because / Since` causal sentence (e.g., `*Because ..., so ...*`)",
+                "constraint_note": "NO 'so' in main clause",
+                "zh_cue": "因为...，所以...",
+            }
+        if (
+            any(k in header_low for k in ("inanimate", "enablement", "propositional packaging"))
+            or "enable" in form_low
+            or ("demonstrate" in form_low and "that" in form_low)
+            or ("reveal" in form_low and "that" in form_low)
+        ):
+            if "enable" in form_low or "allow" in form_low or "permit" in form_low or "causation" in header_low or "enablement" in header_low:
+                return {
+                    "flaw_label": "Inanimate Causation vs. Instrumental Prepositional Fronting Trap (`With / By + [Tool], [Subject] can...` instead of `[Tool] enables [Object] to do`)",
+                    "corruption_step": "reverting the inanimate causal subject to literal Chinese circumstantial fronting (e.g. `With / By + [NP], people / doctors can ...` instead of `[NP] enables / allows ... to ...`)",
+                    "constraint_note": "use an Inanimate Subject + enable/allow + [Object] + to-do (NO 'With ..., [Subject] can ...')",
+                    "zh_cue": "凭借/借助……，人们能够……",
+                }
+            return {
+                "flaw_label": "Inanimate Subject Packaging vs. Circumstantial Personal Fronting Trap (`Through + [Study/Data], we / researchers found...` instead of Inanimate Subject)",
+                "corruption_step": "reverting the inanimate reporting subject to literal Chinese circumstantial personal fronting (e.g. `Through + [Study/Data], we / researchers found that ...` instead of `The study reveals / demonstrates that ...`)",
+                "constraint_note": "deploy the Inanimate Research / Data Subject as the main clause subject (NO 'Through ..., researchers found ...')",
+                "zh_cue": "通过……，研究人员发现……",
+            }
+        if (
+            any(k in header_low for k in ("parataxis", "verb-stack", "verb stack", "serial verb", "verb stacking", "hierarchical particip", "subordination vs. coordination"))
+            or ("particip" in header_low and ("stack" in header_low or "serial" in header_low or "hierarchy" in header_low or "hierarchical" in header_low))
+            or "and [v3]" in form_low
+            or "and v3" in form_low
+        ):
+            return {
+                "flaw_label": "Parataxis Verb-Stack Trap (flat coordinate verb chain instead of participial subordination)",
+                "corruption_step": "flattening the hierarchical participial clause into a mechanical coordinate verb chain (e.g., 'Subject + V1, V2 and V3' or 'Subject + V1 and V2 and V3' instead of 'V-ing..., Subject + V2 and V3')",
+                "constraint_note": "subordinate the first action into a fronted participial clause 'V-ing / Having V-ed..., Subject + V2 and V3' (NO flat coordinate verb stacking 'Subject + V1 and V2 and V3')",
+                "zh_cue": "……（动作一），……（动作二）并……（动作三）",
             }
         if any(k in header_low for k in ("despite", "in spite of")):
             return {
@@ -619,6 +824,26 @@ class QuizTranslationMixin:
                 return max(0.86, raw_sim)
             if min_len <= 7 and (max_len - shared) <= 2:
                 return max(0.86, raw_sim)
+
+        # Single-constituent minimal-pair recognition for complex/academic sentences (B2-C2):
+        # If all non-matching tokens are concentrated in a single contiguous edit locus
+        # (bracketed by identical prefix and/or suffix) and shared wording >= 72%,
+        # it is a verified single-constituent Minimal Pair (e.g. nominalization 'the effective utilization of'
+        # vs clause 'how to effectively utilize' sharing 14/18 = 77.8% words).
+        blocks = [b for b in difflib.SequenceMatcher(None, t1, t2).get_matching_blocks() if b.size > 0]
+        is_single_locus = False
+        if len(blocks) == 1:
+            b = blocks[0]
+            if (b.a == 0 and b.b == 0) or (b.a + b.size == len(t1) and b.b + b.size == len(t2)):
+                is_single_locus = True
+        elif len(blocks) == 2:
+            b1, b2 = blocks[0], blocks[1]
+            if (b1.a == 0 and b1.b == 0) and (b2.a + b2.size == len(t1) and b2.b + b2.size == len(t2)):
+                is_single_locus = True
+
+        if is_single_locus and raw_sim >= 0.72 and min_len >= 8:
+            return max(0.86, raw_sim)
+
         return raw_sim
 
     @classmethod
@@ -798,7 +1023,31 @@ class QuizTranslationMixin:
                     "formula": "Although / Even though + Subject + Verb, Main Clause",
                     "pedagogical_function": "Frames a contrast between an obstacle and an outcome.",
                     "common_mistakes": "Grammar Warning (CONCESSIVE CONNECTIVES): Never pair 'Although / Even though' with 'but' in the same sentence.",
-                }
+                },
+                {
+                    "name": "Explanatory Causal Clause",
+                    "formula": "Because / Since + [Cause Clause], [Main Clause]",
+                    "pedagogical_function": "Connects an empirical justification to an outcome without correlative conjunctions.",
+                    "common_mistakes": "Grammar Warning (L1 Double Conjunction Calque): Never pair 'Because' or 'Since' with 'so' in the same sentence.",
+                },
+                {
+                    "name": "Inanimate Subject Propositional Packaging",
+                    "formula": "[Inanimate/Abstract Subject] + [reveal/demonstrate/show] + that + [Clause]",
+                    "pedagogical_function": "Packages empirical findings into an authoritative inanimate subject.",
+                    "common_mistakes": "Grammar Warning (Inanimate Subject vs. Circumstantial Fronting): Do NOT revert to 'Through [study], researchers found...'.",
+                },
+                {
+                    "name": "Inanimate Causation and Enablement",
+                    "formula": "[Inanimate Subject] + enable/allow/permit + [Object] + to + [VP]",
+                    "pedagogical_function": "Expresses causal enablement with an inanimate instrument as grammatical subject.",
+                    "common_mistakes": "Grammar Warning (Instrumental Fronting vs. Inanimate Causation): Do NOT use 'With [Tool], people can...'.",
+                },
+                {
+                    "name": "Hierarchical Participial Subordination",
+                    "formula": "[V-ing / Having V-ed Phrase], [Subject] + [V2] and [V3]",
+                    "pedagogical_function": "Subordinates the initial sequential action into a fronted participial adjunct ('V-ing... / Having V-ed...'), creating a two-tier syntactic hierarchy instead of flat Chinese parataxis.",
+                    "common_mistakes": "Grammar Warning (Parataxis Verb-Stacking vs. Hierarchical Participle): Learners frequently produce literal L1 transfer by chaining coordinate verbs flatly: '[INCORRECT: The researchers entered the lab, sanitized their equipment, and commenced the experiment -> CORRECT: Entering the lab, the researchers sanitized their equipment and commenced the experiment].' (Note: Subordinate the preparatory action into a fronted participle 'V-ing...' to establish hypotactic hierarchy).",
+                },
             ]
 
         # 3. Step 1: Discover valid Lexical Collocation / Valency Traps and Syntactic Traps
@@ -814,6 +1063,7 @@ class QuizTranslationMixin:
             trap = lex_info.get("trap")
             trap_type = str(trap.get("trap_type") or "") if isinstance(trap, dict) else ""
             if trap and lex_info.get("flaw_label") and trap_type in (
+                "L1_COLLOC_FALSE_FRIEND",
                 "PREP_COLLOC_TRAP",
                 "SYNTAX_COMP_TRAP",
                 "LEXICAL_VALENCY_FRAME",
@@ -824,6 +1074,27 @@ class QuizTranslationMixin:
                 v_copy = dict(v_it)
                 v_copy["lex_info"] = lex_info
                 valid_lex_items.append(v_copy)
+
+        # Supplement high-yield L1 collocation items from catalog if unit vocabulary lacks sufficient traps
+        desired_lex_quota = max(1, target_count // 2)
+        if len(valid_lex_items) < desired_lex_quota:
+            existing_words = {v["word"].lower() for v in valid_lex_items}
+            for cat_k, cat_val in L1_FALSE_COLLOCATION_CATALOG.items():
+                if len(valid_lex_items) >= desired_lex_quota:
+                    break
+                if cat_k not in existing_words:
+                    sup_lex_info = cls._resolve_translation_lexical_trap(cat_k)
+                    if sup_lex_info.get("trap"):
+                        valid_lex_items.append({
+                            "word": cat_k,
+                            "pos": "phrase" if " " in cat_val["correct_frame"] else "noun",
+                            "definition": cat_val["correct_frame"],
+                            "quote": cat_val["model_example"],
+                            "example_usage": cat_val["model_example"],
+                            "register": "neutral",
+                            "lex_info": sup_lex_info,
+                        })
+                        existing_words.add(cat_k)
 
         valid_syn_items: List[Dict[str, Any]] = []
         for g_it in grammar_items:
@@ -899,13 +1170,16 @@ class QuizTranslationMixin:
                     f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{g_name}` structure"
                 )
 
+                zh_cue_str = syn_info.get("zh_cue", "")
+                zh_cue_guide = f" (e.g. expressing an idea such as: \"{zh_cue_str}\")" if zh_cue_str else ""
+
                 micro_task_lines = [
                     f"### Item {idx} Specification ###",
                     f"- Focus Type: Syntactic L1 Negative Transfer Trap",
                     f"- Target Grammar Pattern: {target_grammar_display}",
                     f"- Prescribed Flaw Type: {prescribed_flaw_type}",
                     f"- 🎯 Micro-Task for LLM:",
-                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence expressing a complete thought that naturally requires `{g_name}`. (Do NOT invent convoluted reverse-translationese; make it sound authentic to native {target_language} speakers).",
+                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence{zh_cue_guide} expressing a complete thought that naturally requires `{g_name}`. (Do NOT invent convoluted reverse-translationese; make it sound authentic to native {target_language} speakers).",
                     f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English faithfully applying `{g_formula}`{gram_constraint}.",
                     f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed syntactic flaw ({primary_corruption}).",
                     f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
@@ -950,13 +1224,16 @@ class QuizTranslationMixin:
                     f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation"
                 )
 
+                lex_zh_cue = (lex_trap.get("zh_cue") or lex_info.get("zh_cue") or "") if isinstance(lex_trap, dict) else (lex_info.get("zh_cue") or "")
+                zh_cue_guide = f" (e.g. expressing an idea such as: \"{lex_zh_cue}\")" if lex_zh_cue else ""
+
                 micro_task_lines = [
                     f"### Item {idx} Specification ###",
                     f"- Focus Type: Lexical Collocation & Valency L1 Trap",
                     f"- Target Collocation / Lexical Frame: {word} ({pos}) — \"{defn}\" -> `{frame_line}`",
                     f"- Prescribed Flaw Type: {prescribed_flaw_type}",
                     f"- 🎯 Micro-Task for LLM:",
-                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence requiring the specific meaning and context of `{req_frame}`.",
+                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence{zh_cue_guide} requiring the specific meaning and context of `{req_frame}`.",
                     f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English correctly using the collocation `{req_frame}`.",
                     f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed collocation/preposition flaw ({primary_corruption}).",
                     f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",

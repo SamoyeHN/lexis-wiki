@@ -1138,6 +1138,75 @@
           "common_mistakes": "Grammar Warning (Pronoun Case & Non-Finite Predication in Nominative Absolutes): Learners frequently use objective pronoun case or finite verbs in formal nominative absolutes: \"[INCORRECT: Them having secured bipartisan backing -> CORRECT: They having secured bipartisan backing / Having secured bipartisan backing], the coalition introduced the regulatory bill.\" (Note: In a nominative absolute, the overt subject takes the nominative case and governs a non-finite participle; if the subject is identical to the matrix subject, omit the pronoun entirely to form a standard participial adjunct)."
         }
       }
+    },
+    "inanimate_subject_packaging": {
+      "name": "Inanimate Subject Propositional Packaging",
+      "category": "Information Packaging",
+      "pattern_formula": "[Inanimate/Abstract Subject] + [reveal/demonstrate/show] + that + [Clause]",
+      "priority": { "A1_A2": 70, "B1_B2": 82, "C1_C2": 92 },
+      "tiers": {
+        "A1_A2": {
+          "pedagogical_function": "Uses an inanimate subject (like 'The study' or 'The picture') to state facts directly instead of saying 'We can see'.",
+          "imitation_example": "The survey shows that most local families enjoy spending weekends in public parks.",
+          "common_mistakes": "Grammar Warning (Inanimate Subject vs. Circumstantial Fronting): Learners frequently front prepositional phrases and personal pronouns instead of using an inanimate subject: \"[INCORRECT: Through this survey, we can find that most families enjoy parks -> CORRECT: The survey shows that most families enjoy parks].\" (Note: English academic prose strongly favors inanimate subjects for conciseness and objectivity)."
+        },
+        "B1_B2": {
+          "pedagogical_function": "Packages findings, evidence, or data into an authoritative inanimate subject ('The study reveals that...') to maintain an objective academic stance.",
+          "imitation_example": "The five-year longitudinal study demonstrates that regular physical exercise significantly reduces cardiovascular risk factors.",
+          "common_mistakes": "Grammar Warning (Inanimate Subject vs. Circumstantial Personal Fronting): Learners frequently produce literal L1 transfer by fronting circumstantial phrases with personal pronouns: \"[INCORRECT: Through this five-year longitudinal study, researchers found that exercise reduces risk -> CORRECT: The five-year longitudinal study demonstrates that exercise reduces risk].\" (Note: Use the abstract investigation or data as the grammatical subject of reporting verbs like 'demonstrates', 'reveals', or 'suggests')."
+        },
+        "C1_C2": {
+          "pedagogical_function": "Deploys abstract nominal subjects and reporting predicates to encode propositional epistemic findings with scholarly detachment and syntactic economy.",
+          "imitation_example": "Longitudinal epidemiological data suggest that environmental stressors accelerate neurodegenerative deterioration among vulnerable cohorts.",
+          "common_mistakes": "Grammar Warning (Inanimate Abstract Packaging vs. Personal Calque): Learners frequently calque Chinese topic-prominent structures using circumstantial fronting: \"[INCORRECT: Through analyzing the longitudinal epidemiological data, scientists discovered that environmental stressors accelerate deterioration -> CORRECT: Longitudinal epidemiological data suggest that environmental stressors accelerate neurodegenerative deterioration].\" (Note: Forefront empirical evidence or research artifacts as inanimate agentive subjects rather than subordinate circumstantial modifiers)."
+        }
+      }
+    },
+    "inanimate_causation_enablement": {
+      "name": "Inanimate Causation and Enablement",
+      "category": "Information Packaging",
+      "pattern_formula": "[Inanimate Subject] + enable/allow/permit + [Object] + to + [VP]",
+      "priority": { "A1_A2": 68, "B1_B2": 80, "C1_C2": 90 },
+      "tiers": {
+        "A1_A2": {
+          "pedagogical_function": "Explains what a tool or technology allows people to do using 'enable' or 'allow'.",
+          "imitation_example": "The new subway line enables commuters to reach the city center in twenty minutes.",
+          "common_mistakes": "Grammar Warning (Instrumental Prepositional Fronting vs. Inanimate Subject): Learners frequently rely on 'With... people can...' rather than an inanimate subject: \"[INCORRECT: With the new subway line, commuters can reach the center -> CORRECT: The new subway line enables commuters to reach the city center in twenty minutes].\" (Note: Use the device or tool as the grammatical subject with 'enables sb to do')."
+        },
+        "B1_B2": {
+          "pedagogical_function": "Assigns causal agency to instruments, features, or conditions via enablement predicates ('enable / allow / permit / empower + Object + to-Infinitive').",
+          "imitation_example": "The high resolution of the new-generation sensor enables physicians to detect minute lesions at an early stage.",
+          "common_mistakes": "Grammar Warning (Inanimate Causation vs. Prepositional Instrumental Fronting): Learners frequently transfer L1 circumstantial patterns ('With / By + [Tool], [Subject] can...'): \"[INCORRECT: With the high resolution of the new-generation sensor, physicians can detect minute lesions -> CORRECT: The high resolution of the new-generation sensor enables physicians to detect minute lesions at an early stage].\" (Note: English technical discourse favors inanimate causal agents governing an 'enable + Object + to-V' nexus)."
+        },
+        "C1_C2": {
+          "pedagogical_function": "Elevates abstract systemic mechanisms or technological paradigms into grammatical causal agents governing enablement infinitival complements.",
+          "imitation_example": "Recent breakthroughs in cryogenic electron microscopy allow structural biologists to resolve macromolecular architectures at near-atomic resolution.",
+          "common_mistakes": "Grammar Warning (Abstract Enablement vs. Instrumental Circumstantial Modifiers): Learners frequently default to clunky 'Relying on / By means of... researchers are able to...' calques: \"[INCORRECT: By means of breakthroughs in cryogenic microscopy, structural biologists can resolve architectures -> CORRECT: Recent breakthroughs in cryogenic electron microscopy allow structural biologists to resolve macromolecular architectures at near-atomic resolution].\" (Note: Transform instrumental means into the active inanimate subject with 'allow / enable + NP + to-V')."
+        }
+      }
+    },
+    "parataxis_verb_stacking": {
+      "name": "Hierarchical Participial Subordination",
+      "category": "Information Packaging",
+      "pattern_formula": "[V-ing / Having V-ed Phrase], [Subject] + [V2] and [V3]",
+      "priority": { "A1_A2": 66, "B1_B2": 88, "C1_C2": 95 },
+      "tiers": {
+        "A1_A2": {
+          "pedagogical_function": "Turns the first action into an -ing phrase ('Opening the door, he entered and...') to avoid repeating 'and'.",
+          "imitation_example": "Opening the front door, the teacher walked into the classroom and greeted the students.",
+          "common_mistakes": "Grammar Warning (Parataxis Verb-Stacking Trap): Learners frequently string three verbs together with 'and' instead of using a participle: \"[INCORRECT: The teacher opened the door and walked inside and greeted the students -> CORRECT: Opening the door, the teacher walked inside and greeted the students].\" (Note: Use an initial '-ing' participle to subordinate the first action)."
+        },
+        "B1_B2": {
+          "pedagogical_function": "Subordinates the initial sequential action into a fronted participial adjunct ('V-ing... / Having V-ed...'), creating a two-tier syntactic hierarchy instead of flat Chinese parataxis.",
+          "imitation_example": "Entering the laboratory, the researchers sanitized their equipment and commenced the experiment.",
+          "common_mistakes": "Grammar Warning (Parataxis Verb-Stacking vs. Hierarchical Participle): Learners frequently produce literal L1 transfer by chaining coordinate verbs flatly: \"[INCORRECT: The researchers entered the lab, sanitized their equipment, and commenced the experiment / entered and sanitized and commenced -> CORRECT: Entering the lab, the researchers sanitized their equipment and commenced the experiment].\" (Note: Subordinate the preparatory action into a fronted participle 'V-ing...' to establish hypotactic hierarchy)."
+        },
+        "C1_C2": {
+          "pedagogical_function": "Packages serialized narrative or procedural actions into hierarchical non-finite adjuncts, achieving dense academic hypotaxis over paratactic verb-stacking.",
+          "imitation_example": "Having extracted the sediment cores, marine biologists cataloged the specimens and initiated isotopic analysis.",
+          "common_mistakes": "Grammar Warning (Parataxis Run-On Verb Stacking): Learners frequently calque Chinese paratactic serial-verb clauses into coordinate finite verb stacks: \"[INCORRECT: Biologists extracted the sediment cores, cataloged the specimens, and initiated isotopic analysis -> CORRECT: Having extracted the sediment cores, marine biologists cataloged the specimens and initiated isotopic analysis].\" (Note: Establish syntactic depth by encoding anterior actions as perfect participles 'Having V-ed...')."
+        }
+      }
     }
   },
   "fallbacks": {

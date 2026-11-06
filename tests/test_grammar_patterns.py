@@ -138,3 +138,44 @@ def test_fronted_inversion_does_not_match_normal_negation(nlp, engine):
     matches = engine.match_sentence(doc)
     assert not any(m["pattern_id"] == "fronted_negative_inversion" for m in matches)
 
+
+def test_match_causal_clause(nlp, engine):
+    """Test detection of causal subordinate clauses (because/since/as)."""
+    sent = "Because the preliminary data contained anomalies, the research team postponed publication."
+    doc = nlp(sent)
+    matches = engine.match_sentence(doc)
+    assert any(m["pattern_id"] == "causal_clausal" for m in matches)
+    match = next(m for m in matches if m["pattern_id"] == "causal_clausal")
+    assert match["category"] == "Logic & Stance"
+
+
+def test_match_inanimate_subject_packaging(nlp, engine):
+    """Test detection of inanimate subject propositional packaging."""
+    sent = "The five-year longitudinal study demonstrates that regular exercise significantly reduces cardiovascular risks."
+    doc = nlp(sent)
+    matches = engine.match_sentence(doc)
+    assert any(m["pattern_id"] == "inanimate_subject_packaging" for m in matches)
+    match = next(m for m in matches if m["pattern_id"] == "inanimate_subject_packaging")
+    assert match["category"] == "Information Packaging"
+
+
+def test_match_inanimate_causation_enablement(nlp, engine):
+    """Test detection of inanimate subject causation and enablement."""
+    sent = "The high resolution of the new sensor enables physicians to detect minute lesions at an early stage."
+    doc = nlp(sent)
+    matches = engine.match_sentence(doc)
+    assert any(m["pattern_id"] == "inanimate_causation_enablement" for m in matches)
+    match = next(m for m in matches if m["pattern_id"] == "inanimate_causation_enablement")
+    assert match["category"] == "Information Packaging"
+
+
+def test_match_parataxis_verb_stacking(nlp, engine):
+    """Test detection of parataxis verb-stacking counter-pattern (hierarchical participial subordination)."""
+    sent = "Entering the laboratory, the researchers sanitized their equipment and commenced the experiment."
+    doc = nlp(sent)
+    matches = engine.match_sentence(doc)
+    assert any(m["pattern_id"] == "parataxis_verb_stacking" for m in matches)
+    match = next(m for m in matches if m["pattern_id"] == "parataxis_verb_stacking")
+    assert match["category"] == "Information Packaging"
+
+

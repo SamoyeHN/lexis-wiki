@@ -18,20 +18,21 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - **MANDATORY TARGET INVARIANTS**:
      * **Pool Grounding & Decoupled Assessment Focus**:
        - Translation items strategically decouple syntax and vocabulary to diagnose authentic L1 negative transfer traps:
-         1. **Syntactic L1 Negative Transfer Items**: Focus strictly on the assigned `Target Grammar` pattern and its typical L1 negative transfer trap (e.g. correlative double conjunctions, comma splices, causative infinitive, inverted word order, relative clauses). `Target Keyword` is deliberately empty. DO NOT flag, penalize, or attempt to force a Unit Vocabulary word into valid Syntactic items! They are 100% valid as long as their `Target Grammar` represents a genuine pattern from the Unit Grammar Pool.
-         2. **Lexical Collocation & Valency Items**: Focus on the assigned `Target Keyword` and its dependent preposition/valency trap. Its `Target Keyword` MUST strictly come from the Unit Vocabulary List above, and MUST physically appear verbatim or with valid inflection in the idiomatic translation.
+         1. **Syntactic L1 Negative Transfer Items**: Focus strictly on the assigned `Target Grammar` pattern and its typical L1 negative transfer trap (e.g. correlative double conjunctions, comma splices, causative infinitive, inverted word order, relative clauses, parataxis verb-stacking, inanimate subjects). `Target Keyword` is deliberately empty. DO NOT flag, penalize, or attempt to force a Unit Vocabulary word into valid Syntactic items! They are 100% valid as long as their `Target Grammar` represents a genuine pattern from the Unit Grammar Pool.
+         2. **Lexical Collocation & Valency Items**: Focus on the assigned `Target Keyword` and its dependent preposition/valency trap or high-yield L1 negative transfer collocation trap (drawn either from the Unit Vocabulary List or the pre-compiled pedagogical L1 False Collocation Catalog, e.g. `acquire / gain knowledge` vs `*learn knowledge*`, `make a suggestion` vs `*raise suggestions*`, `heavy traffic` vs `*crowded traffic*`). Its `Target Keyword` MUST physically appear verbatim or with valid inflection in the idiomatic translation.
      * **Language Purity**: The {target_language} stem MUST NOT leak English words (outside established acronyms). Options (Version A and Version B) MUST be 100% in English with ZERO {target_language} characters.
      * 🔒 **CROSS-ITEM LEXICAL UNIQUENESS (MANDATORY)**:
        - **Zero Keyword Repetition**: For Lexical Collocation items, every question in the quiz must test a distinct, unique `target_keyword`. Testing the same keyword twice in one quiz is a FATAL FLAW (`single_fit_valid = false`, pedagogical_score 30-40, triage_action: REWRITE).
        - **Cross-Item Lexical Non-Repetition**: Do NOT reuse major content words or other unit headwords across different items' `idiomatic_translation` or `options` (e.g. if one item tests or features "substantial", other items must not redundantly rely on "substantial"). Ensure broad, diverse lexical coverage!
      * **Surgical Rewrite Target Selection**:
        - When triggering `REWRITE` on a Syntactic item: retain or select an authentic pattern from the Unit Grammar Pool, keep `target_keyword` empty, and craft a pristine translation item with a genuine contrast inspired by the listed Common Mistakes!
-       - When triggering `REWRITE` on a Lexical item: select an unused word strictly from the Unit Vocabulary List, and craft a pristine translation item targeting its preposition/collocation trap!
+       - When triggering `REWRITE` on a Lexical item: select an unused word from the Unit Vocabulary List or an authentic collocation from the L1 False Collocation Catalog, and craft a pristine translation item targeting its preposition/collocation trap!
 
 0.1 **STRUCTURAL INTEGRITY & UNIFIED TRIAGE CLASSIFICATION**:
    - **TIER 1: FATAL STEM & ZERO-TOLERANCE DEFECTS (Action: REWRITE, single_fit_valid = false, pedagogical_score 20-59)**:
      - **Translation Fidelity Mismatch**: The {target_language} stem distorts the core concept of the `Target Keyword` or the intended message of the sentence.
-     - **Genuine Double Key**: Both Version A and Version B are equally idiomatic and grammatically flawless, or the claimed flaw is nonexistent.
+     - **Genuine Double Key**: Both Version A and Version B are equally idiomatic and grammatically flawless in academic English, or the claimed flaw is nonexistent.
+       * *AUTHORITATIVE LEXICOGRAPHIC ERROR NORMS*: Standard L1 learner calques explicitly documented in authoritative reference lexicons (e.g. LDOCE / Cambridge / Oxford Common Errors: `*learn knowledge*` -> `acquire/gain knowledge`, `*raise suggestions*` -> `make suggestions`, `*crowded traffic*` -> `heavy traffic`, `*cheap price*` -> `low/reasonable price`) represent CERTIFIED, DEFECTIVE L1 negative transfer traps. NEVER claim such calques are acceptable academic English or double keys! The prescriptive idiomatic translation is undeniably superior.
      - **Broken Target Translation**: The declared target translation is ungrammatical or fails to express the target keyword / grammar pattern.
      - **Identical Translations**: Version A and Version B are identical.
      - **Keyword / Distractor Repetition**: Reuses a `target_keyword` tested in another Lexical item within the same quiz.
@@ -62,7 +63,8 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
 
 2. **ABSOLUTE SINGLE-FIT VALIDITY & COMPARATIVE RIGOR (`single_fit_valid`)**:
    - Verify that the declared target translation is undeniably superior to the flawed translation.
-   - **Genuine Double Key**: If the alternative translation is ALSO 100% grammatically correct, natural, and free of the claimed flaw, set `single_fit_valid: false` and `pedagogical_score <= 20`.
+   - **Genuine Double Key**: If the alternative translation is ALSO 100% grammatically correct, natural, and free of the claimed flaw in academic English, set `single_fit_valid: false` and `pedagogical_score <= 20`.
+   - **Lexicographic Norm Enforcement**: Prohibited L1 learner calques explicitly flagged in authoritative lexicography (e.g., LDOCE Common Errors `*learn knowledge*`, `*raise suggestions*`) are certified educational traps and must NEVER be treated as acceptable English or double keys.
    - **Defective Contrast / Trivial Giveaway**: If the flawed translation is merely a spelling typo or ridiculous nonsense rather than a legitimate L1 negative transfer trap, penalize distractor quality.
 
 3. **COGNITIVE TRANSLATION DISTRACTOR TRAP ANALYSIS (`distractors`)**:

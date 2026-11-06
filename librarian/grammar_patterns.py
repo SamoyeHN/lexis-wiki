@@ -218,6 +218,23 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
             ]
         ]
     },
+    {
+        "id": "causal_clausal",
+        "category": "Logic & Stance",
+        "priority": 84,
+        "name": "Causal Subordinate Clause",
+        "formula": "because/since/as + [Cause Clause], [Result Clause]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
+                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "sub_verb", "RIGHT_ATTRS": {"DEP": "advcl"}},
+                {"LEFT_ID": "sub_verb", "REL_OP": ">", "RIGHT_ID": "causal_marker", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["because", "since"]},
+                    "DEP": "mark"
+                }},
+            ]
+        ]
+    },
 
     # =========================================================================
     # C. Cohesion & Framing
@@ -360,6 +377,26 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
         ]
     },
     {
+        "id": "parataxis_verb_stacking",
+        "category": "Information Packaging",
+        "priority": 78,
+        "name": "Hierarchical Participial Subordination",
+        "formula": "[V-ing Phrase], [Subject] + [V2] and [V3]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "main_verb", "RIGHT_ATTRS": {"POS": {"IN": ["VERB", "AUX"]}}},
+                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "part_verb", "RIGHT_ATTRS": {
+                    "DEP": "advcl",
+                    "TAG": {"IN": ["VBG", "VBN"]}
+                }},
+                {"LEFT_ID": "main_verb", "REL_OP": ">", "RIGHT_ID": "conj_verb", "RIGHT_ATTRS": {
+                    "DEP": "conj",
+                    "POS": "VERB"
+                }},
+            ]
+        ]
+    },
+    {
         "id": "non_restrictive_relative_clause",
         "category": "Information Packaging",
         "priority": 70,
@@ -441,6 +478,50 @@ DECLARATIVE_GRAMMAR_PATTERNS: List[Dict[str, Any]] = [
                 }},
                 {"LEFT_ID": "abs_verb", "REL_OP": ">", "RIGHT_ID": "abs_subj", "RIGHT_ATTRS": {
                     "DEP": {"IN": ["nsubj", "nsubjpass"]}
+                }},
+            ]
+        ]
+    },
+    {
+        "id": "inanimate_subject_packaging",
+        "category": "Information Packaging",
+        "priority": 83,
+        "name": "Inanimate Subject Propositional Packaging",
+        "formula": "[Inanimate/Abstract Subject] + [reveal/demonstrate/show] + that + [Clause]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "report_verb", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["reveal", "demonstrate", "show", "indicate", "suggest", "prove", "confirm", "illustrate"]},
+                    "POS": {"IN": ["VERB", "AUX"]}
+                }},
+                {"LEFT_ID": "report_verb", "REL_OP": ">", "RIGHT_ID": "subj_noun", "RIGHT_ATTRS": {
+                    "DEP": {"IN": ["nsubj", "nsubjpass"]},
+                    "POS": {"IN": ["NOUN", "PROPN"]}
+                }},
+                {"LEFT_ID": "report_verb", "REL_OP": ">", "RIGHT_ID": "that_comp", "RIGHT_ATTRS": {
+                    "DEP": "ccomp"
+                }},
+            ]
+        ]
+    },
+    {
+        "id": "inanimate_causation_enablement",
+        "category": "Information Packaging",
+        "priority": 82,
+        "name": "Inanimate Causation and Enablement",
+        "formula": "[Inanimate Subject] + enable/allow/permit + [Object] + to + [VP]",
+        "tree_patterns": [
+            [
+                {"RIGHT_ID": "causative_verb", "RIGHT_ATTRS": {
+                    "LEMMA": {"IN": ["enable", "allow", "permit", "lead", "cause", "empower"]},
+                    "POS": {"IN": ["VERB", "AUX"]}
+                }},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "subj_noun", "RIGHT_ATTRS": {
+                    "DEP": "nsubj",
+                    "POS": {"IN": ["NOUN", "PROPN"]}
+                }},
+                {"LEFT_ID": "causative_verb", "REL_OP": ">", "RIGHT_ID": "xcomp_inf", "RIGHT_ATTRS": {
+                    "DEP": "xcomp"
                 }},
             ]
         ]
@@ -617,13 +698,13 @@ class GrammarPatternEngine:
                 else:
                     continue
 
-            # Semantic validation for concession_clausal and conditional_clausal:
+            # Semantic validation for concession_clausal, conditional_clausal, and causal_clausal:
             # 1. Subjectless 'If/While/Though/Although + V-ing/V-ed/Adj' (e.g. 'If living in the U.S., ...',
             #    'While working in Shilidian, ...', 'Though sometimes disguised, ...') is a reduced non-finite adjunct,
             #    not a finite '[Subordinator] + [Subject] + [VP]' clause.
             # 2. Unpunctuated post-posed 'while + Subject + be + V-ing' (e.g. '...while she was driving away') is a temporal
             #    simultaneous background clause, not a concessive or contrastive clause.
-            if string_id in ("concession_clausal", "conditional_clausal"):
+            if string_id in ("concession_clausal", "conditional_clausal", "causal_clausal"):
                 tokens = [doc[i] for i in token_indices]
                 mark_tok = next((t for t in tokens if t.dep_ in ("mark", "advmod")), None)
                 sub_v = next((t for t in tokens if t != mark_tok and t.dep_ == "advcl"), None)
@@ -636,11 +717,11 @@ class GrammarPatternEngine:
                     if main_v and mark_tok.i > main_v.i and has_be_aux and not preceded_by_comma:
                         continue
 
-            # Semantic validation for nonfinite participial adjunct:
+            # Semantic validation for nonfinite participial adjunct and parataxis verb stacking:
             # Must NOT be introduced by interrogative/subordinating adverbs/marks like 'why', 'how', 'when', 'if', 'because'
             # Must NOT have finite auxiliary verbs (e.g. 'was presented' -> finite passive, not nonfinite participle;
             # note that non-finite 'having' or 'being' as in 'Having seen...' or 'Being delayed...' are valid non-finite auxiliaries!)
-            if string_id == "nonfinite_participial_adjunct":
+            if string_id in ("nonfinite_participial_adjunct", "parataxis_verb_stacking"):
                 tokens = [doc[i] for i in token_indices]
                 part_v = next((t for t in tokens if t.tag_ in ("VBG", "VBN")), None)
                 main_v = next((t for t in tokens if t != part_v and t.pos_ in ("VERB", "AUX")), None)
