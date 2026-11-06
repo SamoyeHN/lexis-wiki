@@ -16,24 +16,25 @@ Conduct an exhaustive, high-reasoning pedagogical and psychometric Quality Audit
    - 📐 **UNIT GRAMMAR & COMMON MISTAKES POOL (Target Grammar Pool)**:
 {unit_grammar_list}
    - **MANDATORY TARGET INVARIANTS**:
-     * **Pool Grounding**: 
-       - Every item's `target_keyword` MUST strictly come from the Unit Vocabulary List above.
-       - Every item's `target_grammar` MUST strictly correspond to an authentic pattern from the Unit Grammar & Common Mistakes Pool above!
-     * **Target Keyword Physical Presence**: The `target_keyword` MUST physically appear verbatim or with valid inflection in the idiomatic translation (`idiomatic_translation`). If omitted or altered, flag as defective.
+     * **Pool Grounding & Decoupled Assessment Focus**:
+       - Translation items strategically decouple syntax and vocabulary to diagnose authentic L1 negative transfer traps:
+         1. **Syntactic L1 Negative Transfer Items**: Focus strictly on the assigned `Target Grammar` pattern and its typical L1 negative transfer trap (e.g. correlative double conjunctions, comma splices, causative infinitive, inverted word order, relative clauses). `Target Keyword` is deliberately empty. DO NOT flag, penalize, or attempt to force a Unit Vocabulary word into valid Syntactic items! They are 100% valid as long as their `Target Grammar` represents a genuine pattern from the Unit Grammar Pool.
+         2. **Lexical Collocation & Valency Items**: Focus on the assigned `Target Keyword` and its dependent preposition/valency trap. Its `Target Keyword` MUST strictly come from the Unit Vocabulary List above, and MUST physically appear verbatim or with valid inflection in the idiomatic translation.
      * **Language Purity**: The {target_language} stem MUST NOT leak English words (outside established acronyms). Options (Version A and Version B) MUST be 100% in English with ZERO {target_language} characters.
      * 🔒 **CROSS-ITEM LEXICAL UNIQUENESS (MANDATORY)**:
-       - **Zero Keyword Repetition**: Every question in the quiz must test a distinct, unique `target_keyword`. Testing the same keyword twice in one quiz is a FATAL FLAW (`single_fit_valid = false`, pedagogical_score 30-40, triage_action: REWRITE).
+       - **Zero Keyword Repetition**: For Lexical Collocation items, every question in the quiz must test a distinct, unique `target_keyword`. Testing the same keyword twice in one quiz is a FATAL FLAW (`single_fit_valid = false`, pedagogical_score 30-40, triage_action: REWRITE).
        - **Cross-Item Lexical Non-Repetition**: Do NOT reuse major content words or other unit headwords across different items' `idiomatic_translation` or `options` (e.g. if one item tests or features "substantial", other items must not redundantly rely on "substantial"). Ensure broad, diverse lexical coverage!
      * **Surgical Rewrite Target Selection**:
-       - When triggering `REWRITE`: You MUST select an unused word strictly from the Unit Vocabulary List, pair it with an authentic pattern from the Unit Grammar Pool, and craft a pristine translation item with a genuine contrast inspired by the listed Common Mistakes!
+       - When triggering `REWRITE` on a Syntactic item: retain or select an authentic pattern from the Unit Grammar Pool, keep `target_keyword` empty, and craft a pristine translation item with a genuine contrast inspired by the listed Common Mistakes!
+       - When triggering `REWRITE` on a Lexical item: select an unused word strictly from the Unit Vocabulary List, and craft a pristine translation item targeting its preposition/collocation trap!
 
 0.1 **STRUCTURAL INTEGRITY & UNIFIED TRIAGE CLASSIFICATION**:
    - **TIER 1: FATAL STEM & ZERO-TOLERANCE DEFECTS (Action: REWRITE, single_fit_valid = false, pedagogical_score 20-59)**:
-     - **Translation Fidelity Mismatch**: The {target_language} stem distorts the core concept of the `Target Keyword`.
+     - **Translation Fidelity Mismatch**: The {target_language} stem distorts the core concept of the `Target Keyword` or the intended message of the sentence.
      - **Genuine Double Key**: Both Version A and Version B are equally idiomatic and grammatically flawless, or the claimed flaw is nonexistent.
-     - **Broken Target Translation**: The declared target translation is ungrammatical or fails to express the target keyword.
+     - **Broken Target Translation**: The declared target translation is ungrammatical or fails to express the target keyword / grammar pattern.
      - **Identical Translations**: Version A and Version B are identical.
-     - **Keyword / Distractor Repetition**: Reuses a `target_keyword` tested in another item within the same quiz.
+     - **Keyword / Distractor Repetition**: Reuses a `target_keyword` tested in another Lexical item within the same quiz.
      - *Mandatory Cure*: Discard the broken item and write a completely pristine replacement item in `cured_question` (fields: `translated_sentence` [{target_language} stem], `target_keyword`, `target_grammar`, `idiomatic_translation`, `flawed_translation`, `flaw_type`, `options` [array of 2 English strings], `correct_answer_index` [0 or 1], `explanation`).
    - **TIER 2: LOCAL CONTRAST & CRAFT DEFECTS (Action: REPAIR, single_fit_valid = true, pedagogical_score 60-79)**:
      - **Surface Flaw in Flawed Option**: The flawed translation has a trivial typo or minor article blemish (e.g. 'a ingredient' -> 'an ingredient') rather than a clean syntactic contrast, or the `flaw_type` label is slightly inaccurate.

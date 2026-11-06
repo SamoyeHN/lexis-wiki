@@ -958,19 +958,21 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
     prompt_blueprints: Dict[str, Dict[str, Any]] = {}
     translation_bp_targets: List[str] = []
     if task_type == "quiz" and user_prompt:
-        for m in re.finditer(r"## \[\[(.*?)\]\]", user_prompt):
+        grammar_ref_split = re.split(r"\bGRAMMAR REFERENCE:\b", user_prompt, flags=re.IGNORECASE)
+        vocab_section = grammar_ref_split[0]
+        for m in re.finditer(r"## \[\[(.*?)\]\]", vocab_section):
             prompt_headwords.add(m.group(1).strip().lower())
         if not prompt_headwords:
-            for m in re.finditer(r"-\s*Target:\s*([^\n\r]+)", user_prompt):
+            for m in re.finditer(r"-\s*Target:\s*([^\n\r]+)", vocab_section):
                 prompt_headwords.add(m.group(1).strip().lower())
         # Support Target Word from Authentic Corpus Blueprint or Translation Micro-Task Blueprint
-        for m in re.finditer(r"-\s*Target\s+(?:Word|Keyword):\s*([^\n\r(]+)", user_prompt, re.IGNORECASE):
+        for m in re.finditer(r"-\s*Target\s+(?:Word|Keyword|Collocation\s*/\s*Lexical Frame):\s*([^\n\r(]+)", user_prompt, re.IGNORECASE):
             w = m.group(1).strip().lower()
             if w:
                 prompt_headwords.add(w)
         translation_bp_targets = [
             m.group(1).strip().lower()
-            for m in re.finditer(r"-\s*Target\s+Keyword:\s*([^\n\r(]+)", user_prompt, re.IGNORECASE)
+            for m in re.finditer(r"-\s*Target\s+(?:Keyword|Collocation\s*/\s*Lexical Frame):\s*([^\n\r(]+)", user_prompt, re.IGNORECASE)
             if m.group(1).strip()
         ]
 
@@ -1497,14 +1499,16 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 if not target:
                     audit_str = _safe_str(item.get("design_audit"))
                     m_aud = re.search(
-                        r"AUDIT:\s*\[?\s*([A-Za-z][A-Za-z\s\-']*?)\s*\]?(?:\s*\+|\s*[:—\-])",
+                        r"AUDIT:\s*\[\s*([^\]]+?)\s*\]",
                         audit_str,
                         re.IGNORECASE,
                     )
                     if m_aud:
-                        target = m_aud.group(1).strip().lower()
-                    elif checks < len(translation_bp_targets):
-                        target = translation_bp_targets[checks]
+                        cand_target = m_aud.group(1).strip().lower()
+                        # Only treat as target keyword if it belongs to study headwords
+                        # (Syntactic L1 items specify a grammar pattern name in brackets, not a target keyword)
+                        if cand_target in prompt_headwords or any(cand_target.startswith(hw) or hw.startswith(cand_target) for hw in prompt_headwords):
+                            target = cand_target
             is_comprehension = not target and not is_translation
             expected_opt_count = 2 if is_comparative_translation else 4
             checks += 1

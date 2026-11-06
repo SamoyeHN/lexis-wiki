@@ -1174,9 +1174,10 @@ class QuizGeneratorMixin:
             target_lang = self.config.get("target_language") or "Chinese"
             cefr = (data.get("cefr_level") or "B2").upper()
             kwargs["target_language"] = target_lang
+            kwargs["language"] = target_lang
             kwargs["cefr_level"] = cefr
 
-            # Build Symbolic Translation Micro-Task Blueprints (Register-Aligned Pairing + Minimal-Pair Corruption Spec)
+            # Build Symbolic Translation Micro-Task Blueprints (Decoupled L1 Negative Transfer Traps)
             translation_blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
                 raw_v,
                 grammar_content=raw_g,
@@ -1195,7 +1196,7 @@ class QuizGeneratorMixin:
                 kwargs["grammar_content"] = sanitized_g or "Included in each Item Specification above."
                 logger.info(
                     f"🎯 Built {len(blueprint_specs)} symbolic translation micro-task blueprints "
-                    f"(Register-Aligned Pairing + Minimal-Pair Corruption Operators)."
+                    f"(Decoupled Syntactic & Lexical L1 Negative Transfer Operators)."
                 )
             else:
                 kwargs["vocabulary_content"] = sanitized_v

@@ -226,16 +226,9 @@ class QuizTranslationMixin:
                     bundle_pat = f"{w_clean} {m_vp.group(1).lower()} [sth]"
         required_frame = bundle_pat or w_clean
 
-        # Helper to build canonical uncountable pluralization form (e.g. hospitality -> hospitalities)
-        def _pluralize_uncountable_noun(noun_str: str) -> str:
-            n_low = noun_str.strip()
-            if re.search(r"[^aeiou]y$", n_low, re.IGNORECASE):
-                return n_low[:-1] + "ies"
-            if re.search(r"(?:s|x|z|ch|sh)$", n_low, re.IGNORECASE):
-                return n_low + "es"
-            return n_low + "s"
-
         # 2. Query pedlex_error_traps with strict POS and sense_idx isolation
+        # Focus strictly on high-diagnostic collocation, dependent preposition, and authentic usage traps
+        # (Exclude morphological trivia like uncountable noun pluralization '*packagings*' which degrade translation into spelling checks)
         traps = cls.get_word_error_traps(w_clean, pos=pos_str or None, sense_idx=s_idx)
         best_trap: Optional[Dict[str, Any]] = None
         if traps:
@@ -245,14 +238,7 @@ class QuizTranslationMixin:
                 "GRAMBOX_RULE_TRAP": 1,
                 "PREP_COLLOC_TRAP": 2,
                 "SYNTAX_COMP_TRAP": 3,
-                "GRAM_ATTRIBUTIVE_ONLY": 4,
-                "GRAM_NOT_BEFORE_NOUN": 4,
-                "GRAM_UNCOUNTABLE": 5,
-                "GRAM_INTRANSITIVE": 6,
-                "LEXICAL_VALENCY_FRAME": 6,
-                "L1_CONJUNCTION_REDUNDANCY": 7,
-                "CLAUSE_PREP_CONFUSION": 7,
-                "GRAM_PROPERTY_TRAP": 8,
+                "LEXICAL_VALENCY_FRAME": 4,
             }
             def _is_invalid_prep_or_dialogic_trap(t_obj: Dict[str, Any]) -> bool:
                 t_type = str(t_obj.get("trap_type") or "")
@@ -289,9 +275,6 @@ class QuizTranslationMixin:
                     key=lambda t: priority_order.get(str(t.get("trap_type") or ""), 99)
                 )
                 best_trap = dict(sorted_traps[0])
-                if str(best_trap.get("trap_type") or "") == "GRAM_UNCOUNTABLE":
-                    pl_form = _pluralize_uncountable_noun(w_clean)
-                    best_trap["wrong_frame"] = f"*{pl_form}* (uncountable pluralization)"
                 c_f = str(best_trap.get("correct_frame") or "").strip()
                 t_type_sel = str(best_trap.get("trap_type") or "")
                 if (
@@ -309,73 +292,55 @@ class QuizTranslationMixin:
                 if trap_mod_ex and not model_example and not _dialogic_deictic_re.search(trap_mod_ex):
                     model_example = trap_mod_ex
 
-        # 3. Deterministic fallback for explicit <gram> properties or bound prepositions
+        # 3. Deterministic fallback for common bound-preposition collocation frames
         if not best_trap:
-            def_low = def_str.lower()
-            if ("[only before noun]" in def_low or "attributive" in pos_str.lower()) and pos_str.lower() in ("adjective", "adj", ""):
+            prep_fallbacks = {
+                "comply": ("comply with [rule/law]", "*comply to / comply by*", "All companies must comply with the new safety regulations."),
+                "depend": ("depend on [sb/sth]", "*depend of / depend from*", "Our success depends on everyone's cooperation."),
+                "rely": ("rely on [sb/sth]", "*rely in / rely at*", "Many rural communities rely on public transport."),
+                "consist": ("consist of [parts]", "*be consisted of / consist in*", "The committee consists of ten senior members."),
+                "result": ("result in [outcome]", "*result to*", "The policy change resulted in a sharp drop in emissions."),
+                "contribute": ("contribute to [sth/V-ing]", "*contribute for*", "Regular exercise contributes to better mental health."),
+                "adapt": ("adapt to [new situation]", "*adapt with*", "Species must adapt to changing environments."),
+                "participate": ("participate in [activity]", "*participate on / participate to*", "Students are encouraged to participate in seminar discussions."),
+                "succeed": ("succeed in [sth/V-ing]", "*succeed to do*", "She succeeded in persuading the board."),
+                "insist": ("insist on [sth/V-ing]", "*insist to do*", "He insisted on paying for the meal."),
+            }
+            w_low = w_clean.lower()
+            if w_low in prep_fallbacks:
+                c_frame, w_frame, mod_ex = prep_fallbacks[w_low]
+                if required_frame == w_clean or required_frame.startswith(f"{w_low} "):
+                    required_frame = c_frame
+                if not model_example:
+                    model_example = mod_ex
                 best_trap = {
-                    "trap_type": "GRAM_ATTRIBUTIVE_ONLY",
-                    "correct_frame": f"[only before noun] ({w_clean} + Noun)",
-                    "wrong_frame": f"*be + {w_clean}* (predicative misuse)",
-                    "pedagogical_note": f"'{w_clean}' is an attributive-only adjective ([only before noun]) and cannot be used as a predicate after a linking verb.",
+                    "trap_type": "PREP_COLLOC_TRAP",
+                    "correct_frame": c_frame,
+                    "wrong_frame": w_frame,
+                    "pedagogical_note": f"Use the collocation '{c_frame}', not {w_frame}.",
                 }
-            elif "[uncountable]" in def_low and pos_str.lower() in ("noun", "n", ""):
-                pl_form = _pluralize_uncountable_noun(w_clean)
-                best_trap = {
-                    "trap_type": "GRAM_UNCOUNTABLE",
-                    "correct_frame": f"[uncountable] ({w_clean})",
-                    "wrong_frame": f"*{pl_form}* (uncountable pluralization)",
-                    "pedagogical_note": f"'{w_clean}' is an uncountable noun and must not be pluralized as '*{pl_form}*'.",
-                }
-            else:
-                # Check common bound-preposition collocation frames
-                prep_fallbacks = {
-                    "comply": ("comply with [rule/law]", "*comply to / comply by*", "All companies must comply with the new safety regulations."),
-                    "depend": ("depend on [sb/sth]", "*depend of / depend from*", "Our success depends on everyone's cooperation."),
-                    "rely": ("rely on [sb/sth]", "*rely in / rely at*", "Many rural communities rely on public transport."),
-                    "consist": ("consist of [parts]", "*be consisted of / consist in*", "The committee consists of ten senior members."),
-                    "result": ("result in [outcome]", "*result to*", "The policy change resulted in a sharp drop in emissions."),
-                    "contribute": ("contribute to [sth/V-ing]", "*contribute for*", "Regular exercise contributes to better mental health."),
-                    "adapt": ("adapt to [new situation]", "*adapt with*", "Species must adapt to changing environments."),
-                    "participate": ("participate in [activity]", "*participate on / participate to*", "Students are encouraged to participate in seminar discussions."),
-                    "succeed": ("succeed in [sth/V-ing]", "*succeed to do*", "She succeeded in persuading the board."),
-                    "insist": ("insist on [sth/V-ing]", "*insist to do*", "He insisted on paying for the meal."),
-                }
-                w_low = w_clean.lower()
-                if w_low in prep_fallbacks:
-                    c_frame, w_frame, mod_ex = prep_fallbacks[w_low]
-                    if required_frame == w_clean or required_frame.startswith(f"{w_low} "):
-                        required_frame = c_frame
-                    if not model_example:
-                        model_example = mod_ex
-                    best_trap = {
-                        "trap_type": "PREP_COLLOC_TRAP",
-                        "correct_frame": c_frame,
-                        "wrong_frame": w_frame,
-                        "pedagogical_note": f"Use the collocation '{c_frame}', not {w_frame}.",
-                    }
-                elif bundle_pat and " " in bundle_pat:
-                    m_prep = re.search(rf"\b{re.escape(w_low)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\b", bundle_pat.lower())
-                    if m_prep:
-                        prep_tok = m_prep.group(1)
-                        bp_low = bundle_pat.strip().lower()
-                        is_inf_to = (
-                            prep_tok == "to"
-                            and (
-                                bp_low.endswith(" to")
-                                or bool(re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", bp_low))
-                                or (pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", bp_low))
-                            )
+            elif bundle_pat and " " in bundle_pat:
+                m_prep = re.search(rf"\b{re.escape(w_low)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\b", bundle_pat.lower())
+                if m_prep:
+                    prep_tok = m_prep.group(1)
+                    bp_low = bundle_pat.strip().lower()
+                    is_inf_to = (
+                        prep_tok == "to"
+                        and (
+                            bp_low.endswith(" to")
+                            or bool(re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", bp_low))
+                            or (pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", bp_low))
                         )
-                        is_generic_noun_of = pos_str.lower() in ("noun", "n") and prep_tok == "of"
-                        if not is_inf_to and not is_generic_noun_of:
-                            alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
-                            best_trap = {
-                                "trap_type": "PREP_COLLOC_TRAP",
-                                "correct_frame": bundle_pat,
-                                "wrong_frame": f"*{w_clean} {alt_prep}*",
-                                "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
-                            }
+                    )
+                    is_generic_noun_of = pos_str.lower() in ("noun", "n") and prep_tok == "of"
+                    if not is_inf_to and not is_generic_noun_of:
+                        alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
+                        best_trap = {
+                            "trap_type": "PREP_COLLOC_TRAP",
+                            "correct_frame": bundle_pat,
+                            "wrong_frame": f"*{w_clean} {alt_prep}*",
+                            "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
+                        }
 
         # Format human-readable lexical flaw label and corruption instruction
         lex_flaw_label = ""
@@ -391,22 +356,13 @@ class QuizTranslationMixin:
             elif t_type == "SYNTAX_COMP_TRAP":
                 lex_flaw_label = f"Subcategorization Complement Trap (`{c_frame}` vs `{w_frame}`)"
                 lex_corruption_step = f"replacing the required complement frame `{c_frame}` with `{w_frame}`"
-            elif t_type == "GRAM_UNCOUNTABLE":
-                pl_form = _pluralize_uncountable_noun(w_clean)
-                lex_flaw_label = f"Uncountable Noun Pluralization Trap (`{c_frame}` -> `*{pl_form}*`)"
-                lex_corruption_step = (
-                    f"pluralizing the uncountable noun `{w_clean}` into `*{pl_form}*` while keeping all surrounding words and determiners identical"
-                )
-            elif t_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN", "GRAM_INTRANSITIVE", "GRAM_PROPERTY_TRAP"):
-                lex_flaw_label = f"Lexical Grammar Property Violation (`{c_frame}` -> `{w_frame}`)"
-                lex_corruption_step = f"violating `{c_frame}` by using `{w_frame}`"
-            elif t_type == "LEXICAL_VALENCY_FRAME":
-                lex_flaw_label = f"Lexical Valency / Subcategorization Frame Trap (`{c_frame}` vs `{w_frame}`)"
-                lex_corruption_step = f"violating the required valency frame `{c_frame}` by using `{w_frame}`"
             elif t_type in ("GRAM_BOX_DONTSAY", "GRAMBOX_BADEXA", "GRAMBOX_RULE_TRAP"):
                 bad_ex = f" (Do NOT say: {dont_say})" if dont_say else f" (`{w_frame}`)"
                 lex_flaw_label = f"Lexical Collocation / Usage Trap on `{w_clean}`{bad_ex}"
                 lex_corruption_step = f"introducing the authentic learner error `{w_frame or dont_say}` instead of `{c_frame}`"
+            elif t_type == "LEXICAL_VALENCY_FRAME":
+                lex_flaw_label = f"Lexical Valency / Subcategorization Frame Trap (`{c_frame}` vs `{w_frame}`)"
+                lex_corruption_step = f"violating the required valency frame `{c_frame}` by using `{w_frame}`"
 
         return {
             "required_frame": required_frame,
@@ -845,154 +801,187 @@ class QuizTranslationMixin:
                 }
             ]
 
-        effective_count = min(max(1, target_count), len(vocab_items))
-        selected_vocab = vocab_items[:effective_count]
+        # 3. Step 1: Discover valid Lexical Collocation / Valency Traps and Syntactic Traps
+        valid_lex_items: List[Dict[str, Any]] = []
+        for v_it in vocab_items:
+            w = v_it["word"]
+            p = v_it["pos"]
+            d = v_it["definition"]
+            v_it["register"] = cls._classify_vocab_register(w, p, d)
+            lex_info = cls._resolve_translation_lexical_trap(
+                w, pos=p, definition=d, quote=v_it.get("quote", ""), example_usage=v_it.get("example_usage", "")
+            )
+            trap = lex_info.get("trap")
+            trap_type = str(trap.get("trap_type") or "") if isinstance(trap, dict) else ""
+            if trap and lex_info.get("flaw_label") and trap_type in (
+                "PREP_COLLOC_TRAP",
+                "SYNTAX_COMP_TRAP",
+                "LEXICAL_VALENCY_FRAME",
+                "GRAM_BOX_DONTSAY",
+                "GRAMBOX_BADEXA",
+                "GRAMBOX_RULE_TRAP",
+            ):
+                v_copy = dict(v_it)
+                v_copy["lex_info"] = lex_info
+                valid_lex_items.append(v_copy)
 
-        # Classify registers on selected vocabulary and grammar candidates
-        for vit in selected_vocab:
-            vit["register"] = cls._classify_vocab_register(vit["word"], vit["pos"], vit["definition"])
-        for git in grammar_items:
-            git["register"] = cls._classify_grammar_register(git["name"], git["formula"], git["pedagogical_function"])
+        valid_syn_items: List[Dict[str, Any]] = []
+        for g_it in grammar_items:
+            g_it["register"] = cls._classify_grammar_register(g_it["name"], g_it["formula"], g_it["pedagogical_function"])
+            syn_info = cls._resolve_translation_syntactic_trap(g_it)
+            g_copy = dict(g_it)
+            g_copy["syn_info"] = syn_info
+            valid_syn_items.append(g_copy)
 
-        # 3. Step 1: Register-Aligned Lexical & Syntactic Pairing (Symbolic Pair Matching)
-        gram_usage_counts = [0] * len(grammar_items)
-        paired_specs: List[Tuple[Dict[str, str], Dict[str, str]]] = []
+        # 4. Decouple Word & Syntax: Balance Syntactic L1 items (~60%) and Lexical Collocation items (~40%)
+        effective_count = max(1, target_count)
+        if valid_lex_items:
+            target_lex_count = min(len(valid_lex_items), max(1, effective_count // 2))
+            target_syn_count = effective_count - target_lex_count
+        else:
+            target_lex_count = 0
+            target_syn_count = effective_count
 
-        for v_it in selected_vocab:
-            v_reg = v_it["register"]
-            best_g_idx = 0
-            best_score = -10**9
-            for g_idx, g_it in enumerate(grammar_items):
-                g_reg = g_it["register"]
-                g_comb = f"{g_it['name']} {g_it['formula']}".lower()
-                score = 0
-                # Penalize forced marriages between opposite registers
-                if v_reg == "informal" and g_reg == "formal":
-                    score -= 100
-                elif v_reg == "formal" and g_reg == "informal":
-                    score -= 100
-                elif v_reg == g_reg:
-                    score += 30
-                elif v_reg == "formal" and g_reg == "neutral":
-                    # Concessive / conditional / relative clauses pair naturally with formal academic words
-                    score += 25 if any(k in g_comb for k in ("concessive", "although", "despite", "while", "whereas")) else 18
-                elif v_reg == "informal" and g_reg == "neutral":
-                    score += 20
-                else:
-                    # neutral vocab works cleanly with any grammar pattern
-                    score += 22 if g_reg == "neutral" else 15
+        final_items: List[Dict[str, Any]] = []
+        s_i = 0
+        l_i = 0
+        for step in range(effective_count):
+            if s_i < target_syn_count and (l_i >= target_lex_count or (step + 1) % 2 != 0 or s_i == 0):
+                g_cand = valid_syn_items[s_i % len(valid_syn_items)]
+                s_i += 1
+                final_items.append({"type": "syntactic", "grammar_item": g_cand})
+            elif l_i < target_lex_count:
+                v_cand = valid_lex_items[l_i % len(valid_lex_items)]
+                l_i += 1
+                final_items.append({"type": "lexical", "vocab_item": v_cand})
+            else:
+                g_cand = valid_syn_items[s_i % len(valid_syn_items)]
+                s_i += 1
+                final_items.append({"type": "syntactic", "grammar_item": g_cand})
 
-                # Encourage even rotation across compatible grammar patterns
-                score -= gram_usage_counts[g_idx] * 18
-                if score > best_score:
-                    best_score = score
-                    best_g_idx = g_idx
-
-            gram_usage_counts[best_g_idx] += 1
-            paired_specs.append((v_it, grammar_items[best_g_idx]))
-
-        # 4. Compute deterministic CRC32-balanced 2-option slots (0 vs 1, 50/50 split)
-        n_items = len(paired_specs)
+        # 5. Compute deterministic CRC32-balanced 2-option slots (0 vs 1, 50/50 split)
+        n_items = len(final_items)
         slot_0_count = n_items // 2 + (n_items % 2)
         slot_1_count = n_items // 2
         balanced_slots = [0] * slot_0_count + [1] * slot_1_count
-        seed_str = "|".join(f"{v['word']}:{g['name']}" for v, g in paired_specs)
+        seed_str = "|".join(
+            it["grammar_item"]["name"] if it["type"] == "syntactic" else it["vocab_item"]["word"]
+            for it in final_items
+        )
         rng_state = zlib.crc32(seed_str.encode("utf-8"))
         for i in range(len(balanced_slots) - 1, 0, -1):
             rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
             j = rng_state % (i + 1)
             balanced_slots[i], balanced_slots[j] = balanced_slots[j], balanced_slots[i]
 
-        # 5. Step 2 & Step 3: Build Single-Point Minimal-Pair Corruption Operator & Micro-Task Blueprint
+        # 6. Build Single-Point Minimal-Pair Corruption Operator & Micro-Task Blueprint
         blueprints: List[Dict[str, Any]] = []
         cefr_upper = str(cefr_level or "B2").upper()
 
-        for idx, (v_it, g_it) in enumerate(paired_specs, 1):
-            word = v_it["word"]
-            pos = v_it["pos"]
-            defn = v_it["definition"]
-            v_reg = v_it["register"]
+        for idx, it in enumerate(final_items, 1):
+            corr_slot = balanced_slots[idx - 1]
 
-            g_name = g_it["name"]
-            g_formula = g_it["formula"]
-            g_reg = g_it["register"]
-            target_grammar_display = (
-                f"{g_name} (`{g_formula}`)"
-                if g_formula and g_formula.lower() != g_name.lower()
-                else g_name
-            )
-
-            lex_info = cls._resolve_translation_lexical_trap(
-                word, pos=pos, definition=defn, quote=v_it.get("quote", ""), example_usage=v_it.get("example_usage", "")
-            )
-            syn_info = cls._resolve_translation_syntactic_trap(g_it)
-
-            req_frame = lex_info["required_frame"] or word
-            model_ex = lex_info["model_example"]
-            frame_line = f"{req_frame} (Model: \"{model_ex}\")" if model_ex else req_frame
-
-            # Select primary Prescribed Flaw Type:
-            # - If lexical trap is an explicit property/dontsay trap (GRAM_ATTRIBUTIVE_ONLY, GRAM_UNCOUNTABLE, GRAM_BOX_DONTSAY),
-            #   or on odd/even items when a lexical trap exists and we balance lexical vs syntactic traps across the quiz.
-            lex_trap = lex_info.get("trap")
-            lex_trap_type = str(lex_trap.get("trap_type") or "") if isinstance(lex_trap, dict) else ""
-            use_lexical_primary = False
-            if lex_trap and lex_info.get("flaw_label"):
-                if lex_trap_type in ("GRAM_ATTRIBUTIVE_ONLY", "GRAM_UNCOUNTABLE", "GRAM_BOX_DONTSAY"):
-                    use_lexical_primary = True
-                elif idx % 2 == 1:
-                    use_lexical_primary = True
-
-            if use_lexical_primary:
-                prescribed_flaw_type = lex_info["flaw_label"]
-                flaw_category = "lexical"
-                primary_corruption = lex_info["corruption_step"]
-                critique_focus = (
-                    f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation and `{g_name}` structure"
+            if it["type"] == "syntactic":
+                g_it = it["grammar_item"]
+                g_name = g_it["name"]
+                g_formula = g_it["formula"]
+                g_reg = g_it.get("register", "neutral")
+                syn_info = g_it["syn_info"]
+                target_grammar_display = (
+                    f"{g_name} (`{g_formula}`)"
+                    if g_formula and g_formula.lower() != g_name.lower()
+                    else g_name
                 )
-            else:
                 prescribed_flaw_type = syn_info["flaw_label"]
-                flaw_category = "syntactic"
                 primary_corruption = syn_info["corruption_step"]
+                gram_constraint = f" ({syn_info['constraint_note']})" if syn_info.get("constraint_note") else ""
+                critique_focus = (
+                    f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{g_name}` structure"
+                )
+
+                micro_task_lines = [
+                    f"### Item {idx} Specification ###",
+                    f"- Focus Type: Syntactic L1 Negative Transfer Trap",
+                    f"- Target Grammar Pattern: {target_grammar_display}",
+                    f"- Prescribed Flaw Type: {prescribed_flaw_type}",
+                    f"- 🎯 Micro-Task for LLM:",
+                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence expressing a complete thought that naturally requires `{g_name}`. (Do NOT invent convoluted reverse-translationese; make it sound authentic to native {target_language} speakers).",
+                    f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English faithfully applying `{g_formula}`{gram_constraint}.",
+                    f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed syntactic flaw ({primary_corruption}).",
+                    f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
+                ]
+                micro_task_block = "\n".join(micro_task_lines)
+
+                blueprints.append({
+                    "item_index": idx,
+                    "focus_type": "syntactic",
+                    "target_keyword": "",
+                    "part_of_speech": "",
+                    "definition": "",
+                    "vocab_register": "",
+                    "required_lexical_frame": "",
+                    "model_example": "",
+                    "target_grammar": f"{g_name}: {g_formula}" if g_formula and g_formula.lower() != g_name.lower() else g_name,
+                    "target_grammar_name": g_name,
+                    "target_grammar_formula": g_formula,
+                    "grammar_register": g_reg,
+                    "flaw_type": prescribed_flaw_type,
+                    "flaw_category": "syntactic",
+                    "lexical_trap": None,
+                    "syntactic_trap": syn_info,
+                    "correct_answer_index": corr_slot,
+                    "micro_task_block": micro_task_block,
+                })
+            else:
+                v_it = it["vocab_item"]
+                word = v_it["word"]
+                pos = v_it["pos"]
+                defn = v_it["definition"]
+                v_reg = v_it.get("register", "neutral")
+                lex_info = v_it["lex_info"]
+                lex_trap = lex_info.get("trap")
+                req_frame = lex_info["required_frame"] or word
+                model_ex = lex_info["model_example"]
+                frame_line = f"{req_frame} (Model: \"{model_ex}\")" if model_ex else req_frame
+
+                prescribed_flaw_type = lex_info["flaw_label"]
+                primary_corruption = lex_info["corruption_step"]
                 critique_focus = (
                     f"pointing out the exact `{prescribed_flaw_type}` error and confirming the `{req_frame}` collocation"
                 )
 
-            zh_cue_str = f" (matching `{g_name}` + `{word}` meaning: \"{defn}\")"
-            gram_constraint = f" ({syn_info['constraint_note']})" if syn_info.get("constraint_note") else ""
+                micro_task_lines = [
+                    f"### Item {idx} Specification ###",
+                    f"- Focus Type: Lexical Collocation & Valency L1 Trap",
+                    f"- Target Collocation / Lexical Frame: {word} ({pos}) — \"{defn}\" -> `{frame_line}`",
+                    f"- Prescribed Flaw Type: {prescribed_flaw_type}",
+                    f"- 🎯 Micro-Task for LLM:",
+                    f"  1. `translated_sentence`: Write a natural, polished, and idiomatic {target_language} sentence requiring the specific meaning and context of `{req_frame}`.",
+                    f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English correctly using the collocation `{req_frame}`.",
+                    f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed collocation/preposition flaw ({primary_corruption}).",
+                    f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
+                ]
+                micro_task_block = "\n".join(micro_task_lines)
 
-            micro_task_lines = [
-                f"### Item {idx} Specification ###",
-                f"- Target Keyword: {word} ({pos}) — \"{defn}\"",
-                f"- Required Lexical Frame: {frame_line}",
-                f"- Target Grammar Pattern: {target_grammar_display}",
-                f"- Prescribed Flaw Type: {prescribed_flaw_type}",
-                f"- 🎯 Micro-Task for LLM:",
-                f"  1. `translated_sentence`: Write a natural {target_language} sentence{zh_cue_str}.",
-                f"  2. `idiomatic_translation`: Translate into natural CEFR {cefr_upper} English integrating BOTH `{req_frame}` and `{g_formula}`{gram_constraint}.",
-                f"  3. `flawed_translation`: Keep the sentence nearly identical as a Minimal Pair (≥85% shared wording), ONLY introducing the prescribed flaw ({primary_corruption}).",
-                f"  4. `diagnostic_critique`: Contrast the two versions by {critique_focus}.",
-            ]
-            micro_task_block = "\n".join(micro_task_lines)
-
-            blueprints.append({
-                "item_index": idx,
-                "target_keyword": word,
-                "part_of_speech": pos,
-                "definition": defn,
-                "vocab_register": v_reg,
-                "required_lexical_frame": req_frame,
-                "model_example": model_ex,
-                "target_grammar": f"{g_name}: {g_formula}" if g_formula and g_formula.lower() != g_name.lower() else g_name,
-                "target_grammar_name": g_name,
-                "target_grammar_formula": g_formula,
-                "grammar_register": g_reg,
-                "flaw_type": prescribed_flaw_type,
-                "flaw_category": flaw_category,
-                "lexical_trap": lex_trap,
-                "syntactic_trap": syn_info,
-                "correct_answer_index": balanced_slots[idx - 1],
-                "micro_task_block": micro_task_block,
-            })
+                blueprints.append({
+                    "item_index": idx,
+                    "focus_type": "lexical",
+                    "target_keyword": word,
+                    "part_of_speech": pos,
+                    "definition": defn,
+                    "vocab_register": v_reg,
+                    "required_lexical_frame": req_frame,
+                    "model_example": model_ex,
+                    "target_grammar": "",
+                    "target_grammar_name": "",
+                    "target_grammar_formula": "",
+                    "grammar_register": "",
+                    "flaw_type": prescribed_flaw_type,
+                    "flaw_category": "lexical",
+                    "lexical_trap": lex_trap,
+                    "syntactic_trap": None,
+                    "correct_answer_index": corr_slot,
+                    "micro_task_block": micro_task_block,
+                })
 
         return blueprints

@@ -352,13 +352,17 @@ class TestAnchoredTranslation(unittest.TestCase):
         )
         self.assertEqual(len(blueprints), 2)
 
-        bp_pack = next(bp for bp in blueprints if bp["target_keyword"] == "pack up")
-        bp_orig = next(bp for bp in blueprints if bp["target_keyword"] == "originate")
+        bp_syn = next(bp for bp in blueprints if bp["focus_type"] == "syntactic")
+        bp_lex = next(bp for bp in blueprints if bp["focus_type"] == "lexical")
 
-        self.assertEqual(bp_pack["vocab_register"], "informal")
-        self.assertEqual(bp_pack["target_grammar_name"], "Concessive Clause")
-        self.assertEqual(bp_orig["vocab_register"], "formal")
-        self.assertEqual(bp_orig["target_grammar_name"], "Negative Adverbial Inversion")
+        self.assertEqual(bp_syn["target_grammar_name"], "Negative Adverbial Inversion")
+        self.assertEqual(bp_syn["target_keyword"], "")
+        self.assertEqual(bp_syn["flaw_category"], "syntactic")
+
+        self.assertEqual(bp_lex["target_keyword"], "originate")
+        self.assertEqual(bp_lex["target_grammar"], "")
+        self.assertEqual(bp_lex["flaw_category"], "lexical")
+        self.assertIn("Preposition Trap", bp_lex["flaw_type"])
 
         for bp in blueprints:
             self.assertIn(bp["correct_answer_index"], (0, 1))

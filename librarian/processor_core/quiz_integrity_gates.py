@@ -1058,10 +1058,12 @@ class QuizIntegrityGatesMixin:
                         f"Translation Item #{idx + 1}: 'english_skeleton' must contain exactly one '[ ____ ]' slot."
                     )
 
-            # 3. Target Vocabulary Presence Gate (Active Usage Mandate)
-            # Find declared target word from target_keyword, design_audit, or unit_headwords
+            # 3. Target Vocabulary Presence Gate (Active Usage Mandate for Lexical Collocation Items)
+            # - If target_keyword is declared, verify active presence.
+            # - If item is a Syntactic L1 item (target_grammar declared with empty target_keyword), do not force arbitrary headwords.
             declared_word = keyword or None
-            if not declared_word and audit_str:
+            has_explicit_grammar_target = bool(str(q_dict.get("target_grammar", "")).strip())
+            if not declared_word and not has_explicit_grammar_target and audit_str:
                 m_word = re.search(r'(?:Target Vocab(?:ulary)?|Target Word|Target Keyword)[\:\s\-]+([A-Za-z\s\-]+?)(?:\]|\+|\-\>|\n|$)', audit_str, re.IGNORECASE)
                 if m_word:
                     declared_word = m_word.group(1).strip()
@@ -1070,8 +1072,8 @@ class QuizIntegrityGatesMixin:
                     if m_bracket:
                         declared_word = m_bracket.group(1).strip()
 
-            # If not in audit_str, search which unit_headword matches this item
-            if not declared_word and unit_headwords:
+            # If not in audit_str and not an explicit grammar target, search which unit_headword matches this item
+            if not declared_word and not has_explicit_grammar_target and unit_headwords:
                 target_search_corpus = f"{correct_eng} {idiomatic_trans} {options[correct_idx]}" if (options and isinstance(correct_idx, int) and 0 <= correct_idx < len(options)) else f"{correct_eng} {idiomatic_trans}"
                 for hw in unit_headwords:
                     if _word_in_text(hw, target_search_corpus):
