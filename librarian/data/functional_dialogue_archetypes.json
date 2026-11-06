@@ -1635,9 +1635,13 @@
             },
             {
               "scenario_id": "arch_02_a2_form_sc02",
-              "setting": "Asking for information about a campus facility or route and comparing two ways/options",
-              "participants": "Visitor/New student and Local/Staff member",
-              "communicative_goal": "Ask about options or routes, clarify a key feature or landmark, and decide which one to take.",
+              "setting": "Asking for directions or information about a campus facility/route and comparing two ways/options",
+              "participants": "Visitor/Student looking for directions and Campus staff/Local giving route directions",
+              "speaker_roles": {
+                "speaker_1": "Visitor / Student asking for directions to a facility or department",
+                "speaker_2": "Campus staff member / Local guide giving directions and route options"
+              },
+              "communicative_goal": "Ask how to get to a facility or building, compare two route options (e.g. shortcut vs main avenue), clarify a key landmark or turn, and decide which way to take.",
               "optional_scenario_lexis": [
                 {
                   "expression": "you can't miss it",
@@ -1646,10 +1650,89 @@
                 },
                 {
                   "expression": "go for",
-                  "meaning": "choose a particular option",
+                  "meaning": "choose a particular route or option",
+                  "optional": true
+                },
+                {
+                  "expression": "cut through",
+                  "meaning": "take a shortcut through an area",
                   "optional": true
                 }
-              ]
+              ],
+              "turn_overrides": {
+                "1": {
+                  "move_name": "Polite Attention Getter & Route Enquiry (Light Turn)",
+                  "pragmatic_function": "Approach the staff member politely and ask for directions to a facility or destination.",
+                  "functional_chunks": [
+                    "excuse me, could you tell me how to get to [...]?",
+                    "excuse me, I'm looking for the [...], how do I get there from here?",
+                    "could you tell me the fastest way to get to [...]?"
+                  ]
+                },
+                "2": {
+                  "move_name": "Helpful Response & Presenting Two Route Options (Light Turn)",
+                  "pragmatic_function": "Confirm the location and outline that there are two main routes (e.g. direct shortcut vs main path).",
+                  "functional_chunks": [
+                    "of course—there are two ways: you can cut through [...] or follow [...]",
+                    "sure! there's the direct shortcut through [...] and the main path past [...]",
+                    "certainly! you can either take the indoor walkway or follow the main avenue"
+                  ]
+                },
+                "3": {
+                  "move_name": "Describing Specific Condition or Constraint (Heavy Turn)",
+                  "pragmatic_function": "Explain a personal condition or constraint (e.g. carrying heavy materials, weather, or being in a hurry) and ask for a comparison.",
+                  "functional_chunks": [
+                    "[Specific Need] I'm carrying heavy materials / running a bit late—is one route faster or easier?",
+                    "[Weather / Terrain] it's starting to rain—does the shortcut stay covered or are there stairs?",
+                    "[Comparison] how long does each route take to walk from here?"
+                  ]
+                },
+                "4": {
+                  "move_name": "Contrasting the Two Routes & Landmarks (Heavy Turn)",
+                  "pragmatic_function": "Contrast the two routes clearly with walking times and landmark signposts (Bait -> Key signpost).",
+                  "functional_chunks": [
+                    "[Contrast] the shortcut takes about 4 minutes past [...], but there are steep steps, whereas the main path takes about 8 minutes and is completely flat",
+                    "[Landmark Contrast] one path goes through the quad, while the main avenue goes right past the library landmark and has clear signs",
+                    "[Bait -> Key] the side path looks shorter on the map, but the path along the main road is much easier to follow"
+                  ]
+                },
+                "5": {
+                  "move_name": "Checking Understanding of Landmark or Turn (Light Turn)",
+                  "pragmatic_function": "Verify a crucial landmark, crosswalk, or turn to avoid getting lost.",
+                  "functional_chunks": [
+                    "just to check, do I turn left after the library landmark?",
+                    "can I make sure—is the entrance right after the crosswalk?",
+                    "so does that mean I walk straight past the cafeteria until the intersection?"
+                  ]
+                },
+                "6": {
+                  "move_name": "Clarifying Landmark & Recommending Best Route (Heavy Turn)",
+                  "pragmatic_function": "Confirm the landmark clearly and recommend the best route with 'you can't miss it'.",
+                  "functional_chunks": [
+                    "[Landmark + Recommendation] exactly, cross at the crosswalk just after the library—you can't miss it; for what you need, that's definitely the best route",
+                    "[Clarification] what I mean is once you see the large blue building, turn left—it's straight ahead with a large glass entrance",
+                    "[Recommendation] with your heavy materials, I'd definitely take the main path—it's much smoother"
+                  ]
+                },
+                "7": {
+                  "move_name": "Committing to the Chosen Route & Thanking (Heavy Turn)",
+                  "pragmatic_function": "Commit to the chosen route and state why it fits the constraint.",
+                  "functional_chunks": [
+                    "[Decision] great, I'll go for the main path then, since it's flat and easier to walk",
+                    "[Selection] the main avenue past the library sounds ideal—I'll take that way, thanks",
+                    "[Route Choice] that's very clear—I'll stick to the covered walkway then"
+                  ]
+                },
+                "8": {
+                  "move_name": "Courteous Wrap-Up & Warm Closing (Light Turn)",
+                  "pragmatic_function": "Wish the speaker a safe walk or good day warmly.",
+                  "functional_chunks": [
+                    "you're all set! have a safe walk and good luck with your session",
+                    "my pleasure! enjoy the walk and have a wonderful day",
+                    "glad to help! you really can't miss it once you pass the library"
+                  ]
+                }
+              }
             }
           ],
           "turn_progression": [

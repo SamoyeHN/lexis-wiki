@@ -20,6 +20,10 @@ Generate a realistic everyday or academic spoken dialogue and a rigorous compreh
      * In `script`, every turn's `speaker` MUST be either `"{speaker_1_name}"` or `"{speaker_2_name}"`.
      * In `question`, `options`, and `explanation`, ALWAYS refer to the speakers by their actual names (`{speaker_1_name}` and `{speaker_2_name}`)—NEVER mention `'Turn X'` or write generic labels like `"Speaker 1"` or `"Speaker 2"`.
    - ⚠️ **SPEAKER ATTRIBUTION RIGOR MANDATE**: Clearly distinguish the roles, stances, and proposals of `{speaker_1_name}` vs `{speaker_2_name}`.
+   - ⚠️ **SCENARIO & DOMAIN BINDING MANDATE**:
+     * The conversation MUST genuinely execute the specific situation described in **Everyday Scenario Setting** and its **Communicative Goal** (e.g. if the scenario is asking for directions or comparing routes to a campus facility, the dialogue MUST directly involve asking directions, landmark guidance, and route comparison).
+     * The **Macro Thematic Backdrop** provides the topical context (such as the specific department, facility, or course subject).
+     * NEVER drift or default into generic, unrelated corporate tropes (such as 'remote work pilot', 'work-from-home policy', or 'office scheduling') unless the unit theme is specifically about workplace telecommuting.
 
 2. **Dialogue-Driven Question Blueprints (Adapt Naturally to Your Dialogue)**:
    - Generate **EXACTLY {count}** comprehension questions in the `questions` array (`Question 1 Blueprint` through `Question {count} Blueprint` in order).

@@ -1406,13 +1406,19 @@ class SyllabusAndMarkdownMixin:
             source_content = source_path.read_text(encoding="utf-8")
             summary_path = unit_dir / "extractions" / f"{core_name}_summary.md"
             summary_txt = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+            m_arch = re.search(r'^listening_archetype:\s*["\']?([^"\'\r\n]+)["\']?', source_content, re.MULTILINE)
+            arch_spec = m_arch.group(1).strip() if m_arch else ""
+            m_sc = re.search(r'^listening_scenario:\s*["\']?([^"\'\r\n]+)["\']?', source_content, re.MULTILINE)
+            sc_spec = m_sc.group(1).strip() if m_sc else ""
             return {
                 "vocab_list": fresh_v_items,
                 "summary_content": summary_txt,
                 "source_content": clean_source or source_content,
                 "raw_source_content": source_content,
                 "unit_core_name": core_name,
-                "cefr_level": cefr
+                "cefr_level": cefr,
+                "listening_archetype": arch_spec,
+                "listening_scenario": sc_spec,
             }
 
         elif quiz_type == "video":

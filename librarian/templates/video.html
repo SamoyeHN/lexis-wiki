@@ -1359,37 +1359,6 @@
                     ${isSubmitted ? `
                         <div class="feedback-box">
                             <strong>Explanation:</strong> ${q.explanation}
-                            ${(() => {
-                                const audit = quizData._expert_audit;
-                                if (!audit || !Array.isArray(audit.questions) || !audit.questions[currentIdx]) return '';
-                                const itemAudit = audit.questions[currentIdx];
-                                if (!Array.isArray(itemAudit.distractors) || itemAudit.distractors.length === 0) return '';
-                                
-                                let dHtml = '<div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(0,0,0,0.1);">';
-                                dHtml += '<div style="font-weight: 700; font-size: 12px; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;">Expert Distractor Analysis & Traps:</div>';
-                                
-                                itemAudit.distractors.forEach(d => {
-                                    if (!d) return;
-                                    const letter = d.option_letter || '?';
-                                    const isTarget = (letter.charCodeAt(0) - 65 === q.correct_answer_index);
-                                    const tagClass = isTarget ? 'audit-point-tag rationale' : 'audit-point-tag trap';
-                                    let trapLabel = d.trap_type || (isTarget ? 'Correct Answer' : 'Plausible Distractor');
-                                    if (!isTarget && trapLabel.toLowerCase().includes('correct')) trapLabel = 'Plausible Distractor';
-                                    const plausibility = d.plausibility_rating ? ` · Plausibility: ${d.plausibility_rating}` : '';
-                                    
-                                    dHtml += `
-                                        <div class="audit-point-subcard">
-                                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-                                                <strong style="color: var(--color-primary);">Option [${letter}]:</strong>
-                                                <span class="${tagClass}">${trapLabel}${plausibility}</span>
-                                            </div>
-                                            ${d.elimination_rationale ? `<div style="font-size: 12px; color: var(--color-text-body-alt);">${d.elimination_rationale}</div>` : ''}
-                                        </div>
-                                    `;
-                                });
-                                dHtml += '</div>';
-                                return dHtml;
-                            })()}
                         </div>
                     ` : ''}
 

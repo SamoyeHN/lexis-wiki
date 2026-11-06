@@ -12,12 +12,229 @@ import threading
 import zlib
 from contextlib import contextmanager
 from functools import lru_cache
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+
+logger = logging.getLogger(__name__)
 
 
 class QuizListeningMixin:
     _FUNCTIONAL_ARCHETYPES_CACHE: Optional[Dict[str, Any]] = None
+
+    ARCHETYPE_ALIASES: Dict[str, str] = {
+        # Number / code shortcuts
+        "1": "arch_01_arranging_and_rescheduling",
+        "01": "arch_01_arranging_and_rescheduling",
+        "arch_01": "arch_01_arranging_and_rescheduling",
+        "arch1": "arch_01_arranging_and_rescheduling",
+        "2": "arch_02_enquiring_comparing_and_deciding",
+        "02": "arch_02_enquiring_comparing_and_deciding",
+        "arch_02": "arch_02_enquiring_comparing_and_deciding",
+        "arch2": "arch_02_enquiring_comparing_and_deciding",
+        "3": "arch_03_requesting_and_negotiating_help",
+        "03": "arch_03_requesting_and_negotiating_help",
+        "arch_03": "arch_03_requesting_and_negotiating_help",
+        "arch3": "arch_03_requesting_and_negotiating_help",
+        "4": "arch_04_problem_sharing_empathy_and_advice",
+        "04": "arch_04_problem_sharing_empathy_and_advice",
+        "arch_04": "arch_04_problem_sharing_empathy_and_advice",
+        "arch4": "arch_04_problem_sharing_empathy_and_advice",
+        "5": "arch_05_opinion_exchange_and_consensus",
+        "05": "arch_05_opinion_exchange_and_consensus",
+        "arch_05": "arch_05_opinion_exchange_and_consensus",
+        "arch5": "arch_05_opinion_exchange_and_consensus",
+        "6": "arch_06_collaborative_proposals_and_tradeoffs",
+        "06": "arch_06_collaborative_proposals_and_tradeoffs",
+        "arch_06": "arch_06_collaborative_proposals_and_tradeoffs",
+        "arch6": "arch_06_collaborative_proposals_and_tradeoffs",
+        "7": "arch_07_complaints_apologies_and_remedies",
+        "07": "arch_07_complaints_apologies_and_remedies",
+        "arch_07": "arch_07_complaints_apologies_and_remedies",
+        "arch7": "arch_07_complaints_apologies_and_remedies",
+        "8": "arch_08_social_catching_up_and_closing",
+        "08": "arch_08_social_catching_up_and_closing",
+        "arch_08": "arch_08_social_catching_up_and_closing",
+        "arch8": "arch_08_social_catching_up_and_closing",
+        "9": "arch_09_academic_seminar_and_causal_probing",
+        "09": "arch_09_academic_seminar_and_causal_probing",
+        "arch_09": "arch_09_academic_seminar_and_causal_probing",
+        "arch9": "arch_09_academic_seminar_and_causal_probing",
+        "10": "arch_10_interviews_and_credential_pitching",
+        "arch_10": "arch_10_interviews_and_credential_pitching",
+        "arch10": "arch_10_interviews_and_credential_pitching",
+        "11": "arch_11_instruction_walkthrough_and_onboarding",
+        "arch_11": "arch_11_instruction_walkthrough_and_onboarding",
+        "arch11": "arch_11_instruction_walkthrough_and_onboarding",
+        "12": "arch_12_negotiating_terms_and_compromise",
+        "arch_12": "arch_12_negotiating_terms_and_compromise",
+        "arch12": "arch_12_negotiating_terms_and_compromise",
+        "13": "arch_13_medical_consultation_and_health_triage",
+        "arch_13": "arch_13_medical_consultation_and_health_triage",
+        "arch13": "arch_13_medical_consultation_and_health_triage",
+        "14": "arch_14_resolving_misunderstandings_and_mediation",
+        "arch_14": "arch_14_resolving_misunderstandings_and_mediation",
+        "arch14": "arch_14_resolving_misunderstandings_and_mediation",
+
+        # Pedagogical / thematic aliases
+        "arranging": "arch_01_arranging_and_rescheduling",
+        "reschedule": "arch_01_arranging_and_rescheduling",
+        "rescheduling": "arch_01_arranging_and_rescheduling",
+        "appointment": "arch_01_arranging_and_rescheduling",
+
+        "enquiry": "arch_02_enquiring_comparing_and_deciding",
+        "enquiring": "arch_02_enquiring_comparing_and_deciding",
+        "deciding": "arch_02_enquiring_comparing_and_deciding",
+        "decision": "arch_02_enquiring_comparing_and_deciding",
+        "options": "arch_02_enquiring_comparing_and_deciding",
+        "compare": "arch_02_enquiring_comparing_and_deciding",
+
+        "request": "arch_03_requesting_and_negotiating_help",
+        "requesting": "arch_03_requesting_and_negotiating_help",
+        "help": "arch_03_requesting_and_negotiating_help",
+
+        "problem": "arch_04_problem_sharing_empathy_and_advice",
+        "problems": "arch_04_problem_sharing_empathy_and_advice",
+        "advice": "arch_04_problem_sharing_empathy_and_advice",
+        "empathy": "arch_04_problem_sharing_empathy_and_advice",
+        "trouble": "arch_04_problem_sharing_empathy_and_advice",
+
+        "opinion": "arch_05_opinion_exchange_and_consensus",
+        "opinions": "arch_05_opinion_exchange_and_consensus",
+        "consensus": "arch_05_opinion_exchange_and_consensus",
+        "debate": "arch_05_opinion_exchange_and_consensus",
+        "views": "arch_05_opinion_exchange_and_consensus",
+
+        "proposal": "arch_06_collaborative_proposals_and_tradeoffs",
+        "proposals": "arch_06_collaborative_proposals_and_tradeoffs",
+        "collaborative": "arch_06_collaborative_proposals_and_tradeoffs",
+        "collaboration": "arch_06_collaborative_proposals_and_tradeoffs",
+        "planning": "arch_06_collaborative_proposals_and_tradeoffs",
+
+        "complaint": "arch_07_complaints_apologies_and_remedies",
+        "complaints": "arch_07_complaints_apologies_and_remedies",
+        "remedy": "arch_07_complaints_apologies_and_remedies",
+        "remedies": "arch_07_complaints_apologies_and_remedies",
+        "apology": "arch_07_complaints_apologies_and_remedies",
+        "feedback": "arch_07_complaints_apologies_and_remedies",
+
+        "social": "arch_08_social_catching_up_and_closing",
+        "catching_up": "arch_08_social_catching_up_and_closing",
+        "icebreak": "arch_08_social_catching_up_and_closing",
+        "ice_breaking": "arch_08_social_catching_up_and_closing",
+        "closing": "arch_08_social_catching_up_and_closing",
+
+        "academic": "arch_09_academic_seminar_and_causal_probing",
+        "seminar": "arch_09_academic_seminar_and_causal_probing",
+        "causal": "arch_09_academic_seminar_and_causal_probing",
+        "probing": "arch_09_academic_seminar_and_causal_probing",
+        "hypothesis": "arch_09_academic_seminar_and_causal_probing",
+
+        "interview": "arch_10_interviews_and_credential_pitching",
+        "interviews": "arch_10_interviews_and_credential_pitching",
+        "pitch": "arch_10_interviews_and_credential_pitching",
+        "pitching": "arch_10_interviews_and_credential_pitching",
+
+        "instruction": "arch_11_instruction_walkthrough_and_onboarding",
+        "onboarding": "arch_11_instruction_walkthrough_and_onboarding",
+        "walkthrough": "arch_11_instruction_walkthrough_and_onboarding",
+
+        "negotiate": "arch_12_negotiating_terms_and_compromise",
+        "negotiation": "arch_12_negotiating_terms_and_compromise",
+        "bargain": "arch_12_negotiating_terms_and_compromise",
+        "compromise": "arch_12_negotiating_terms_and_compromise",
+
+        "medical": "arch_13_medical_consultation_and_health_triage",
+        "health": "arch_13_medical_consultation_and_health_triage",
+        "clinic": "arch_13_medical_consultation_and_health_triage",
+        "doctor": "arch_13_medical_consultation_and_health_triage",
+        "symptoms": "arch_13_medical_consultation_and_health_triage",
+
+        "misunderstanding": "arch_14_resolving_misunderstandings_and_mediation",
+        "mediation": "arch_14_resolving_misunderstandings_and_mediation",
+        "clarification": "arch_14_resolving_misunderstandings_and_mediation",
+    }
+
+    @classmethod
+    def resolve_functional_dialogue_archetype_id(cls, spec: str) -> str:
+        """
+        Normalizes an archetype specification into a canonical archetype_id
+        (e.g., '4' -> 'arch_04_problem_sharing_empathy_and_advice',
+               'advice' -> 'arch_04_problem_sharing_empathy_and_advice',
+               'arch_04' -> 'arch_04_problem_sharing_empathy_and_advice').
+        Returns empty string if spec is empty or cannot be resolved.
+        """
+        clean = str(spec or "").strip().lower()
+        if not clean:
+            return ""
+        config = cls._load_functional_dialogue_archetypes()
+        all_ids = {
+            str(a.get("archetype_id")) for a in (config.get("archetypes") or []) if a.get("archetype_id")
+        }
+        if clean in all_ids:
+            return clean
+        if clean in cls.ARCHETYPE_ALIASES:
+            return cls.ARCHETYPE_ALIASES[clean]
+        for alias, aid in cls.ARCHETYPE_ALIASES.items():
+            if clean == alias or clean.startswith(alias):
+                return aid
+        for aid in all_ids:
+            if clean in aid:
+                return aid
+        return ""
+
+    @classmethod
+    def resolve_functional_dialogue_scenario_id(
+        cls, spec: str, forced_archetype_id: str = ""
+    ) -> Tuple[str, str]:
+        """
+        Normalizes a scenario specification into (canonical_scenario_id, canonical_archetype_id)
+        (e.g., 'arch_01_a2_inf_sc01' -> ('arch_01_a2_inf_sc01', 'arch_01_arranging_and_rescheduling'),
+               'weekend' -> ('arch_01_a2_inf_sc01', 'arch_01_arranging_and_rescheduling'),
+               'clinic' -> ('arch_13_b1p_form_sc01', 'arch_13_medical_consultation_and_health_triage')).
+        Returns ('', '') if spec is empty or cannot be resolved.
+        """
+        clean = str(spec or "").strip().lower()
+        if not clean:
+            return ("", "")
+        config = cls._load_functional_dialogue_archetypes()
+        archetypes = config.get("archetypes") or []
+
+        # 1. Exact match on scenario_id
+        for arch in archetypes:
+            a_id = str(arch.get("archetype_id") or "")
+            if forced_archetype_id and a_id != forced_archetype_id:
+                continue
+            for tr in arch.get("trajectories") or []:
+                for sc in tr.get("everyday_scenarios") or []:
+                    sc_id = str(sc.get("scenario_id") or "")
+                    if clean == sc_id.lower():
+                        return (sc_id, a_id)
+
+        # 2. Substring match on scenario_id
+        for arch in archetypes:
+            a_id = str(arch.get("archetype_id") or "")
+            if forced_archetype_id and a_id != forced_archetype_id:
+                continue
+            for tr in arch.get("trajectories") or []:
+                for sc in tr.get("everyday_scenarios") or []:
+                    sc_id = str(sc.get("scenario_id") or "")
+                    if clean in sc_id.lower():
+                        return (sc_id, a_id)
+
+        # 3. Substring match on scenario setting / communicative goal
+        for arch in archetypes:
+            a_id = str(arch.get("archetype_id") or "")
+            if forced_archetype_id and a_id != forced_archetype_id:
+                continue
+            for tr in arch.get("trajectories") or []:
+                for sc in tr.get("everyday_scenarios") or []:
+                    sc_id = str(sc.get("scenario_id") or "")
+                    setting_text = f"{sc.get('setting', '')} {sc.get('communicative_goal', '')}".lower()
+                    if clean in setting_text:
+                        return (sc_id, a_id)
+
+        return ("", "")
 
     @classmethod
     def _load_functional_dialogue_archetypes(cls) -> Dict[str, Any]:
@@ -67,8 +284,34 @@ class QuizListeningMixin:
         if not archetypes:
             return {}
 
+        if forced_archetype_id:
+            resolved_forced = cls.resolve_functional_dialogue_archetype_id(forced_archetype_id)
+            if resolved_forced:
+                forced_archetype_id = resolved_forced
+            else:
+                logger.warning(
+                    f"Unknown forced_archetype_id '{forced_archetype_id}'; "
+                    f"falling back to automatic archetype selection."
+                )
+                forced_archetype_id = ""
+
+        if forced_scenario_id:
+            resolved_sc_id, resolved_arch_id = cls.resolve_functional_dialogue_scenario_id(
+                forced_scenario_id, forced_archetype_id
+            )
+            if resolved_sc_id:
+                forced_scenario_id = resolved_sc_id
+                if not forced_archetype_id and resolved_arch_id:
+                    forced_archetype_id = resolved_arch_id
+            else:
+                logger.warning(
+                    f"Unknown forced_scenario_id '{forced_scenario_id}'; "
+                    f"falling back to automatic scenario selection."
+                )
+                forced_scenario_id = ""
+
         cefr_upper = str(cefr_level or "B2").strip().upper()
-        target_band = "A1_A2" if cefr_upper in ("A1", "A2", "A2+") else "B1_C2"
+        target_band = "A1_A2" if cefr_upper in ("A1", "A2", "A2+", "B1") else "B1_C2"
         is_advanced_academic = cefr_upper in ("B2", "C1", "C2")
 
         topic_norm = str(thematic_topic or "").lower()
@@ -91,6 +334,20 @@ class QuizListeningMixin:
                         break
                 if not matched_traj:
                     continue
+            elif forced_scenario_id:
+                for tr in trajs:
+                    if isinstance(tr, dict):
+                        sc_ids = [str(s.get("scenario_id") or "") for s in (tr.get("everyday_scenarios") or [])]
+                        if forced_scenario_id in sc_ids:
+                            matched_traj = tr
+                            break
+                if not matched_traj:
+                    for tr in trajs:
+                        if isinstance(tr, dict) and str(tr.get("cefr_band") or "") == target_band:
+                            matched_traj = tr
+                            break
+                    if not matched_traj and trajs:
+                        matched_traj = trajs[0]
             else:
                 for tr in trajs:
                     if isinstance(tr, dict) and str(tr.get("cefr_band") or "") == target_band:
@@ -126,18 +383,21 @@ class QuizListeningMixin:
                 }
                 score += min(12, len(overlap) * 4)
 
-            # 3. Everyday reflective/discussion affinity when no narrow transactional/specialized keyword hits
+            # 3. Everyday reflective/discussion affinity when no narrow transactional/specialized keyword hits:
+            # Provide an equal baseline score across versatile conversational/academic archetypes and let
+            # deterministic CRC32 tie-breaker rotate across units to prevent single-archetype monoculture.
             if score == 0:
-                if arch_id == "arch_05_opinion_exchange_and_consensus":
-                    score += 10
-                elif arch_id == "arch_04_problem_sharing_empathy_and_advice":
-                    score += 8
-                elif arch_id == "arch_08_social_catching_up_and_closing":
-                    score += 7
-                elif arch_id == "arch_06_collaborative_proposals_and_tradeoffs":
-                    score += 6
-                elif cefr_upper in ("C1", "C2") and arch_id == "arch_09_academic_seminar_and_causal_probing":
-                    score += 7
+                versatile_archs = {
+                    "arch_02_enquiring_comparing_and_deciding",
+                    "arch_04_problem_sharing_empathy_and_advice",
+                    "arch_05_opinion_exchange_and_consensus",
+                    "arch_06_collaborative_proposals_and_tradeoffs",
+                    "arch_08_social_catching_up_and_closing",
+                }
+                if is_advanced_academic:
+                    versatile_archs.add("arch_09_academic_seminar_and_causal_probing")
+                if arch_id in versatile_archs:
+                    score = 4
 
             # Deterministic tie-breaker rotation across units
             tie_break = (rng + a_idx * 2654435761) & 0x7FFFFFFF
@@ -187,7 +447,7 @@ class QuizListeningMixin:
             "trajectory": chosen_traj,
             "scenario": chosen_scenario,
             "plugin": chosen_plugin,
-            "cefr_band": target_band,
+            "cefr_band": chosen_traj.get("cefr_band", target_band),
         }
 
     @classmethod
@@ -421,8 +681,9 @@ class QuizListeningMixin:
         traj_title = str(traj.get("title") or arch_name)
         traj_register = str(traj.get("register") or "neutral")
         speaker_roles = traj.get("speaker_roles") or {}
-        spk1_desc = str(speaker_roles.get("speaker_1") or speaker_1_role or "Speaker 1")
-        spk2_desc = str(speaker_roles.get("speaker_2") or speaker_2_role or "Speaker 2")
+        sc_speaker_roles = scenario.get("speaker_roles") or {}
+        spk1_desc = str(sc_speaker_roles.get("speaker_1") or speaker_roles.get("speaker_1") or speaker_1_role or "Speaker 1")
+        spk2_desc = str(sc_speaker_roles.get("speaker_2") or speaker_roles.get("speaker_2") or speaker_2_role or "Speaker 2")
 
         sc_setting = str(scenario.get("setting") or "Everyday or academic spoken interaction")
         sc_participants = str(scenario.get("participants") or f"{spk1_desc} and {spk2_desc}")
@@ -435,8 +696,22 @@ class QuizListeningMixin:
             f"- **Selected Trajectory**: `{traj_title}` (CEFR Band: `{cefr_band}` | Register: `{traj_register}`)",
         ]
         if topic_clean:
+            if cefr_band == "A1_A2":
+                state_machine_lines.append(
+                    f"- **Macro Thematic Backdrop / Physical Shell**: `{topic_clean}` (Physical shell only: use this domain strictly as an external physical anchor, such as a facility/building name, department title, or item label. The dialogue MUST remain 100% focused on concrete everyday communicative actions — directions, times, borrowing, dining, or simple arrangements. NEVER discuss abstract academic theories or corporate mechanisms in A1-B1 turns)."
+                )
+            else:
+                state_machine_lines.append(
+                    f"- **Macro Thematic Backdrop**: `{topic_clean}` (Ground the academic/professional discussion in this domain, anchored to a concrete project artifact or real data point)."
+                )
+
+        if cefr_band == "B1_C2":
             state_machine_lines.append(
-                f"- **Macro Thematic Backdrop**: `{topic_clean}` (Blend this broad theme naturally into the scenario below; NEVER recite textbook trivia or force awkward reading passage vocabulary into the conversation)."
+                "- **SLA Academic Concretization Mandate (Tangible Project Anchors)**:\n"
+                "  * Anchor the discussion to a tangible project artifact or data point (e.g. presentation slide #3, survey sample size, lab equipment schedule, draft report word count).\n"
+                "  * Keep turns between 18 and 25 words (NEVER exceeding 30 words). Use high-frequency S1/S2 spoken words and natural contractions.\n"
+                "  * BANNED pseudo-written connectors: NEVER use 'furthermore', 'moreover', 'in conclusion', or 'it is noteworthy that'. Use natural spoken signposts: 'the thing is', 'to be fair', 'on the flip side', 'the bottom line is'.\n"
+                "  * Circumlocution & Analogy: If an abstract theoretical concept appears, one speaker must briefly unpack it with an everyday analogy or concrete example."
             )
         state_machine_lines.extend([
             f"- **Everyday Scenario Setting**: {sc_setting}",
@@ -475,7 +750,16 @@ class QuizListeningMixin:
             move_name = str(t_obj.get("move_name") or "Conversational Move")
             prag_func = str(t_obj.get("pragmatic_function") or "Advance the conversation naturally.")
 
+            turn_overrides = scenario.get("turn_overrides") or {}
+            sc_override = turn_overrides.get(str(t_num)) or turn_overrides.get(t_num)
             raw_fc = t_obj.get("functional_chunks") or []
+            if isinstance(sc_override, dict):
+                if sc_override.get("move_name"):
+                    move_name = str(sc_override["move_name"])
+                if sc_override.get("pragmatic_function"):
+                    prag_func = str(sc_override["pragmatic_function"])
+                if sc_override.get("functional_chunks"):
+                    raw_fc = sc_override["functional_chunks"]
             chunk_patterns: List[str] = []
             for fc in raw_fc:
                 if isinstance(fc, dict) and fc.get("pattern"):

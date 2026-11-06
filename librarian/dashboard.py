@@ -130,11 +130,17 @@ def background_compile_worker(job_id, filename, categories=None):
         err_msg = traceback.format_exc()
         DashboardState.update_job(job_id, progress=100, status="failed", log=f"❌ Exception occurred: {err_msg}")
 
-def background_quiz_worker(job_id, filename, count, template):
+def background_quiz_worker(job_id, filename, count, template, listening_archetype=None, listening_scenario=None):
     try:
-        DashboardState.update_job(job_id, progress=20, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'...")
+        spec_parts = []
+        if listening_archetype:
+            spec_parts.append(f"Archetype: {listening_archetype}")
+        if listening_scenario:
+            spec_parts.append(f"Scenario: {listening_scenario}")
+        arch_info = f" [{', '.join(spec_parts)}]" if spec_parts else ""
+        DashboardState.update_job(job_id, progress=20, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'{arch_info}...")
         DashboardState.update_job(job_id, progress=40, stage="generating", log=f"[QUIZ] Auto-syncing deterministic Vocabulary & Grammar extractions for '{filename}'...")
-        DashboardState.update_job(job_id, progress=60, stage="generating", log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count})...")
+        DashboardState.update_job(job_id, progress=60, stage="generating", log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count}){arch_info}...")
         
         processor = WikiProcessor()
 
@@ -149,7 +155,14 @@ def background_quiz_worker(job_id, filename, count, template):
                 log=f"[AUDIT] {message}"
             )
 
-        result = processor.generate_quiz(filename, count=count, template_name=template, audit_callback=on_audit_update)
+        result = processor.generate_quiz(
+            filename,
+            count=count,
+            template_name=template,
+            audit_callback=on_audit_update,
+            listening_archetype=listening_archetype,
+            listening_scenario=listening_scenario,
+        )
         
         if "Error" in result:
             DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Quiz generation failed: {result}")
@@ -1026,12 +1039,26 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 filename = data.get("filename")
                 count = max(1, min(int(data.get("count", 10)), 100))
                 template = data.get("template", "vocabulary")
+                listening_archetype = data.get("listening_archetype") or data.get("archetype")
+                listening_scenario = data.get("listening_scenario") or data.get("scenario")
 
                 if not filename:
                     response_data = {"success": False, "error": "Unit or vocabulary filename is required"}
                 else:
-                    job_id = DashboardState.create_job("quiz", f"{filename} ({template})")
-                    t = threading.Thread(target=background_quiz_worker, args=(job_id, filename, count, template))
+                    target_label = f"{filename} ({template})"
+                    if template == "listening":
+                        spec_labels = []
+                        if listening_archetype:
+                            spec_labels.append(listening_archetype)
+                        if listening_scenario:
+                            spec_labels.append(listening_scenario)
+                        if spec_labels:
+                            target_label += f" [{', '.join(spec_labels)}]"
+                    job_id = DashboardState.create_job("quiz", target_label)
+                    t = threading.Thread(
+                        target=background_quiz_worker,
+                        args=(job_id, filename, count, template, listening_archetype, listening_scenario)
+                    )
                     t.daemon = True
                     t.start()
                     response_data = {"success": True, "job_id": job_id, "message": "Quiz generation task spawned successfully."}

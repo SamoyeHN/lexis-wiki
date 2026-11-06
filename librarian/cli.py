@@ -51,6 +51,8 @@ def main():
     quiz_parser.add_argument("filename", help="Name of the unit (e.g., Book_4_Unit_1) or the vocabulary file")
     quiz_parser.add_argument("--count", type=int, help="Number of questions to generate (uses config defaults if omitted)")
     quiz_parser.add_argument("--template", "-t", default="vocabulary", choices=["vocabulary", "reading", "translation", "listening", "video"], help="Template type to generate (default: vocabulary)")
+    quiz_parser.add_argument("--archetype", "-a", default=None, help="Functional dialogue archetype to force for listening quiz (e.g. 4, arch_04, advice, seminar, options, complaint)")
+    quiz_parser.add_argument("--scenario", "-s", default=None, help="Everyday scenario ID or setting keyword to force for listening quiz (e.g. arch_01_a2_inf_sc01, arch_04_b1p_form_sc01, weekend)")
 
     # Ask command
     ask_parser = subparsers.add_parser("ask", help="Query the wiki and raw files using full-file context (RAG)")
@@ -303,7 +305,13 @@ def main():
                 target_count = tmpl_val or 10
 
         print(f"Generating quiz from {args.filename} (Target: {target_count} questions, Template: {args.template})...")
-        result = processor.generate_quiz(args.filename, count=target_count, template_name=args.template)
+        result = processor.generate_quiz(
+            args.filename,
+            count=target_count,
+            template_name=args.template,
+            listening_archetype=getattr(args, "archetype", None),
+            listening_scenario=getattr(args, "scenario", None),
+        )
         
         if "Error" in result:
             print(f"\n❌ {result}")

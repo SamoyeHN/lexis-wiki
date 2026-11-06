@@ -237,6 +237,93 @@ class TestListeningScenariosQuality(unittest.TestCase):
         self.assertNotIn("{scenario_id}", rendered)
         self.assertNotIn("{blueprint_prompt_block}", rendered)
 
+    def test_05_forced_archetype_resolution_and_aliases(self) -> None:
+        """Verifies canonical IDs, numbers, and semantic aliases resolve deterministically."""
+        test_cases = [
+            ("1", "arch_01_arranging_and_rescheduling"),
+            ("arch_01", "arch_01_arranging_and_rescheduling"),
+            ("reschedule", "arch_01_arranging_and_rescheduling"),
+            ("2", "arch_02_enquiring_comparing_and_deciding"),
+            ("options", "arch_02_enquiring_comparing_and_deciding"),
+            ("decision", "arch_02_enquiring_comparing_and_deciding"),
+            ("3", "arch_03_requesting_and_negotiating_help"),
+            ("help", "arch_03_requesting_and_negotiating_help"),
+            ("4", "arch_04_problem_sharing_empathy_and_advice"),
+            ("advice", "arch_04_problem_sharing_empathy_and_advice"),
+            ("5", "arch_05_opinion_exchange_and_consensus"),
+            ("consensus", "arch_05_opinion_exchange_and_consensus"),
+            ("6", "arch_06_collaborative_proposals_and_tradeoffs"),
+            ("proposal", "arch_06_collaborative_proposals_and_tradeoffs"),
+            ("7", "arch_07_complaints_apologies_and_remedies"),
+            ("complaint", "arch_07_complaints_apologies_and_remedies"),
+            ("8", "arch_08_social_catching_up_and_closing"),
+            ("social", "arch_08_social_catching_up_and_closing"),
+            ("9", "arch_09_academic_seminar_and_causal_probing"),
+            ("seminar", "arch_09_academic_seminar_and_causal_probing"),
+            ("10", "arch_10_interviews_and_credential_pitching"),
+            ("interview", "arch_10_interviews_and_credential_pitching"),
+            ("11", "arch_11_instruction_walkthrough_and_onboarding"),
+            ("onboarding", "arch_11_instruction_walkthrough_and_onboarding"),
+            ("12", "arch_12_negotiating_terms_and_compromise"),
+            ("negotiate", "arch_12_negotiating_terms_and_compromise"),
+            ("13", "arch_13_medical_consultation_and_health_triage"),
+            ("doctor", "arch_13_medical_consultation_and_health_triage"),
+            ("14", "arch_14_resolving_misunderstandings_and_mediation"),
+            ("mediation", "arch_14_resolving_misunderstandings_and_mediation"),
+        ]
+        for spec, expected in test_cases:
+            resolved = LinguisticEngine.resolve_functional_dialogue_archetype_id(spec)
+            self.assertEqual(resolved, expected, f"Spec '{spec}' did not resolve to '{expected}'")
+
+        # Test blueprint generation with forced archetype
+        bp = LinguisticEngine.build_listening_micro_task_blueprints(
+            vocab_content=[],
+            thematic_topic="1. Renewable Energy",
+            target_count=5,
+            cefr_level="B2",
+            forced_archetype_id="seminar"
+        )
+        self.assertEqual(bp.get("archetype_id"), "arch_09_academic_seminar_and_causal_probing")
+
+    def test_06_forced_scenario_resolution_and_matching(self) -> None:
+        """Verifies scenario IDs and keywords resolve deterministically and lock correct trajectory."""
+        sc_test_cases = [
+            ("arch_01_a2_inf_sc01", ("arch_01_a2_inf_sc01", "arch_01_arranging_and_rescheduling")),
+            ("arch_01_b1p_form_sc01", ("arch_01_b1p_form_sc01", "arch_01_arranging_and_rescheduling")),
+            ("weekend", ("arch_01_a2_inf_sc01", "arch_01_arranging_and_rescheduling")),
+            ("clinic", ("arch_13_b1p_form_sc01", "arch_13_medical_consultation_and_health_triage")),
+            ("arch_04_b1p_form_sc01", ("arch_04_b1p_form_sc01", "arch_04_problem_sharing_empathy_and_advice")),
+        ]
+        for spec, expected in sc_test_cases:
+            sc_id, a_id = LinguisticEngine.resolve_functional_dialogue_scenario_id(spec)
+            self.assertEqual((sc_id, a_id), expected, f"Scenario spec '{spec}' did not resolve to '{expected}'")
+
+        # Test blueprint generation with forced scenario alone (should lock scenario AND archetype)
+        bp = LinguisticEngine.build_listening_micro_task_blueprints(
+            vocab_content=[],
+            thematic_topic="General Discussion",
+            target_count=5,
+            cefr_level="B2",
+            forced_scenario_id="weekend"
+        )
+        self.assertEqual(bp.get("archetype_id"), "arch_01_arranging_and_rescheduling")
+        self.assertEqual(bp.get("scenario_id"), "arch_01_a2_inf_sc01")
+        self.assertEqual(bp.get("cefr_band"), "A1_A2")
+
+        # Test blueprint generation with both forced archetype and scenario
+        bp2 = LinguisticEngine.build_listening_micro_task_blueprints(
+            vocab_content=[],
+            thematic_topic="Workplace Consultation",
+            target_count=5,
+            cefr_level="A2",  # Note: text is A2, but teacher explicitly requested B1+ formal scenario
+            forced_archetype_id="arch_01_arranging_and_rescheduling",
+            forced_scenario_id="arch_01_b1p_form_sc01"
+        )
+        self.assertEqual(bp2.get("archetype_id"), "arch_01_arranging_and_rescheduling")
+        self.assertEqual(bp2.get("scenario_id"), "arch_01_b1p_form_sc01")
+        self.assertEqual(bp2.get("cefr_band"), "B1_C2")
+
+
 
 def _build_listening_generation_prompt(sc: Dict[str, Any], bp: Dict[str, Any]) -> str:
     """Builds the full `listening_quiz.md` prompt for a given scenario and blueprint."""

@@ -947,7 +947,7 @@ class QuizGeneratorMixin:
                 
         return quiz_obj
 
-    def generate_quiz(self, unit_name, count=10, template_name="vocabulary", audit_callback=None):
+    def generate_quiz(self, unit_name, count=10, template_name="vocabulary", audit_callback=None, listening_archetype=None, listening_scenario=None):
         """
         Generates a quiz handout based on extracted wiki data.
         Optional audit_callback(stage, progress, message, extra=None) for live dashboard progress.
@@ -1310,9 +1310,11 @@ class QuizGeneratorMixin:
                 )
             elif cefr == "B2":
                 kwargs["dialogue_style_guidance"] = (
-                    "Natural, idiomatic spoken conversation between peers, colleagues, or student and advisor. "
-                    "Use high-frequency spoken English (S1/S2 vocabulary and natural contractions like `we've`, `that's`, `I'd`) at 12 to 18 words per turn. "
-                    "Difficulty at B2 comes from tracking pragmatic stance shifts, polite hedges, and conversational updates—NEVER from dense academic/corporate jargon (avoid stiff phrases like 'qualitative methodology' or 'unexpected logistical delays')."
+                    "Natural, idiomatic spoken discussion between peers, student and advisor, or colleagues (e.g. IELTS Section 3 / university project review). "
+                    "Use high-frequency spoken English (S1/S2 vocabulary and natural contractions like `we've`, `that's`, `I'd`) at 15 to 22 words per turn (NEVER exceeding 28 words). "
+                    "Anchor the conversation to a tangible project artifact (e.g. presentation slide, survey sample size, lab booking, or report deadline). "
+                    "Difficulty at B2 comes from tracking pragmatic stance shifts, polite hedges, and conversational updates—NEVER from dense academic jargon. "
+                    "DO NOT use essay connectors like 'furthermore', 'moreover', or 'in conclusion'; use spoken signposts like 'to be fair', 'the thing is', or 'on the flip side'."
                 )
                 kwargs["question_stem_guidance"] = (
                     "Use clear, natural question stems testing speaker intention, stance shifts, and agreed next steps."
@@ -1327,8 +1329,10 @@ class QuizGeneratorMixin:
                 )
             else:
                 kwargs["dialogue_style_guidance"] = (
-                    "University seminar, tutorial consultation, or analytical discussion (e.g. IELTS Listening Section 3 / TOEFL academic discussion where two students, colleagues, or a tutor and student evaluate research findings, policy trade-offs, or project feasibility). "
-                    "Turns are articulated yet genuinely spoken (18 to 30 words per turn), focusing on broader feasibility, methodology, and practical trade-offs rather than obscure engineering or textbook trivia."
+                    "University seminar, tutorial consultation, or project review (e.g. IELTS Listening Section 3 / TOEFL academic discussion where two students, colleagues, or a tutor and student evaluate project trade-offs or methodology). "
+                    "Turns MUST be genuinely spoken at 18 to 25 words per turn (NEVER exceeding 30 words), anchored to a concrete project artifact (e.g. slide diagram, questionnaire numbers, or deadline constraint). "
+                    "When theoretical terms appear, unpack them with an everyday spoken analogy. "
+                    "NEVER use written essay connectors like 'furthermore', 'moreover', or 'in conclusion'; use natural spoken signposts like 'the bottom line is', 'to be fair', or 'having said that'."
                 )
                 kwargs["question_stem_guidance"] = (
                     "Use rigorous assessment stems testing speaker stance, implicit qualifications, and analytical deductions."
@@ -1360,6 +1364,13 @@ class QuizGeneratorMixin:
                     thematic_concepts.append(f"1. {u_t or t_t}")
 
             if summary_txt:
+                # Extract first sentence of Narrative Overview for concrete situational domain grounding
+                m_narrative = re.search(r'##\s*Narrative Overview\s*\n+([^#\n]+(?:\.|\?|!))', summary_txt)
+                if m_narrative:
+                    narrative_snippet = re.sub(r'\[\[(.*?)\]\]', r'\1', m_narrative.group(1).strip())
+                    if narrative_snippet and len(narrative_snippet) <= 220:
+                        thematic_concepts.append(f"Domain Context: {narrative_snippet}")
+
                 concept_matches = re.findall(r'###\s*\[\[(.*?)\]\]', summary_txt)
                 if not concept_matches:
                     concept_matches = re.findall(r'###\s*([^\n]+)', summary_txt)
@@ -1378,6 +1389,26 @@ class QuizGeneratorMixin:
             thematic_topic_str = "\n".join(thematic_concepts)
             kwargs["thematic_topic"] = thematic_topic_str
 
+            forced_arch = ""
+            if listening_archetype:
+                forced_arch = str(listening_archetype).strip()
+            elif data.get("listening_archetype"):
+                forced_arch = str(data["listening_archetype"]).strip()
+            elif raw_src_txt:
+                m_arch = re.search(r'^listening_archetype:\s*["\']?([^"\'\r\n]+)["\']?', raw_src_txt, re.MULTILINE)
+                if m_arch:
+                    forced_arch = m_arch.group(1).strip()
+
+            forced_scenario = ""
+            if listening_scenario:
+                forced_scenario = str(listening_scenario).strip()
+            elif data.get("listening_scenario"):
+                forced_scenario = str(data["listening_scenario"]).strip()
+            elif raw_src_txt:
+                m_sc = re.search(r'^listening_scenario:\s*["\']?([^"\'\r\n]+)["\']?', raw_src_txt, re.MULTILINE)
+                if m_sc:
+                    forced_scenario = m_sc.group(1).strip()
+
             try:
                 listening_bp = LinguisticEngine.build_listening_micro_task_blueprints(
                     raw_v,
@@ -1386,6 +1417,8 @@ class QuizGeneratorMixin:
                     cefr_level=cefr,
                     speaker_1_name=s1_name,
                     speaker_2_name=s2_name,
+                    forced_archetype_id=forced_arch,
+                    forced_scenario_id=forced_scenario,
                 )
             except Exception as e:
                 logger.warning(f"Failed to build listening micro-task blueprints: {e}")

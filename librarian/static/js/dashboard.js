@@ -3179,9 +3179,105 @@
         });
     }
 
+    const LISTENING_ARCHETYPE_SCENARIOS = {
+        "arch_01_arranging_and_rescheduling": [
+            { id: "arch_01_a2_inf_sc01", label: "[Informal] Weekend outing or study session planning" },
+            { id: "arch_01_a2_inf_sc02", label: "[Informal] Coordinating meetup time and location" },
+            { id: "arch_01_b1p_form_sc01", label: "[Formal] Office or academic review rescheduling" }
+        ],
+        "arch_02_enquiring_comparing_and_deciding": [
+            { id: "arch_02_a2_form_sc01", label: "[Everyday] Item or service enquiry and comparison" },
+            { id: "arch_02_a2_form_sc02", label: "[Campus] Campus facility or route enquiry" },
+            { id: "arch_02_b1p_inf_sc01", label: "[Peer] Tool, workshop or local facility discussion" }
+        ],
+        "arch_03_requesting_and_negotiating_help": [
+            { id: "arch_03_a2_inf_sc01", label: "[Informal] Borrowing items or errand assistance" },
+            { id: "arch_03_b1p_form_sc01", label: "[Workplace] Urgent shift cover or feedback assistance" }
+        ],
+        "arch_04_problem_sharing_empathy_and_advice": [
+            { id: "arch_04_a2_inf_sc01", label: "[Informal] Stressful task or everyday worry sharing" },
+            { id: "arch_04_b1p_form_sc01", label: "[Professional] Project setback or career dilemma" }
+        ],
+        "arch_05_opinion_exchange_and_consensus": [
+            { id: "arch_05_a2_inf_sc01", label: "[Informal] Campus policy, app, or lifestyle debate" },
+            { id: "arch_05_b1p_form_sc01", label: "[Seminar] Policy, technology, or trend evaluation" }
+        ],
+        "arch_06_collaborative_proposals_and_tradeoffs": [
+            { id: "arch_06_a2_inf_sc01", label: "[Classroom] Presentation or club activity planning" },
+            { id: "arch_06_b1p_form_sc01", label: "[Workplace] Project proposal or workflow planning" }
+        ],
+        "arch_07_complaints_apologies_and_remedies": [
+            { id: "arch_07_a2_form_sc01", label: "[Service] Reporting faulty item, order, or facility" },
+            { id: "arch_07_b1p_form_sc01", label: "[Professional] Quality gap or unmet service review" }
+        ],
+        "arch_08_social_catching_up_and_closing": [
+            { id: "arch_08_a2_inf_sc01", label: "[Informal] Running into an acquaintance or friend" },
+            { id: "arch_08_b1p_form_sc01", label: "[Networking] Seminar break or orientation event" }
+        ],
+        "arch_09_academic_seminar_and_causal_probing": [
+            { id: "arch_09_a2_inf_sc01", label: "[Classroom] Why an everyday social trend occurs" },
+            { id: "arch_09_b1p_form_sc01", label: "[Academic] Analyzing causal mechanisms & boundary conditions" }
+        ],
+        "arch_10_interviews_and_credential_pitching": [
+            { id: "arch_10_a2_inf_sc01", label: "[Campus] Club recruitment or assistant interview" },
+            { id: "arch_10_b1p_form_sc01", label: "[Professional] Internship, graduate, or fellowship role" }
+        ],
+        "arch_11_instruction_walkthrough_and_onboarding": [
+            { id: "arch_11_a2_inf_sc01", label: "[Campus] Studio, library, or activity center walkthrough" },
+            { id: "arch_11_b1p_form_sc01", label: "[Professional] Laboratory or project operations briefing" }
+        ],
+        "arch_12_negotiating_terms_and_compromise": [
+            { id: "arch_12_a2_inf_sc01", label: "[Everyday] Second-hand sale, flatshare, or room booking" },
+            { id: "arch_12_b1p_form_sc01", label: "[Business] Partnership or cross-team resource negotiation" }
+        ],
+        "arch_13_medical_consultation_and_health_triage": [
+            { id: "arch_13_a2_inf_sc01", label: "[Everyday] Health center, pharmacy, or wellness room" },
+            { id: "arch_13_b1p_form_sc01", label: "[Clinical] Medical clinic or specialist consultation" }
+        ],
+        "arch_14_resolving_misunderstandings_and_mediation": [
+            { id: "arch_14_a2_inf_sc01", label: "[Interpersonal] Shared flat or friend misunderstanding" },
+            { id: "arch_14_b1p_form_sc01", label: "[Workplace] Post-handover review or team mediation" }
+        ]
+    };
+
+    function onListeningArchetypeChange() {
+        const archSelect = document.getElementById('listening-archetype-select');
+        const scenarioSelect = document.getElementById('listening-scenario-select');
+        const scenarioBadge = document.getElementById('listening-scenario-badge');
+        if (!archSelect || !scenarioSelect) return;
+
+        const archVal = archSelect.value;
+        scenarioSelect.innerHTML = '<option value="">Auto (Setting-Adaptive)</option>';
+
+        if (!archVal || !LISTENING_ARCHETYPE_SCENARIOS[archVal]) {
+            scenarioSelect.disabled = true;
+            if (scenarioBadge) {
+                scenarioBadge.className = 'badge bg-secondary-subtle text-secondary border border-secondary-subtle px-1.5 py-0.5 rounded-pill';
+                scenarioBadge.innerText = 'Auto-Matched';
+            }
+        } else {
+            scenarioSelect.disabled = false;
+            const scenarios = LISTENING_ARCHETYPE_SCENARIOS[archVal];
+            scenarios.forEach(sc => {
+                const opt = document.createElement('option');
+                opt.value = sc.id;
+                opt.textContent = sc.label;
+                scenarioSelect.appendChild(opt);
+            });
+            if (scenarioBadge) {
+                scenarioBadge.className = 'badge bg-success-subtle text-success border border-success-subtle px-1.5 py-0.5 rounded-pill';
+                scenarioBadge.innerText = `${scenarios.length} Scenarios`;
+            }
+        }
+    }
+
     function generateQuiz() {
         const template = document.getElementById('quiz-template-select').value;
         const count = document.getElementById('quiz-count-input').value;
+        const archSelect = document.getElementById('listening-archetype-select');
+        const scenarioSelect = document.getElementById('listening-scenario-select');
+        const listeningArchetype = (template === 'listening' && archSelect) ? archSelect.value : '';
+        const listeningScenario = (template === 'listening' && scenarioSelect) ? scenarioSelect.value : '';
 
         if (!currentUnit) {
             showInfoModal("No Workspace Selected", "Please select a unit workspace first.");
@@ -3197,21 +3293,26 @@
             .then(res => res.json())
             .then(data => {
                 if (data.success && data.is_video) {
-                    proceedWithQuizGeneration(currentUnit, count, template);
+                    proceedWithQuizGeneration(currentUnit, count, template, listeningArchetype, listeningScenario);
                 } else {
                     showInfoModal("Video Handout Unavailable", "Cannot generate video handout: This raw unit source is not mapped to an active media file or transcript.");
                 }
             });
         } else {
-            proceedWithQuizGeneration(currentUnit, count, template);
+            proceedWithQuizGeneration(currentUnit, count, template, listeningArchetype, listeningScenario);
         }
     }
 
-    function proceedWithQuizGeneration(filename, count, template) {
+    function proceedWithQuizGeneration(filename, count, template, listeningArchetype = '', listeningScenario = '') {
+        const payload = { filename, count, template };
+        if (template === 'listening') {
+            if (listeningArchetype) payload.listening_archetype = listeningArchetype;
+            if (listeningScenario) payload.listening_scenario = listeningScenario;
+        }
         fetch('/api/generate-quiz', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename, count, template })
+            body: JSON.stringify(payload)
         })
         .then(res => res.json())
         .then(data => {
@@ -3417,6 +3518,16 @@
                 else btn.classList.remove('active');
             }
         });
+
+        const archContainer = document.getElementById('listening-archetype-container');
+        if (archContainer) {
+            if (val === 'listening') {
+                archContainer.classList.remove('d-none');
+                onListeningArchetypeChange();
+            } else {
+                archContainer.classList.add('d-none');
+            }
+        }
         
         let defaultCount = 10;
         if (appConfig.quiz_defaults && appConfig.quiz_defaults[val] !== undefined) {

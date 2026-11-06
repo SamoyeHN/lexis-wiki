@@ -231,3 +231,125 @@ flowchart TD
 - **Live Output (`arch_10_a2_inf_sc01` & `arch_10_b1p_form_sc01`)**:
   - **A2 (`36.99s`, 0 retries)**: Candidate naturally links photography hobby to the club helper role, explains how they fixed a rain delay at a school music show, and contrasts busy Monday mornings with light Tuesday/Friday afternoons.
   - **B2 (`53.06s`, 0 retries, 0 Code Gate warnings)**: Candidate connects cross-departmental data tracking to the project coordinator role, illustrates resolving a two-week reporting bottleneck via a shared tracking template, and aligns on a hybrid onboarding schedule.
+
+---
+
+## 5. Forced Archetype Specification (CLI & Frontmatter)
+
+To support scripted curriculum compilation, teacher customization, and multi-variant evaluation, the listening pipeline supports locking any of the 14 communicative archetypes deterministically via CLI or Markdown Frontmatter.
+
+### 5.1 Invocation Methods
+
+1. **CLI Parameter (`--archetype, -a`)**:
+   ```bash
+   # Force by index number (1–14):
+   lexis quiz Book_1_Unit_1_Section_A -t listening -a 4
+
+   # Force by canonical ID:
+   lexis quiz Book_1_Unit_1_Section_A -t listening -a arch_04_problem_sharing_empathy_and_advice
+
+   # Force by semantic keyword alias:
+   lexis quiz Book_1_Unit_1_Section_A -t listening -a advice
+   lexis quiz Book_4_Unit_6_Section_A -t listening -a seminar
+   lexis quiz Book_2_Unit_3_Section_A -t listening -a complaint
+   ```
+
+2. **Unit Source Markdown Frontmatter (`sources/<Unit>.md`)**:
+   ```yaml
+   ---
+   title: "Book 1 Unit 1 Section A"
+   listening_archetype: "advice"   # or 4, or arch_04
+   ---
+   ```
+
+### 5.2 Resolution Priority Cascade
+1. **CLI Flag (`--archetype / -a`)**: Highest precedence, overrides all frontmatter.
+2. **Source Frontmatter (`listening_archetype: "..."`)**: Used when CLI flag is omitted.
+3. **Deterministic Topic Matcher (`CRC32` Tie-Breaking)**: Default when no archetype is specified; scores thematic tokens against archetype keywords and uses deterministic tie-breaking.
+
+### 5.3 Semantic Alias Mapping Table
+
+| Input Number / Aliases | Canonical Archetype ID | Communicative Function |
+| :--- | :--- | :--- |
+| `1`, `arch_01`, `arranging`, `reschedule`, `appointment` | `arch_01_arranging_and_rescheduling` | Making Arrangements & Rescheduling |
+| `2`, `arch_02`, `options`, `decision`, `compare`, `enquiry` | `arch_02_enquiring_comparing_and_deciding` | Enquiring, Comparing & Deciding |
+| `3`, `arch_03`, `help`, `request`, `requesting` | `arch_03_requesting_and_negotiating_help` | Requesting & Negotiating Help |
+| `4`, `arch_04`, `advice`, `problem`, `empathy`, `trouble` | `arch_04_problem_sharing_empathy_and_advice` | Problem Sharing, Empathy & Advice |
+| `5`, `arch_05`, `opinion`, `consensus`, `debate`, `views` | `arch_05_opinion_exchange_and_consensus` | Opinion Exchange & Consensus |
+| `6`, `arch_06`, `proposal`, `proposals`, `collaboration`, `planning` | `arch_06_collaborative_proposals_and_tradeoffs` | Collaborative Proposals & Trade-offs |
+| `7`, `arch_07`, `complaint`, `complaints`, `remedy`, `apology`, `feedback` | `arch_07_complaints_apologies_and_remedies` | Complaints, Apologies & Remedies |
+| `8`, `arch_08`, `social`, `catching_up`, `icebreak`, `closing` | `arch_08_social_catching_up_and_closing` | Social Catching Up & Closing |
+| `9`, `arch_09`, `seminar`, `academic`, `causal`, `probing`, `hypothesis` | `arch_09_academic_seminar_and_causal_probing` | Academic Seminar & Causal Probing |
+| `10`, `arch_10`, `interview`, `interviews`, `pitch`, `pitching` | `arch_10_interviews_and_credential_pitching` | Interviews & Credential Pitching |
+| `11`, `arch_11`, `instruction`, `onboarding`, `walkthrough` | `arch_11_instruction_walkthrough_and_onboarding` | Instruction Walkthrough & Onboarding |
+| `12`, `arch_12`, `negotiate`, `negotiation`, `bargain`, `compromise` | `arch_12_negotiating_terms_and_compromise` | Negotiating Terms & Compromise |
+| `13`, `arch_13`, `medical`, `health`, `clinic`, `doctor`, `symptoms` | `arch_13_medical_consultation_and_health_triage` | Medical Consultation & Health Triage |
+| `14`, `arch_14`, `misunderstanding`, `mediation`, `clarification` | `arch_14_resolving_misunderstandings_and_mediation` | Resolving Misunderstandings & Mediation |
+
+---
+
+## 6. Forced Scenario Specification & Dashboard Cascading Dropdown
+
+Beyond archetypes, teachers and curriculum designers can force specific **everyday scenarios** (30 concrete scenarios across the 14 archetypes) via CLI, Markdown Frontmatter, or the Dashboard Web UI.
+
+### 6.1 Invocation Methods
+1. **CLI Flag (`--scenario, -s`)**:
+   ```bash
+   # Force specific scenario ID:
+   lexis quiz Book_1_Unit_1_Section_A -t listening -s arch_01_a2_inf_sc01
+
+   # Force by setting keyword (auto-locks archetype and trajectory):
+   lexis quiz Book_1_Unit_1_Section_A -t listening -s weekend
+   lexis quiz Book_4_Unit_6_Section_A -t listening -s clinic
+   ```
+
+2. **Unit Source Markdown Frontmatter (`sources/<Unit>.md`)**:
+   ```yaml
+   ---
+   title: "Book 1 Unit 1 Section A"
+   listening_archetype: "arch_01_arranging_and_rescheduling"
+   listening_scenario: "arch_01_a2_inf_sc01"
+   ---
+   ```
+
+3. **Dashboard Web UI Two-Tier Cascading Dropdown**:
+   - **Level 1 (Listening Archetype)**: Pure English list of 14 communicative archetypes (`Auto`, `1. Arranging & Rescheduling`, ..., `14. Resolving Misunderstandings`).
+   - **Level 2 (Listening Scenario)**: Dynamically populates based on Level 1 selection (`Auto (Setting-Adaptive)`, `[Informal] ...`, `[Formal] ...`). If Archetype is set to `Auto`, Scenario defaults to `Auto` and is disabled.
+
+---
+
+## 7. Dual-Track SLA Routing & Academic Concretization Architecture
+
+To reconcile the tension between advanced unit reading themes (e.g. *Market Research, Epistemology, Global Supply Chains*) and authentic spoken language acquisition, the listening generator enforces a strict cognitive dual-track separation based on Cummins' BICS vs. CALP framework.
+
+### 7.1 A1–B1 vs. B2–C1 Dual-Track Automatic Routing
+
+When trajectory selection is not explicitly overridden by `--scenario`, the pipeline resolves the CEFR band automatically:
+- **A1–B1 Units (`A1_A2` Trajectory Band)**: Targets everyday interpersonal communication (BICS). Maps to campus life, service desks, travel, borrowing, casual arrangements, and everyday social problem-solving.
+- **B2–C1 Units (`B1_C2` Trajectory Band)**: Targets professional and academic communicative competence (CALP). Maps to academic seminars, project consultations, advisor meetings, and team compromise negotiations.
+
+### 7.2 Thematic Physical Shelling for A1–A2
+
+When an A1–A2 trajectory is executed for a unit featuring an abstract or high-level academic/business reading passage, the generator applies **Thematic Physical Shelling**:
+- The reading topic functions **strictly as a physical backdrop or nominal setting** (e.g., *"Market Research Building"*, *"Room 302 of the Economics Dept"*, *"Signboard for the Consumer Trends Lecture"*).
+- The topic is strictly banned from invading daily speech acts. Interpersonal dialogue turns must remain 100% authentic, everyday communicative English (e.g., *asking for directions to a room, borrowing a charger, checking room opening hours*).
+
+### 7.3 B2–C1 Academic Concretization & Comprehensible Input
+
+Academic discussions (e.g., Archetype 9 *Academic Seminar*, Archetype 4 *Advisor Consultation*, Archetype 6 *Project Trade-offs*) frequently fail SLA standards if allowed to drift into abstract philosophical essays. The generator enforces four psycholinguistic grounding rules:
+
+1. **Tangible Artifact Anchoring**:
+   - Every high-level academic or methodological dispute must ground in a concrete project artifact:
+     - *Slide #3 of the deck*, *table on page 14*, *sample size of 30 undergraduates*, *2,000-word limit*, *audio recorder battery failure during Tuesday's interview*.
+   - Abstract assertions (*"Our methodological paradigm exhibits epistemological dissonance"*) are completely replaced with concrete student-advisor friction (*"If we interview 30 people instead of 10, how do we transcribe that before Friday's deadline?"*).
+2. **Conversational vs. Essay Markers**:
+   - Explicitly bans written essay transitions: `Furthermore`, `Moreover`, `In conclusion`, `Consequently`.
+   - Requires natural spoken signposts: `Hang on`, `The real snag is...`, `To be fair...`, `What if we...`, `That's one way to look at it, but...`.
+3. **Turn Length & Working Memory Ceiling**:
+   - Single turns are capped at **18–25 words** (hard maximum 35 words).
+   - Long monologues overwhelm auditory working memory; arguments must be broken into interactive Light/Heavy turn alternations with active listener backchanneling (`Right`, `Fair point`, `I see what you mean`).
+4. **Cambridge/IELTS Signposted Distractor Traps (`Bait → Real Key`)**:
+   - Explicitly requires spoken repair and topic redirection (*"I initially planned to survey 50 students, but Dr. Evans capped it at 20"*), testing comprehension of spoken updates rather than passive keyword matching.
+
+
+

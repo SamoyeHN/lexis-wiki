@@ -545,6 +545,42 @@
                             </select>
                         </div>
 
+                        <!-- Listening Archetype Interactive Dropdown Selector (Active when Listening is selected) -->
+                        <div id="listening-archetype-container" class="d-none">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="label-md-system text-muted" style="font-size: 0.65rem;">LISTENING ARCHETYPE</span>
+                                <span class="badge bg-info-subtle text-info border border-info-subtle px-1.5 py-0.5 rounded-pill" style="font-size: 0.62rem;">14 Archetypes</span>
+                            </div>
+                            <select class="form-select form-select-sm font-monospace text-truncate" id="listening-archetype-select" onchange="onListeningArchetypeChange()" style="font-size: 0.72rem; padding: 0.35rem 0.5rem; background-color: var(--surface-container-low, #f8fafc);">
+                                <option value="">Auto (Topic-Adaptive)</option>
+                                <option value="arch_01_arranging_and_rescheduling">1. Arranging &amp; Rescheduling</option>
+                                <option value="arch_02_enquiring_comparing_and_deciding">2. Enquiring, Comparing &amp; Deciding</option>
+                                <option value="arch_03_requesting_and_negotiating_help">3. Requesting &amp; Negotiating Help</option>
+                                <option value="arch_04_problem_sharing_empathy_and_advice">4. Problem Sharing &amp; Advice</option>
+                                <option value="arch_05_opinion_exchange_and_consensus">5. Opinion Exchange &amp; Consensus</option>
+                                <option value="arch_06_collaborative_proposals_and_tradeoffs">6. Collaborative Proposals &amp; Planning</option>
+                                <option value="arch_07_complaints_apologies_and_remedies">7. Complaints &amp; Remedies</option>
+                                <option value="arch_08_social_catching_up_and_closing">8. Social Catching Up</option>
+                                <option value="arch_09_academic_seminar_and_causal_probing">9. Academic Seminar &amp; Inquiry</option>
+                                <option value="arch_10_interviews_and_credential_pitching">10. Interviews &amp; Structured Q&amp;A</option>
+                                <option value="arch_11_instruction_walkthrough_and_onboarding">11. Instruction &amp; Onboarding</option>
+                                <option value="arch_12_negotiating_terms_and_compromise">12. Negotiating Terms &amp; Compromise</option>
+                                <option value="arch_13_medical_consultation_and_health_triage">13. Medical Consultation &amp; Triage</option>
+                                <option value="arch_14_resolving_misunderstandings_and_mediation">14. Resolving Misunderstandings</option>
+                            </select>
+
+                            <!-- Listening Scenario Dropdown (Cascaded from Archetype) -->
+                            <div id="listening-scenario-container" class="mt-2">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="label-md-system text-muted" style="font-size: 0.65rem;">LISTENING SCENARIO</span>
+                                    <span id="listening-scenario-badge" class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-1.5 py-0.5 rounded-pill" style="font-size: 0.62rem;">Auto-Matched</span>
+                                </div>
+                                <select class="form-select form-select-sm font-monospace text-truncate" id="listening-scenario-select" disabled style="font-size: 0.72rem; padding: 0.35rem 0.5rem; background-color: var(--surface-container-low, #f8fafc);">
+                                    <option value="">Auto (Setting-Adaptive)</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <button class="btn btn-creative w-100 d-flex align-items-center justify-content-center gap-1.5 font-monospace fw-bold" onclick="generateQuiz()" style="font-size: 0.78rem; padding: 0.45rem 1rem;">
                             <i class="bi bi-lightning-charge-fill"></i> GENERATE QUIZ
                         </button>

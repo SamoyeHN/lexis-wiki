@@ -71,9 +71,18 @@ lexis quiz Book_4_Unit_1 --template vocabulary --count 20
 # Idiomatic translation appraisal & contrastive defect analysis
 lexis quiz Book_4_Unit_1 --template translation --count 15
 
-# 4. Listening Dialogue Quiz (10 questions)
+# 4. Listening Dialogue Quiz (5 questions)
 # Multi-turn spoken scripts with pre-synthesized audio via Kokoro / Edge-TTS
-lexis quiz Book_4_Unit_1 --template listening --count 10
+lexis quiz Book_4_Unit_1 --template listening --count 5
+
+# Force a specific functional dialogue archetype (by number 1-14 or keyword):
+lexis quiz Book_1_Unit_1_Section_A -t listening -a advice       # Force Arch 04 (Advice/Problem Sharing)
+lexis quiz Book_4_Unit_6_Section_A -t listening -a seminar      # Force Arch 09 (Academic Seminar)
+lexis quiz Book_1_Unit_1_Section_A -t listening -a 2            # Force Arch 02 (Options & Decision)
+
+# Force a specific everyday scenario ID or setting keyword:
+lexis quiz Book_1_Unit_1_Section_A -t listening -s arch_01_a2_inf_sc01 # Force weekend outing planning scenario
+lexis quiz Book_4_Unit_6_Section_A -t listening -a 1 -s consultation   # Force office review rescheduling
 
 # 5. Timestamp-Anchored Video Quiz (5 questions)
 # Grounded chronological comprehension with video transcript anchors
