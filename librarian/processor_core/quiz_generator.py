@@ -517,6 +517,72 @@ class QuizGeneratorMixin:
         return quiz_obj
 
     @classmethod
+    def hydrate_reading_blueprint_items(
+        cls,
+        quiz_obj: Any,
+        blueprint_specs: List[Dict[str, Any]],
+    ) -> Any:
+        """
+        Deterministically hydrates and reconciles blueprint-owned fields on ReadingQuiz items:
+        - Reconciles question category with canonical Reading schema literal:
+          `macro_gist` -> "Main Idea", `causal_chain` / `factual_mechanism` / `rhetorical_contrast` -> "Detail/Recall",
+          `pragmatic_inference` -> "Inference", `modality_hedging` -> "Author's Tone/Purpose".
+        - Enforces canonical design_audit tag format: `AUDIT: [AnchorID] -> [Category] -> [Operators]`.
+        - Fallback repairs question stem if empty or trivially corrupt.
+        """
+        if not quiz_obj or not blueprint_specs:
+            return quiz_obj
+
+        q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
+        if not isinstance(q_list, list):
+            return quiz_obj
+
+        CATEGORY_MAP = {
+            "macro_gist": "Main Idea",
+            "causal_chain": "Detail/Recall",
+            "factual_mechanism": "Detail/Recall",
+            "pragmatic_inference": "Inference",
+            "modality_hedging": "Author's Tone/Purpose",
+            "rhetorical_contrast": "Detail/Recall",
+        }
+
+        for q_i, q_item in enumerate(q_list):
+            if q_i >= len(blueprint_specs):
+                break
+            spec = blueprint_specs[q_i] or {}
+            is_dict = isinstance(q_item, dict)
+
+            def _get(field: str, default: Any = "") -> Any:
+                if is_dict:
+                    return q_item.get(field, default)
+                return getattr(q_item, field, default)
+
+            def _set(field: str, val: Any) -> None:
+                if is_dict:
+                    q_item[field] = val
+                else:
+                    setattr(q_item, field, val)
+
+            skill = str(spec.get("skill_type") or "macro_gist").lower()
+            cat = CATEGORY_MAP.get(skill, "Main Idea")
+            _set("category", cat)
+
+            ops = [d.get("operator", "") for d in spec.get("prescribed_distractor_operators", []) if isinstance(d, dict)]
+            ops_str = "/".join(ops) if ops else "fallacy_operators"
+            anchor_id = spec.get("anchor_id", f"S-{q_i + 1}")
+            audit_str = f"AUDIT: [{anchor_id}] -> [{cat}] -> [{ops_str}]"
+
+            cur_audit = str(_get("design_audit") or "").strip()
+            if not cur_audit or not cur_audit.startswith("AUDIT:"):
+                _set("design_audit", audit_str)
+
+            cur_stem = str(_get("question") or "").strip()
+            if not cur_stem or len(cur_stem) < 8:
+                _set("question", spec.get("question_stem", cur_stem))
+
+        return quiz_obj
+
+    @classmethod
     def shuffle_quiz_options(cls, quiz_obj: Any, preserve_blueprint_order: bool = False) -> Any:
         """
         Sanitizes options and ensures robust answer key distribution.
@@ -1166,6 +1232,23 @@ class QuizGeneratorMixin:
                     "     * `Author's Tone/Purpose`: 1 question assessing stance, attitude, rhetorical strategy, or underlying perspective."
                 )
                 kwargs["vocab_target_guidance"] = "5 to 8 challenging academic vocabulary items directly from the passage"
+
+            # Neuro-symbolic discourse reading blueprints
+            try:
+                reading_blueprints = LinguisticEngine.build_discourse_blueprints(
+                    data["passage"],
+                    count=count,
+                    cefr_level=cefr,
+                )
+                kwargs["reading_blueprints_block"] = LinguisticEngine.format_reading_micro_task_blueprints(reading_blueprints)
+                blueprint_specs = [bp.to_micro_task() for bp in reading_blueprints]
+                logger.info(
+                    f"🎯 Built {len(blueprint_specs)} symbolic reading discourse micro-task blueprints "
+                    f"({cefr=}, count={count})"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to build reading discourse blueprints: {e}")
+                kwargs["reading_blueprints_block"] = ""
         elif template_name == "translation":
             raw_v = data.get("vocab_list", "")
             sanitized_v, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_v)
@@ -1487,6 +1570,8 @@ class QuizGeneratorMixin:
                         speaker_1_name=kwargs.get("speaker_1_name", ""),
                         speaker_2_name=kwargs.get("speaker_2_name", ""),
                     )
+                elif template_name == "reading":
+                    quiz_obj = self.hydrate_reading_blueprint_items(quiz_obj, blueprint_specs)
                 else:
                     q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
                     if isinstance(q_list, list):
@@ -1624,7 +1709,8 @@ class QuizGeneratorMixin:
                         l1_defective, l1_defects = self.audit_reading_integrity(
                             quiz_dict_eval,
                             passage_text=source_context,
-                            cefr_level=kwargs.get("cefr_level", "B2")
+                            cefr_level=kwargs.get("cefr_level", "B2"),
+                            blueprint_specs=blueprint_specs,
                         )
                     elif template_name == "video":
                         l1_defective, l1_defects = self.audit_video_integrity(
@@ -1864,10 +1950,12 @@ class QuizGeneratorMixin:
                                 cure_l1_defects = []
                                 cure_cefr = kwargs.get("cefr_level", "B2")
                                 if template_name == "reading":
+                                    cure_bp_spec = [blueprint_specs[item_slot]] if (blueprint_specs and item_slot < len(blueprint_specs)) else None
                                     cure_l1_flagged, cure_l1_defects = self.audit_reading_integrity(
                                         {"questions": [healed_item]},
                                         passage_text=source_context,
-                                        cefr_level=cure_cefr
+                                        cefr_level=cure_cefr,
+                                        blueprint_specs=cure_bp_spec
                                     )
                                     cure_item_failed = bool(cure_l1_flagged)
                                 elif template_name == "video":

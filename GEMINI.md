@@ -113,6 +113,7 @@ wiki/<UnitName>/
 - [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md): Single source of truth for candidate extraction, POS resolution, optimal example selection principles across parts of speech, valency cascades, distractor generation, and the 8 lexico-syntactic construction families.
 - [docs/pedlex-database-architecture.md](docs/pedlex-database-architecture.md): PedLex SQLite database schemas (`ldoce`, `pedlex_phrase_index`, `pedlex_cxn_index`, `pedlex_error_traps`), JSON payload specifications, and runtime query interfaces.
 - [docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md): Four pragmatic interaction paradigms, 14 functional dialogue archetypes, conversation analysis turn structures, and listening blueprints.
+- [docs/reading-discourse-architecture.md](docs/reading-discourse-architecture.md): Discourse graph extraction, 6 discourse relation types, 10 psychometric distractor fallacy operators, single-step inference entailment, and verbatim lexical leakage guard.
 - [docs/audit-scores-guide.md](docs/audit-scores-guide.md): Level 1 deterministic code gate and Level 2 expert evaluator rubrics.
 - [docs/cli.md](docs/cli.md): CLI commands, compilation flags, and dashboard workflows.
 
@@ -121,6 +122,6 @@ wiki/<UnitName>/
 - [x] **Sense-First Quiz Blueprint Closure**: Five-source LDOCE pool, modular architecture (`quiz_vocab.py` etc.), zero drift, universal post-assembly double-key collision screening verified across Books 1–4 (30 units, 300 items, 100% pass rate).
 - [x] **Verb Patient Ontology & Dynamic Fallback Pool**: WordNet supersense + cognitive subdomains for patient slots; 8,102-word dynamic core lexicon fallback.
 - [x] **Symbolic Translation & Listening Blueprints**: Minimal-pair error-injection (`translation_quiz`); 14 dialogue archetypes with pragmatic turn structures (`listening_quiz`).
+- [x] **Symbolic Reading Discourse Blueprint**: Pre-assign rhetorical span anchors (`spaCy` transitions), 10 deterministic distractor fallacy operators (cross-paragraph bait, causal reversal, modality overgeneralization, explicit restatement), single-step inference entailment, and 3-gram verbatim lexical leakage code gate.
 - [ ] **Paired Listening–Speaking Workbench**: Two-act receptive-to-productive pairing (`Act I: Listening` $\rightarrow$ `Act II: Speaking`) with 3-level progressive fading scaffolding (Cue Card $\rightarrow$ Acoustic Cloze $\rightarrow$ Blind Production) and cross-scenario transfer.
 - [ ] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts.
-- [ ] **Symbolic Reading Discourse Blueprint**: Pre-assign rhetorical span anchors (`spaCy` transitions) and deterministic distractor fallacy operators (cross-paragraph bait, causal reversal, modality overgeneralization).

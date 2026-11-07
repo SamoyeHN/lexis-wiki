@@ -6,6 +6,7 @@ Facade mixin composing specialized modular mixins:
 - QuizVocabMixin: Generative vocabulary quiz target skeletons & authentic cloze items
 - QuizTranslationMixin: Translation micro-task blueprints & lexical/syntactic traps
 - QuizListeningMixin: Functional dialogue listening archetypes & blueprints
+- QuizReadingMixin: Discourse reading comprehension blueprints & fallacy operators
 """
 
 from .quiz_patterns import QuizPatternsMixin
@@ -13,6 +14,7 @@ from .quiz_frames import QuizFramesMixin
 from .quiz_vocab import QuizVocabMixin
 from .quiz_translation import QuizTranslationMixin
 from .quiz_listening import QuizListeningMixin
+from .quiz_reading import QuizReadingMixin
 
 
 class QuizSkeletonsMixin(
@@ -21,6 +23,7 @@ class QuizSkeletonsMixin(
     QuizVocabMixin,
     QuizTranslationMixin,
     QuizListeningMixin,
+    QuizReadingMixin,
 ):
     """
     Unified Quiz Skeletons Mixin facade.
@@ -36,4 +39,5 @@ __all__ = [
     "QuizVocabMixin",
     "QuizTranslationMixin",
     "QuizListeningMixin",
+    "QuizReadingMixin",
 ]

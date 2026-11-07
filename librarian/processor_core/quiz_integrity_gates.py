@@ -321,7 +321,8 @@ class QuizIntegrityGatesMixin:
         cls,
         quiz_obj: Any,
         passage_text: str = "",
-        cefr_level: str = "B2"
+        cefr_level: str = "B2",
+        blueprint_specs: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Reading Comprehension Quiz.
@@ -430,6 +431,27 @@ class QuizIntegrityGatesMixin:
                     defect_messages.append(
                         f"Reading Item #{idx + 1}: Question stem contains obscure/super-advanced word '{tok}' ({tok_lvl}) exceeding CEFR {cefr_upper} ceiling: \"{stem[:40]}\""
                     )
+
+            # 1.8 Check Lexical Leakage (Verbatim 3-gram copying from anchor sentence)
+            if blueprint_specs and idx < len(blueprint_specs):
+                spec = blueprint_specs[idx] or {}
+                anchor_text = spec.get("anchor_text", "")
+                if anchor_text and isinstance(correct_idx, int) and 0 <= correct_idx < len(options):
+                    key_opt = str(options[correct_idx]).strip()
+
+                    def get_3grams(s: str) -> Set[Tuple[str, str, str]]:
+                        words = re.findall(r"\b[a-zA-Z]{2,}\b", s.lower())
+                        return set(zip(words, words[1:], words[2:]))
+
+                    key_3g = get_3grams(key_opt)
+                    anc_3g = get_3grams(anchor_text)
+                    if key_3g and anc_3g:
+                        overlap = len(key_3g.intersection(anc_3g)) / len(key_3g)
+                        if overlap > 0.35:
+                            flagged_indices.add(idx)
+                            defect_messages.append(
+                                f"Reading Item #{idx + 1}: Lexical leakage detected ({overlap:.1%} 3-gram overlap > 35% with anchor [{spec.get('anchor_id')}]): \"{key_opt[:50]}\""
+                            )
 
         # 2. Skill Diversity Gate
         if len(questions) >= 4 and len(categories_seen) < 2:
