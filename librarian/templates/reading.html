@@ -144,6 +144,28 @@
 
         .passage-content p {
             margin-bottom: 20px;
+            position: relative;
+        }
+
+        /* Numbered paragraph marker (Scheme C: Unicode Circled Numbers) */
+        .para-num {
+            display: inline-block;
+            font-size: 1.15em;
+            font-weight: 600;
+            color: var(--color-primary, #6366f1);
+            margin-right: 6px;
+            vertical-align: baseline;
+            user-select: none;
+            line-height: 1;
+        }
+
+        .section-heading {
+            margin: 24px 0 10px;
+            font-size: 1.15em;
+            font-weight: 700;
+            color: var(--color-text-dark);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+            padding-bottom: 4px;
         }
 
         /* Vocabulary Tooltip Highlight */
@@ -740,15 +762,59 @@
                 }
             }
 
-            // 2. Clean common markdown markers
-            let passageHtml = passageRaw
+            // 2. Clean syllabus and passage-level titles
+            passageRaw = passageRaw
                 .replace(/^##\s+Text\s*$/gm, "")
-                .replace(/^###\s+.*$/gm, (match) => `<strong>${match.replace("###", "").trim()}</strong>`)
-                .replace(/\n\n+/g, "\n\n")
+                .replace(/^##\s*Syllabus[\s\S]*/im, "")
+                .replace(/<syllabus>[\s\S]*?<\/syllabus>/gi, "")
                 .trim();
+
+            const rawBlocks = passageRaw.split(/\n\n+/).map(b => b.trim()).filter(b => b.length > 0);
             
-            // 3. Format paragraphs
-            passageHtml = passageHtml.split("\n\n").map(para => `<p>${para}</p>`).join("");
+            // Filter passage/text level titles like '## Passage A' or top bold title
+            const blocks = [];
+            for (let b of rawBlocks) {
+                if (/^#+\s*(?:Passage|Text)\s+[A-Z]/i.test(b)) continue;
+                if (/^\*\*.*?\*\*$/.test(b) && blocks.length === 0) continue;
+                blocks.push(b);
+            }
+
+            const CIRCLED_NUMS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
+            function getCircledNum(n) {
+                return (n >= 1 && n <= 20) ? CIRCLED_NUMS[n - 1] : `(${n})`;
+            }
+
+            let secIdx = 1;
+            let formattedParagraphs = [];
+            let i = 0;
+            while (i < blocks.length) {
+                let b = blocks[i];
+                let isHeading = false;
+                let title = "";
+                if (b.startsWith("#")) {
+                    isHeading = true;
+                    title = b.replace(/^#+\s*/, "").trim();
+                } else if (!b.includes("\n") && b.length < 70 && !/[.?!:;"']$/.test(b.trim())) {
+                    isHeading = true;
+                    title = b.replace(/^[*_]+|[*_]+$/g, "").trim();
+                }
+
+                if (isHeading && i + 1 < blocks.length) {
+                    let body = blocks[i + 1];
+                    body = body.replace(/^\[Paragraph\s+\d+(?::\s*[^\]]+)?\]\s*/i, "");
+                    formattedParagraphs.push(`<h3 class="section-heading">${title}</h3>`);
+                    formattedParagraphs.push(`<p><span class="para-num">${getCircledNum(secIdx)}</span>${body}</p>`);
+                    secIdx++;
+                    i += 2;
+                } else {
+                    b = b.replace(/^\[Paragraph\s+\d+(?::\s*[^\]]+)?\]\s*/i, "");
+                    formattedParagraphs.push(`<p><span class="para-num">${getCircledNum(secIdx)}</span>${b}</p>`);
+                    secIdx++;
+                    i += 1;
+                }
+            }
+
+            let passageHtml = formattedParagraphs.join("\n");
 
             const foundMatches = {}; // index -> actual text matched
 

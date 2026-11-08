@@ -386,7 +386,6 @@ class TestAnchoredTranslation(unittest.TestCase):
         schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
         item_schema = schema_data["properties"]["questions"]["items"]
         expected_keys = {
-            "design_audit",
             "translated_sentence",
             "idiomatic_translation",
             "flawed_translation",
@@ -408,7 +407,6 @@ class TestAnchoredTranslation(unittest.TestCase):
             "title": "Translation Appraisal Quiz",
             "questions": [
                 {
-                    "design_audit": "AUDIT: [originate] + [Although + Clause] -> L1 Conjunction Redundancy",
                     "translated_sentence": "虽然许多圣诞传统起源于德国，但它们如今已传播到世界各地。",
                     "idiomatic_translation": "Although many Christmas traditions originated in Germany, they have now spread around the world.",
                     "flawed_translation": "Although many Christmas traditions originated in Germany, but they have now spread around the world.",
@@ -419,6 +417,7 @@ class TestAnchoredTranslation(unittest.TestCase):
 
         hydrated = WikiProcessor.hydrate_translation_blueprint_items(raw_llm_output, blueprints)
         q0 = hydrated["questions"][0]
+        self.assertTrue(q0.get("design_audit", "").startswith("AUDIT:"))
         self.assertEqual(q0["target_keyword"], "originate")
         self.assertEqual(
             q0["target_grammar"],

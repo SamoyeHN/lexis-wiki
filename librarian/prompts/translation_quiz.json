@@ -11,10 +11,6 @@
       "items": {
         "type": "object",
         "properties": {
-          "design_audit": {
-            "type": "string",
-            "minLength": 1
-          },
           "translated_sentence": {
             "type": "string",
             "minLength": 1
@@ -33,7 +29,6 @@
           }
         },
         "required": [
-          "design_audit",
           "translated_sentence",
           "idiomatic_translation",
           "flawed_translation",

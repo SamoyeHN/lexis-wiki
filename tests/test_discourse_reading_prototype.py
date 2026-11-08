@@ -276,3 +276,97 @@ class TestDiscourseReadingPrototype:
         assert DistractorFallacyOperator.EXPLICIT_RESTATEMENT in ops_adv
         assert DistractorFallacyOperator.OVER_EXTENSION in ops_adv
         assert DistractorFallacyOperator.REVERSE_ENTAILMENT in ops_adv
+
+    def test_section_bijection_book1_unit2(self, book1_unit2_passage: str):
+        """Asserts 1-to-1 bijection between sections and quiz items for multi-section passage."""
+        blueprints = DiscourseReadingEngine.build_discourse_blueprints(
+            book1_unit2_passage, count=6, cefr_level="A2"
+        )
+        assert len(blueprints) == 6
+
+        section_titles = [bp.section_title for bp in blueprints]
+        expected_sections = [
+            "Paragraph 1",
+            "Potlucks for Staff and Volunteers",
+            "Giving Cards to Volunteers",
+            "Hats Off to Volunteers",
+            "Afternoon at the Movies",
+            "Pat on the Back",
+        ]
+        assert section_titles == expected_sections, f"Expected exact 1-to-1 section mapping: {section_titles}"
+
+        # Stems must reference section titles for custom sections
+        for i in range(1, 6):
+            sec = expected_sections[i]
+            assert sec in blueprints[i].question_stem_prompt, (
+                f"Item {i+1} stem '{blueprints[i].question_stem_prompt}' must embed section '{sec}'"
+            )
+
+    def test_section_clustering_gate_and_hydration(self, book1_unit2_passage: str):
+        from librarian.processor_core.quiz_integrity_gates import QuizIntegrityGatesMixin
+        from librarian.processor_core.quiz_generator import QuizGeneratorMixin
+
+        blueprints = DiscourseReadingEngine.build_discourse_blueprints(
+            book1_unit2_passage, count=6, cefr_level="A2"
+        )
+        bp_specs = [bp.to_micro_task() for bp in blueprints]
+
+        # Case 1: Clustering defect where Hats Off to Volunteers is tested twice (Item 4 and Item 5)
+        clustered_quiz = {
+            "questions": [
+                {"question": "What is the main idea?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Main Idea"},
+                {"question": "In the 'Potlucks for Staff and Volunteers' section, why potluck?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Detail/Recall"},
+                {"question": "In the 'Giving Cards to Volunteers' section, why give cards?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Detail/Recall"},
+                {"question": "In the 'Hats Off to Volunteers' section, what happens?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Detail/Recall"},
+                {"question": "In the 'Hats Off to Volunteers' section, why hats?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Author's Tone/Purpose"},
+                {"question": "In the 'Pat on the Back' section, what idea is shared?", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "category": "Inference"},
+            ]
+        }
+        flagged, defects = QuizIntegrityGatesMixin.audit_reading_integrity(
+            clustered_quiz, passage_text=book1_unit2_passage, cefr_level="A2", blueprint_specs=bp_specs
+        )
+        assert 4 in flagged, f"Item #5 (idx 4) must be flagged for duplicate section: {defects}"
+        assert any("Section clustering defect" in d for d in defects)
+
+        # Case 2: Hydration automatically heals the clustered stem to the blueprint's prescribed stem
+        healed_quiz = QuizGeneratorMixin.hydrate_reading_blueprint_items(clustered_quiz, bp_specs)
+        item5_stem = healed_quiz["questions"][4]["question"]
+        assert "Afternoon at the Movies" in item5_stem, f"Item #5 must be healed to Afternoon at the Movies: {item5_stem}"
+
+        # Re-audit on healed quiz should have 0 section clustering defects
+        flagged_after, defects_after = QuizIntegrityGatesMixin.audit_reading_integrity(
+            healed_quiz, passage_text=book1_unit2_passage, cefr_level="A2", blueprint_specs=bp_specs
+        )
+        assert not any("Section clustering defect" in d for d in defects_after)
+        assert not any("Section mismatch" in d for d in defects_after)
+
+    def test_chronological_paragraph_ordering_and_distinct_distant_refs(self, unit6_passage: str):
+        blueprints = DiscourseReadingEngine.build_discourse_blueprints(unit6_passage, count=5)
+        assert len(blueprints) == 5
+
+        # Item 1 should be MACRO_GIST
+        assert blueprints[0].skill_type == DiscourseRelationType.MACRO_GIST
+
+        # Items 2..N should be monotonically non-decreasing by target_paragraph_index
+        para_indices = [bp.target_paragraph_index for bp in blueprints[1:]]
+        assert para_indices == sorted(para_indices), f"Paragraph indices must progress chronologically: {para_indices}"
+
+        # Distractor source references across items must be distinct (zero recycling)
+        all_refs = []
+        for bp in blueprints:
+            for d in bp.distractors:
+                if d.source_reference:
+                    all_refs.append(d.source_reference)
+        assert len(all_refs) == len(set(all_refs)), f"Distractor references must be distinct, got duplicates: {all_refs}"
+
+    def test_macro_gist_dual_pole_and_title_scope(self, unit6_passage: str):
+        blueprints = DiscourseReadingEngine.build_discourse_blueprints(unit6_passage, count=5)
+        gist_bp = blueprints[0]
+        assert gist_bp.skill_type == DiscourseRelationType.MACRO_GIST
+
+        # Check that Title Scope is embedded in paraphrase target instruction
+        assert "The coming energy crisis" in gist_bp.paraphrase_target_instruction
+
+        # Check that Dual-Pole (both intro and conclusion anchors) are referenced
+        assert "initial problem/proposition" in gist_bp.paraphrase_target_instruction or "introductory proposition" in gist_bp.paraphrase_target_instruction
+        assert "final resolution" in gist_bp.paraphrase_target_instruction or "concluding resolution" in gist_bp.paraphrase_target_instruction

@@ -71,6 +71,7 @@ class ReadingDistractorSpec:
     blueprint_instruction: str
     source_reference: Optional[str] = None
     target_misconception: str = ""
+    source_text: str = ""
 
 
 # Backward-compatible alias
@@ -89,6 +90,7 @@ class ReadingItemBlueprint:
     distractors: List[ReadingDistractorSpec] = field(default_factory=list)
     tier: CEFRDifficultyTier = CEFRDifficultyTier.ADVANCED
     passage_words: Optional[Set[str]] = None
+    section_title: str = ""
 
     def to_micro_task(self) -> Dict[str, Any]:
         """Formats the blueprint into an actionable micro-task for LLM prompts."""
@@ -110,6 +112,7 @@ class ReadingItemBlueprint:
             "skill_type": self.skill_type.value,
             "tier": self.tier.value,
             "paragraph": self.target_paragraph_index,
+            "section_title": self.section_title,
             "anchor_id": self.anchor_sentence_id,
             "anchor_text": self.anchor_sentence_text,
             "question_stem": self.question_stem_prompt,
@@ -123,6 +126,7 @@ class ReadingItemBlueprint:
                     "instruction": d.blueprint_instruction,
                     "trap_target": d.target_misconception,
                     "source_reference": d.source_reference or "n/a",
+                    "source_text": d.source_text or "n/a",
                 }
                 for d in self.distractors
             ],
@@ -131,6 +135,14 @@ class ReadingItemBlueprint:
 
 # Backward-compatible alias
 DiscourseItemBlueprint = ReadingItemBlueprint
+
+
+@dataclass
+class DiscourseSection:
+    section_index: int
+    title: str
+    body_text: str
+    sentence_ids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -143,6 +155,7 @@ class DiscourseGraph:
     inference_spans: List[Tuple[int, str, str]] = field(default_factory=list)
     introduction_unit: Optional[Tuple[int, str, str]] = None
     conclusion_unit: Optional[Tuple[int, str, str]] = None
+    sections: List[DiscourseSection] = field(default_factory=list)
 
 
 @dataclass
@@ -180,24 +193,69 @@ class QuizReadingMixin:
     Mixin providing neuro-symbolic reading comprehension blueprints and evaluation gates.
     """
 
+    _spacy_nlp = None
+
+    @classmethod
+    def get_spacy(cls):
+        """
+        Lazily loads and returns the spaCy en_core_web_sm pipeline.
+        """
+        if getattr(cls, "_spacy_nlp", None) is None:
+            try:
+                import spacy
+                cls._spacy_nlp = spacy.load("en_core_web_sm", disable=["ner"])
+            except Exception:
+                cls._spacy_nlp = False
+        return cls._spacy_nlp if cls._spacy_nlp is not False else None
+
     @classmethod
     def extract_discourse_graph(cls, text: str) -> DiscourseGraph:
         """
-        Parses text into paragraphs and deterministic rhetorical spans.
+        Parses text into paragraphs, sections, and deterministic rhetorical spans.
         Uses spaCy sentence segmentation for sentence ID anchoring.
         """
         # Clean markdown frontmatter and syllabus if present
         clean_text = re.sub(r"^---[\s\S]*?---\s*", "", text).strip()
         clean_text = re.sub(r"<syllabus>[\s\S]*?</syllabus>", "", clean_text).strip()
+        clean_text = re.sub(r"##\s*Syllabus[\s\S]*", "", clean_text, flags=re.IGNORECASE).strip()
 
-        raw_paras = [p.strip() for p in clean_text.split("\n\n") if p.strip()]
-        paragraphs: List[str] = []
-        for p in raw_paras:
-            # Strip markdown headers if standalone
-            cleaned = re.sub(r"^#+\s*.*?\n", "", p).strip()
-            if cleaned:
-                paragraphs.append(cleaned)
+        raw_blocks = [b.strip() for b in clean_text.split("\n\n") if b.strip()]
+        blocks: List[str] = []
+        for b in raw_blocks:
+            # Strip passage/text level titles like '## Passage A' or '## Text A'
+            if re.match(r"^#+\s*(?:Passage|Text)\s+[A-Z]", b, re.I):
+                continue
+            # Strip top-level bold passage title if at the very beginning
+            if re.match(r"^\*\*.*?\*\*$", b) and len(blocks) == 0:
+                continue
+            blocks.append(b)
 
+        sections: List[DiscourseSection] = []
+        i = 0
+        sec_idx = 1
+        while i < len(blocks):
+            b = blocks[i]
+            is_heading = False
+            title = ""
+            if b.startswith("#"):
+                is_heading = True
+                title = b.lstrip("#").strip()
+            elif "\n" not in b and len(b) < 70 and not b.endswith((".", "?", "!", ":", ";", '"', "'")):
+                is_heading = True
+                title = b.strip("*_ ")
+
+            if is_heading and i + 1 < len(blocks):
+                body = blocks[i + 1]
+                sections.append(DiscourseSection(section_index=sec_idx, title=title, body_text=body))
+                sec_idx += 1
+                i += 2
+            else:
+                title = f"Paragraph {sec_idx}"
+                sections.append(DiscourseSection(section_index=sec_idx, title=title, body_text=b))
+                sec_idx += 1
+                i += 1
+
+        paragraphs = [sec.body_text for sec in sections]
         sentence_pool: List[Tuple[int, str, str]] = []
         causal_chains: List[Tuple[int, str, str]] = []
         contrast_spans: List[Tuple[int, str, str]] = []
@@ -211,16 +269,17 @@ class QuizReadingMixin:
             nlp.add_pipe("sentencizer")
 
         s_counter = 1
-        for p_idx, para in enumerate(paragraphs, 1):
-            doc = nlp(para)
+        for sec in sections:
+            doc = nlp(sec.body_text)
             for sent in doc.sents:
                 s_text = sent.text.strip()
                 if len(s_text) < 15:
                     continue
                 s_id = f"S-{s_counter}"
                 s_counter += 1
+                sec.sentence_ids.append(s_id)
 
-                entry = (p_idx, s_id, s_text)
+                entry = (sec.section_index, s_id, s_text)
                 sentence_pool.append(entry)
 
                 if CAUSAL_CONNECTIVES_REGEX.search(s_text):
@@ -244,7 +303,61 @@ class QuizReadingMixin:
             inference_spans=inference_spans,
             introduction_unit=intro_unit,
             conclusion_unit=conclusion_unit,
+            sections=sections,
         )
+
+    @classmethod
+    def format_paragraph_numbered_passage(cls, text: str) -> str:
+        """
+        Formats text with explicit [Paragraph N] labels corresponding to
+        the DiscourseGraph sections, ensuring unambiguous paragraph references
+        for LLM generation prompts and L2 Expert Auditor.
+        """
+        if not text or not text.strip():
+            return text
+        graph = cls.extract_discourse_graph(text)
+        if not graph.sections:
+            return text
+        formatted_blocks = []
+        for sec in graph.sections:
+            if sec.title and not re.match(r"^Paragraph\s+\d+$", sec.title, re.IGNORECASE):
+                formatted_blocks.append(f"[Paragraph {sec.section_index}: {sec.title}]\n{sec.body_text}")
+            else:
+                formatted_blocks.append(f"[Paragraph {sec.section_index}]\n{sec.body_text}")
+        return "\n\n".join(formatted_blocks)
+
+    @classmethod
+    def extract_reading_vocabulary(
+        cls,
+        text: str,
+        target_count: int = 8,
+        enable_llm_disambiguation: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Deterministically extracts academic vocabulary for reading comprehension handouts
+        from the passage text (0 tokens if disambiguation disabled or 1-token WSD).
+        """
+        if not text or not text.strip():
+            return []
+        try:
+            raw_items = cls.extract_deterministic_vocabulary(
+                text,
+                target_count=target_count,
+                enable_llm_disambiguation=enable_llm_disambiguation,
+            )
+        except Exception as e:
+            logger.warning(f"Failed deterministic reading vocabulary extraction: {e}")
+            raw_items = []
+        vocab_items = []
+        for item in raw_items[:target_count]:
+            vocab_items.append({
+                "word": item["word"],
+                "context_sentence": item.get("quoted_sentence", ""),
+                "part_of_speech": item.get("part_of_speech", "noun"),
+                "definition": item.get("definition", ""),
+                "example_usage": item.get("example_usage", ""),
+            })
+        return vocab_items
 
     @classmethod
     def build_discourse_blueprints(
@@ -286,28 +399,174 @@ class QuizReadingMixin:
 
         # Helper: Extract anchor topic noun
         def get_topic_noun(s_text: str) -> str:
+            stopwords = {
+                "this", "that", "these", "those", "their", "there", "which", "where", "about", "after",
+                "here", "very", "what", "when", "some", "more", "most", "also", "just", "such", "than",
+                "then", "from", "with", "into", "over", "under", "both", "each", "other", "have", "were",
+                "been", "would", "could", "should", "will", "shall", "does", "doing", "done", "make", "made",
+            }
+            light_nouns = {
+                "thing", "things", "way", "ways", "fact", "facts", "case", "cases",
+                "point", "points", "part", "parts", "aspect", "aspects", "degree",
+                "degrees", "level", "levels", "extent", "extents", "type", "types",
+                "kind", "kinds", "sort", "sorts", "item", "items", "matter", "matters",
+                "idea", "ideas", "sense", "senses", "view", "views", "topic", "topics",
+                "reason", "reasons", "result", "results", "term", "terms", "manner",
+                "piece", "pieces", "lot", "lots", "number", "numbers", "amount", "amounts",
+                "person", "people", "one", "ones", "something", "anything", "nothing",
+            }
+            nlp = cls.get_spacy() if hasattr(cls, "get_spacy") else None
+            if nlp:
+                try:
+                    doc = nlp(s_text)
+                    nouns = [
+                        t.text for t in doc
+                        if t.pos_ in ("NOUN", "PROPN")
+                        and t.text.lower() not in stopwords
+                        and t.text.lower() not in light_nouns
+                        and len(t.text) > 2
+                    ]
+                    if nouns:
+                        return nouns[0]
+                except Exception:
+                    pass
             matches = re.findall(r"\b[A-Z][a-z]+\b|\b[a-z]{4,}\b", s_text)
-            stopwords = {"this", "that", "these", "those", "their", "there", "which", "where", "about", "after"}
-            candidates = [m for m in matches if m.lower() not in stopwords]
-            return candidates[0] if candidates else "the topic"
+            candidates = [m for m in matches if m.lower() not in stopwords and m.lower() not in light_nouns]
+            return candidates[0] if candidates else ""
+
+        used_sections: Set[int] = set()
+        used_anchors: Set[str] = set()
+        used_distant_refs: Set[str] = set()
+
+        def get_sec_title(sec_idx: int) -> str:
+            for s in graph.sections:
+                if s.section_index == sec_idx:
+                    return s.title
+            return f"Paragraph {sec_idx}"
+
+        def pick_anchor(
+            candidates: List[Tuple[int, str, str]],
+            fallback_pool: Optional[List[Tuple[int, str, str]]] = None,
+        ) -> Tuple[int, str, str]:
+            # 1. Prefer candidate in an unused section
+            for c in candidates:
+                if c[0] not in used_sections and c[1] not in used_anchors:
+                    return c
+            # 2. Prefer unused section from fallback pool or sentence pool
+            unused_sec_indices = [s.section_index for s in graph.sections if s.section_index not in used_sections]
+            if unused_sec_indices:
+                target_sec_idx = unused_sec_indices[0]
+                sec_sentences = [
+                    s for s in (fallback_pool or graph.sentence_pool)
+                    if s[0] == target_sec_idx and s[1] not in used_anchors
+                ]
+                if sec_sentences:
+                    return sec_sentences[0]
+            # 3. Candidate not in used anchors
+            for c in candidates:
+                if c[1] not in used_anchors:
+                    return c
+            # 4. Any sentence not in used anchors
+            for s in (fallback_pool or graph.sentence_pool):
+                if s[1] not in used_anchors:
+                    return s
+            return graph.sentence_pool[0]
+
+        def get_distant_ref(target_sec_idx: int) -> Tuple[str, str]:
+            # 1. Prefer sentences in a different section, not used as anchor, not yet used as distant ref, with reasonable length (>= 6 words)
+            cands = [
+                s for s in graph.sentence_pool
+                if s[0] != target_sec_idx and s[1] not in used_anchors and s[1] not in used_distant_refs and len(s[2].split()) >= 6
+            ]
+            if not cands:
+                cands = [
+                    s for s in graph.sentence_pool
+                    if s[0] != target_sec_idx and s[1] not in used_anchors and s[1] not in used_distant_refs
+                ]
+            if not cands:
+                cands = [
+                    s for s in graph.sentence_pool
+                    if s[0] != target_sec_idx and s[1] not in used_distant_refs
+                ]
+            if not cands:
+                cands = [s for s in graph.sentence_pool if s[0] != target_sec_idx]
+
+            chosen = cands[0] if cands else (graph.sentence_pool[0] if graph.sentence_pool else (1, "S-1", ""))
+            used_distant_refs.add(chosen[1])
+            return chosen[1], chosen[2]
 
         # -------------------------------------------------------------
-        # ITEM 1: MACRO_GIST (Global Thesis)
+        # Extract title from frontmatter (prefer text_title, title, unit_title, or top heading)
         # -------------------------------------------------------------
+        passage_title = ""
+        for key in ("text_title", "title", "unit_title"):
+            m = re.search(rf"^---\s*[\s\S]*?^{key}:\s*[\"']?([^\"'\n]+)[\"']?", text, re.M)
+            if m:
+                passage_title = m.group(1).strip()
+                break
+        if not passage_title:
+            b_match = re.search(r"^\*\*([^*\n]+)\*\*", text, re.M)
+            passage_title = b_match.group(1).strip() if b_match else "the passage"
+
+        # -------------------------------------------------------------
+        # ITEM 1: MACRO_GIST (Global Thesis with Dual-Pole RST Grounding)
+        # -------------------------------------------------------------
+        # Pole 1: Introductory Thesis Nucleus (Paragraph 1)
         gist_candidates = [s for s in graph.sentence_pool if s[0] == 1]
-        gist_anchor = gist_candidates[0] if gist_candidates else graph.sentence_pool[0]
-        if len(gist_candidates) > 1 and len(gist_candidates[1][2]) > len(gist_anchor[2]):
-            gist_anchor = gist_candidates[1]
+        gist_anchor = None
+        thesis_marker_pattern = r"\b(yet|however|nevertheless|nonetheless|but|instead|true|essential|crucial|real|underlying|meaning)\b"
+        for s in gist_candidates:
+            if re.search(thesis_marker_pattern, s[2], re.IGNORECASE):
+                gist_anchor = s
+                break
+        if not gist_anchor:
+            # Standard expository thesis convention: closing sentence of introductory paragraph
+            gist_anchor = gist_candidates[-1] if gist_candidates else (graph.sentence_pool[0] if graph.sentence_pool else (1, "S-1", "Passage thesis"))
 
-        distant_candidates = [s for s in graph.sentence_pool if s[0] > 1]
-        distant_ref_1 = distant_candidates[len(distant_candidates) // 2][1] if distant_candidates else "S-last"
+        # Pole 2: Concluding Resolution Nucleus (Final Section)
+        concl_anchor = None
+        last_sec_idx = graph.sections[-1].section_index if graph.sections else 1
+        if last_sec_idx > 1:
+            concl_cands = [
+                s for s in graph.sentence_pool
+                if s[0] == last_sec_idx
+                and not re.match(r"^\(?(?:Posted|Written|By|Date)\b", s[2], re.I)
+                and len(s[2].split()) >= 4
+            ]
+            if not concl_cands and len(graph.sections) > 1:
+                penult_idx = graph.sections[-2].section_index
+                concl_cands = [s for s in graph.sentence_pool if s[0] == penult_idx and len(s[2].split()) >= 4]
+
+            res_marker_pattern = r"\b(ultimately|finally|decision|choice|conclude|conclusion|future|growth|therefore|thus|resolution|build|learn|live|world|change|hope|forward)\b"
+            for s in concl_cands:
+                if re.search(res_marker_pattern, s[2], re.IGNORECASE):
+                    concl_anchor = s
+                    break
+            if not concl_anchor and concl_cands:
+                concl_anchor = concl_cands[-1]
+
+        used_sections.add(gist_anchor[0])
+        used_anchors.add(gist_anchor[1])
+        if concl_anchor:
+            used_anchors.add(concl_anchor[1])
+        ref_id_1, ref_text_1 = get_distant_ref(gist_anchor[0])
+        sec_title_1 = get_sec_title(gist_anchor[0])
 
         if is_foundational:
             gist_stem = "What is the main idea of this passage?"
-            gist_para_target = (
-                f"State the main point of anchor [{gist_anchor[1]}]: '{gist_anchor[2]}' "
-                "in simple, clear words (5 to 10 words). Keep key topic words; do NOT copy 3 consecutive words."
-            )
+            if concl_anchor and concl_anchor[1] != gist_anchor[1]:
+                gist_para_target = (
+                    f"State the overarching main idea of the entire passage, connecting the opening point in [{gist_anchor[1]}]: '{gist_anchor[2]}' "
+                    f"with the concluding resolution in [{concl_anchor[1]}]: '{concl_anchor[2]}'. "
+                    f"The correct option MUST align with the overarching topic of the passage title '{passage_title}' "
+                    "in simple, clear words (5 to 10 words). Keep key topic words; do NOT copy 3 consecutive words. Must capture the overall thesis, not an isolated opening hook."
+                )
+            else:
+                gist_para_target = (
+                    f"State the overarching main idea of the entire passage, guided by [{gist_anchor[1]}]: '{gist_anchor[2]}'. "
+                    f"The correct option MUST align with the overarching topic of the passage title '{passage_title}' "
+                    "in simple, clear words (5 to 10 words). Keep key topic words; do NOT copy 3 consecutive words. Must capture the overall thesis, not an isolated opening hook."
+                )
             gist_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.EXTREME_WORD,
@@ -321,17 +580,27 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Mention a true small detail from sentence [{distant_ref_1}] instead of the main idea.",
-                    source_reference=distant_ref_1,
+                    blueprint_instruction=f"Mention a true small detail from sentence [{ref_id_1}] instead of the main idea.",
+                    source_reference=ref_id_1,
+                    source_text=ref_text_1,
                     target_misconception="Mistaking an accurate supporting detail for the overarching thesis.",
                 ),
             ]
         elif is_intermediate:
             gist_stem = "Which of the following best describes the main idea of this passage?"
-            gist_para_target = (
-                f"Paraphrase the overarching thesis from [{gist_anchor[1]}]: '{gist_anchor[2]}' "
-                "using standard vocabulary (8 to 14 words, zero 3-gram verbatim copying)."
-            )
+            if concl_anchor and concl_anchor[1] != gist_anchor[1]:
+                gist_para_target = (
+                    f"Synthesize the overarching thesis of the ENTIRE passage by linking the introductory proposition in [{gist_anchor[1]}]: '{gist_anchor[2]}' "
+                    f"with the concluding resolution in [{concl_anchor[1]}]: '{concl_anchor[2]}'. "
+                    f"The correct key MUST directly govern the thematic domain defined by the passage title '{passage_title}' "
+                    "using standard vocabulary (8 to 14 words, zero 3-gram verbatim copying). Must capture the comprehensive central takeaway across the whole article, strictly avoiding opening anecdotes or local paragraph details."
+                )
+            else:
+                gist_para_target = (
+                    f"Synthesize the overarching thesis of the ENTIRE passage (centering on [{gist_anchor[1]}]: '{gist_anchor[2]}'). "
+                    f"The correct key MUST directly govern the thematic domain defined by the passage title '{passage_title}' "
+                    "using standard vocabulary (8 to 14 words, zero 3-gram verbatim copying). Must capture the comprehensive central takeaway across the whole article, strictly avoiding opening anecdotes or local paragraph details."
+                )
             gist_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.EXTREME_WORD,
@@ -345,22 +614,33 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Draw an authentic factual claim from sentence [{distant_ref_1}] that is accurate but merely a local detail.",
-                    source_reference=distant_ref_1,
+                    blueprint_instruction=f"Draw an authentic factual claim from sentence [{ref_id_1}] that is accurate but merely a local detail.",
+                    source_reference=ref_id_1,
+                    source_text=ref_text_1,
                     target_misconception="Mistaking an accurate supporting detail for the overarching thesis.",
                 ),
             ]
         else:
             gist_stem = "Which statement best encapsulates the author's primary thesis in this passage?"
-            gist_para_target = (
-                f"Reformulate the macro-level thesis established in [{gist_anchor[1]}]: '{gist_anchor[2]}' "
-                "using academic abstraction (10 to 16 words, zero 3-gram verbatim copying)."
-            )
+            if concl_anchor and concl_anchor[1] != gist_anchor[1]:
+                gist_para_target = (
+                    f"Synthesize the macro-level thesis of the ENTIRE passage by bridging the initial problem/proposition in [{gist_anchor[1]}]: '{gist_anchor[2]}' "
+                    f"with the final resolution in [{concl_anchor[1]}]: '{concl_anchor[2]}'. "
+                    f"The correct key MUST govern the holistic thematic domain defined by the passage title '{passage_title}' "
+                    "using academic abstraction (10 to 16 words, zero 3-gram verbatim copying). Formulate the core systemic argument of the whole article rather than an isolated premise."
+                )
+            else:
+                gist_para_target = (
+                    f"Synthesize the macro-level thesis of the ENTIRE passage (anchored in [{gist_anchor[1]}]: '{gist_anchor[2]}'). "
+                    f"The correct key MUST govern the holistic thematic domain defined by the passage title '{passage_title}' "
+                    "using academic abstraction (10 to 16 words, zero 3-gram verbatim copying). Formulate the core systemic argument of the whole article rather than an isolated premise."
+                )
             gist_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Extract a verified factual assertion from sentence [{distant_ref_1}] that functions as a localized supporting argument rather than the macro-thesis.",
-                    source_reference=distant_ref_1,
+                    blueprint_instruction=f"Extract a verified factual assertion from sentence [{ref_id_1}] that functions as a localized supporting argument rather than the macro-thesis.",
+                    source_reference=ref_id_1,
+                    source_text=ref_text_1,
                     target_misconception="Mistaking an accurate supporting detail for the overarching thesis.",
                 ),
                 ReadingDistractorSpec(
@@ -387,22 +667,26 @@ class QuizReadingMixin:
                 distractors=gist_distractors,
                 tier=tier,
                 passage_words=passage_words,
+                section_title=sec_title_1,
             )
         )
 
         # -------------------------------------------------------------
         # ITEM 2: CAUSAL_CHAIN (Cause & Effect)
         # -------------------------------------------------------------
-        if graph.causal_chains:
-            causal_anchor = graph.causal_chains[0]
-        else:
-            causal_candidates = [s for s in graph.sentence_pool if s[0] > 1]
-            causal_anchor = causal_candidates[0] if causal_candidates else graph.sentence_pool[-1]
-
-        distant_ref_2 = distant_candidates[-1][1] if distant_candidates else "S-1"
+        causal_anchor = pick_anchor(graph.causal_chains, fallback_pool=[s for s in graph.sentence_pool if s[0] > 1])
+        used_sections.add(causal_anchor[0])
+        used_anchors.add(causal_anchor[1])
+        ref_id_2, ref_text_2 = get_distant_ref(causal_anchor[0])
+        c_title = get_sec_title(causal_anchor[0])
+        has_custom_c = not bool(re.match(r"^Paragraph\s+\d+$", c_title, re.IGNORECASE))
 
         if is_foundational:
-            causal_stem = f"According to Paragraph {causal_anchor[0]}, what was the main reason or result mentioned?"
+            causal_stem = (
+                f'In the "{c_title}" section, what was the main reason or result mentioned?'
+                if has_custom_c
+                else f"According to Paragraph {causal_anchor[0]}, what was the main reason or result mentioned?"
+            )
             causal_para_target = (
                 f"Simply explain the reason or result stated in anchor [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(5 to 10 words, zero 3-gram verbatim copying)."
@@ -420,13 +704,18 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Include a true fact from sentence [{distant_ref_2}] that does not explain this cause.",
-                    source_reference=distant_ref_2,
+                    blueprint_instruction=f"Include a true fact from sentence [{ref_id_2}] that does not explain this cause.",
+                    source_reference=ref_id_2,
+                    source_text=ref_text_2,
                     target_misconception="Selecting a true statement that does not address the question asked in the stem.",
                 ),
             ]
         elif is_intermediate:
-            causal_stem = f"Based on Paragraph {causal_anchor[0]}, what is the primary consequence or cause discussed?"
+            causal_stem = (
+                f'Based on the "{c_title}" section, what is the primary consequence or cause discussed?'
+                if has_custom_c
+                else f"Based on Paragraph {causal_anchor[0]}, what is the primary consequence or cause discussed?"
+            )
             causal_para_target = (
                 f"Accurately paraphrase the cause-and-effect relationship in [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -444,13 +733,18 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Introduce a true statement from sentence [{distant_ref_2}] that is irrelevant to the causal chain.",
-                    source_reference=distant_ref_2,
+                    blueprint_instruction=f"Introduce a true statement from sentence [{ref_id_2}] that is irrelevant to the causal chain.",
+                    source_reference=ref_id_2,
+                    source_text=ref_text_2,
                     target_misconception="Selecting a true statement that does not address the question asked in the stem.",
                 ),
             ]
         else:
-            causal_stem = f"According to Paragraph {causal_anchor[0]}, what causal mechanism is directly responsible for the observed development?"
+            causal_stem = (
+                f'In the "{c_title}" section, what causal mechanism is directly responsible for the observed development?'
+                if has_custom_c
+                else f"According to Paragraph {causal_anchor[0]}, what causal mechanism is directly responsible for the observed development?"
+            )
             causal_para_target = (
                 f"Reformulate the precise cause-and-effect chain in [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -468,8 +762,9 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Incorporate a verified factual statement from sentence [{distant_ref_2}] that answers a different question.",
-                    source_reference=distant_ref_2,
+                    blueprint_instruction=f"Incorporate a verified factual statement from sentence [{ref_id_2}] that answers a different question.",
+                    source_reference=ref_id_2,
+                    source_text=ref_text_2,
                     target_misconception="Selecting a true statement that does not address the question asked in the stem.",
                 ),
             ]
@@ -486,97 +781,204 @@ class QuizReadingMixin:
                 distractors=causal_distractors,
                 tier=tier,
                 passage_words=passage_words,
+                section_title=c_title,
             )
         )
 
         # -------------------------------------------------------------
-        # ITEM 3: RHETORICAL_CONTRAST (Contrast / Concession)
+        # ITEM 3: RHETORICAL_CONTRAST (Contrast / Concession) or FACTUAL_MECHANISM Fallback
         # -------------------------------------------------------------
-        if graph.contrast_spans:
-            contrast_anchor = graph.contrast_spans[0]
-        else:
-            middle_paras = [s for s in graph.sentence_pool if s[0] > 1 and s[1] != causal_anchor[1]]
-            contrast_anchor = middle_paras[len(middle_paras) // 2] if middle_paras else graph.sentence_pool[0]
+        contrast_anchor = pick_anchor(graph.contrast_spans, fallback_pool=[s for s in graph.sentence_pool if s[1] not in used_anchors])
+        used_sections.add(contrast_anchor[0])
+        used_anchors.add(contrast_anchor[1])
+        ref_id_3, ref_text_3 = get_distant_ref(contrast_anchor[0])
+        cnt_title = get_sec_title(contrast_anchor[0])
+        has_custom_cnt = not bool(re.match(r"^Paragraph\s+\d+$", cnt_title, re.IGNORECASE))
+        is_genuine_contrast = any(contrast_anchor[1] == s[1] for s in graph.contrast_spans)
 
-        distant_ref_3 = graph.sentence_pool[0][1]
-
-        if is_foundational:
-            contrast_stem = f"In Paragraph {contrast_anchor[0]}, what difference or contrast is pointed out?"
-            contrast_para_target = (
-                f"Express the difference or comparison in anchor [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
-                "in simple words (5 to 10 words, zero 3-gram verbatim copying)."
-            )
-            contrast_distractors = [
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.OPPOSITE_FACT,
-                    blueprint_instruction="Reverse the contrast: say the two things are identical or emphasize the wrong side.",
-                    target_misconception="Ignoring the contrastive qualification and reversing authorial emphasis.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.EXTREME_WORD,
-                    blueprint_instruction="Use 'every single' or 'all' to turn the comparison into an absolute claim.",
-                    target_misconception="Confusing a mild contrast with an absolute extreme.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Borrow familiar wording from sentence [{distant_ref_3}] from Paragraph 1.",
-                    source_reference=distant_ref_3,
-                    target_misconception="Recognizing familiar vocabulary from another part of the text.",
-                ),
-            ]
-        elif is_intermediate:
-            contrast_stem = f"In Paragraph {contrast_anchor[0]}, what contrast does the author draw?"
-            contrast_para_target = (
-                f"Paraphrase the contrastive or concessive relationship established in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
-                "(8 to 14 words, zero 3-gram verbatim copying)."
-            )
-            contrast_distractors = [
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.POLARITY_INVERSION,
-                    blueprint_instruction="Misidentify which element the author favors or emphasizes across the contrastive marker.",
-                    target_misconception="Reversing the communicative weight across a concessive or contrastive junction.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.EXTREME_WORD,
-                    blueprint_instruction="Exaggerate the distinction into an irreconcilable or complete opposition.",
-                    target_misconception="Amplifying a nuanced comparative difference into total incompatibility.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Introduce an authentic fact from sentence [{distant_ref_3}] that plays no part in this comparison.",
-                    source_reference=distant_ref_3,
-                    target_misconception="Recognizing familiar vocabulary from another part of the text.",
-                ),
-            ]
+        if not is_genuine_contrast:
+            item3_skill = DiscourseRelationType.FACTUAL_MECHANISM
+            if is_foundational:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, what action or detail is described?'
+                    if has_custom_cnt
+                    else f"In Paragraph {contrast_anchor[0]}, what action or detail is described?"
+                )
+                contrast_para_target = (
+                    f"Express the action or detail in anchor [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "in simple words (5 to 10 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.OPPOSITE_FACT,
+                        blueprint_instruction="State the opposite of what the author describes using simple words.",
+                        target_misconception="Reversing the factual detail or action described in the text.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.EXTREME_WORD,
+                        blueprint_instruction="Use 'every single' or 'all' to turn the detail into an absolute rule.",
+                        target_misconception="Overgeneralizing a specific factual detail into an absolute requirement.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Borrow familiar wording from sentence [{ref_id_3}] from another paragraph.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Recognizing familiar vocabulary from another part of the text.",
+                    ),
+                ]
+            elif is_intermediate:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, what specific practice or detail is highlighted?'
+                    if has_custom_cnt
+                    else f"In Paragraph {contrast_anchor[0]}, what specific practice or detail is highlighted?"
+                )
+                contrast_para_target = (
+                    f"Paraphrase the practice or detail described in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "(8 to 14 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.POLARITY_INVERSION,
+                        blueprint_instruction="Invert the specific detail or claim stated in the text.",
+                        target_misconception="Inverting a key factual attribute stated in the text.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.EXTREME_WORD,
+                        blueprint_instruction="Exaggerate the detail into a universal obligation or absolute condition.",
+                        target_misconception="Unwarranted generalization from a specific case.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Introduce an authentic fact from sentence [{ref_id_3}] that plays no part in this section.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Recognizing familiar vocabulary from another part of the text.",
+                    ),
+                ]
+            else:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, what procedure or mechanism is detailed?'
+                    if has_custom_cnt
+                    else f"According to Paragraph {contrast_anchor[0]}, what procedure or mechanism is detailed?"
+                )
+                contrast_para_target = (
+                    f"Reformulate the procedure or mechanism in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "(10 to 16 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.POLARITY_INVERSION,
+                        blueprint_instruction="Invert the specific technical condition or constraint described in the text.",
+                        target_misconception="Inverting the operational polarity of the factual constraint.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.EXTREME_WORD,
+                        blueprint_instruction="Assert that this operational detail is an unavoidable absolute.",
+                        target_misconception="Sensationalizing a routine operational detail.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Extract an accurate detail from sentence [{ref_id_3}] located in an entirely different paragraph.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Selecting a true factoid that pertains to a different paragraph.",
+                    ),
+                ]
         else:
-            contrast_stem = f"In Paragraph {contrast_anchor[0]}, how does the author qualify or contrast the preceding assertion?"
-            contrast_para_target = (
-                f"Synthesize the concession/contrast in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
-                "(10 to 16 words, zero 3-gram verbatim copying)."
-            )
-            contrast_distractors = [
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.POLARITY_INVERSION,
-                    blueprint_instruction="Assert that the author dismisses or invalidates the contrasted premise rather than qualifying it.",
-                    target_misconception="Misinterpreting a concessive hedge as an outright refutation.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.MODALITY_ESCALATION,
-                    blueprint_instruction="Escalate the contrast into an absolute incompatibility (e.g. 'fundamentally precludes', 'strictly incompatible').",
-                    target_misconception="Amplifying a nuanced comparative difference into total incompatibility.",
-                ),
-                ReadingDistractorSpec(
-                    operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Incorporate a verified factual claim from sentence [{distant_ref_3}] outside this rhetorical boundary.",
-                    source_reference=distant_ref_3,
-                    target_misconception="Recognizing familiar vocabulary from another part of the text.",
-                ),
-            ]
+            item3_skill = DiscourseRelationType.RHETORICAL_CONTRAST
+            if is_foundational:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, what difference or contrast is pointed out?'
+                    if has_custom_cnt
+                    else f"In Paragraph {contrast_anchor[0]}, what difference or contrast is pointed out?"
+                )
+                contrast_para_target = (
+                    f"Express the difference or comparison in anchor [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "in simple words (5 to 10 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.OPPOSITE_FACT,
+                        blueprint_instruction="Reverse the contrast: say the two things are identical or emphasize the wrong side.",
+                        target_misconception="Ignoring the contrastive qualification and reversing authorial emphasis.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.EXTREME_WORD,
+                        blueprint_instruction="Use 'every single' or 'all' to turn the comparison into an absolute claim.",
+                        target_misconception="Confusing a mild contrast with an absolute extreme.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Borrow familiar wording from sentence [{ref_id_3}] from Paragraph 1.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Recognizing familiar vocabulary from another part of the text.",
+                    ),
+                ]
+            elif is_intermediate:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, what contrast does the author draw?'
+                    if has_custom_cnt
+                    else f"In Paragraph {contrast_anchor[0]}, what contrast does the author draw?"
+                )
+                contrast_para_target = (
+                    f"Paraphrase the contrastive or concessive relationship established in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "(8 to 14 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.POLARITY_INVERSION,
+                        blueprint_instruction="Misidentify which element the author favors or emphasizes across the contrastive marker.",
+                        target_misconception="Reversing the communicative weight across a concessive or contrastive junction.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.EXTREME_WORD,
+                        blueprint_instruction="Exaggerate the distinction into an irreconcilable or complete opposition.",
+                        target_misconception="Amplifying a nuanced comparative difference into total incompatibility.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Introduce an authentic fact from sentence [{ref_id_3}] that plays no part in this comparison.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Recognizing familiar vocabulary from another part of the text.",
+                    ),
+                ]
+            else:
+                contrast_stem = (
+                    f'In the "{cnt_title}" section, how does the author qualify or contrast the preceding assertion?'
+                    if has_custom_cnt
+                    else f"In Paragraph {contrast_anchor[0]}, how does the author qualify or contrast the preceding assertion?"
+                )
+                contrast_para_target = (
+                    f"Synthesize the concession/contrast in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
+                    "(10 to 16 words, zero 3-gram verbatim copying)."
+                )
+                contrast_distractors = [
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.POLARITY_INVERSION,
+                        blueprint_instruction="Assert that the author dismisses or invalidates the contrasted premise rather than qualifying it.",
+                        target_misconception="Misinterpreting a concessive hedge as an outright refutation.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.MODALITY_ESCALATION,
+                        blueprint_instruction="Escalate the contrast into an absolute incompatibility (e.g. 'fundamentally precludes', 'strictly incompatible').",
+                        target_misconception="Amplifying a nuanced comparative difference into total incompatibility.",
+                    ),
+                    ReadingDistractorSpec(
+                        operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
+                        blueprint_instruction=f"Incorporate a verified factual claim from sentence [{ref_id_3}] outside this rhetorical boundary.",
+                        source_reference=ref_id_3,
+                        source_text=ref_text_3,
+                        target_misconception="Recognizing familiar vocabulary from another part of the text.",
+                    ),
+                ]
 
         blueprints.append(
             ReadingItemBlueprint(
                 item_index=3,
-                skill_type=DiscourseRelationType.RHETORICAL_CONTRAST,
+                skill_type=item3_skill,
                 target_paragraph_index=contrast_anchor[0],
                 anchor_sentence_id=contrast_anchor[1],
                 anchor_sentence_text=contrast_anchor[2],
@@ -585,20 +987,28 @@ class QuizReadingMixin:
                 distractors=contrast_distractors,
                 tier=tier,
                 passage_words=passage_words,
+                section_title=cnt_title,
             )
         )
 
         # -------------------------------------------------------------
         # ITEM 4: FACTUAL_MECHANISM (Paraphrased Detail)
         # -------------------------------------------------------------
-        used_anchors = {gist_anchor[1], causal_anchor[1], contrast_anchor[1]}
-        factual_pool = [s for s in graph.sentence_pool if s[1] not in used_anchors and len(s[2]) >= 25]
-        factual_anchor = factual_pool[len(factual_pool) // 3] if factual_pool else graph.sentence_pool[1]
-
-        distant_ref_4 = graph.sentence_pool[-2][1] if len(graph.sentence_pool) >= 2 else graph.sentence_pool[0][1]
+        factual_pool = [s for s in graph.sentence_pool if s[1] not in used_anchors and len(s[2]) >= 20]
+        factual_anchor = pick_anchor([], fallback_pool=factual_pool)
+        used_sections.add(factual_anchor[0])
+        used_anchors.add(factual_anchor[1])
+        ref_id_4, ref_text_4 = get_distant_ref(factual_anchor[0])
+        f_title = get_sec_title(factual_anchor[0])
+        has_custom_f = not bool(re.match(r"^Paragraph\s+\d+$", f_title, re.IGNORECASE))
+        f_topic = get_topic_noun(factual_anchor[2])
 
         if is_foundational:
-            factual_stem = f"According to Paragraph {factual_anchor[0]}, what fact or action is mentioned?"
+            factual_stem = (
+                f'According to the "{f_title}" section, what fact or action is mentioned?'
+                if has_custom_f
+                else f"According to Paragraph {factual_anchor[0]}, what fact or action is mentioned?"
+            )
             factual_para_target = (
                 f"State the fact or action in anchor [{factual_anchor[1]}]: '{factual_anchor[2]}' "
                 "using simple words (5 to 10 words, zero 3-gram verbatim copying)."
@@ -616,13 +1026,25 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"State a true detail from sentence [{distant_ref_4}] found in another paragraph.",
-                    source_reference=distant_ref_4,
+                    blueprint_instruction=f"State a true detail from sentence [{ref_id_4}] found in another paragraph.",
+                    source_reference=ref_id_4,
+                    source_text=ref_text_4,
                     target_misconception="Selecting a true factoid that pertains to a different paragraph.",
                 ),
             ]
         elif is_intermediate:
-            factual_stem = f"According to Paragraph {factual_anchor[0]}, which of the following is true regarding {get_topic_noun(factual_anchor[2])}?"
+            if f_topic:
+                factual_stem = (
+                    f'According to the "{f_title}" section, which of the following is true regarding {f_topic}?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, which of the following is true regarding {f_topic}?"
+                )
+            else:
+                factual_stem = (
+                    f'According to the "{f_title}" section, which of the following statements is true?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, which of the following statements is true?"
+                )
             factual_para_target = (
                 f"Accurately paraphrase the concrete fact in [{factual_anchor[1]}]: '{factual_anchor[2]}' "
                 "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -640,13 +1062,25 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Introduce a verifiable fact from sentence [{distant_ref_4}] that answers a different question.",
-                    source_reference=distant_ref_4,
+                    blueprint_instruction=f"Introduce a verifiable fact from sentence [{ref_id_4}] that answers a different question.",
+                    source_reference=ref_id_4,
+                    source_text=ref_text_4,
                     target_misconception="Selecting a true factoid that pertains to a different paragraph.",
                 ),
             ]
         else:
-            factual_stem = f"According to Paragraph {factual_anchor[0]}, what specific operational condition applies to {get_topic_noun(factual_anchor[2])}?"
+            if f_topic:
+                factual_stem = (
+                    f'According to the "{f_title}" section, what specific operational condition applies to {f_topic}?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, what specific operational condition applies to {f_topic}?"
+                )
+            else:
+                factual_stem = (
+                    f'According to the "{f_title}" section, which of the following statements is true?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, which of the following statements is true?"
+                )
             factual_para_target = (
                 f"Provide a rigorous academic paraphrase of [{factual_anchor[1]}]: '{factual_anchor[2]}' "
                 "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -664,8 +1098,9 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Extract an accurate detail from sentence [{distant_ref_4}] located in an entirely different paragraph.",
-                    source_reference=distant_ref_4,
+                    blueprint_instruction=f"Extract an accurate detail from sentence [{ref_id_4}] located in an entirely different paragraph.",
+                    source_reference=ref_id_4,
+                    source_text=ref_text_4,
                     target_misconception="Selecting a true factoid that pertains to a different paragraph.",
                 ),
             ]
@@ -682,22 +1117,26 @@ class QuizReadingMixin:
                 distractors=factual_distractors,
                 tier=tier,
                 passage_words=passage_words,
+                section_title=f_title,
             )
         )
 
         # -------------------------------------------------------------
         # ITEM 5: MODALITY_HEDGING (Stance / Recommendation)
         # -------------------------------------------------------------
-        if graph.modality_spans:
-            modality_anchor = graph.modality_spans[-1]
-        else:
-            final_paras = [s for s in graph.sentence_pool if s[0] == len(graph.paragraphs)]
-            modality_anchor = final_paras[-1] if final_paras else graph.sentence_pool[-1]
-
-        distant_ref_5 = graph.sentence_pool[0][1]
+        modality_anchor = pick_anchor(graph.modality_spans, fallback_pool=[s for s in graph.sentence_pool if s[1] not in used_anchors])
+        used_sections.add(modality_anchor[0])
+        used_anchors.add(modality_anchor[1])
+        ref_id_5, ref_text_5 = get_distant_ref(modality_anchor[0])
+        m_title = get_sec_title(modality_anchor[0])
+        has_custom_m = not bool(re.match(r"^Paragraph\s+\d+$", m_title, re.IGNORECASE))
 
         if is_foundational:
-            modality_stem = f"In Paragraph {modality_anchor[0]}, what does the author suggest or recommend?"
+            modality_stem = (
+                f'In the "{m_title}" section, what does the author suggest or recommend?'
+                if has_custom_m
+                else f"In Paragraph {modality_anchor[0]}, what does the author suggest or recommend?"
+            )
             modality_para_target = (
                 f"State the author's suggestion or feeling in anchor [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "using simple words (5 to 10 words)."
@@ -715,13 +1154,18 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Include a factual detail from sentence [{distant_ref_5}] from the start of the text.",
-                    source_reference=distant_ref_5,
+                    blueprint_instruction=f"Include a factual detail from sentence [{ref_id_5}] from the start of the text.",
+                    source_reference=ref_id_5,
+                    source_text=ref_text_5,
                     target_misconception="Conflating factual context with the author's prescriptive stance.",
                 ),
             ]
         elif is_intermediate:
-            modality_stem = f"What is the author's perspective or outlook in Paragraph {modality_anchor[0]}?"
+            modality_stem = (
+                f'What is the author\'s perspective or outlook in the "{m_title}" section?'
+                if has_custom_m
+                else f"What is the author's perspective or outlook in Paragraph {modality_anchor[0]}?"
+            )
             modality_para_target = (
                 f"Paraphrase the hedged or prospective stance expressed in [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -739,13 +1183,18 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Incorporate a factual statement from sentence [{distant_ref_5}] from Paragraph 1.",
-                    source_reference=distant_ref_5,
+                    blueprint_instruction=f"Incorporate a factual statement from sentence [{ref_id_5}] from Paragraph 1.",
+                    source_reference=ref_id_5,
+                    source_text=ref_text_5,
                     target_misconception="Conflating factual context with the author's prescriptive stance.",
                 ),
             ]
         else:
-            modality_stem = f"Which statement accurately characterizes the author's epistemic stance in Paragraph {modality_anchor[0]}?"
+            modality_stem = (
+                f'Which statement accurately characterizes the author\'s epistemic stance in the "{m_title}" section?'
+                if has_custom_m
+                else f"Which statement accurately characterizes the author's epistemic stance in Paragraph {modality_anchor[0]}?"
+            )
             modality_para_target = (
                 f"Synthesize the author's hedged assessment in [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -763,8 +1212,9 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.TRUE_BUT_IRRELEVANT,
-                    blueprint_instruction=f"Extract a verified premise from sentence [{distant_ref_5}] that is descriptive rather than normative.",
-                    source_reference=distant_ref_5,
+                    blueprint_instruction=f"Extract a verified premise from sentence [{ref_id_5}] that is descriptive rather than normative.",
+                    source_reference=ref_id_5,
+                    source_text=ref_text_5,
                     target_misconception="Conflating descriptive data with normative stance.",
                 ),
             ]
@@ -781,6 +1231,7 @@ class QuizReadingMixin:
                 distractors=modality_distractors,
                 tier=tier,
                 passage_words=passage_words,
+                section_title=m_title,
             )
         )
 
@@ -788,23 +1239,35 @@ class QuizReadingMixin:
         # ITEM 6: PRAGMATIC_INFERENCE (Single-Step Logical Entailment)
         # -------------------------------------------------------------
         if count >= 6:
-            used_so_far = {b.anchor_sentence_id for b in blueprints}
-            inf_candidates = [s for s in graph.inference_spans if s[1] not in used_so_far]
-            if not inf_candidates:
-                inf_candidates = [s for s in graph.sentence_pool if s[1] not in used_so_far and len(s[2]) >= 20]
-            inf_anchor = inf_candidates[0] if inf_candidates else graph.sentence_pool[-1]
-            topic_subject = get_topic_noun(inf_anchor[2])
+            inf_anchor = pick_anchor(graph.inference_spans, fallback_pool=[s for s in graph.sentence_pool if s[1] not in used_anchors and len(s[2]) >= 20])
+            used_sections.add(inf_anchor[0])
+            used_anchors.add(inf_anchor[1])
+            ref_id_6, ref_text_6 = get_distant_ref(inf_anchor[0])
+            i_title = get_sec_title(inf_anchor[0])
+            has_custom_i = not bool(re.match(r"^Paragraph\s+\d+$", i_title, re.IGNORECASE))
+            raw_topic = get_topic_noun(inf_anchor[2])
+            if raw_topic:
+                if not raw_topic.lower().startswith(("the ", "a ", "an ", "this ", "these ")):
+                    topic_subject = f"the {raw_topic}" if not raw_topic.endswith("s") else raw_topic
+                else:
+                    topic_subject = raw_topic
+            else:
+                topic_subject = "this topic"
 
             if is_foundational:
-                inf_stem = f"In Paragraph {inf_anchor[0]}, what is suggested about {topic_subject}?"
+                inf_stem = (
+                    f'In the "{i_title}" section, what is suggested about {topic_subject}?'
+                    if has_custom_i
+                    else f"In Paragraph {inf_anchor[0]}, what is suggested about {topic_subject}?"
+                )
                 inf_para_target = (
-                    f"State the single-step logical inference implied by anchor [{inf_anchor[1]}]: '{inf_anchor[2]}' "
-                    "(5 to 10 words). Do NOT merely repeat explicit facts; state what logically follows."
+                    f"State what is implied or suggested about {topic_subject} in anchor [{inf_anchor[1]}]: '{inf_anchor[2]}' "
+                    "(5 to 10 words, zero 3-gram verbatim copying)."
                 )
                 inf_distractors = [
                     ReadingDistractorSpec(
                         operator=DistractorFallacyOperator.EXPLICIT_RESTATEMENT,
-                        blueprint_instruction="State an explicitly mentioned literal fact from the paragraph (a true fact, but an explicit restatement rather than an inference).",
+                        blueprint_instruction="State an explicitly mentioned literal procedural step or minor detail from the text (a literal fact, but not the main inferred conclusion).",
                         target_misconception="Picking an explicitly stated fact instead of an implied conclusion.",
                     ),
                     ReadingDistractorSpec(
@@ -819,7 +1282,11 @@ class QuizReadingMixin:
                     ),
                 ]
             elif is_intermediate:
-                inf_stem = f"What can be inferred from Paragraph {inf_anchor[0]} regarding {topic_subject}?"
+                inf_stem = (
+                    f'What can be inferred from the "{i_title}" section regarding {topic_subject}?'
+                    if has_custom_i
+                    else f"What can be inferred from Paragraph {inf_anchor[0]} regarding {topic_subject}?"
+                )
                 inf_para_target = (
                     f"Articulate the unstated logical deduction or prerequisite implied by [{inf_anchor[1]}]: '{inf_anchor[2]}' "
                     "(8 to 14 words). Focus on what must necessarily be true based strictly on this premise."
@@ -842,7 +1309,11 @@ class QuizReadingMixin:
                     ),
                 ]
             else:
-                inf_stem = f"What does Paragraph {inf_anchor[0]} implicitly presuppose or suggest regarding {topic_subject}?"
+                inf_stem = (
+                    f'What does the "{i_title}" section implicitly presuppose or suggest regarding {topic_subject}?'
+                    if has_custom_i
+                    else f"What does Paragraph {inf_anchor[0]} implicitly presuppose or suggest regarding {topic_subject}?"
+                )
                 inf_para_target = (
                     f"Synthesize the single-step logical entailment (P -> Q) warranted by [{inf_anchor[1]}]: '{inf_anchor[2]}' "
                     "(10 to 16 words). Formulate the latent systemic condition that must hold for the statement to be valid."
@@ -877,10 +1348,24 @@ class QuizReadingMixin:
                     distractors=inf_distractors,
                     tier=tier,
                     passage_words=passage_words,
+                    section_title=i_title,
                 )
             )
 
-        return blueprints[:count]
+        selected = blueprints[:count]
+        if not selected:
+            return selected
+
+        # Sort items: Keep MACRO_GIST at Item 1, sort paragraph-specific items chronologically by target_paragraph_index
+        macro_items = [b for b in selected if b.skill_type == DiscourseRelationType.MACRO_GIST]
+        local_items = [b for b in selected if b.skill_type != DiscourseRelationType.MACRO_GIST]
+        local_items.sort(key=lambda b: b.target_paragraph_index)
+
+        ordered = macro_items + local_items
+        for idx, item in enumerate(ordered, 1):
+            item.item_index = idx
+
+        return ordered
 
     @classmethod
     def format_reading_micro_task_blueprints(
@@ -896,20 +1381,29 @@ class QuizReadingMixin:
             task = bp.to_micro_task()
             d_lines = []
             for i, d in enumerate(task["prescribed_distractor_operators"], 1):
-                src = f" (Reference: [{d['source_reference']}])" if d.get("source_reference") and d["source_reference"] != "n/a" else ""
+                src_parts = []
+                if d.get("source_reference") and d["source_reference"] != "n/a":
+                    src_parts.append(f"[{d['source_reference']}]")
+                if d.get("source_text") and d["source_text"] != "n/a":
+                    st = d["source_text"].strip()
+                    if len(st) > 75:
+                        st = st[:72] + "..."
+                    src_parts.append(f'"{st}"')
+                src = f" (Reference: {' '.join(src_parts)})" if src_parts else ""
                 d_lines.append(f"     * Choice Trap {i} (`{d['operator']}`){src}: {d['instruction']}")
             distractor_block = "\n".join(d_lines)
+
+            sec_title = task.get("section_title", "")
+            has_custom_title = bool(sec_title and not re.match(r"^paragraph\s+\d+$", sec_title, re.IGNORECASE))
+            sec_header = f' (Section: "{sec_title}")' if has_custom_title else ""
 
             block = (
                 f"### Item {task['item_index']} Specification ###\n"
                 f"- **Discourse Skill**: `{task['skill_type']}` ({task['tier']} tier)\n"
-                f"- **Target Paragraph**: Paragraph {task['paragraph']}\n"
+                f"- **Target Paragraph**: Paragraph {task['paragraph']}{sec_header}\n"
                 f"- **Anchor Sentence [{task['anchor_id']}]**: \"{task['anchor_text']}\"\n"
                 f"- **Mandatory Question Stem**: \"{task['question_stem']}\"\n"
                 f"- **Paraphrase Target**: {task['paraphrase_target']}\n"
-                f"- **Paraphrase Style**: {task['paraphrase_style']}\n"
-                f"- **Option Length Bounds**: {task['option_length_guidance']}\n"
-                f"- **Lexical Ceiling Mandate**: {task['lexical_ceiling_instruction']}\n"
                 f"- **Prescribed Distractor Operators**:\n"
                 f"{distractor_block}"
             )

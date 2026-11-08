@@ -30,13 +30,11 @@ Create a high-quality multiple-choice vocabulary assessment from the supplied ta
    - 🚫 **NO SCAFFOLDING OR RAW BRACKET LEAKAGE**: NEVER output meta-instructions (`"Fit into frame..."`, `"Plural noun slot required..."`) or raw brackets (`[concrete physical object...]`, `[sb]`, `[sth]`, `[verb]`) into the question stem.
    - 🎯 **Declared Inflection Is Binding**: For verb targets, the prescribed options are already cast in a specific inflectional form (e.g. past tense, `-s` form, past participle, or base form), and the stem syntax must grammatically require that exact form.
 
-4. **Explanations & Design Audit**:
+4. **Pedagogical Explanations**:
    - `explanation`: Provide concise, objective pedagogical explanations stating why the correct target fits the sentence context, and explicitly distinguishing why each of the other 3 options is disqualified (syntactic clash, preposition mismatch, or semantic contradiction). Quote the exact words of the options.
    - 🚫 **NO SELF-TALK OR DRAFT REVISIONS IN EXPLANATIONS**: Write the final `explanation` directly in an authoritative, third-person instructional voice. NEVER include internal reasoning, self-corrections, or draft notes (such as `"Wait, ..."`, `"The stem I wrote..."`, `"Let's adjust..."`, or `"Revised Stem:"`) inside `explanation`.
    - 🔒 **NO DISTRACTOR SELF-DEFINITION**: Never justify an option by simply stating what that option itself means. Each disqualification must be a contrast with the target's locked sense — what the target means in this sentence that the option cannot mean. Do not restate the blueprint's `Semantic Discriminator` wording as the reason.
    - `definition`: State the contextual dictionary meaning of the target word.
-   - `design_audit`: Provide a compact audit tag chain (under 15 words) showing the exact blanked frame used in your question stem:
-     `AUDIT: [Target Word] -> [Part of Speech] -> [Exact Blanked Frame in Stem, e.g. 'repay a ____' or '____ in']`
 
 CONTENT:
 {vocabulary_content}

@@ -36,10 +36,7 @@ Generate a realistic everyday or academic spoken dialogue and a rigorous compreh
      * **Correct Answer (`options[correct_answer_index]`)**: Place the true answer at the exact `Prescribed Correct Answer Index`, paraphrasing the target exchange naturally—NEVER copy 5+ consecutive words verbatim from a dialogue turn.
      * **3 Plausible Distractors**: Fill the other 3 option slots with realistic false choices grounded in your dialogue using the item's suggested `Distractor Traps` (e.g., swapping speaker roles, flipping a condition/polarity, or mixing in a detail from another turn). Ensure no distractor is accidentally true.
 
-3. **Design Audit & Explanation**:
-   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
-     `AUDIT: [Speaker & Turn #] -> [Category] -> [Key Traps]`
-     (e.g. `AUDIT: [{speaker_1_name}, Turn 3] -> [Detail] -> [Polarity Flip + Role Swap]`). DO NOT write paragraphs or quote dialogue here.
+3. **Explanation & Option Alignment**:
    - `explanation`: Explain why the correct option (`Option A`/`B`/`C`/`D` matching `Prescribed Correct Answer Index`) is supported by what `{speaker_1_name}` or `{speaker_2_name}` said, and contrastively explain why each of the other 3 options (referred to as `Option A`, `Option B`, `Option C`, `Option D` — NEVER `"Option 0"` or `"Option 1"`) is false.
    - `correct_answer_index`: MUST equal the exact integer (`0`, `1`, `2`, or `3`) specified by `Prescribed Correct Answer Index` in that question's blueprint.
    - Do NOT wrap question or option text in quotes or labels (`A.`, `B)`).

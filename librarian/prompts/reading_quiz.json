@@ -5,62 +5,12 @@
       "type": "string",
       "minLength": 1
     },
-    "vocabulary": {
-      "type": "array",
-      "minItems": 5,
-      "maxItems": 8,
-      "items": {
-        "type": "object",
-        "properties": {
-          "word": {
-            "type": "string",
-            "minLength": 1
-          },
-          "context_sentence": {
-            "type": "string",
-            "minLength": 1
-          },
-          "part_of_speech": {
-            "type": "string",
-            "enum": [
-              "noun",
-              "verb",
-              "adjective",
-              "adverb",
-              "preposition",
-              "conjunction",
-              "interjection"
-            ]
-          },
-          "definition": {
-            "type": "string",
-            "minLength": 1
-          },
-          "example_usage": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "word",
-          "context_sentence",
-          "part_of_speech",
-          "definition",
-          "example_usage"
-        ],
-        "additionalProperties": false
-      }
-    },
     "questions": {
       "type": "array",
       "maxItems": "{count}",
       "items": {
         "type": "object",
         "properties": {
-          "design_audit": {
-            "type": "string",
-            "minLength": 1
-          },
           "question": {
             "type": "string",
             "minLength": 1
@@ -98,7 +48,6 @@
           }
         },
         "required": [
-          "design_audit",
           "question",
           "options",
           "correct_answer_index",
@@ -111,7 +60,6 @@
   },
   "required": [
     "title",
-    "vocabulary",
     "questions"
   ],
   "additionalProperties": false

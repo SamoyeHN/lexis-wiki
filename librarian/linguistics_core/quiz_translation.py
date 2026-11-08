@@ -646,7 +646,11 @@ class QuizTranslationMixin:
                 "zh_cue": "让/使某人做……",
             }
         if (
-            any(k in header_low for k in ("inversion", "negative adv", "seldom", "rarely", "never", "little", "only when", "only by", "only after"))
+            (
+                any(k in header_low for k in ("inversion", "negative adv", "seldom", "rarely", "little", "only when", "only by", "only after"))
+                or bool(re.search(r"\bnever\b", header_low))
+            )
+            and "nevertheless" not in header_low
             or ("not only" in header_low and "correlative" not in header_low and "aux" in form_low)
         ):
             return {

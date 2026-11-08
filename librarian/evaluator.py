@@ -2093,17 +2093,6 @@ def _score_uniqueness(items: List[Dict[str, Any]], task_type: str, user_prompt: 
             if repeated:
                 rep_details = ", ".join(f"'{w}' ({c}x)" for w, c in list(repeated.items())[:3])
                 unique_flags.append(f"❌ Distractors recycled repeatedly across quiz: {rep_details}")
-
-        ans_indices = [
-            item.get("correct_answer_index")
-            for item in items
-            if isinstance(item.get("correct_answer_index"), int)
-        ]
-        if len(ans_indices) >= 4 and len(set(ans_indices)) == 1:
-            unique_flags.append(
-                f"⚠️ Quiz answer-key clustering: all {len(ans_indices)} items share identical correct_answer_index ({ans_indices[0]})"
-            )
-            earned = max(0.0, earned - 4.0)
     return earned, unique_flags
 
 

@@ -648,6 +648,42 @@ class TestIntegrityGate(unittest.TestCase):
         self.assertTrue(any("duplicate" in d for d in defects))
         self.assertTrue(any("timestamp" in d for d in defects))
 
+    def test_video_quiz_schema_pruned_and_deterministic_hydration(self):
+        from librarian.schemas import get_json_schema, VideoQuiz
+        from librarian.processor import WikiProcessor
+        import json
+
+        # 1. Schema exclusion verification: VideoQuizQuestion.design_audit must not leak to LLM schema
+        schema = get_json_schema(VideoQuiz)
+        q_props = schema["properties"]["questions"]["items"]["properties"]
+        q_req = schema["properties"]["questions"]["items"]["required"]
+        self.assertNotIn("design_audit", q_props)
+        self.assertNotIn("design_audit", q_req)
+
+        with open("librarian/prompts/video_quiz.json", "r", encoding="utf-8") as f:
+            file_schema = json.load(f)
+        file_q_props = file_schema["properties"]["questions"]["items"]["properties"]
+        file_q_req = file_schema["properties"]["questions"]["items"]["required"]
+        self.assertNotIn("design_audit", file_q_props)
+        self.assertNotIn("design_audit", file_q_req)
+
+        # 2. Deterministic hydration: Ensure design_audit is hydrated in Python (<0.01ms, 0 tokens)
+        mock_quiz = {
+            "questions": [
+                {
+                    "question": "What is the primary function of the floodgates?",
+                    "options": ["Water regulation", "Sediment trapping", "Fish breeding", "Power generation"],
+                    "correct_answer_index": 0,
+                    "timestamp": "[02:45]",
+                    "explanation": "At [02:45], the narrator explains water regulation is the floodgates primary role."
+                }
+            ]
+        }
+        hydrated = WikiProcessor.hydrate_video_blueprint_items(mock_quiz)
+        audit_val = hydrated["questions"][0].get("design_audit", "")
+        self.assertTrue(audit_val.startswith("AUDIT: [[02:45]]"))
+        self.assertIn("[Comprehension]", audit_val)
+
     def test_video_expert_auditor_template_selection(self):
         from librarian.expert_auditor import ExpertAuditor
         from unittest.mock import patch

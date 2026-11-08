@@ -323,6 +323,72 @@ class TestListeningScenariosQuality(unittest.TestCase):
         self.assertEqual(bp2.get("scenario_id"), "arch_01_b1p_form_sc01")
         self.assertEqual(bp2.get("cefr_band"), "B1_C2")
 
+    def test_07_pruned_schema_and_deterministic_audit_hydration(self) -> None:
+        """Verifies design_audit is pruned from schema and deterministically hydrated in code."""
+        from librarian.processor import WikiProcessor
+
+        schema_path = PROJECT_ROOT / "librarian" / "prompts" / "listening_quiz.json"
+        schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
+        item_schema = schema_data["properties"]["questions"]["items"]
+        expected_keys = {
+            "question",
+            "options",
+            "correct_answer_index",
+            "category",
+            "explanation",
+        }
+        self.assertEqual(set(item_schema["required"]), expected_keys)
+        self.assertEqual(set(item_schema["properties"].keys()), expected_keys)
+
+        raw_llm_quiz = {
+            "title": "Campus Arrangement Dialogue",
+            "topic": "Rescheduling study session",
+            "speaker_1": "Aria",
+            "speaker_2": "Ryan",
+            "script": [
+                {"speaker": "Aria", "text": "Are you free this Friday afternoon?"},
+                {"speaker": "Ryan", "text": "I'm tied up until 4 PM, but open after that."},
+            ],
+            "questions": [
+                {
+                    "question": "What is Ryan's availability on Friday afternoon?",
+                    "options": [
+                        "He is unavailable the entire afternoon.",
+                        "He is free after 4 PM.",
+                        "He prefers to meet on Saturday.",
+                        "He cannot make it at all.",
+                    ],
+                    "correct_answer_index": 1,
+                    "category": "Detail",
+                    "explanation": "Option B is correct because Ryan explicitly says he is open after 4 PM.",
+                }
+            ],
+        }
+        blueprints = [
+            {
+                "item_index": 1,
+                "anchor_turn": "Turn 2",
+                "primary_turn": 2,
+                "target_speaker": "Ryan",
+                "target_skill": "Detail",
+                "correct_answer_index": 1,
+                "slot_operators": {
+                    0: "Polarity Flip",
+                    1: "Paraphrase Operator (Correct Answer)",
+                    2: "Day Swap",
+                    3: "Condition Flip",
+                },
+            }
+        ]
+
+        hydrated = WikiProcessor.hydrate_listening_blueprint_items(
+            raw_llm_quiz, blueprints, speaker_1_name="Aria", speaker_2_name="Ryan"
+        )
+        q0 = hydrated["questions"][0]
+        self.assertTrue(q0.get("design_audit", "").startswith("AUDIT:"))
+        self.assertIn("Ryan, Turn 2", q0["design_audit"])
+        self.assertIn("Detail", q0["design_audit"])
+
 
 
 def _build_listening_generation_prompt(sc: Dict[str, Any], bp: Dict[str, Any]) -> str:

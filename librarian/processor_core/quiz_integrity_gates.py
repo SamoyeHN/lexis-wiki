@@ -348,6 +348,12 @@ class QuizIntegrityGatesMixin:
         defect_messages = []
         passage_norm = re.sub(r'\s+', ' ', passage_text.lower()) if passage_text else ""
         clean_passage_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", passage_text.lower())) if passage_text else set()
+        if passage_text:
+            try:
+                nlp = LinguisticEngine.get_spacy()
+                clean_passage_words |= {t.lemma_.lower() for t in nlp(passage_text) if t.is_alpha and len(t.lemma_) >= 3}
+            except Exception:
+                pass
         cefr_upper = str(cefr_level or "B2").upper()
         meta_whitelist = {
             "according", "paragraph", "passage", "infer", "inferred", "inference",
@@ -452,6 +458,47 @@ class QuizIntegrityGatesMixin:
                             defect_messages.append(
                                 f"Reading Item #{idx + 1}: Lexical leakage detected ({overlap:.1%} 3-gram overlap > 35% with anchor [{spec.get('anchor_id')}]): \"{key_opt[:50]}\""
                             )
+
+            # 1.9 Check Section Assignment Mismatch
+            if blueprint_specs and idx < len(blueprint_specs):
+                spec = blueprint_specs[idx] or {}
+                spec_dict = spec if isinstance(spec, dict) else (dataclasses.asdict(spec) if dataclasses.is_dataclass(spec) else {})
+                assigned_sec = spec_dict.get("section_title", "")
+                if assigned_sec and not assigned_sec.lower().startswith("paragraph "):
+                    stem_lower = stem.lower()
+                    for other_idx, other_spec in enumerate(blueprint_specs):
+                        if other_idx == idx:
+                            continue
+                        other_dict = other_spec if isinstance(other_spec, dict) else (dataclasses.asdict(other_spec) if dataclasses.is_dataclass(other_spec) else {})
+                        other_sec = other_dict.get("section_title", "")
+                        if other_sec and not other_sec.lower().startswith("paragraph ") and other_sec.lower() != assigned_sec.lower():
+                            if other_sec.lower() in stem_lower and assigned_sec.lower() not in stem_lower:
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Reading Item #{idx + 1}: Section mismatch — assigned to '{assigned_sec}' but question stem tests '{other_sec}'."
+                                )
+                                break
+
+        # 1.10 Section Clustering Deduplication Gate
+        if blueprint_specs:
+            seen_custom_titles: Dict[str, int] = {}
+            for idx, q in enumerate(questions):
+                q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+                stem_lower = str(q_dict.get("question", "")).strip().lower()
+                for spec in blueprint_specs:
+                    spec_dict = spec if isinstance(spec, dict) else (dataclasses.asdict(spec) if dataclasses.is_dataclass(spec) else {})
+                    s_title = spec_dict.get("section_title", "")
+                    if s_title and not s_title.lower().startswith("paragraph "):
+                        s_title_clean = s_title.strip().lower()
+                        if s_title_clean in stem_lower:
+                            if s_title_clean in seen_custom_titles:
+                                prior_idx = seen_custom_titles[s_title_clean]
+                                flagged_indices.add(idx)
+                                defect_messages.append(
+                                    f"Reading Item #{idx + 1}: Section clustering defect — Section '{s_title}' is tested multiple times (also in Item #{prior_idx + 1})."
+                                )
+                            else:
+                                seen_custom_titles[s_title_clean] = idx
 
         # 2. Skill Diversity Gate
         if len(questions) >= 4 and len(categories_seen) < 2:
@@ -855,6 +902,12 @@ class QuizIntegrityGatesMixin:
 
         headword_whitelist = cls._expand_headword_whitelist(unit_headwords)
         clean_passage_words = set(re.findall(r"\b[a-zA-Z]{3,}\b", passage_text.lower())) if passage_text else set()
+        if passage_text:
+            try:
+                nlp = LinguisticEngine.get_spacy()
+                clean_passage_words |= {t.lemma_.lower() for t in nlp(passage_text) if t.is_alpha and len(t.lemma_) >= 3}
+            except Exception:
+                pass
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
             "sentence", "translation", "english", "chinese", "option", "correct", "flawed", "idiomatic"

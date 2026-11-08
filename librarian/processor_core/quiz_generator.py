@@ -293,6 +293,14 @@ class QuizGeneratorMixin:
             if spec.get("flaw_type"):
                 _set("flaw_type", spec["flaw_type"])
 
+            # Deterministically hydrate design_audit (<0.01ms, 0 tokens)
+            t_name = spec.get("target_grammar") or spec.get("target_keyword") or "Translation Target"
+            f_name = spec.get("flaw_type") or "L1 Negative Transfer Trap"
+            audit_str = f"AUDIT: [{t_name}] -> [{f_name}]"
+            cur_audit = str(_get("design_audit") or "").strip()
+            if not cur_audit or not cur_audit.startswith("AUDIT:"):
+                _set("design_audit", audit_str)
+
             idiomatic = str(_get("idiomatic_translation", "") or "").strip()
             flawed = str(_get("flawed_translation", "") or "").strip()
             critique = str(_get("diagnostic_critique", "") or "").strip()
@@ -514,6 +522,21 @@ class QuizGeneratorMixin:
 
             _set("correct_answer_index", prescribed_idx)
 
+            # 3. Deterministically hydrate design_audit (<0.01ms, 0 tokens)
+            target_spk = spec.get("target_speaker") or (spk1 if (spec.get("primary_turn", 1) % 2 == 1) else spk2)
+            if target_spk in ("Speaker 1", "speaker 1", "speaker1"):
+                target_spk = spk1
+            elif target_spk in ("Speaker 2", "speaker 2", "speaker2"):
+                target_spk = spk2
+            turn_str = spec.get("anchor_turn") or "Turn 1"
+            skill_str = target_skill or "Detail"
+            ops = [v for k, v in (spec.get("slot_operators") or {}).items() if "Correct Answer" not in v]
+            trap_str = " + ".join(ops[:2]) if ops else "Distractor Traps"
+            audit_str = f"AUDIT: [{target_spk}, {turn_str}] -> [{skill_str}] -> [{trap_str}]"
+            cur_audit = str(_get("design_audit") or "").strip()
+            if not cur_audit or not cur_audit.startswith("AUDIT:"):
+                _set("design_audit", audit_str)
+
         return quiz_obj
 
     @classmethod
@@ -546,6 +569,7 @@ class QuizGeneratorMixin:
             "rhetorical_contrast": "Detail/Recall",
         }
 
+        used_section_titles = set()
         for q_i, q_item in enumerate(q_list):
             if q_i >= len(blueprint_specs):
                 break
@@ -577,8 +601,184 @@ class QuizGeneratorMixin:
                 _set("design_audit", audit_str)
 
             cur_stem = str(_get("question") or "").strip()
+            sec_title = spec.get("section_title", "")
+            has_custom_title = bool(sec_title and not sec_title.lower().startswith("paragraph "))
+
+            needs_stem_repair = False
             if not cur_stem or len(cur_stem) < 8:
-                _set("question", spec.get("question_stem", cur_stem))
+                needs_stem_repair = True
+            elif has_custom_title:
+                stem_lower = cur_stem.lower()
+                sec_lower = sec_title.lower()
+                collides_with_other = any(other_t.lower() in stem_lower for other_t in used_section_titles)
+                if collides_with_other or (sec_lower not in stem_lower):
+                    needs_stem_repair = True
+
+            if needs_stem_repair and spec.get("question_stem"):
+                _set("question", spec.get("question_stem"))
+                cur_stem = spec.get("question_stem")
+
+            if has_custom_title:
+                used_section_titles.add(sec_title)
+
+        # Cross-item distractor deduplication guard
+        seen_distractors: Dict[str, Tuple[int, int]] = {}  # norm_text -> (q_idx, opt_idx)
+        for q_i, q_item in enumerate(q_list):
+            is_dict = isinstance(q_item, dict)
+            opts = q_item.get("options") if is_dict else getattr(q_item, "options", [])
+            c_idx = q_item.get("correct_answer_index", 0) if is_dict else getattr(q_item, "correct_answer_index", 0)
+            if not isinstance(opts, list):
+                continue
+            opts_copy = list(opts)
+            changed = False
+            for opt_i, opt in enumerate(opts_copy):
+                if opt_i == c_idx:
+                    continue
+                opt_norm = str(opt).strip().lower()
+                if len(opt_norm) >= 6:
+                    if opt_norm in seen_distractors:
+                        # Collision with earlier distractor!
+                        spec = blueprint_specs[q_i] if q_i < len(blueprint_specs) else {}
+                        alt_ref = ""
+                        for d_spec in spec.get("prescribed_distractor_operators", []):
+                            if d_spec.get("source_text"):
+                                alt_ref = d_spec["source_text"].strip().rstrip(".")
+                                break
+                        if alt_ref and alt_ref.lower() != opt_norm:
+                            opts_copy[opt_i] = f"{alt_ref}."
+                        else:
+                            opts_copy[opt_i] = f"Specifically, {str(opt).strip()}"
+                        changed = True
+                    else:
+                        seen_distractors[opt_norm] = (q_i, opt_i)
+            if changed:
+                if is_dict:
+                    q_item["options"] = opts_copy
+                else:
+                    setattr(q_item, "options", opts_copy)
+
+        return quiz_obj
+
+    @classmethod
+    def hydrate_vocabulary_blueprint_items(
+        cls,
+        quiz_obj: Any,
+        blueprint_specs: List[Dict[str, Any]],
+    ) -> Any:
+        """
+        Deterministically hydrates and reconciles blueprint-owned fields on VocabularyQuiz items:
+        - Reconciles target_word, definition, prescribed options, and correct_answer_index.
+        - Automatically repairs question stem for bound prepositions if dropped.
+        - Enforces canonical design_audit tag format: `AUDIT: [Target Word] -> [Part of Speech] -> [Exact Blanked Frame in Stem]`.
+        """
+        if not quiz_obj or not blueprint_specs:
+            return quiz_obj
+
+        q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
+        if not isinstance(q_list, list):
+            return quiz_obj
+
+        for q_i, q_item in enumerate(q_list):
+            if q_i >= len(blueprint_specs):
+                break
+            spec = blueprint_specs[q_i] or {}
+            is_dict = isinstance(q_item, dict)
+
+            def _get(field: str, default: Any = "") -> Any:
+                if is_dict:
+                    return q_item.get(field, default)
+                return getattr(q_item, field, default)
+
+            def _set(field: str, val: Any) -> None:
+                if is_dict:
+                    q_item[field] = val
+                else:
+                    setattr(q_item, field, val)
+
+            # 1. Stem post-repair for bound prepositions
+            stem_str = str(_get("question", "") or "")
+            micro_task_rule = str(spec.get("micro_task") or "")
+            m_bound_prep = re.search(r"____\s+([a-z]{2,10})\b", micro_task_rule)
+            _other_preps = {
+                "in", "on", "at", "to", "for", "from", "with", "by", "of",
+                "into", "onto", "upon", "about", "against", "under", "over",
+                "through", "between", "among", "as", "towards", "toward",
+            }
+            if m_bound_prep and m_bound_prep.group(1).lower() in _other_preps and "____" in stem_str:
+                req_prep = m_bound_prep.group(1).lower()
+                if (
+                    not re.search(rf"____\s+{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
+                    and not re.search(rf"____\b[^.?!;]*\b{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
+                ):
+                    m_after = re.search(r"____\s+([A-Za-z]+)\b", stem_str)
+                    after_tok = m_after.group(1).lower() if m_after else ""
+                    if after_tok and after_tok not in _other_preps:
+                        stem_str = re.sub(r"____", f"____ {req_prep}", stem_str, count=1)
+                        _set("question", stem_str)
+
+            # 2. Reconcile blueprint metadata
+            tw = spec.get("target_word") or _get("target_word", "")
+            if spec.get("target_word"):
+                _set("target_word", spec["target_word"])
+            if spec.get("definition"):
+                _set("definition", spec["definition"])
+            if spec.get("options"):
+                _set("options", list(spec["options"]))
+            if spec.get("correct_answer_index") is not None:
+                _set("correct_answer_index", spec["correct_answer_index"])
+
+            # 3. Deterministically hydrate design_audit
+            pos = spec.get("part_of_speech") or "word"
+            blank_frame = ""
+            if "____" in stem_str:
+                m_frame = re.search(r"((?:\b[A-Za-z'-]+\b\s+){0,2}____(?:\s+\b[A-Za-z'-]+\b){0,2})", stem_str)
+                if m_frame:
+                    blank_frame = m_frame.group(1).strip()
+            if not blank_frame:
+                blank_frame = spec.get("cloze_slot_frame") or "... ____ ..."
+
+            audit_str = f"AUDIT: [{tw}] -> [{pos}] -> [{blank_frame}]"
+            cur_audit = str(_get("design_audit") or "").strip()
+            if not cur_audit or not cur_audit.startswith("AUDIT:"):
+                _set("design_audit", audit_str)
+
+        return quiz_obj
+
+    @classmethod
+    def hydrate_video_blueprint_items(
+        cls,
+        quiz_obj: Any,
+    ) -> Any:
+        """
+        Deterministically hydrates design_audit for VideoQuiz items (<0.01ms, 0 tokens):
+        - Enforces canonical tag format: `AUDIT: [{timestamp}] -> [Comprehension] -> [Distractor Traps]`.
+        """
+        if not quiz_obj:
+            return quiz_obj
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return quiz_obj
+
+        for idx, q_item in enumerate(questions):
+            is_dict = isinstance(q_item, dict)
+
+            def _get(field: str, default: Any = "") -> Any:
+                if is_dict:
+                    return q_item.get(field, default)
+                return getattr(q_item, field, default)
+
+            def _set(field: str, val: Any) -> None:
+                if is_dict:
+                    q_item[field] = val
+                else:
+                    setattr(q_item, field, val)
+
+            cur_audit = str(_get("design_audit") or "").strip()
+            if not cur_audit or not cur_audit.startswith("AUDIT:"):
+                ts = str(_get("timestamp") or f"Segment #{idx + 1}").strip()
+                audit_str = f"AUDIT: [{ts}] -> [Comprehension] -> [Distractor Traps]"
+                _set("design_audit", audit_str)
 
         return quiz_obj
 
@@ -1099,6 +1299,8 @@ class QuizGeneratorMixin:
                         has_prescribed_options = True
                     blueprint_specs.append({
                         "target_word": c.get("target_word"),
+                        "part_of_speech": c.get("part_of_speech", ""),
+                        "cloze_slot_frame": "... ____ ...",
                         "definition": c.get("definition"),
                         "options": list(pre_opts) if pre_opts else None,
                         "correct_answer_index": c.get("correct_answer_index") if pre_opts else None,
@@ -1114,7 +1316,7 @@ class QuizGeneratorMixin:
                     )
                 kwargs["vocabulary_content"] = (
                     "### AUTHENTIC PASSAGE CLOZE TARGETS (ACHIEVEMENT MCQ MODE) ###\n"
-                    "For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the candidate distractors) and craft the pedagogical explanation and design audit:\n\n"
+                    "For EACH item below, adopt its EXACT Target, Part of Speech, and Authentic Question Stem (do NOT invent new sentences or alter the stem). Formulate 3 plausible academic distractors (or use the candidate distractors) and craft the pedagogical explanation:\n\n"
                     + "\n\n".join(cloze_bullets)
                 )
             else:
@@ -1130,9 +1332,12 @@ class QuizGeneratorMixin:
                     if tw_key and s.get("definition"):
                         vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
                     prescribed_opts = s.get("prescribed_options", [])
+                    frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
                     blueprint_specs.append({
                         "target_word": s.get("target_word"),
                         "base_headword": s.get("base_headword"),
+                        "part_of_speech": s.get("part_of_speech", ""),
+                        "cloze_slot_frame": frame_str,
                         "definition": s.get("definition"),
                         "options": list(prescribed_opts) if prescribed_opts else None,
                         "correct_answer_index": s.get("correct_answer_index", 0) if prescribed_opts else None,
@@ -1140,7 +1345,6 @@ class QuizGeneratorMixin:
                     })
                     opts_str = ", ".join(prescribed_opts)
                     micro_task_str = s.get("micro_task", "")
-                    frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
                     pattern_line = f"- Required Stem Frame: {frame_str}\n"
                     extra_note = re.sub(
                         r"^Fit into (?:frame\s+'[^']*'|the Required Stem Frame above)\.\s*",
@@ -1180,58 +1384,17 @@ class QuizGeneratorMixin:
 
             kwargs["cefr_level"] = data.get("cefr_level", "B2")
         elif template_name == "reading":
-            kwargs["passage_content"] = data["passage"]
+            kwargs["passage_content"] = LinguisticEngine.format_paragraph_numbered_passage(data["passage"])
             cefr = str(data.get("cefr_level", "B2")).upper()
             kwargs["cefr_level"] = cefr
             is_foundational = cefr in ("A1", "A2", "B1")
             kwargs["is_foundational"] = is_foundational
             if cefr in ("A1", "A2"):
                 kwargs["cefr_descriptor"] = f"Foundational English (CEFR {cefr})"
-                kwargs["question_stem_guidance"] = (
-                    "Use clear, direct, and accessible question stems (e.g., 'What did people use...', 'Why does the author mention...', 'According to paragraph 1...'). "
-                    "Avoid dense academic vocabulary, complex passive inversions, or convoluted hypothetical framing in the question stems."
-                )
-                kwargs["option_complexity_guidance"] = (
-                    "Keep each option concise (ideally 4 to 12 words) and structurally simple. "
-                    "Options MUST NOT introduce obscure, advanced words (C1/C2) not found in the passage."
-                )
-                kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail/Recall`: 2 to 3 questions assessing key facts, explicit statements, or simple causes.\n"
-                    "     * `Main Idea`: 1 to 2 questions assessing the overall topic or central message.\n"
-                    "     * `Inference`: 0 to 1 question assessing a straightforward, obvious conclusion directly supported by the text."
-                )
-                kwargs["vocab_target_guidance"] = "5 to 8 key functional or topical vocabulary items essential for understanding the passage (e.g. core verbs, key nouns, useful everyday expressions)"
             elif cefr == "B1":
                 kwargs["cefr_descriptor"] = "Intermediate English (CEFR B1)"
-                kwargs["question_stem_guidance"] = (
-                    "Use standard, clear question stems assessing paragraph connections, cause-and-effect, and key claims. "
-                    "Maintain natural, accessible syntax."
-                )
-                kwargs["option_complexity_guidance"] = (
-                    "Keep options standard and clear (ideally 6 to 15 words). Do not use obscure, hyper-specialized vocabulary in options."
-                )
-                kwargs["skill_distribution_guidance"] = (
-                    "     * `Detail/Recall`: 2 questions targeting key factual statements or causal links.\n"
-                    "     * `Main Idea`: 1 to 2 questions assessing paragraph or text-level main ideas.\n"
-                    "     * `Inference`: 1 question assessing logical deductions warranted by the text.\n"
-                    "     * `Author's Tone/Purpose`: 0 to 1 question assessing speaker attitude or purpose."
-                )
-                kwargs["vocab_target_guidance"] = "5 to 8 intermediate vocabulary items from the passage that expand students' communicative competence"
             else:
                 kwargs["cefr_descriptor"] = f"Advanced Academic English (CEFR {cefr})"
-                kwargs["question_stem_guidance"] = (
-                    f"Use rigorous, standardized CEFR {cefr} reading assessment stems assessing synthesis, global discourse organization, and implicit logic."
-                )
-                kwargs["option_complexity_guidance"] = (
-                    "Craft intellectually mature options with accurate paraphrasing, precise lexical substitutions, and nuanced distractors."
-                )
-                kwargs["skill_distribution_guidance"] = (
-                    "     * `Main Idea`: 1 to 2 questions assessing global gist, central thesis, or primary communicative purpose.\n"
-                    "     * `Detail/Recall`: 2 to 4 questions targeting key factual statements, causal links, or explicit mechanisms.\n"
-                    "     * `Inference`: 1 to 3 questions assessing logical implications, unstated assumptions, or deductions fully warranted by the text.\n"
-                    "     * `Author's Tone/Purpose`: 1 question assessing stance, attitude, rhetorical strategy, or underlying perspective."
-                )
-                kwargs["vocab_target_guidance"] = "5 to 8 challenging academic vocabulary items directly from the passage"
 
             # Neuro-symbolic discourse reading blueprints
             try:
@@ -1288,49 +1451,6 @@ class QuizGeneratorMixin:
                     kwargs["count"] = min(count, len(unit_headwords), len(unit_grammar_patterns))
                 elif unit_headwords:
                     kwargs["count"] = min(count, len(unit_headwords))
-
-            if cefr in ("A1", "A2"):
-                kwargs["sentence_complexity_guidance"] = (
-                    "Simple, clear, and direct everyday or classroom situations (8 to 14 English words). "
-                    "Use basic coordination (and, but) or single simple clauses. Strictly avoid dense subordinate embedding or inversion."
-                )
-                kwargs["target_grammar_guidance"] = (
-                    "Focus strictly on foundational morphosyntax: singular/plural concord, basic tense forms (simple present/past), "
-                    "pronoun cases, and essential prepositions (in, at, on, with, for)."
-                )
-                kwargs["flaw_taxonomy_guidance"] = (
-                    "     * *Trap 1 (L1 Negative Transfer & Missing Dummy Subjects)*: Direct literal word-for-word translation, missing 'There is/are' or 'It is' dummy subjects, or stacking multiple verbs without conjunctions.\n"
-                    "     * *Trap 2 (Preposition & Function Word Loss)*: Omitting or confusing everyday prepositions (e.g. *listen music* instead of *listen to music*, *arrive to* instead of *arrive at*).\n"
-                    "     * *Trap 3 (Basic Agreement & Inflection Breakdown)*: Missing third-person singular '-s', bare infinitive after preposition, or plural suffix disagreement."
-                )
-            elif cefr == "B1":
-                kwargs["sentence_complexity_guidance"] = (
-                    "Standard compound/complex sentences (12 to 20 English words) describing common social, educational, or work situations. "
-                    "Incorporate common adverbial clauses (because, although, if, when) or direct relative clauses."
-                )
-                kwargs["target_grammar_guidance"] = (
-                    "Intermediate grammatical patterns: modal verbs (should, must, might), passive voice, "
-                    "gerunds vs infinitives, and straightforward coordinating/subordinating clause links."
-                )
-                kwargs["flaw_taxonomy_guidance"] = (
-                    "     * *Trap 1 (L1 Negative Transfer & Conjunction Doubling)*: Using correlative doubles like 'Although... but...' or misplaced adverbial adjuncts.\n"
-                    "     * *Trap 2 (Collocation & Dependent Prepositions)*: Dependent preposition errors (e.g. *depend of* instead of *depend on*, *comply to* instead of *comply with*).\n"
-                    "     * *Trap 3 (Voice & Aspect Inflection Errors)*: Incomplete passive voice formulas or incorrect participle forms (e.g. *is break* instead of *is broken*)."
-                )
-            else:
-                kwargs["sentence_complexity_guidance"] = (
-                    "Intellectually mature, formal compound-complex sentences (18 to 30 English words) involving academic analysis, "
-                    "cause-and-effect reasoning, or professional discourse."
-                )
-                kwargs["target_grammar_guidance"] = (
-                    "Advanced academic structures: fronted inversion, non-finite participial clauses, cleft sentences, "
-                    "abstract shell noun complements, or concessive refutations."
-                )
-                kwargs["flaw_taxonomy_guidance"] = (
-                    "     * *Trap 1 (L1 Negative Transfer & Chinglish Syntax)*: Mechanically translating word order, resulting in missing dummy subjects, awkward topic-prominent structures, or verb stacking.\n"
-                    "     * *Trap 2 (Collocation & Preposition Clash)*: Misusing formal dependent prepositions or verb-noun collocations (e.g. *comply to* instead of *comply with*, *make a damage*).\n"
-                    "     * *Trap 3 (Morpho-syntactic & Formula Breakdown)*: Distorting the target formula or non-finite verb morphology (e.g. failed subject-auxiliary inversion, dangling participle)."
-                )
 
         elif template_name == "listening":
             raw_v = data.get("vocab_list", "")
@@ -1572,54 +1692,12 @@ class QuizGeneratorMixin:
                     )
                 elif template_name == "reading":
                     quiz_obj = self.hydrate_reading_blueprint_items(quiz_obj, blueprint_specs)
+                elif template_name == "vocabulary":
+                    quiz_obj = self.hydrate_vocabulary_blueprint_items(quiz_obj, blueprint_specs)
                 else:
-                    q_list = quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", [])
-                    if isinstance(q_list, list):
-                        for q_i, q_item in enumerate(q_list):
-                            if q_i >= len(blueprint_specs):
-                                break
-                            spec = blueprint_specs[q_i]
-                            is_dict = isinstance(q_item, dict)
-                            stem_str = str(q_item.get("question") if is_dict else getattr(q_item, "question", "") or "")
-                            micro_task_rule = str(spec.get("micro_task") or "")
-                            m_bound_prep = re.search(r"____\s+([a-z]{2,10})\b", micro_task_rule)
-                            _other_preps = {
-                                "in", "on", "at", "to", "for", "from", "with", "by", "of",
-                                "into", "onto", "upon", "about", "against", "under", "over",
-                                "through", "between", "among", "as", "towards", "toward",
-                            }
-                            if m_bound_prep and m_bound_prep.group(1).lower() in _other_preps and "____" in stem_str:
-                                req_prep = m_bound_prep.group(1).lower()
-                                if (
-                                    not re.search(rf"____\s+{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
-                                    and not re.search(rf"____\b[^.?!;]*\b{re.escape(req_prep)}\b", stem_str, flags=re.IGNORECASE)
-                                ):
-                                    m_after = re.search(r"____\s+([A-Za-z]+)\b", stem_str)
-                                    after_tok = m_after.group(1).lower() if m_after else ""
-                                    if after_tok and after_tok not in _other_preps:
-                                        stem_str = re.sub(r"____", f"____ {req_prep}", stem_str, count=1)
-                                        if is_dict:
-                                            q_item["question"] = stem_str
-                                        else:
-                                            setattr(q_item, "question", stem_str)
-                            if is_dict:
-                                if spec.get("target_word"):
-                                    q_item["target_word"] = spec["target_word"]
-                                if spec.get("definition"):
-                                    q_item["definition"] = spec["definition"]
-                                if spec.get("options"):
-                                    q_item["options"] = list(spec["options"])
-                                if spec.get("correct_answer_index") is not None:
-                                    q_item["correct_answer_index"] = spec["correct_answer_index"]
-                            else:
-                                if spec.get("target_word"):
-                                    setattr(q_item, "target_word", spec["target_word"])
-                                if spec.get("definition"):
-                                    setattr(q_item, "definition", spec["definition"])
-                                if spec.get("options"):
-                                    setattr(q_item, "options", list(spec["options"]))
-                                if spec.get("correct_answer_index") is not None:
-                                    setattr(q_item, "correct_answer_index", spec["correct_answer_index"])
+                    quiz_obj = self.hydrate_vocabulary_blueprint_items(quiz_obj, blueprint_specs)
+            elif template_name == "video":
+                quiz_obj = self.hydrate_video_blueprint_items(quiz_obj)
 
             # 4.5. Randomize options (skip when blueprint prescribes CRC32-balanced options)
             quiz_obj = self._shuffle_quiz_options(quiz_obj, preserve_blueprint_order=has_prescribed_options)
@@ -1635,12 +1713,24 @@ class QuizGeneratorMixin:
                     pass
 
             if template_name == "reading":
+                reading_vocab = []
+                try:
+                    reading_vocab = LinguisticEngine.extract_reading_vocabulary(
+                        data.get("passage", ""),
+                        target_count=8,
+                        enable_llm_disambiguation=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"Reading vocabulary extraction skipped: {e}")
                 if isinstance(quiz_obj, dict):
                     quiz_obj["passage"] = data["passage"]
+                    quiz_obj["vocabulary"] = reading_vocab
                 else:
                     quiz_obj.passage = data["passage"]
+                    quiz_obj.vocabulary = reading_vocab
 
             if template_name == "video":
+                quiz_obj = self.hydrate_video_blueprint_items(quiz_obj)
                 video_vocab = []
                 try:
                     video_vocab = LinguisticEngine.extract_video_vocabulary(
@@ -1667,7 +1757,7 @@ class QuizGeneratorMixin:
                     from ..expert_auditor import ExpertAuditor
                     source_context = ""
                     if template_name == "reading":
-                        source_context = data.get("passage", "")
+                        source_context = LinguisticEngine.format_paragraph_numbered_passage(data.get("passage", ""))
                     elif template_name == "video":
                         source_context = data.get("transcript", "")
                     elif template_name == "translation":
@@ -2051,8 +2141,12 @@ class QuizGeneratorMixin:
                                 pass
 
                         if template_name == "reading":
-                            if isinstance(quiz_obj, dict): quiz_obj["passage"] = data["passage"]
-                            else: quiz_obj.passage = data["passage"]
+                            if isinstance(quiz_obj, dict):
+                                quiz_obj["passage"] = data["passage"]
+                                quiz_obj["vocabulary"] = reading_vocab
+                            else:
+                                quiz_obj.passage = data["passage"]
+                                quiz_obj.vocabulary = reading_vocab
                         elif template_name == "video":
                             if isinstance(quiz_obj, dict):
                                 quiz_obj["video_url"] = data["video_url"]

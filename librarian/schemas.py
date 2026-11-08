@@ -473,7 +473,7 @@ class SummaryExtraction:
 
 @dataclasses.dataclass
 class QuizQuestion:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     target_word: str = dataclasses.field(default="", metadata={"minLength": 1})
     question: str = dataclasses.field(default="", metadata={"minLength": 1})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
@@ -488,7 +488,7 @@ class VocabularyQuiz:
 
 @dataclasses.dataclass
 class ReadingQuizQuestion:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     question: str = dataclasses.field(default="", metadata={"minLength": 1})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
@@ -506,12 +506,12 @@ class ReadingVocabItem:
 @dataclasses.dataclass
 class ReadingQuiz:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    vocabulary: List[ReadingVocabItem] = dataclasses.field(default_factory=list, metadata={"minItems": 5, "maxItems": 8})
+    vocabulary: List[ReadingVocabItem] = dataclasses.field(default_factory=list, metadata={"exclude_from_schema": True})
     questions: List[ReadingQuizQuestion] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
 
 @dataclasses.dataclass
 class TranslationQuestion:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     translated_sentence: str = dataclasses.field(default="", metadata={"minLength": 1})
     idiomatic_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
     flawed_translation: str = dataclasses.field(default="", metadata={"minLength": 1})
@@ -539,7 +539,7 @@ class ListeningQuizTurn:
 
 @dataclasses.dataclass
 class ListeningQuizQuestion:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     question: str = dataclasses.field(default="", metadata={"minLength": 1})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
@@ -567,7 +567,7 @@ class RoutingResult:
 
 @dataclasses.dataclass
 class VideoQuizQuestion:
-    design_audit: str = dataclasses.field(default="", metadata={"minLength": 1})
+    design_audit: str = dataclasses.field(default="", metadata={"exclude_from_schema": True})
     question: str = dataclasses.field(default="", metadata={"minLength": 1})
     options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4, "item_minLength": 1})
     correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})

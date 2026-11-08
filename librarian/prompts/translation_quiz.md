@@ -22,11 +22,6 @@ Create a {language}-to-English **Comparative Translation Appraisal** assessment 
      * Do NOT rewrite the rest of the sentence or introduce random unfocused typos. Keep all surrounding clauses and vocabulary identical so the pair forms a surgical diagnostic Minimal Pair.
    - **`diagnostic_critique`**: A contrastive pedagogical critique (2 to 3 sentences) explicitly pointing out the exact minimal-pair error locus in the flawed version and explaining why the idiomatic structure/collocation is correct.
 
-3. **Design Audit**:
-   - `design_audit`: Keep concise (under 20 words) using the tag chain format:
-     `AUDIT: [Target: Grammar Formula or Collocation] -> [Prescribed Flaw Type]`
-     (e.g. `AUDIT: [Although + Clause] -> L1 Conjunction Redundancy (Although... but)` or `AUDIT: [comply with] -> Lexical Valency / Preposition Trap (*comply to*)`). DO NOT write paragraphs or quote full sentences here.
-
 ITEM SPECIFICATIONS & BLUEPRINTS:
 {vocabulary_content}
 

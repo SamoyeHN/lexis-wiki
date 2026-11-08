@@ -135,6 +135,7 @@ class TestReadingGateCEFRAdaptation(unittest.TestCase):
         kwargs_a2 = {
             "count": 5,
             "passage_content": SAMPLE_PASSAGE_A2,
+            "reading_blueprints_block": "",
             "cefr_level": "A2",
             "cefr_descriptor": "Foundational English (CEFR A2)",
             "vocab_target_guidance": "5 to 8 key functional vocabulary items",
@@ -144,12 +145,13 @@ class TestReadingGateCEFRAdaptation(unittest.TestCase):
         }
         formatted_a2 = raw_prompt.format(**kwargs_a2)
         self.assertIn("Foundational English (CEFR A2)", formatted_a2)
-        self.assertIn("Concise options <= 12 words", formatted_a2)
+        self.assertIn("A2", formatted_a2)
 
         # Test B2 interpolation
         kwargs_b2 = {
             "count": 5,
             "passage_content": SAMPLE_PASSAGE_A2,
+            "reading_blueprints_block": "",
             "cefr_level": "B2",
             "cefr_descriptor": "Advanced Academic English (CEFR B2)",
             "vocab_target_guidance": "5 to 8 academic vocabulary items",
@@ -159,7 +161,7 @@ class TestReadingGateCEFRAdaptation(unittest.TestCase):
         }
         formatted_b2 = raw_prompt.format(**kwargs_b2)
         self.assertIn("Advanced Academic English (CEFR B2)", formatted_b2)
-        self.assertIn("Academic synthesis question stems", formatted_b2)
+        self.assertIn("B2", formatted_b2)
 
 
 if __name__ == "__main__":

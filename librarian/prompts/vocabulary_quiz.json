@@ -11,10 +11,6 @@
       "items": {
         "type": "object",
         "properties": {
-          "design_audit": {
-            "type": "string",
-            "minLength": 1
-          },
           "target_word": {
             "type": "string",
             "minLength": 1
@@ -51,7 +47,6 @@
           }
         },
         "required": [
-          "design_audit",
           "target_word",
           "question",
           "options",
