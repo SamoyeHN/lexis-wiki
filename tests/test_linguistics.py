@@ -1109,7 +1109,7 @@ class TestAnchorFourDimensionRepair:
         raw_text = 'Their attitude was “Ah! You’re here! We can start now!” And then he smiled.'
         _, pool = LinguisticEngine.tokenize_and_index_sentences(raw_text)
         assert len(pool) == 2
-        assert pool["S-1"] == 'Their attitude was “Ah! You’re here! We can start now!”'
+        assert pool["S-1"] == 'Their attitude was "Ah! You\'re here! We can start now!"'
         assert pool["S-2"] == 'And then he smiled.'
 
     def test_contextual_pos_precision(self):
@@ -5433,6 +5433,92 @@ class TestEightConstructionFamiliesBlueprint:
         balanced = LinguisticEngine._balance_single_and_multi_word(candidates, target_count=2, multi_word_ratio=0.5)
         sel_words = [it["word"] for it in balanced]
         assert "sponsorship" in sel_words and "obstacle" not in sel_words, sel_words
+
+    def test_pure_symbolic_cloze_lexical_definition_lookup(self):
+        """Verify get_lexical_definition resolves inflected verbs/nouns to prototype definitions."""
+        # 1. Past tense verbs -> base lemma definition
+        def_conducted = LinguisticEngine.get_lexical_definition("conducted", "verb")
+        assert def_conducted, "Expected definition for 'conducted'"
+        assert "the past tense of" not in def_conducted.lower(), f"Pointer artifact not resolved: {def_conducted}"
+        assert any(k in def_conducted.lower() for k in ("carry out", "organize", "activity", "process", "behavior")), def_conducted
+
+        def_protested = LinguisticEngine.get_lexical_definition("protested", "verb")
+        assert def_protested
+        assert "the past tense of" not in def_protested.lower()
+
+        # 2. Present participle verbs -> base lemma definition
+        def_outselling = LinguisticEngine.get_lexical_definition("outselling", "verb")
+        assert def_outselling
+        assert "present participle" not in def_outselling.lower()
+        assert any(k in def_outselling.lower() for k in ("sell", "sold", "quantities")), def_outselling
+
+        # 3. Plural nouns -> singular prototype
+        def_analysts = LinguisticEngine.get_lexical_definition("analysts", "noun")
+        assert def_analysts
+        assert "plural of" not in def_analysts.lower()
+        assert any(k in def_analysts.lower() for k in ("someone", "person", "examines", "analyzes")), def_analysts
+
+        # 4. Multi-word phrases
+        def_take_part = LinguisticEngine.get_lexical_definition("take part in", "phrase")
+        assert def_take_part
+        assert any(k in def_take_part.lower() for k in ("involved", "participate", "activity")), def_take_part
+
+    def test_synthesize_cloze_explanation(self):
+        """Verify pedagogical contrastive explanation synthesis for cloze questions."""
+        exp = LinguisticEngine.synthesize_cloze_explanation(
+            target_word="conducted",
+            target_definition="to carry out a particular activity or process",
+            distractors=["coordinated", "fetched", "insulated"],
+            part_of_speech="verb",
+        )
+        assert "The correct answer is 'conducted'" in exp
+        assert "In contrast" in exp
+        assert "'coordinated'" in exp
+        assert "'fetched'" in exp
+        assert "'insulated'" in exp
+        assert "none of which fit the context of the sentence" in exp
+
+    def test_build_authentic_cloze_items_turnkey(self):
+        """Verify build_authentic_cloze_items attaches options, index, and explanation."""
+        vocab_items = [
+            {
+                "word": "conduct",
+                "part_of_speech": "verb",
+                "definition": "to carry out a particular activity or process",
+                "quote": "Coca-Cola conducted extensive taste tests in the early 1980s.",
+            },
+            {
+                "word": "protest",
+                "part_of_speech": "verb",
+                "definition": "to state that you disagree with or are angry about something",
+                "quote": "Millions of consumers protested against the formula change.",
+            },
+            {
+                "word": "outsell",
+                "part_of_speech": "verb",
+                "definition": "to be sold in larger quantities than something else",
+                "quote": "Pepsi was outselling traditional Coke in supermarkets across America.",
+            },
+            {
+                "word": "analyst",
+                "part_of_speech": "noun",
+                "definition": "someone whose job is to carefully examine something",
+                "quote": "Financial analysts predicted a major market shift.",
+            },
+        ]
+        items = LinguisticEngine.build_authentic_cloze_items(vocab_items, target_count=4)
+        assert len(items) == 4
+        for it in items:
+            assert "question" in it
+            assert "____" in it["question"]
+            assert "options" in it
+            assert len(it["options"]) == 4
+            assert "correct_answer_index" in it
+            assert 0 <= it["correct_answer_index"] < 4
+            assert it["options"][it["correct_answer_index"]] == it["target_word"]
+            assert "explanation" in it
+            assert it["target_word"] in it["explanation"]
+
 
 
 

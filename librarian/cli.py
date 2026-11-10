@@ -50,7 +50,7 @@ def main():
     quiz_parser = subparsers.add_parser("quiz", help="Generate an interactive HTML handout (vocabulary, reading, translation, or listening quiz)")
     quiz_parser.add_argument("filename", help="Name of the unit (e.g., Book_4_Unit_1) or the vocabulary file")
     quiz_parser.add_argument("--count", type=int, help="Number of questions to generate (uses config defaults if omitted)")
-    quiz_parser.add_argument("--template", "-t", default="vocabulary", choices=["vocabulary", "reading", "translation", "listening", "video"], help="Template type to generate (default: vocabulary)")
+    quiz_parser.add_argument("--template", "-t", default="vocabulary", choices=["vocabulary", "cloze", "reading", "translation", "listening", "video"], help="Template type to generate (default: vocabulary)")
     quiz_parser.add_argument("--archetype", "-a", default=None, help="Functional dialogue archetype to force for listening quiz (e.g. 4, arch_04, advice, seminar, options, complaint)")
     quiz_parser.add_argument("--scenario", "-s", default=None, help="Everyday scenario ID or setting keyword to force for listening quiz (e.g. arch_01_a2_inf_sc01, arch_04_b1p_form_sc01, weekend)")
 
@@ -89,7 +89,7 @@ def main():
     # Batch re-audit command (re-runs the Level 2 expert audit over existing handouts, read-only)
     reaudit_parser = subparsers.add_parser("re-audit", help="Re-run the Level 2 expert audit over existing quiz handouts and print a summary")
     reaudit_parser.add_argument("units", nargs="*", help="Specific unit(s) to re-audit (default: all units with handouts)")
-    reaudit_parser.add_argument("--template", "-t", choices=["vocabulary", "reading", "translation", "listening", "video"], help="Only re-audit this quiz type")
+    reaudit_parser.add_argument("--template", "-t", choices=["vocabulary", "cloze", "reading", "translation", "listening", "video"], help="Only re-audit this quiz type")
     reaudit_parser.add_argument("--workers", "-w", type=int, default=2, help="Concurrent audit workers (default: 2)")
     reaudit_parser.add_argument("--json", action="store_true", help="Output the summary as JSON")
 

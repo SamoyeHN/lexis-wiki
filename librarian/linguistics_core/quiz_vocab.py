@@ -162,6 +162,160 @@ class QuizVocabMixin:
         return balanced
 
     @classmethod
+    def get_lexical_definition(cls, phrase_or_word: str, pos: str = "") -> str:
+        """
+        Retrieves an authoritative pedagogical definition for a word or multi-word phrase.
+        If the input is an inflected form (such as past tense verb 'conducted', participle 'outselling',
+        or plural noun 'analysts') and returns an inflection pointer ('the past tense of...'),
+        it automatically resolves to the base lemma/prototype ('conduct', 'outsell', 'analyst')
+        to extract the true semantic definition from LDOCE or WordNet.
+        """
+        w_clean = str(phrase_or_word or "").strip()
+        if not w_clean:
+            return ""
+        w_lower = w_clean.lower()
+
+        # Helper to check if a definition is just an inflection pointer
+        def _is_inflection_pointer(def_str: str) -> bool:
+            low = def_str.lower()
+            return any(low.startswith(p) for p in (
+                "the past tense of", "the past participle of", "the plural of",
+                "present participle of", "the comparative of", "the superlative of",
+                "past tense and past participle of", "another spelling of"
+            ))
+
+        # 1. Multi-word phrases / phrasal verbs
+        if " " in w_lower:
+            parts = w_lower.split()
+            base_first = cls.lemma_of(parts[0]) or parts[0]
+            base_phrase = f"{base_first} {' '.join(parts[1:])}"
+            phrase_cands = [w_lower, base_phrase]
+            if len(parts) > 2:
+                phrase_cands.extend([" ".join(parts[:-1]), f"{base_first} {' '.join(parts[1:-1])}"])
+
+            # Check lookup_ldoce_phrase first (returns (host_word, sense_idx, tier, raw_phrase))
+            for cand in phrase_cands:
+                p_res = cls.lookup_ldoce_phrase(cand)
+                if p_res:
+                    if isinstance(p_res, (list, tuple)) and len(p_res) >= 2:
+                        host_word, sense_idx = p_res[0], p_res[1]
+                        if host_word and sense_idx is not None:
+                            ent = cls.get_ldoce_entry(host_word)
+                            if ent and ent.get("senses") and 0 <= sense_idx < len(ent["senses"]):
+                                d = cls.format_ldoce_definition(ent["senses"][sense_idx])
+                                if d and not _is_inflection_pointer(d):
+                                    return d
+                    elif isinstance(p_res, dict):
+                        for s in (p_res.get("senses") or []):
+                            d = cls.format_ldoce_definition(s)
+                            if d and not _is_inflection_pointer(d):
+                                return d
+
+            for cand in phrase_cands:
+                d, _ = cls.get_expression_definition_and_example(cand)
+                if d and "functioning in academic" not in d and not _is_inflection_pointer(d):
+                    return d
+
+        # 2. Single word (or fallback for multi-word) via LDOCE
+        base = cls.lemma_of(w_lower) or w_lower
+        pos_code = cls._pos_code(pos) if pos else None
+
+        # Check base first if inflected, or w_lower
+        cands_to_check = [base, w_lower] if base != w_lower else [w_lower]
+        for cand in cands_to_check:
+            entry = cls.get_ldoce_entry(cand)
+            if entry and entry.get("senses"):
+                senses = entry["senses"]
+                if pos_code:
+                    pos_matched = [
+                        s for s in senses
+                        if cls._pos_code(s.get("pos") or entry.get("pos")) == pos_code
+                    ]
+                    if pos_matched:
+                        senses = pos_matched + [s for s in senses if s not in pos_matched]
+                for s in senses:
+                    d = cls.format_ldoce_definition(s)
+                    if d and not _is_inflection_pointer(d):
+                        return d
+                if senses:
+                    d = cls.format_ldoce_definition(senses[0])
+                    if d:
+                        return d
+
+        # 3. WordNet Fallback
+        try:
+            wn = cls.get_wordnet()
+            if wn:
+                wn_pos_map = {
+                    "v": "v", "verb": "v", "n": "n", "noun": "n",
+                    "a": "a", "adj": "a", "adjective": "a",
+                    "adv": "r", "adverb": "r"
+                }
+                wn_p = wn_pos_map.get(str(pos).lower()) if pos else None
+                for cand in cands_to_check:
+                    syns = wn.synsets(cand, pos=wn_p) if wn_p else wn.synsets(cand)
+                    if syns:
+                        return syns[0].definition()
+        except Exception:
+            pass
+
+        return ""
+
+    @classmethod
+    def synthesize_cloze_explanation(
+        cls,
+        target_word: str,
+        target_definition: str,
+        distractors: List[str],
+        part_of_speech: str = "",
+    ) -> str:
+        """
+        Synthesizes a high-discrimination pedagogical explanation from dictionary definitions:
+        Defines the target word in context and contrasts each distractor using its LDOCE/WordNet definition.
+        """
+        t_def_raw = target_definition or cls.get_lexical_definition(target_word, pos=part_of_speech)
+        t_def_clean = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", t_def_raw or "").strip().rstrip(".")
+        if ";" in t_def_clean and len(t_def_clean) > 80:
+            t_def_clean = t_def_clean.split(";")[0].strip()
+        if len(t_def_clean) > 120:
+            words = t_def_clean[:120].rsplit(" ", 1)
+            t_def_clean = (words[0] if len(words) > 1 else t_def_clean[:117]).rstrip() + "..."
+        t_def_clean = t_def_clean.rstrip(".")
+
+        dist_clauses = []
+        for d in distractors:
+            d_clean = str(d).strip()
+            if not d_clean:
+                continue
+            d_def = cls.get_lexical_definition(d_clean, pos=part_of_speech)
+            d_def_clean = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", d_def or "").strip()
+            if ";" in d_def_clean:
+                d_def_clean = d_def_clean.split(";")[0].strip()
+            if len(d_def_clean) > 90:
+                words = d_def_clean[:90].rsplit(" ", 1)
+                d_def_clean = (words[0] if len(words) > 1 else d_def_clean[:87]).rstrip() + "..."
+            d_def_clean = d_def_clean.rstrip(".")
+            if d_def_clean:
+                dist_clauses.append(f"'{d_clean}' means {d_def_clean}")
+            else:
+                dist_clauses.append(f"'{d_clean}' does not fit this context")
+
+        if len(dist_clauses) > 1:
+            dist_str = ", ".join(dist_clauses[:-1]) + f", and {dist_clauses[-1]}"
+        elif dist_clauses:
+            dist_str = dist_clauses[0]
+        else:
+            dist_str = ""
+
+        if dist_str:
+            return (
+                f"The correct answer is '{target_word}' ({t_def_clean}). "
+                f"In contrast, {dist_str}, none of which fit the context of the sentence."
+            )
+        return f"The correct answer is '{target_word}' ({t_def_clean})."
+
+
+    @classmethod
     def _normalize_vocab_items_input(
         cls,
         vocab_input: Any,
@@ -207,7 +361,7 @@ class QuizVocabMixin:
                 if not word or (
                     not cls.is_pedagogical_target(word)
                     and not (len(vocab_input) <= 5 and word.lower() in ("goody", "goodies", "toothpaste"))
-                ):
+                ) or not cls.is_pedagogical_expression(word, defn):
                     continue
                 parsed_items.append({
                     "raw_word": raw_w,
@@ -239,10 +393,12 @@ class QuizVocabMixin:
                     word = re.sub(r'\s+', ' ', word).strip()
                 else:
                     word = re.sub(r'\s+', ' ', re.sub(r'\[.*?\]|\(.*?\)', '', raw_w_poss)).strip()
+                m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
+                raw_defn_str = m_def.group(1).strip() if m_def else ""
                 if not word or (
                     not cls.is_pedagogical_target(word)
                     and not (len(blocks) <= 5 and word.lower() in ("goody", "goodies", "toothpaste"))
-                ):
+                ) or not cls.is_pedagogical_expression(word, raw_defn_str):
                     continue
                 m_pos = re.search(r'-\s*\*\*Part\s+of\s+Speech\*\*:\s*([^\n]+)', b, re.IGNORECASE)
                 pos_str = m_pos.group(1).strip() if m_pos else ""
@@ -251,14 +407,13 @@ class QuizVocabMixin:
                     ht_clean = re.sub(r'\b(?:A1|A2|B1|B2|C1|C2)\b', '', ht_clean).strip()
                     if ht_clean:
                         pos_str = ht_clean
-                m_def = re.search(r'-\s*\*\*Definition\*\*:\s*([^\n]+)', b, re.IGNORECASE)
                 m_quote = re.search(r'-\s*\*\*Quoted Sentence\*\*:\s*([^\n]+)', b, re.IGNORECASE)
                 m_ex = re.search(r'-\s*\*\*Example\s+Usage\*\*:\s*([^\n]+)', b, re.IGNORECASE)
                 parsed_items.append({
                     "raw_word": raw_w,
                     "word": word,
                     "part_of_speech": pos_str or "noun",
-                    "definition": m_def.group(1).strip() if m_def else "",
+                    "definition": raw_defn_str,
                     "quote": m_quote.group(1).strip() if m_quote else "",
                     "example_usage": m_ex.group(1).strip() if m_ex else "",
                 })
@@ -392,6 +547,49 @@ class QuizVocabMixin:
                     definition=it.get("definition"),
                     quote=it.get("quote"),
                 )
+                pos_raw = (it.get("part_of_speech") or "").lower()
+                is_pv = "phrasal verb" in pos_raw or (tokens and cls._is_base_verb_lemma(tokens[0]))
+                if is_pv and distractors:
+                    head_surf = surface_form.split()[0].lower() if surface_form else ""
+                    head_base = tokens[0].lower() if tokens else ""
+                    verb_tag = None
+                    t_tag = target_tok.tag_.upper() if target_tok is not None else ""
+                    if t_tag == "VBD":
+                        if any(
+                            ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
+                            for ch in target_tok.children
+                        ):
+                            verb_tag = "VBN"
+                        else:
+                            verb_tag = "VBD"
+                    elif t_tag in ("VBN", "VBG", "VBZ"):
+                        verb_tag = t_tag
+                    elif t_tag in ("VB", "VBP"):
+                        verb_tag = "VB"
+                    else:
+                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                            if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
+                                verb_tag = cand_tag
+                                break
+                    if not verb_tag and head_surf != head_base:
+                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                            if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
+                                verb_tag = cand_tag
+                                break
+                    if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
+                        inflected_pv_d = []
+                        for d in distractors:
+                            p_parts = d.strip().split()
+                            if not p_parts:
+                                continue
+                            p_head = p_parts[0].lower()
+                            p_head_base = p_head if cls._is_base_verb_lemma(p_head) else (cls.lemma_of(p_head) or p_head)
+                            p_head_inf = cls._inflect_verb(p_head_base, verb_tag)
+                            if p_head_inf:
+                                inflected_pv_d.append(" ".join([p_head_inf] + p_parts[1:]))
+                            else:
+                                inflected_pv_d.append(d)
+                        distractors = inflected_pv_d
             else:
                 pos_raw = it["part_of_speech"].lower()
                 if "verb" in pos_raw:
@@ -421,7 +619,59 @@ class QuizVocabMixin:
                     for fd in fallback_d:
                         if fd not in distractors and len(distractors) < 3:
                             distractors.append(fd)
-                if pos_tag == "n" and target_tok.tag_ == "NNS":
+                if canonical_pos == "verb":
+                    verb_tag = None
+                    t_tag = target_tok.tag_.upper() if target_tok is not None else ""
+                    if t_tag == "VBD":
+                        if any(
+                            ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
+                            for ch in target_tok.children
+                        ):
+                            verb_tag = "VBN"
+                        else:
+                            verb_tag = "VBD"
+                    elif t_tag in ("VBN", "VBG", "VBZ"):
+                        verb_tag = t_tag
+                    elif t_tag in ("VB", "VBP"):
+                        verb_tag = "VB"
+                    else:
+                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                            if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
+                                verb_tag = cand_tag
+                                break
+                    if not verb_tag and surface_form.lower() != w_lower:
+                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                            if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
+                                verb_tag = cand_tag
+                                break
+
+                    if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
+                        inflected_d = []
+                        for d in distractors:
+                            d_base = d if cls._is_base_verb_lemma(d) else (cls.lemma_of(d) or d)
+                            d_inf = cls._inflect_verb(d_base, verb_tag)
+                            if d_inf and (cls._morph_form_valid(d_base, d_inf, verb_tag) or cls.is_attested_form(d_inf)):
+                                inflected_d.append(d_inf)
+                        # If any distractor couldn't be inflected, refill with inflected zero-collision fallbacks
+                        if len(inflected_d) < 3:
+                            fallbacks = cls.generate_zero_collision_distractors(
+                                target_word=w_lower, pos="v", count=12, context_sentence=q_clean
+                            )
+                            for fb in fallbacks:
+                                if len(inflected_d) >= 3:
+                                    break
+                                fb_base = fb if cls._is_base_verb_lemma(fb) else (cls.lemma_of(fb) or fb)
+                                fb_inf = cls._inflect_verb(fb_base, verb_tag)
+                                if (
+                                    fb_inf
+                                    and fb_inf not in inflected_d
+                                    and fb_inf.lower() != surface_form.lower()
+                                    and (cls._morph_form_valid(fb_base, fb_inf, verb_tag) or cls.is_attested_form(fb_inf))
+                                ):
+                                    inflected_d.append(fb_inf)
+                        if inflected_d:
+                            distractors = inflected_d
+                elif pos_tag == "n" and target_tok.tag_ == "NNS":
                     distractors = [cls.pluralize_noun(d) for d in distractors]
 
             used_distractors.update(d for d in distractors if d)
@@ -438,7 +688,47 @@ class QuizVocabMixin:
             })
 
         # Balance single-word headwords vs multi-word expressions (e.g. 60% single words + 40% multi-word phrases)
-        return cls._balance_single_and_multi_word(cloze_items, target_count=target_count, multi_word_ratio=0.4)
+        balanced_items = cls._balance_single_and_multi_word(cloze_items, target_count=target_count, multi_word_ratio=0.4)
+        n = len(balanced_items)
+        if n > 0:
+            target_distribution = [n // 4 + (1 if i < (n % 4) else 0) for i in range(4)]
+            balanced_slots = []
+            for slot_idx, cnt in enumerate(target_distribution):
+                balanced_slots.extend([slot_idx] * cnt)
+            seed_hash = zlib.crc32("".join(s["target_word"] for s in balanced_items).encode("utf-8"))
+            rng_state = seed_hash
+            for i in range(len(balanced_slots) - 1, 0, -1):
+                rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+                j = rng_state % (i + 1)
+                balanced_slots[i], balanced_slots[j] = balanced_slots[j], balanced_slots[i]
+
+            for idx, it in enumerate(balanced_items):
+                target_w = it["target_word"]
+                dist = list(it.get("precomputed_distractors", []))
+                if len(dist) < 3:
+                    fallbacks = cls.generate_zero_collision_distractors(
+                        target_word=it.get("base_headword") or target_w,
+                        pos=cls._pos_code(it.get("part_of_speech", "")),
+                        count=10,
+                        context_sentence=it.get("source_sentence", "")
+                    )
+                    for fb in fallbacks:
+                        if fb not in dist and fb.lower() != target_w.lower():
+                            dist.append(fb)
+                        if len(dist) >= 3:
+                            break
+                slot = balanced_slots[idx]
+                opts = dist[:slot] + [target_w] + dist[slot:]
+                it["options"] = opts
+                it["precomputed_options"] = opts
+                it["correct_answer_index"] = slot
+                it["explanation"] = cls.synthesize_cloze_explanation(
+                    target_word=target_w,
+                    target_definition=it.get("definition", ""),
+                    distractors=[o for i_o, o in enumerate(opts) if i_o != slot],
+                    part_of_speech=it.get("part_of_speech", "")
+                )
+        return balanced_items
 
     @classmethod
     def extract_sense_verified_noun_verb_collocations(

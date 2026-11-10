@@ -1677,6 +1677,43 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         )
 
                 bp_info = prompt_blueprints.get(target.lower(), {}) if prompt_blueprints else {}
+                bp_pos = bp_info.get("part_of_speech", "")
+
+                # Verb Option Morphological Agreement Gate (动词同型校验门禁)
+                # If target is an inflected verb (-ed, -ing, -s), options must not mix base verbs with inflected target
+                if is_list_valid and options and len(options) == 4:
+                    t_parts = target.strip().split()
+                    t_head = t_parts[0].lower()
+                    t_base = LinguisticEngine.lemma_of(t_head) or t_head
+                    t_is_verb = (
+                        bp_pos in ("verb", "phrase", "phrasal verb")
+                        or LinguisticEngine._is_base_verb_lemma(t_base)
+                    )
+                    if t_is_verb and t_head != t_base:
+                        t_verb_tag = None
+                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                            if (LinguisticEngine._inflect_verb(t_base, cand_tag) or "").lower() == t_head:
+                                t_verb_tag = cand_tag
+                                break
+                        if t_verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
+                            base_clashing = []
+                            for o in options:
+                                o_str = str(o).strip()
+                                o_parts = o_str.split()
+                                if not o_parts:
+                                    continue
+                                o_head = o_parts[0].lower()
+                                o_base = o_head if LinguisticEngine._is_base_verb_lemma(o_head) else (LinguisticEngine.lemma_of(o_head) or o_head)
+                                if o_head == o_base and o_head != t_head:
+                                    inflected_form = LinguisticEngine._inflect_verb(o_base, t_verb_tag)
+                                    if inflected_form and inflected_form.lower() == o_head:
+                                        continue
+                                    base_clashing.append(o_str)
+                            if base_clashing:
+                                no_verb_inflection_clash = False
+                                flags.append(
+                                    f"❌ Quiz item '{target}': Verb option inflection mismatch (动词同型错误) — target is inflected ({t_verb_tag}), but options contain base-form verbs: {base_clashing}"
+                                )
 
                 # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer

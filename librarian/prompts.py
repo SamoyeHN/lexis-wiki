@@ -29,6 +29,7 @@ class Prompts:
         "extract_summary": SummaryExtraction,
         "extract_mindmap": MindMapExtraction,
         "vocabulary_quiz": VocabularyQuiz,
+        "cloze_quiz": VocabularyQuiz,
         "reading_quiz": ReadingQuiz,
         "translation_quiz": TranslationQuiz,
         "listening_quiz": ListeningQuiz,
@@ -51,6 +52,8 @@ class Prompts:
         """
         md_path = Path(__file__).parent / "prompts" / f"{name}.md"
         json_path = Path(__file__).parent / "prompts" / f"{name}.json"
+        if not md_path.exists() and name == "cloze_quiz":
+            md_path = Path(__file__).parent / "prompts" / "vocabulary_quiz.md"
 
         # 1. Load Prompt Text (.md)
         prompt_text = ""

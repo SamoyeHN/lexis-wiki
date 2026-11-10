@@ -145,7 +145,7 @@ class ExpertAuditor:
         is_video = (quiz_type == "video") or any("timestamp" in q for q in questions if isinstance(q, dict))
         is_translation = (quiz_type == "translation") or any("translated_sentence" in q for q in questions if isinstance(q, dict))
         is_listening = (quiz_type == "listening")
-        is_vocab = (quiz_type == "vocabulary") or (not is_translation and not is_video and not is_listening and any("target_word" in q for q in questions if isinstance(q, dict)))
+        is_vocab = (quiz_type in ("vocabulary", "cloze")) or (not is_translation and not is_video and not is_listening and any("target_word" in q for q in questions if isinstance(q, dict)))
         is_reading = (quiz_type == "reading")
 
         # Select specialized prompt template by modality

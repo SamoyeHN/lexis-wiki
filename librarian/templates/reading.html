@@ -791,9 +791,17 @@
                 let b = blocks[i];
                 let isHeading = false;
                 let title = "";
+                let lines = b.split("\n").map(l => l.trim()).filter(l => l.length > 0);
                 if (b.startsWith("#")) {
                     isHeading = true;
                     title = b.replace(/^#+\s*/, "").trim();
+                } else if (lines.length <= 2 && lines.every(l => l.length < 80) && b.length < 140) {
+                    let hasSub = lines.length === 2 && /^[-—:]/.test(lines[1]);
+                    let noPeriod = !/[.;"']$/.test(lines[lines.length - 1]);
+                    if (hasSub || (noPeriod && (i === 0 || !/[.?!]$/.test(lines[0])))) {
+                        isHeading = true;
+                        title = hasSub ? lines.map(l => l.replace(/^[-—\s:]+/, "").trim()).join(" - ") : lines.join(" ");
+                    }
                 } else if (!b.includes("\n") && b.length < 70 && !/[.?!:;"']$/.test(b.trim())) {
                     isHeading = true;
                     title = b.replace(/^[*_]+|[*_]+$/g, "").trim();

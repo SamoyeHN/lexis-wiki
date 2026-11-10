@@ -156,6 +156,7 @@ class DiscourseGraph:
     introduction_unit: Optional[Tuple[int, str, str]] = None
     conclusion_unit: Optional[Tuple[int, str, str]] = None
     sections: List[DiscourseSection] = field(default_factory=list)
+    top_heading_title: str = ""
 
 
 @dataclass
@@ -203,7 +204,7 @@ class QuizReadingMixin:
         if getattr(cls, "_spacy_nlp", None) is None:
             try:
                 import spacy
-                cls._spacy_nlp = spacy.load("en_core_web_sm", disable=["ner"])
+                cls._spacy_nlp = spacy.load("en_core_web_sm")
             except Exception:
                 cls._spacy_nlp = False
         return cls._spacy_nlp if cls._spacy_nlp is not False else None
@@ -233,20 +234,33 @@ class QuizReadingMixin:
         sections: List[DiscourseSection] = []
         i = 0
         sec_idx = 1
+        top_heading_title = ""
         while i < len(blocks):
             b = blocks[i]
             is_heading = False
             title = ""
+            lines = [l.strip() for l in b.split("\n") if l.strip()]
             if b.startswith("#"):
                 is_heading = True
                 title = b.lstrip("#").strip()
+            elif len(lines) <= 2 and all(len(l) < 80 for l in lines) and len(b) < 140:
+                has_sub = len(lines) == 2 and lines[1].startswith(("-", "—", ":"))
+                no_period = not lines[-1].endswith((".", ";", '"', "'"))
+                if has_sub or (no_period and (i == 0 or not lines[0].endswith("."))):
+                    is_heading = True
+                    title = " - ".join([l.lstrip("-— :").strip() for l in lines]) if has_sub else " ".join(lines)
             elif "\n" not in b and len(b) < 70 and not b.endswith((".", "?", "!", ":", ";", '"', "'")):
                 is_heading = True
                 title = b.strip("*_ ")
 
             if is_heading and i + 1 < len(blocks):
                 body = blocks[i + 1]
-                sections.append(DiscourseSection(section_index=sec_idx, title=title, body_text=body))
+                if i == 0:
+                    top_heading_title = title
+                    sec_title = f"Paragraph {sec_idx}"
+                else:
+                    sec_title = title
+                sections.append(DiscourseSection(section_index=sec_idx, title=sec_title, body_text=body))
                 sec_idx += 1
                 i += 2
             else:
@@ -304,6 +318,7 @@ class QuizReadingMixin:
             introduction_unit=intro_unit,
             conclusion_unit=conclusion_unit,
             sections=sections,
+            top_heading_title=top_heading_title,
         )
 
     @classmethod
@@ -404,6 +419,7 @@ class QuizReadingMixin:
                 "here", "very", "what", "when", "some", "more", "most", "also", "just", "such", "than",
                 "then", "from", "with", "into", "over", "under", "both", "each", "other", "have", "were",
                 "been", "would", "could", "should", "will", "shall", "does", "doing", "done", "make", "made",
+                "many", "much", "few", "several", "every", "all",
             }
             light_nouns = {
                 "thing", "things", "way", "ways", "fact", "facts", "case", "cases",
@@ -414,11 +430,39 @@ class QuizReadingMixin:
                 "reason", "reasons", "result", "results", "term", "terms", "manner",
                 "piece", "pieces", "lot", "lots", "number", "numbers", "amount", "amounts",
                 "person", "people", "one", "ones", "something", "anything", "nothing",
+                "end", "ends", "start", "starts", "beginning", "beginnings", "time", "times",
+                "year", "years", "day", "days", "week", "weeks", "month", "months",
             }
             nlp = cls.get_spacy() if hasattr(cls, "get_spacy") else None
             if nlp:
                 try:
                     doc = nlp(s_text)
+                    # 1. Prioritize salient named entities (ORG, PERSON, PRODUCT, GPE, etc.)
+                    for ent in doc.ents:
+                        if ent.label_ not in ("CARDINAL", "ORDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY"):
+                            ent_text = ent.text.strip()
+                            if (
+                                len(ent_text) > 2
+                                and ent_text.lower() not in stopwords
+                                and ent_text.lower() not in light_nouns
+                            ):
+                                return ent_text
+                    # 2. Prioritize key noun chunks (multi-word entities or salient concepts)
+                    for chunk in doc.noun_chunks:
+                        chunk_words = [
+                            t for t in chunk
+                            if t.pos_ not in ("DET", "PRON")
+                            and t.text.lower() not in stopwords
+                        ]
+                        if chunk_words:
+                            c_text = " ".join(t.text for t in chunk_words).strip()
+                            if (
+                                len(c_text) > 2
+                                and c_text.lower() not in light_nouns
+                                and not all(t.text.lower() in light_nouns for t in chunk_words)
+                            ):
+                                return c_text
+                    # 3. Fall back to individual content nouns
                     nouns = [
                         t.text for t in doc
                         if t.pos_ in ("NOUN", "PROPN")
@@ -505,8 +549,11 @@ class QuizReadingMixin:
                 passage_title = m.group(1).strip()
                 break
         if not passage_title:
-            b_match = re.search(r"^\*\*([^*\n]+)\*\*", text, re.M)
-            passage_title = b_match.group(1).strip() if b_match else "the passage"
+            if graph.top_heading_title:
+                passage_title = graph.top_heading_title
+            else:
+                b_match = re.search(r"^\*\*([^*\n]+)\*\*", text, re.M)
+                passage_title = b_match.group(1).strip() if b_match else "the passage"
 
         # -------------------------------------------------------------
         # ITEM 1: MACRO_GIST (Global Thesis with Dual-Pole RST Grounding)
@@ -681,12 +728,21 @@ class QuizReadingMixin:
         c_title = get_sec_title(causal_anchor[0])
         has_custom_c = not bool(re.match(r"^Paragraph\s+\d+$", c_title, re.IGNORECASE))
 
+        c_topic = get_topic_noun(causal_anchor[2])
+
         if is_foundational:
-            causal_stem = (
-                f'In the "{c_title}" section, what was the main reason or result mentioned?'
-                if has_custom_c
-                else f"According to Paragraph {causal_anchor[0]}, what was the main reason or result mentioned?"
-            )
+            if c_topic:
+                causal_stem = (
+                    f'In the "{c_title}" section, what was the main reason or result mentioned regarding {c_topic}?'
+                    if has_custom_c
+                    else f"According to Paragraph {causal_anchor[0]}, what was the main reason or result mentioned regarding {c_topic}?"
+                )
+            else:
+                causal_stem = (
+                    f'In the "{c_title}" section, what was the main reason or result mentioned?'
+                    if has_custom_c
+                    else f"According to Paragraph {causal_anchor[0]}, what was the main reason or result mentioned?"
+                )
             causal_para_target = (
                 f"Simply explain the reason or result stated in anchor [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(5 to 10 words, zero 3-gram verbatim copying)."
@@ -711,11 +767,18 @@ class QuizReadingMixin:
                 ),
             ]
         elif is_intermediate:
-            causal_stem = (
-                f'Based on the "{c_title}" section, what is the primary consequence or cause discussed?'
-                if has_custom_c
-                else f"Based on Paragraph {causal_anchor[0]}, what is the primary consequence or cause discussed?"
-            )
+            if c_topic:
+                causal_stem = (
+                    f'Based on the "{c_title}" section, what is the primary consequence or cause discussed regarding {c_topic}?'
+                    if has_custom_c
+                    else f"Based on Paragraph {causal_anchor[0]}, what is the primary consequence or cause discussed regarding {c_topic}?"
+                )
+            else:
+                causal_stem = (
+                    f'Based on the "{c_title}" section, what is the primary consequence or cause discussed?'
+                    if has_custom_c
+                    else f"Based on Paragraph {causal_anchor[0]}, what is the primary consequence or cause discussed?"
+                )
             causal_para_target = (
                 f"Accurately paraphrase the cause-and-effect relationship in [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -740,11 +803,18 @@ class QuizReadingMixin:
                 ),
             ]
         else:
-            causal_stem = (
-                f'In the "{c_title}" section, what causal mechanism is directly responsible for the observed development?'
-                if has_custom_c
-                else f"According to Paragraph {causal_anchor[0]}, what causal mechanism is directly responsible for the observed development?"
-            )
+            if c_topic:
+                causal_stem = (
+                    f'In the "{c_title}" section, what causal mechanism directly affects {c_topic}?'
+                    if has_custom_c
+                    else f"According to Paragraph {causal_anchor[0]}, what causal mechanism directly affects {c_topic}?"
+                )
+            else:
+                causal_stem = (
+                    f'In the "{c_title}" section, what causal mechanism is directly responsible for the observed development?'
+                    if has_custom_c
+                    else f"According to Paragraph {causal_anchor[0]}, what causal mechanism is directly responsible for the observed development?"
+                )
             causal_para_target = (
                 f"Reformulate the precise cause-and-effect chain in [{causal_anchor[1]}]: '{causal_anchor[2]}' "
                 "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -795,15 +865,23 @@ class QuizReadingMixin:
         cnt_title = get_sec_title(contrast_anchor[0])
         has_custom_cnt = not bool(re.match(r"^Paragraph\s+\d+$", cnt_title, re.IGNORECASE))
         is_genuine_contrast = any(contrast_anchor[1] == s[1] for s in graph.contrast_spans)
+        cnt_topic = get_topic_noun(contrast_anchor[2])
 
         if not is_genuine_contrast:
             item3_skill = DiscourseRelationType.FACTUAL_MECHANISM
             if is_foundational:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, what action or detail is described?'
-                    if has_custom_cnt
-                    else f"In Paragraph {contrast_anchor[0]}, what action or detail is described?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what action or detail is described regarding {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what action or detail is described regarding {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what action or detail is described?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what action or detail is described?"
+                    )
                 contrast_para_target = (
                     f"Express the action or detail in anchor [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "in simple words (5 to 10 words, zero 3-gram verbatim copying)."
@@ -828,11 +906,18 @@ class QuizReadingMixin:
                     ),
                 ]
             elif is_intermediate:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, what specific practice or detail is highlighted?'
-                    if has_custom_cnt
-                    else f"In Paragraph {contrast_anchor[0]}, what specific practice or detail is highlighted?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what specific practice or detail is highlighted regarding {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what specific practice or detail is highlighted regarding {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what specific practice or detail is highlighted?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what specific practice or detail is highlighted?"
+                    )
                 contrast_para_target = (
                     f"Paraphrase the practice or detail described in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -857,11 +942,18 @@ class QuizReadingMixin:
                     ),
                 ]
             else:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, what procedure or mechanism is detailed?'
-                    if has_custom_cnt
-                    else f"According to Paragraph {contrast_anchor[0]}, what procedure or mechanism is detailed?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what procedure or mechanism is detailed regarding {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"According to Paragraph {contrast_anchor[0]}, what procedure or mechanism is detailed regarding {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what procedure or mechanism is detailed?'
+                        if has_custom_cnt
+                        else f"According to Paragraph {contrast_anchor[0]}, what procedure or mechanism is detailed?"
+                    )
                 contrast_para_target = (
                     f"Reformulate the procedure or mechanism in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -888,11 +980,18 @@ class QuizReadingMixin:
         else:
             item3_skill = DiscourseRelationType.RHETORICAL_CONTRAST
             if is_foundational:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, what difference or contrast is pointed out?'
-                    if has_custom_cnt
-                    else f"In Paragraph {contrast_anchor[0]}, what difference or contrast is pointed out?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what difference or contrast is pointed out concerning {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what difference or contrast is pointed out concerning {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what difference or contrast is pointed out?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what difference or contrast is pointed out?"
+                    )
                 contrast_para_target = (
                     f"Express the difference or comparison in anchor [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "in simple words (5 to 10 words, zero 3-gram verbatim copying)."
@@ -917,11 +1016,18 @@ class QuizReadingMixin:
                     ),
                 ]
             elif is_intermediate:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, what contrast does the author draw?'
-                    if has_custom_cnt
-                    else f"In Paragraph {contrast_anchor[0]}, what contrast does the author draw?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what contrast does the author draw concerning {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what contrast does the author draw concerning {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, what contrast does the author draw?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, what contrast does the author draw?"
+                    )
                 contrast_para_target = (
                     f"Paraphrase the contrastive or concessive relationship established in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -946,11 +1052,18 @@ class QuizReadingMixin:
                     ),
                 ]
             else:
-                contrast_stem = (
-                    f'In the "{cnt_title}" section, how does the author qualify or contrast the preceding assertion?'
-                    if has_custom_cnt
-                    else f"In Paragraph {contrast_anchor[0]}, how does the author qualify or contrast the preceding assertion?"
-                )
+                if cnt_topic:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, how does the author qualify or contrast the situation regarding {cnt_topic}?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, how does the author qualify or contrast the situation regarding {cnt_topic}?"
+                    )
+                else:
+                    contrast_stem = (
+                        f'In the "{cnt_title}" section, how does the author qualify or contrast the preceding assertion?'
+                        if has_custom_cnt
+                        else f"In Paragraph {contrast_anchor[0]}, how does the author qualify or contrast the preceding assertion?"
+                    )
                 contrast_para_target = (
                     f"Synthesize the concession/contrast in [{contrast_anchor[1]}]: '{contrast_anchor[2]}' "
                     "(10 to 16 words, zero 3-gram verbatim copying)."
@@ -1004,11 +1117,18 @@ class QuizReadingMixin:
         f_topic = get_topic_noun(factual_anchor[2])
 
         if is_foundational:
-            factual_stem = (
-                f'According to the "{f_title}" section, what fact or action is mentioned?'
-                if has_custom_f
-                else f"According to Paragraph {factual_anchor[0]}, what fact or action is mentioned?"
-            )
+            if f_topic:
+                factual_stem = (
+                    f'According to the "{f_title}" section, what fact or action is mentioned regarding {f_topic}?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, what fact or action is mentioned regarding {f_topic}?"
+                )
+            else:
+                factual_stem = (
+                    f'According to the "{f_title}" section, what fact or action is mentioned?'
+                    if has_custom_f
+                    else f"According to Paragraph {factual_anchor[0]}, what fact or action is mentioned?"
+                )
             factual_para_target = (
                 f"State the fact or action in anchor [{factual_anchor[1]}]: '{factual_anchor[2]}' "
                 "using simple words (5 to 10 words, zero 3-gram verbatim copying)."
@@ -1130,13 +1250,21 @@ class QuizReadingMixin:
         ref_id_5, ref_text_5 = get_distant_ref(modality_anchor[0])
         m_title = get_sec_title(modality_anchor[0])
         has_custom_m = not bool(re.match(r"^Paragraph\s+\d+$", m_title, re.IGNORECASE))
+        m_topic = get_topic_noun(modality_anchor[2])
 
         if is_foundational:
-            modality_stem = (
-                f'In the "{m_title}" section, what does the author suggest or recommend?'
-                if has_custom_m
-                else f"In Paragraph {modality_anchor[0]}, what does the author suggest or recommend?"
-            )
+            if m_topic:
+                modality_stem = (
+                    f'In the "{m_title}" section, what is the author\'s view or perspective regarding {m_topic}?'
+                    if has_custom_m
+                    else f"In Paragraph {modality_anchor[0]}, what is the author\'s view or perspective regarding {m_topic}?"
+                )
+            else:
+                modality_stem = (
+                    f'In the "{m_title}" section, what is the author\'s view or main point?'
+                    if has_custom_m
+                    else f"In Paragraph {modality_anchor[0]}, what is the author\'s view or main point?"
+                )
             modality_para_target = (
                 f"State the author's suggestion or feeling in anchor [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "using simple words (5 to 10 words)."
@@ -1161,11 +1289,18 @@ class QuizReadingMixin:
                 ),
             ]
         elif is_intermediate:
-            modality_stem = (
-                f'What is the author\'s perspective or outlook in the "{m_title}" section?'
-                if has_custom_m
-                else f"What is the author's perspective or outlook in Paragraph {modality_anchor[0]}?"
-            )
+            if m_topic:
+                modality_stem = (
+                    f'What is the author\'s perspective or assessment regarding {m_topic} in the "{m_title}" section?'
+                    if has_custom_m
+                    else f"What is the author\'s perspective or assessment regarding {m_topic} in Paragraph {modality_anchor[0]}?"
+                )
+            else:
+                modality_stem = (
+                    f'What is the author\'s perspective or outlook in the "{m_title}" section?'
+                    if has_custom_m
+                    else f"What is the author's perspective or outlook in Paragraph {modality_anchor[0]}?"
+                )
             modality_para_target = (
                 f"Paraphrase the hedged or prospective stance expressed in [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "(8 to 14 words, zero 3-gram verbatim copying)."
@@ -1190,11 +1325,18 @@ class QuizReadingMixin:
                 ),
             ]
         else:
-            modality_stem = (
-                f'Which statement accurately characterizes the author\'s epistemic stance in the "{m_title}" section?'
-                if has_custom_m
-                else f"Which statement accurately characterizes the author's epistemic stance in Paragraph {modality_anchor[0]}?"
-            )
+            if m_topic:
+                modality_stem = (
+                    f'Which statement accurately characterizes the author\'s evaluative stance regarding {m_topic} in the "{m_title}" section?'
+                    if has_custom_m
+                    else f"Which statement accurately characterizes the author\'s evaluative stance regarding {m_topic} in Paragraph {modality_anchor[0]}?"
+                )
+            else:
+                modality_stem = (
+                    f'Which statement accurately characterizes the author\'s epistemic stance in the "{m_title}" section?'
+                    if has_custom_m
+                    else f"Which statement accurately characterizes the author's epistemic stance in Paragraph {modality_anchor[0]}?"
+                )
             modality_para_target = (
                 f"Synthesize the author's hedged assessment in [{modality_anchor[1]}]: '{modality_anchor[2]}' "
                 "(10 to 16 words, zero 3-gram verbatim copying)."

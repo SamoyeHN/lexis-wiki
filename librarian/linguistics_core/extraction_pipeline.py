@@ -1707,6 +1707,9 @@ class ExtractionPipelineMixin:
                         # Must not start or end with a determiner/pronoun unless start is 'a'/'an'/'the' in a noun idiom
                         if span_t[-1].pos_ in ("DET", "PRON", "AUX", "CCONJ", "SCONJ"):
                             continue
+                        # Must not contain numbers, digits, or numerical tokens
+                        if any(t.pos_ == "NUM" or t.like_num or re.search(r"\d", t.text) for t in span_t):
+                            continue
                         surf_toks = [t.text.lower() for t in span_t]
                         lem0 = (
                             span_t[0].lemma_.lower()
@@ -1772,6 +1775,8 @@ class ExtractionPipelineMixin:
                                     final_formula = f"{p_formula} [sb]"
                                 else:
                                     final_formula = f"{p_formula} [sth]"
+                            if not cls.is_pedagogical_expression(p_name) or not cls.is_pedagogical_expression(final_formula):
+                                continue
                             m_type_su = cls.classify_expression_type(p_name, sent_clean) or "set phrase"
                             raw_candidates.append({
                                 "sid": sid,
@@ -1801,6 +1806,9 @@ class ExtractionPipelineMixin:
 
         for item in raw_candidates:
             phrase = item.get("phrase", "").lower().strip()
+            item_formula = item.get("pattern_formula", phrase)
+            if not cls.is_pedagogical_expression(phrase) or not cls.is_pedagogical_expression(item_formula):
+                continue
             item_type = item.get("type")
             words = phrase.split()
             if not words or phrase in ("a lot of", "lots of"):
@@ -5402,7 +5410,7 @@ class ExtractionPipelineMixin:
                 phrase = s.get("phrase", "")
                 formula = s.get("pattern_formula", phrase)
                 norm_form = re.sub(r'\[.*?\]|\(.*?\)', '', formula).strip().lower()
-                if not norm_form or norm_form in seen_formulas:
+                if not norm_form or norm_form in seen_formulas or not cls.is_pedagogical_expression(norm_form) or not cls.is_pedagogical_expression(formula):
                     continue
                 is_syllabus_item = bool(s.get("_is_syllabus", False))
                 if not is_syllabus_item and any(
@@ -5506,8 +5514,9 @@ class ExtractionPipelineMixin:
                 ex = cls.ensure_distinct_example(formula, expr_type, ex, quote, sense=locked_expr_sense)
 
                 # Gate 2 (Evidence-Completeness Gate - 宁缺勿滥):
-                # Drop any multi-word expression lacking an authoritative definition or distinct corpus example.
-                if not defn or cls.is_boilerplate_definition(defn) or not ex:
+                # Drop any multi-word expression lacking an authoritative definition, distinct corpus example,
+                # or mapped to a non-pedagogical cardinal number definition.
+                if not defn or cls.is_boilerplate_definition(defn) or not ex or not cls.is_pedagogical_expression(formula, defn):
                     continue
                 defn_norm_key = re.sub(r"[^a-z0-9]+", " ", defn.lower()).strip()
                 if defn_norm_key in excl_d_norm:

@@ -1371,7 +1371,7 @@ class SyllabusAndMarkdownMixin:
 
             return all_v_items, g_items, resolved_cefr, clean_p
 
-        if quiz_type in ("vocabulary", "vocabulary_quiz"):
+        if quiz_type in ("vocabulary", "vocabulary_quiz", "cloze", "cloze_quiz"):
             # Per Rule 3.1: Assessment truth must be grounded directly on authentic source text via structured items,
             # and automatically syncs extractions/<Unit>_vocabulary.md and <Unit>_grammar.md on disk.
             if not source_path or not source_path.exists():

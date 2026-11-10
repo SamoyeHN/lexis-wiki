@@ -843,6 +843,21 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
             quiz, "quiz", user_prompt=self._prompt("annoyed", "verb", "past tense (VBD)")
         )
         self.assertFalse(any("Inflection discordance" in f for f in flags))
+        self.assertFalse(any("Verb option inflection mismatch" in f for f in flags))
+
+    def test_verb_option_morphological_agreement_flags_base_distractors(self):
+        quiz = [{
+            "target_word": "protested",
+            "question": "Citizens ____ against the new tax laws outside city hall.",
+            "options": ["protested", "arise", "protect", "profess"],
+            "correct_answer_index": 0,
+            "explanation": "'protested' fits the context.",
+        }]
+        score, flags = _score_pedagogy(
+            quiz, "quiz", user_prompt=self._prompt("protested", "verb", "past tense (VBD)")
+        )
+        self.assertTrue(any("Verb option inflection mismatch" in f for f in flags), flags)
+        self.assertEqual(score, 0.0)
 
     def test_legal_noun_distractors_are_not_flagged(self):
         quiz = [{

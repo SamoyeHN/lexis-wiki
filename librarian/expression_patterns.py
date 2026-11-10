@@ -939,9 +939,22 @@ class ExpressionPatternEngine:
                 "group", "pair", "couple", "plenty", "variety", "range", "series", "member",
                 "majority", "minority", "rest", "half", "side", "end", "beginning", "middle",
                 "top", "bottom", "front", "back", "edge", "center", "centre", "form", "lack",
-                "use", "rise", "coming", "result", "cause", "effect", "source", "example"
+                "use", "rise", "coming", "result", "cause", "effect", "source", "example",
+                "million", "millions", "billion", "billions", "thousand", "thousands",
+                "hundred", "hundreds", "dozen", "dozens", "score", "scores",
+                "share", "rate", "percent", "percentage",
+                "dollar", "dollars", "cent", "cents", "pound", "pounds", "euro", "euros"
+            })
+            _TRANSPARENT_OF_OBJECTS = frozenset({
+                "dollar", "dollars", "cent", "cents", "pound", "pounds", "euro", "euros", "penny", "pence",
+                "money", "cash", "currency", "people", "person", "man", "men", "woman", "women",
+                "child", "children", "student", "students", "worker", "workers", "year", "years",
+                "month", "months", "week", "weeks", "day", "days", "hour", "hours", "minute", "minutes",
+                "second", "seconds"
             })
             if n1_lem in _TRANSPARENT_OF_HEADS or n1_tok.text.lower() in _TRANSPARENT_OF_HEADS:
+                return None
+            if n2_lem in _TRANSPARENT_OF_OBJECTS or n2_tok.text.lower() in _TRANSPARENT_OF_OBJECTS:
                 return None
             # Reject when N2 has a possessive or demonstrative determiner (e.g. 'the love of their family')
             if any(c.dep_ in ("poss", "nummod") for c in n2_tok.children):

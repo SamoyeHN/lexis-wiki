@@ -495,13 +495,19 @@
                         
                         <!-- Template select buttons in grid -->
                         <div class="row g-2">
-                            <div class="col-6">
+                            <div class="col-4">
                                 <button type="button" id="btn-arch-vocabulary" class="btn btn-quiz-arch w-100 py-2 d-flex flex-row align-items-center justify-content-center gap-1 active" onclick="selectQuizArch('vocabulary')" style="font-size: 0.72rem; padding: 0.4rem 0.25rem;">
                                     <i class="bi bi-spellcheck text-info fs-6"></i>
                                     <span>Vocabulary</span>
                                 </button>
                             </div>
-                            <div class="col-6">
+                            <div class="col-4">
+                                <button type="button" id="btn-arch-cloze" class="btn btn-quiz-arch w-100 py-2 d-flex flex-row align-items-center justify-content-center gap-1" onclick="selectQuizArch('cloze')" style="font-size: 0.72rem; padding: 0.4rem 0.25rem;">
+                                    <i class="bi bi-input-cursor-text text-info fs-6"></i>
+                                    <span>Cloze</span>
+                                </button>
+                            </div>
+                            <div class="col-4">
                                 <button type="button" id="btn-arch-reading" class="btn btn-quiz-arch w-100 py-2 d-flex flex-row align-items-center justify-content-center gap-1" onclick="selectQuizArch('reading')" style="font-size: 0.72rem; padding: 0.4rem 0.25rem;">
                                     <i class="bi bi-book text-info fs-6"></i>
                                     <span>Reading</span>
@@ -538,6 +544,7 @@
                             <select class="form-select d-none" id="quiz-source-select"></select>
                             <select class="form-select d-none" id="quiz-template-select">
                                 <option value="vocabulary">vocabulary</option>
+                                <option value="cloze">cloze</option>
                                 <option value="reading">reading</option>
                                 <option value="translation">translation</option>
                                 <option value="listening">listening</option>

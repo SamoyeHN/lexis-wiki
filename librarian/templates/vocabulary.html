@@ -528,6 +528,9 @@
                 constructor(quizData) {
 
                     this.quizTitle = quizData.title;
+                    if (this.quizTitle) {
+                        document.title = this.quizTitle;
+                    }
 
                     this.quizQuestions = quizData.questions;
 

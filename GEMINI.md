@@ -96,7 +96,7 @@
 wiki/<UnitName>/
 ├── sources/              # Primary text (<UnitName>.md) and media/
 ├── extractions/          # <UnitName>_{vocabulary,grammar,summary}.md & <UnitName>_mindmap.json
-└── handouts/             # <UnitName>_{vocabulary,reading,translation,listening,video}_quiz.html
+└── handouts/             # <UnitName>_{vocabulary,cloze,reading,translation,listening,video}_quiz.html
 ```
 - Folder slug `<UnitName>` is the immutable physical key (`normalize_name()`). Display titles live in YAML frontmatter (`title: "..."`).
 
@@ -115,6 +115,8 @@ wiki/<UnitName>/
 - [docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md): Four pragmatic interaction paradigms, 14 functional dialogue archetypes, conversation analysis turn structures, and listening blueprints.
 - [docs/reading-discourse-architecture.md](docs/reading-discourse-architecture.md): Discourse graph extraction, 6 discourse relation types, 10 psychometric distractor fallacy operators, single-step inference entailment, and verbatim lexical leakage guard.
 - [docs/audit-scores-guide.md](docs/audit-scores-guide.md): Level 1 deterministic code gate and Level 2 expert evaluator rubrics.
+- [docs/digital-human-characters.md](docs/digital-human-characters.md): Digital human dialogue cast archetypes, facial geometry standards, and multi-character rendering pipelines.
+- [docs/esp-trade-logistics-roadmap-and-validation.md](docs/esp-trade-logistics-roadmap-and-validation.md): Technical roadmap, corpus collection checklist, and 6-stage model validation specification for foreign trade and logistics specialized English (ESP).
 - [docs/cli.md](docs/cli.md): CLI commands, compilation flags, and dashboard workflows.
 
 ### 6.2 Project Roadmap
@@ -125,3 +127,4 @@ wiki/<UnitName>/
 - [x] **Symbolic Reading Discourse Blueprint**: Pre-assign rhetorical span anchors (`spaCy` transitions), 10 deterministic distractor fallacy operators (cross-paragraph bait, causal reversal, modality overgeneralization, explicit restatement), single-step inference entailment, and 3-gram verbatim lexical leakage code gate.
 - [ ] **Paired Listening–Speaking Workbench**: Two-act receptive-to-productive pairing (`Act I: Listening` $\rightarrow$ `Act II: Speaking`) with 3-level progressive fading scaffolding (Cue Card $\rightarrow$ Acoustic Cloze $\rightarrow$ Blind Production) and cross-scenario transfer.
 - [ ] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts.
+- [ ] **ESP Specialized Domain Extension**: Multi-source trade/logistics corpus collection, Incoterms/UCP600 legal consistency gates, and domain-gated WSD (`pedlex_esp.db`).

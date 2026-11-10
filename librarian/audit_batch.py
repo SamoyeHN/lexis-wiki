@@ -29,10 +29,10 @@ from .expert_auditor import ExpertAuditor
 logger = logging.getLogger("librarian.audit_batch")
 
 # Quiz templates that can appear in a handout filename ``<stem>_<template>_quiz.html``.
-QUIZ_TEMPLATES = ("vocabulary", "reading", "translation", "listening", "video")
+QUIZ_TEMPLATES = ("vocabulary", "cloze", "reading", "translation", "listening", "video")
 
 _FILENAME_RE = re.compile(
-    r"^(?P<stem>.+)_(?P<template>vocabulary|reading|translation|listening|video)_quiz\.html$"
+    r"^(?P<stem>.+)_(?P<template>vocabulary|cloze|reading|translation|listening|video)_quiz\.html$"
 )
 
 # Matches the JS injection point, e.g. ``const quizData = {"title": ...}``

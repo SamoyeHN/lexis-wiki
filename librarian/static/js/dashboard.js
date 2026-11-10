@@ -3511,7 +3511,7 @@
 
     function selectQuizArch(val) {
         document.getElementById('quiz-template-select').value = val;
-        ['translation', 'reading', 'vocabulary', 'listening', 'video'].forEach(arch => {
+        ['translation', 'reading', 'vocabulary', 'cloze', 'listening', 'video'].forEach(arch => {
             const btn = document.getElementById('btn-arch-' + arch);
             if (btn) {
                 if (arch === val) btn.classList.add('active');

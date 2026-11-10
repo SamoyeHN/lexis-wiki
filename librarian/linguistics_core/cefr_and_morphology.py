@@ -550,7 +550,20 @@ class CefrAndMorphologyMixin:
         w_clean = word.strip()
         if not w_clean:
             return False
+        # Exclude numbers, digits, decades, years, or temporal numerical tokens
+        if re.search(r"\d", w_clean):
+            return False
         w_lower = w_clean.lower()
+
+        # Cardinal number words
+        _CARDINAL_NUMBERS = {
+            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+            "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+            "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+            "hundred", "thousand", "million", "billion", "trillion",
+        }
+        if w_lower in _CARDINAL_NUMBERS or w_lower.rstrip("s") in _CARDINAL_NUMBERS:
+            return False
 
         # Ultra-Basic Function Words & Low-SLA Trivia / Commodity / Mineral Filter
         ultra_basic_or_non_pedagogical_words = {
@@ -577,6 +590,41 @@ class CefrAndMorphologyMixin:
             nlp = cls.get_spacy()
             doc_orig = nlp(w_clean)
             if doc_orig and doc_orig[0].ent_type_ in ("NORP", "GPE", "LOC", "PERSON"):
+                return False
+
+        return True
+
+    @classmethod
+    def is_pedagogical_expression(cls, phrase: str, definition: Optional[str] = None) -> bool:
+        """
+        Gating function to ensure candidate multi-word expressions, collocations, phrasal verbs,
+        and idioms are pedagogically sound SLA vocabulary targets.
+        Excludes:
+        1. Any phrase containing digits, decades, or years (e.g. 'the early 1980s', 'in 1985', '2 percent').
+        2. Transparent quantifier/partitive phrases of quantity or currency (e.g. 'millions of dollars',
+           'thousands of people', 'hundreds of years').
+        3. Phrases mapped to pure cardinal number definitions (e.g. 'the number 1,000,000').
+        """
+        p_clean = re.sub(r'\[.*?\]|\(.*?\)', '', str(phrase or '')).strip()
+        if not p_clean:
+            return False
+        p_low = p_clean.lower()
+
+        # 1. Reject digits or temporal decade/year patterns
+        if re.search(r"\d", p_clean):
+            return False
+
+        # 2. Reject transparent quantifier / numeral + of + noun expressions
+        if re.search(
+            r"^(?:millions?|billions?|thousands?|hundreds?|dozens?|scores?)\s+of\s+(?:dollars?|pounds?|euros?|cents?|money|cash|currency|people|person|man|men|woman|women|child|children|students?|workers?|years?|months?|weeks?|days?|hours?|minutes?|seconds?|miles?|tons?)\b",
+            p_low,
+        ):
+            return False
+
+        # 3. Reject if definition indicates a cardinal number
+        if definition:
+            d_low = str(definition).strip().lower()
+            if re.match(r"^the number [\d,]+", d_low) or d_low.startswith("the number "):
                 return False
 
         return True
