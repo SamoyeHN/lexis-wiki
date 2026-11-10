@@ -2138,11 +2138,11 @@ class DistractorEngineMixin:
                 ]
         if context_anchor:
             clean_anchor = context_anchor.strip().lower()
-            if wn_pos == "a" and anchor_type == "prep":
+            if (wn_pos in ("a", "n") or not wn_pos) and anchor_type == "prep":
                 # Preposition Valency Gate - reject candidates that also govern the target preposition
                 for cand in candidates:
-                    cand_preps = ocd.get(cand, {}).get("prep", [])
-                    if clean_anchor in cand_preps or cand in cls._ADJ_PREP_VALENCY_MAP.get(clean_anchor, []):
+                    cand_preps = cls.get_governed_prepositions(cand, pos=pos)
+                    if clean_anchor in cand_preps or cls.lookup_ldoce_phrase(f"{cand} {clean_anchor}"):
                         forbidden_words.add(cand)
             elif wn_pos == "a" and anchor_type == "modified_noun":
                 # Modified Noun Collocation Clash - reject legal adjectives that also collocate with the noun
@@ -2202,7 +2202,7 @@ class DistractorEngineMixin:
                 continue
             if _is_informal_or_slang_distractor(cand):
                 continue
-            has_cand_clash, _ = cls.evaluate_syntactic_slot_clash(
+            has_cand_clash, cand_clash_r = cls.evaluate_syntactic_slot_clash(
                 clean_target, cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
             )
             # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
@@ -2254,6 +2254,8 @@ class DistractorEngineMixin:
                     distractor_metadata[cand] = "antonym"
                 elif cand in tier0_ldoce_thesaurus:
                     distractor_metadata[cand] = "ldoce_thesaurus"
+                elif anchor_type == "prep" and has_cand_clash and cand_clash_r == "unattested_prepositional_government_clash":
+                    distractor_metadata[cand] = "preposition_valency"
                 elif wn_pos == "a":
                     if anchor_type == "prep" and any(cand in adjs for p, adjs in cls._ADJ_PREP_VALENCY_MAP.items() if p != context_anchor):
                         distractor_metadata[cand] = "preposition_valency"
@@ -3921,6 +3923,55 @@ class DistractorEngineMixin:
 
         return profile
 
+    _STANDARD_PREPOSITIONS = {
+        "into", "to", "of", "for", "with", "in", "on", "from", "at",
+        "about", "towards", "against", "over", "between", "through", "under", "upon"
+    }
+
+    @classmethod
+    def get_governed_prepositions(cls, word: str, pos: Optional[str] = None) -> Set[str]:
+        """Returns the set of bound/governed prepositions for `word` (noun, adjective, or verb).
+        
+        Sourced deterministically from:
+          1. Oxford Collocations Dictionary (`prep` section)
+          2. _ADJ_PREP_VALENCY_MAP
+          3. LDOCE pattern bundles & patterns (e.g. 'insight into', 'overview of', 'allergic to')
+        """
+        w = (word or "").strip().lower()
+        if not w:
+            return set()
+        preps: Set[str] = set()
+
+        # 1. Oxford Collocations Dictionary
+        ocd = cls.get_oxford_collocations()
+        if w in ocd:
+            for p in ocd[w].get("prep", []):
+                p_clean = p.strip().lower()
+                if p_clean in cls._STANDARD_PREPOSITIONS:
+                    preps.add(p_clean)
+
+        # 2. _ADJ_PREP_VALENCY_MAP
+        for p, adjs in cls._ADJ_PREP_VALENCY_MAP.items():
+            if w in adjs:
+                preps.add(p)
+
+        # 3. LDOCE patterns and pattern_bundles
+        entry = cls.get_ldoce_entry(w)
+        if entry:
+            for s in entry.get("senses", []):
+                all_pats = s.get("patterns", []) + [
+                    b.get("pattern", "") for b in s.get("pattern_bundles", []) if isinstance(b, dict)
+                ]
+                for pat in all_pats:
+                    if not pat or not isinstance(pat, str):
+                        continue
+                    tokens = pat.lower().split()
+                    for tok in tokens:
+                        if tok in cls._STANDARD_PREPOSITIONS:
+                            preps.add(tok)
+
+        return preps
+
     @classmethod
     def evaluate_syntactic_slot_clash(
         cls,
@@ -3978,6 +4029,7 @@ class DistractorEngineMixin:
         is_passive_verb_slot = False
         has_direct_obj_slot = anchor_type in ("object", "sb_to_do")
         active_verb_frame = anchor_type if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") else None
+        extracted_gov_prep: Optional[str] = None
 
         if quote and anchor and anchor_type in ("prep", "to_inf", "that_clause", "sb_to_do"):
             if not re.search(rf"\b{re.escape(anchor.lower())}\b", quote.lower()):
@@ -3988,6 +4040,16 @@ class DistractorEngineMixin:
             q_doc = nlp(quote)
             for tok in q_doc:
                 if cls.form_matches(tok.lemma_.lower(), t) or cls.form_matches(tok.text.lower(), t):
+                    # Check for directly right-adjacent preposition or prep child
+                    if tok.i + 1 < len(q_doc):
+                        next_tok = q_doc[tok.i + 1]
+                        if next_tok.text.lower() in cls._STANDARD_PREPOSITIONS and next_tok.pos_ in ("ADP", "SCONJ"):
+                            extracted_gov_prep = next_tok.text.lower()
+                    if not extracted_gov_prep:
+                        for ch in tok.children:
+                            if ch.dep_ == "prep" and ch.text.lower() in cls._STANDARD_PREPOSITIONS and ch.i > tok.i:
+                                extracted_gov_prep = ch.text.lower()
+                                break
                     if wn_pos == "a" or tok.pos_ == "ADJ":
                         if tok.dep_ in ("amod", "compound", "nmod") or (tok.head and tok.head.pos_ in ("NOUN", "PROPN") and tok.i < tok.head.i):
                             is_attr_adj_slot = True
@@ -4134,6 +4196,21 @@ class DistractorEngineMixin:
             c_bound = cls.lookup_ldoce_phrase(f"{norm_anc} {c}")
             if t_bound and not c_bound:
                 return True, "unattested_bound_degree_collocation_clash"
+
+        # 6. Bound Prepositional Government Clash (e.g. insight into vs overview of / description of; allergic to vs aware of)
+        gov_prep = None
+        if anchor_type == "prep" and anchor:
+            clean_anc_p = anchor.strip().lower()
+            if clean_anc_p in cls._STANDARD_PREPOSITIONS:
+                gov_prep = clean_anc_p
+        if not gov_prep and extracted_gov_prep:
+            gov_prep = extracted_gov_prep
+
+        if gov_prep and (wn_pos in ("n", "a") or pos_norm in ("n", "noun", "a", "adj", "adjective")):
+            c_preps = cls.get_governed_prepositions(c, pos=pos)
+            if c_preps and gov_prep not in c_preps:
+                if not cls.lookup_ldoce_phrase(f"{c} {gov_prep}"):
+                    return True, "unattested_prepositional_government_clash"
 
         return False, ""
 
