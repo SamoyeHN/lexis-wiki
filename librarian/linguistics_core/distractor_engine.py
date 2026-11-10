@@ -687,16 +687,17 @@ class DistractorEngineMixin:
                 _t_gram_low = str(_t_sns_g[0].get("grammar") or "").strip().lower()
         target_strictly_uncountable = (
             wn_pos == "n"
-            and "uncountable" in _t_gram_low
-            and "countable" not in re.sub(r"\buncountable\b", "", _t_gram_low)
+            and (
+                ("uncountable" in _t_gram_low and "countable" not in re.sub(r"\buncountable\b", "", _t_gram_low))
+                or cls._is_primarily_uncountable_noun(clean_target)
+            )
         )
         target_strictly_countable = (
             wn_pos == "n"
+            and not target_strictly_uncountable
             and (
-                (
-                    "countable" in re.sub(r"\buncountable\b", "", _t_gram_low)
-                    and "uncountable" not in _t_gram_low
-                )
+                cls._is_primarily_countable_noun(clean_target)
+                or ("countable" in re.sub(r"\buncountable\b", "", _t_gram_low) and "uncountable" not in _t_gram_low)
                 or _bridged_concrete_plural_ics
             )
         )
@@ -2208,6 +2209,16 @@ class DistractorEngineMixin:
             # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
             if not has_cand_clash and cand in near_only_for_pile and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
                 continue
+            # Countability Symmetry Gate for Nouns:
+            # - For strictly uncountable noun targets: allow at most 1 countable foil into safe_distractors.
+            # - For strictly countable noun targets: allow at most 1 uncountable foil into safe_distractors.
+            if wn_pos == "n":
+                if target_strictly_uncountable and cls._is_primarily_countable_noun(cand):
+                    if sum(1 for s in safe_distractors if cls._is_primarily_countable_noun(s)) >= 1:
+                        continue
+                elif target_strictly_countable and cls._is_primarily_uncountable_noun(cand):
+                    if sum(1 for s in safe_distractors if cls._is_primarily_uncountable_noun(s)) >= 1:
+                        continue
             # Attributive position check: if modifying a noun, reject predicative-only adjectives
             if anchor_type == "modified_noun" and cand in cls._PREDICATIVE_ONLY_ADJS:
                 continue
@@ -2252,6 +2263,10 @@ class DistractorEngineMixin:
                     distractor_metadata[cand] = "cxn_subcat_contrast"
                 elif cand in sense_antonyms:
                     distractor_metadata[cand] = "antonym"
+                elif wn_pos == "n" and target_strictly_uncountable and cls._is_primarily_countable_noun(cand):
+                    distractor_metadata[cand] = "countability_contrast_countable"
+                elif wn_pos == "n" and target_strictly_countable and cls._is_primarily_uncountable_noun(cand):
+                    distractor_metadata[cand] = "countability_contrast_uncountable"
                 elif cand in tier0_ldoce_thesaurus:
                     distractor_metadata[cand] = "ldoce_thesaurus"
                 elif anchor_type == "prep" and has_cand_clash and cand_clash_r == "unattested_prepositional_government_clash":
@@ -2551,6 +2566,13 @@ class DistractorEngineMixin:
                             )
                         ):
                             continue
+                        if wn_pos == "n":
+                            if target_strictly_uncountable and cls._is_primarily_countable_noun(p_word):
+                                if sum(1 for s in safe_distractors if cls._is_primarily_countable_noun(s)) >= 1:
+                                    continue
+                            elif target_strictly_countable and cls._is_primarily_uncountable_noun(p_word):
+                                if sum(1 for s in safe_distractors if cls._is_primarily_uncountable_noun(s)) >= 1:
+                                    continue
                         if p_word not in safe_distractors:
                             safe_distractors.append(p_word)
                             distractor_metadata[p_word] = "orthographic_paronym"
@@ -2601,6 +2623,13 @@ class DistractorEngineMixin:
                             and cls._common_prefix_len(clean_target, best_p_word) >= 4
                         )
                     )
+                    if wn_pos == "n":
+                        if target_strictly_uncountable and cls._is_primarily_countable_noun(best_p_word):
+                            if sum(1 for s in safe_distractors if cls._is_primarily_countable_noun(s)) >= 1:
+                                can_replace_coord = False
+                        elif target_strictly_countable and cls._is_primarily_uncountable_noun(best_p_word):
+                            if sum(1 for s in safe_distractors if cls._is_primarily_uncountable_noun(s)) >= 1:
+                                can_replace_coord = False
                     if can_replace_coord and best_p_word not in safe_distractors:
                         popped = safe_distractors.pop()
                         distractor_metadata.pop(popped, None)
@@ -2732,6 +2761,84 @@ class DistractorEngineMixin:
                             safe_distractors.append(picked_uncountable)
                             distractor_metadata[picked_uncountable] = "countability_contrast_uncountable"
 
+            # Part B: Symmetrical Countability Contrast for Strictly Uncountable Noun Targets
+            # Inject at most 1 semantically related countable foil (e.g. advice -> suggestion/tip;
+            # equipment -> tool/device; information -> fact/detail; furniture -> chair/desk;
+            # luggage -> belongings/item; progress -> breakthrough/advance) into safe_distractors.
+            is_strictly_uncountable_noun_target = bool(
+                target_strictly_uncountable
+                or t_gram_prof_n.get("pure_uncountable")
+            )
+            if is_strictly_uncountable_noun_target:
+                # 1. Promote or normalize existing countable distractor metadata
+                c_distractors = [d for d in safe_distractors if cls._is_primarily_countable_noun(d)]
+                if c_distractors:
+                    distractor_metadata[c_distractors[0]] = "countability_contrast_countable"
+                    # Prune any excess countable distractors beyond the 1-foil quota
+                    if len(c_distractors) > 1:
+                        for extra_c in c_distractors[1:]:
+                            if extra_c in safe_distractors:
+                                safe_distractors.remove(extra_c)
+                                distractor_metadata.pop(extra_c, None)
+
+                # 2. If no countable foil is present yet, inject at most 1 from reverse countability contrast map or thesaurus
+                if not any(v == "countability_contrast_countable" for v in distractor_metadata.values()):
+                    t_lem_n = cls.lemma_of(clean_target)
+                    rev_map = cls.get_noun_countability_contrast_map(reverse=True)
+                    contrast_pool_c: List[str] = []
+                    for key_w in (clean_target, t_lem_n):
+                        for c_cand in rev_map.get(key_w, []):
+                            if c_cand not in contrast_pool_c:
+                                contrast_pool_c.append(c_cand)
+
+                    # Also inspect LDOCE thesaurus for countable peers
+                    t_entry_n = cls.get_ldoce_entry(t_lem_n) or cls.get_ldoce_entry(clean_target)
+                    if t_entry_n:
+                        thes_list_n = t_entry_n.get("thesaurus") or []
+                        for th_it in thes_list_n:
+                            th_w = str(th_it.get("word") or "").strip().lower()
+                            th_g = str(th_it.get("grammar") or "").strip().lower()
+                            if (
+                                th_w
+                                and th_w not in (clean_target, t_lem_n)
+                                and " " not in th_w
+                                and "/" not in th_w
+                                and "countable" in th_g
+                                and not re.search(r"\buncountable\b", th_g)
+                                and th_w not in contrast_pool_c
+                            ):
+                                contrast_pool_c.append(th_w)
+
+                    picked_countable: Optional[str] = None
+                    for c_word in contrast_pool_c:
+                        if (
+                            c_word != clean_target
+                            and c_word != t_lem_n
+                            and c_word not in safe_distractors
+                            and c_word not in exclude_words
+                            and not cls.are_same_word_family(c_word, clean_target)
+                            and cls.is_exact_pedlex_headword(c_word)
+                            and cls._is_primarily_countable_noun(c_word)
+                            and cls.is_cefr_compliant_distractor(c_word, clean_target)
+                        ):
+                            picked_countable = c_word
+                            break
+
+                    if picked_countable:
+                        if len(safe_distractors) < target_count:
+                            safe_distractors.append(picked_countable)
+                            distractor_metadata[picked_countable] = "countability_contrast_countable"
+                        elif len(safe_distractors) >= target_count:
+                            last_d = safe_distractors[-1]
+                            if distractor_metadata.get(last_d) in (
+                                "coordinate", "troponym", "attribute_coordinate",
+                                "synonym", "ldoce_thesaurus", "dynamic_domain_fallback", "orthographic_paronym",
+                            ):
+                                safe_distractors.pop()
+                                distractor_metadata.pop(last_d, None)
+                                safe_distractors.append(picked_countable)
+                                distractor_metadata[picked_countable] = "countability_contrast_countable"
+
         # Second Defense: Dynamic domain-aligned fallback using target WordNet lexfile
         # When candidates pool is still sparse, extract homogeneous fallback words from the target's
         # sense-locked WordNet lexfile (e.g. noun.cognition, noun.group) to prevent Domain/Category Mismatch.
@@ -2775,13 +2882,14 @@ class DistractorEngineMixin:
                         raw_fb_pool.sort(key=lambda x: -cls._zipf_freq(x))
                     for fb in raw_fb_pool:
                         if target_strictly_uncountable:
-                            _fb_ent = cls.get_ldoce_entry(fb) or {}
-                            _fb_sns = [
-                                sn for sn in (_fb_ent.get("senses") or [])
-                                if not sn.get("pos") or cls._pos_code(sn.get("pos")) == "n"
-                            ] or (_fb_ent.get("senses") or [])
-                            if _fb_sns and "uncountable" not in " ".join(str(sn.get("grammar") or "").lower() for sn in _fb_sns[:2]):
-                                continue
+                            if not cls._is_primarily_uncountable_noun(fb):
+                                _fb_ent = cls.get_ldoce_entry(fb) or {}
+                                _fb_sns = [
+                                    sn for sn in (_fb_ent.get("senses") or [])
+                                    if not sn.get("pos") or cls._pos_code(sn.get("pos")) == "n"
+                                ] or (_fb_ent.get("senses") or [])
+                                if not _fb_sns or "uncountable" not in " ".join(str(sn.get("grammar") or "").lower() for sn in _fb_sns[:2]):
+                                    continue
                         if (
                             not cls.are_same_word_family(fb, clean_target)
                             and not any(cls.are_same_word_family(fb, s) for s in safe_distractors)
@@ -2795,6 +2903,31 @@ class DistractorEngineMixin:
                                 break
                     if len(safe_distractors) >= target_count:
                         break
+
+            if len(safe_distractors) < target_count and target_strictly_uncountable:
+                core_unc_pool = [
+                    "guidance", "counsel", "feedback", "information", "equipment", "hardware",
+                    "machinery", "progress", "research", "evidence", "assistance", "funding",
+                    "legislation", "pollution", "luggage", "baggage", "furniture", "property",
+                ]
+                for unc_cand in (list(near_set_for_pile) + core_unc_pool):
+                    if (
+                        unc_cand != clean_target
+                        and unc_cand not in safe_distractors
+                        and unc_cand not in forbidden_words
+                        and unc_cand not in exclude_words
+                        and cls._is_primarily_uncountable_noun(unc_cand)
+                        and not cls.are_same_word_family(unc_cand, clean_target)
+                        and not any(cls.are_same_word_family(unc_cand, s) for s in safe_distractors)
+                        and cls.is_cefr_compliant_distractor(unc_cand, clean_target)
+                        and not cls.double_key_collision(
+                            clean_target, unc_cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                        )[0]
+                    ):
+                        safe_distractors.append(unc_cand)
+                        distractor_metadata[unc_cand] = "uncountable_domain_peer"
+                        if len(safe_distractors) >= target_count:
+                            break
 
         # Second Defense for Adjectives (`wn_pos == "a"`): Morphological & Syntactic-Slot Aligned Peers
         # Prevents participial `-ing` adjectives (e.g. `rewarding`) or relational `adj.pert` adjectives (e.g. `doctoral`)
@@ -3785,7 +3918,100 @@ class DistractorEngineMixin:
         "license": ["permission", "authorization"],
         "program": ["software", "programming", "funding"],
         "application": ["software", "technology"],
+        "suitcase": ["baggage", "luggage"],
+        "bag": ["baggage", "luggage"],
+        "report": ["news", "information"],
+        "story": ["news", "information"],
+        "article": ["news", "information"],
+        "bulletin": ["news", "information"],
+        "hotel": ["accommodation", "housing"],
+        "room": ["accommodation", "housing"],
+        "apartment": ["accommodation", "housing"],
+        "house": ["accommodation", "housing"],
+        "coin": ["cash", "money", "currency"],
+        "bill": ["cash", "money", "currency"],
+        "note": ["cash", "money", "currency"],
+        "ring": ["jewelry", "jewellery"],
+        "necklace": ["jewelry", "jewellery"],
+        "bracelet": ["jewelry", "jewellery"],
+        "knife": ["cutlery"],
+        "fork": ["cutlery"],
+        "spoon": ["cutlery"],
+        "pen": ["stationery"],
+        "pencil": ["stationery"],
+        "notebook": ["stationery"],
+        "envelope": ["stationery"],
+        "action": ["behavior", "conduct"],
+        "deed": ["behavior", "conduct"],
+        "gesture": ["behavior", "conduct"],
+        "habit": ["behavior", "conduct"],
+        "cheer": ["applause"],
+        "ovation": ["applause"],
+        "car": ["traffic", "transportation", "transport"],
+        "bus": ["traffic", "transportation", "transport"],
+        "train": ["traffic", "transportation", "transport"],
+        "instruction": ["guidance", "advice", "training"],
+        "direction": ["guidance", "advice"],
+        "guideline": ["guidance", "advice"],
     }
+
+    _NOUN_COUNTABILITY_REVERSE_MAP: Optional[Dict[str, List[str]]] = None
+
+    @classmethod
+    def get_noun_countability_contrast_map(cls, reverse: bool = False) -> Dict[str, List[str]]:
+        """Returns the noun countability contrast map (countable -> uncountable foils, or reversed)."""
+        if not reverse:
+            return cls._NOUN_COUNTABILITY_CONTRAST_MAP
+        if cls._NOUN_COUNTABILITY_REVERSE_MAP is None:
+            rev: Dict[str, List[str]] = {}
+            for c_word, u_list in cls._NOUN_COUNTABILITY_CONTRAST_MAP.items():
+                for u_word in u_list:
+                    if u_word not in rev:
+                        rev[u_word] = []
+                    if c_word not in rev[u_word]:
+                        rev[u_word].append(c_word)
+            cls._NOUN_COUNTABILITY_REVERSE_MAP = rev
+        return cls._NOUN_COUNTABILITY_REVERSE_MAP
+
+    @classmethod
+    def _is_primarily_uncountable_noun(cls, word: str) -> bool:
+        """Determines if a noun is strictly or primarily uncountable in PedLex."""
+        w = (word or "").strip().lower()
+        if not w:
+            return False
+        prof = cls.get_word_gram_profile(w, pos="noun")
+        if prof.get("pure_uncountable"):
+            return True
+        if prof.get("pure_countable") or prof.get("pure_plural"):
+            return False
+        ent = cls.get_ldoce_entry(w)
+        if not ent:
+            return False
+        senses = [s for s in (ent.get("senses") or []) if not s.get("pos") or cls._pos_code(s.get("pos")) == "n"] or ent.get("senses") or []
+        if not senses:
+            return False
+        g0 = str(senses[0].get("grammar") or "").lower()
+        return "uncountable" in g0 and "countable" not in re.sub(r"\buncountable\b", "", g0)
+
+    @classmethod
+    def _is_primarily_countable_noun(cls, word: str) -> bool:
+        """Determines if a noun is strictly or primarily countable (or plural) in PedLex."""
+        w = (word or "").strip().lower()
+        if not w or w.endswith("ics"):
+            return False
+        prof = cls.get_word_gram_profile(w, pos="noun")
+        if prof.get("pure_countable") or prof.get("pure_plural"):
+            return True
+        if prof.get("pure_uncountable"):
+            return False
+        ent = cls.get_ldoce_entry(w)
+        if not ent:
+            return False
+        senses = [s for s in (ent.get("senses") or []) if not s.get("pos") or cls._pos_code(s.get("pos")) == "n"] or ent.get("senses") or []
+        if not senses:
+            return False
+        g0 = str(senses[0].get("grammar") or "").lower()
+        return "countable" in g0 and "uncountable" not in g0
 
     @classmethod
     def get_word_gram_profile(cls, word: str, pos: Optional[str] = None) -> Dict[str, Any]:
