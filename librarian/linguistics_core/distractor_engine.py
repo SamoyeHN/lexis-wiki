@@ -3973,6 +3973,76 @@ class DistractorEngineMixin:
         return preps
 
     @classmethod
+    def _is_attested_verb(cls, word: str) -> bool:
+        """Determines whether `word` is attested as a genuine verb in WordNet or LDOCE."""
+        w = (word or "").strip().lower()
+        if not w:
+            return False
+        wn = cls.get_wordnet()
+        if wn.words(w, pos="v"):
+            return True
+        w_lem = cls.lemma_of(w)
+        if w_lem != w and wn.words(w_lem, pos="v"):
+            return True
+        entry = cls.get_ldoce_entry(w) or cls.get_ldoce_entry(w_lem)
+        if entry and entry.get("pos") in ("verb", "v"):
+            return True
+        return False
+
+    @classmethod
+    def get_word_to_complement_profile(cls, word: str, pos: Optional[str] = None) -> Tuple[bool, bool]:
+        """Returns `(has_to_inf, has_to_prep)` indicating whether `word` accepts an infinitive
+        complement (`to + do`) and/or prepositional complement (`to + noun/gerund`).
+        
+        Sourced deterministically from:
+          1. LDOCE cxn_specs & pedlex_cxn_index (e.g. N_SHELL_TO_DO, V_INF_ONLY, ADJ_ANIMATE_CONTROL)
+          2. LDOCE pattern bundles & patterns (e.g. 'reluctance to do sth' vs 'aversion to sth')
+          3. Oxford Collocations Dictionary (`prep` == 'to') & _ADJ_PREP_VALENCY_MAP['to']
+        """
+        w = (word or "").strip().lower()
+        if not w:
+            return False, False
+        has_to_inf = False
+        has_to_prep = False
+
+        entry = cls.get_ldoce_entry(w)
+        if entry:
+            for s in entry.get("senses", []):
+                for cs in s.get("cxn_specs", []):
+                    sg = cs.get("subcat_group", "")
+                    if sg in (
+                        "N_SHELL_TO_DO", "V_INF_ONLY", "V_BOTH_GERUND_INF",
+                        "ADJ_ANIMATE_CONTROL", "ADJ_IT_EXTRAPOS", "ADJ_TOUGH_BOTH"
+                    ):
+                        has_to_inf = True
+
+            for s in entry.get("senses", []):
+                all_p = s.get("patterns", []) + [
+                    b.get("pattern", "") for b in s.get("pattern_bundles", []) if isinstance(b, dict)
+                ]
+                for p in all_p:
+                    if not p or not isinstance(p, str):
+                        continue
+                    p_low = p.lower()
+                    if any(cue in p_low for cue in [
+                        "to do", "to be", "to have", "(to do", "to + inf", "to inf", "to [do", "to act"
+                    ]):
+                        has_to_inf = True
+                    elif any(cue in p_low for cue in [
+                        "to something", "to somebody", "to sth", "to sb", "to (doing)", "to doing", "to noun"
+                    ]) or p_low.endswith(" to"):
+                        has_to_prep = True
+
+        ocd = cls.get_oxford_collocations()
+        if "to" in ocd.get(w, {}).get("prep", []):
+            has_to_prep = True
+
+        if w in cls._ADJ_PREP_VALENCY_MAP.get("to", []):
+            has_to_prep = True
+
+        return has_to_inf, has_to_prep
+
+    @classmethod
     def evaluate_syntactic_slot_clash(
         cls,
         target: str,
@@ -4030,16 +4100,53 @@ class DistractorEngineMixin:
         has_direct_obj_slot = anchor_type in ("object", "sb_to_do")
         active_verb_frame = anchor_type if anchor_type in ("to_inf", "gerund", "that_clause", "sb_to_do") else None
         extracted_gov_prep: Optional[str] = None
+        is_to_inf_slot = anchor_type in ("to_inf", "shell_to_do")
+        is_to_prep_slot = bool(anchor_type == "prep" and (anchor or "").strip().lower() == "to")
+
+        if not is_to_inf_slot and not is_to_prep_slot and anchor:
+            anc_str = anchor.strip().lower()
+            if anc_str.startswith("to "):
+                anc_doc = cls.get_spacy()(anc_str)
+                if len(anc_doc) >= 2:
+                    anc_nxt = anc_doc[1]
+                    if anc_nxt.pos_ == "ADV" and len(anc_doc) >= 3:
+                        anc_nxt = anc_doc[2]
+                    if anc_nxt.tag_ == "VBG" or anc_nxt.pos_ in ("NOUN", "PROPN", "PRON", "DET") or anc_nxt.text.lower() in ("the", "a", "an", "his", "her", "their", "our", "its", "this", "that", "these", "those"):
+                        is_to_prep_slot = True
+                    elif anc_nxt.tag_ == "VB" or (anc_nxt.pos_ in ("VERB", "AUX") and anc_nxt.tag_ not in ("VBG", "VBN", "VBD", "VBZ")):
+                        if cls._is_attested_verb(anc_nxt.lemma_) or cls._is_attested_verb(anc_nxt.text):
+                            is_to_inf_slot = True
+                        else:
+                            is_to_prep_slot = True
+                    elif not cls._is_attested_verb(anc_nxt.lemma_) and not cls._is_attested_verb(anc_nxt.text):
+                        is_to_prep_slot = True
 
         if quote and anchor and anchor_type in ("prep", "to_inf", "that_clause", "sb_to_do"):
             if not re.search(rf"\b{re.escape(anchor.lower())}\b", quote.lower()):
                 quote = None
 
         if quote:
+            # If quote is a cloze stem with a blank (e.g. '____'), restore target word so spaCy dependency tree parses authentically
+            parse_quote = re.sub(r'_{2,}', t, quote) if re.search(r'_{2,}', quote) else quote
             nlp = cls.get_spacy()
-            q_doc = nlp(quote)
+            q_doc = nlp(parse_quote)
             for tok in q_doc:
-                if cls.form_matches(tok.lemma_.lower(), t) or cls.form_matches(tok.text.lower(), t):
+                if cls.form_matches(tok.lemma_.lower(), t) or cls.form_matches(tok.text.lower(), t) or re.match(r"^_{2,}$", tok.text):
+                    # Check for to + inf or to + gerund/noun
+                    if tok.i + 1 < len(q_doc) and q_doc[tok.i + 1].text.lower() == "to":
+                        if tok.i + 2 < len(q_doc):
+                            nxt = q_doc[tok.i + 2]
+                            if nxt.pos_ == "ADV" and tok.i + 3 < len(q_doc):
+                                nxt = q_doc[tok.i + 3]
+                            if nxt.tag_ == "VBG" or nxt.pos_ in ("NOUN", "PROPN", "PRON", "DET") or nxt.text.lower() in ("the", "a", "an", "his", "her", "their", "our", "its", "this", "that", "these", "those"):
+                                is_to_prep_slot = True
+                            elif nxt.tag_ == "VB" or (nxt.pos_ in ("VERB", "AUX") and nxt.tag_ not in ("VBG", "VBN", "VBD", "VBZ")):
+                                if cls._is_attested_verb(nxt.lemma_) or cls._is_attested_verb(nxt.text):
+                                    is_to_inf_slot = True
+                                else:
+                                    is_to_prep_slot = True
+                            elif not cls._is_attested_verb(nxt.lemma_) and not cls._is_attested_verb(nxt.text):
+                                is_to_prep_slot = True
                     # Check for directly right-adjacent preposition or prep child
                     if tok.i + 1 < len(q_doc):
                         next_tok = q_doc[tok.i + 1]
@@ -4211,6 +4318,14 @@ class DistractorEngineMixin:
             if c_preps and gov_prep not in c_preps:
                 if not cls.lookup_ldoce_phrase(f"{c} {gov_prep}"):
                     return True, "unattested_prepositional_government_clash"
+
+        # 7. Subcategorization Frame Clash: to + infinitive vs to + gerund/preposition
+        if is_to_inf_slot or is_to_prep_slot:
+            c_inf, c_prep = cls.get_word_to_complement_profile(c, pos=pos)
+            if is_to_inf_slot and c_prep and not c_inf:
+                return True, "incompatible_to_infinitive_subcat_clash"
+            if is_to_prep_slot and c_inf and not c_prep:
+                return True, "incompatible_to_gerund_subcat_clash"
 
         return False, ""
 
