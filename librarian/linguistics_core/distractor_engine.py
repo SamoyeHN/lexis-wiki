@@ -983,15 +983,9 @@ class DistractorEngineMixin:
                 t_text = (it.get("word", "") + " " + it_dist + " " + it_concept).lower()
                 t_toks = {w for w in re.findall(r"\b[a-zA-Z]{3,}\b", t_text) if w not in _thes_stopwords}
                 overlap_score = len(t_toks & d_words) * 3 + len(t_toks & q_words)
-                # If definition/quote provided, filter out Activator/Thesaurus clusters with zero content-word overlap against the target sense
-                if content_words and overlap_score == 0 and not it.get("is_grambox_peer"):
-                    continue
-                # Boost true Thesaurus distinction records slightly over broad Activator clusters
-                if not it.get("concept"):
-                    overlap_score += 1
-                if it.get("is_grambox_peer"):
-                    overlap_score += 5
+
                 raw_cand_head = str(it.get("word", "")).strip().lower().split("/")[0].split()[0] if it.get("word") else ""
+                has_clash = False
                 if raw_cand_head:
                     has_clash, _ = cls.evaluate_syntactic_slot_clash(
                         clean_target, raw_cand_head,
@@ -999,6 +993,17 @@ class DistractorEngineMixin:
                     )
                     if has_clash:
                         overlap_score += 15
+
+                # If definition/quote provided, filter out Activator/Thesaurus clusters with zero content-word overlap against the target sense
+                # UNLESS the candidate has a verified syntactic slot clash or is a comparison peer
+                if content_words and overlap_score == 0 and not it.get("is_grambox_peer") and not has_clash:
+                    continue
+
+                # Boost true Thesaurus distinction records slightly over broad Activator clusters
+                if not it.get("concept"):
+                    overlap_score += 1
+                if it.get("is_grambox_peer"):
+                    overlap_score += 5
                 scored_thes_items.append((overlap_score, it))
             scored_thes_items.sort(key=lambda x: x[0], reverse=True)
 
@@ -1100,16 +1105,17 @@ class DistractorEngineMixin:
                         if cand_entry:
                             c_primary = (cand_entry.get("pos") or "").lower()
                             c_poses = [p.lower() for p in cand_entry.get("all_poses", [c_primary])]
+                            c_senses = cand_entry.get("senses") or []
                             if wn_pos == "n":
                                 if not any("noun" in p for p in c_poses):
                                     continue
-                                # Reject if primary PedLex POS is verb or adjective and spacy also detects non-noun
-                                if c_primary in ("verb", "adjective", "adverb"):
+                                # Reject if primary PedLex POS is verb or adjective unless it has an attested noun sense
+                                if c_primary in ("verb", "adjective", "adverb") and not any(s.get("pos") == "noun" for s in c_senses):
                                     continue
                             elif wn_pos == "v":
                                 if not any("verb" in p for p in c_poses):
                                     continue
-                                if c_primary in ("noun", "adjective", "adverb"):
+                                if c_primary in ("noun", "adjective", "adverb") and not any(s.get("pos") == "verb" for s in c_senses):
                                     continue
                             elif wn_pos == "a" and not any("adj" in p for p in c_poses):
                                 continue
@@ -4052,6 +4058,82 @@ class DistractorEngineMixin:
                 or (active_verb_frame == "to_inf" and "V_to_do" in c_prof["forbidden_frames"])
             ):
                 return True, f"forbidden_frame_{active_verb_frame}"
+
+        # 4. Aspectual Duration / Modifier Clash (e.g. quick/brief vs stare/gaze; prolonged/steady vs glance)
+        _INSTANTANEOUS_MODS = {"quick", "brief", "fleeting", "hasty", "momentary", "swift", "passing", "instant", "rapid"}
+        _DURATIVE_MODS = {"prolonged", "steady", "fixed", "continuous", "sustained", "unwavering", "unblinking", "endless", "long"}
+
+        is_instant_slot = bool(anchor and anchor.lower() in _INSTANTANEOUS_MODS)
+        is_durative_slot = bool(anchor and anchor.lower() in _DURATIVE_MODS)
+
+        if quote and not (is_instant_slot or is_durative_slot):
+            nlp = cls.get_spacy()
+            q_doc = nlp(quote)
+            for tok in q_doc:
+                if cls.form_matches(tok.lemma_.lower(), t) or cls.form_matches(tok.text.lower(), t):
+                    for ch in tok.children:
+                        ch_lem = ch.lemma_.lower()
+                        if ch_lem in _INSTANTANEOUS_MODS:
+                            is_instant_slot = True
+                        elif ch_lem in _DURATIVE_MODS:
+                            is_durative_slot = True
+                    if tok.head and not cls.form_matches(tok.head.lemma_.lower(), t):
+                        head_lem = tok.head.lemma_.lower()
+                        if head_lem in _INSTANTANEOUS_MODS:
+                            is_instant_slot = True
+                        elif head_lem in _DURATIVE_MODS:
+                            is_durative_slot = True
+                    break
+
+        c_ent = cls.get_ldoce_entry(c) or {}
+        c_senses = c_ent.get("senses", [])
+        c_defs = " ".join(str(s.get("definition", "")).lower() for s in c_senses)
+
+        if is_instant_slot:
+            has_durative_def = any(
+                cue in c_defs
+                for cue in [
+                    "for a long time", "fixedly", "steadily", "without moving your eyes",
+                    "long-lasting", "giving it all your attention"
+                ]
+            )
+            has_quick_def = any(
+                cue in c_defs
+                for cue in ["quick", "quickly", "a short time", "brief", "sudden", "suddenly", "for a moment"]
+            )
+            if has_durative_def and not has_quick_def:
+                return True, "durative_candidate_in_instantaneous_aspect_slot"
+
+        if is_durative_slot:
+            has_quick_def = any(
+                cue in c_defs
+                for cue in ["quick", "quickly", "a short time", "brief", "sudden", "suddenly", "for a moment"]
+            )
+            has_durative_def = any(
+                cue in c_defs
+                for cue in [
+                    "for a long time", "fixedly", "steadily", "without moving your eyes",
+                    "long-lasting"
+                ]
+            )
+            if has_quick_def and not has_durative_def:
+                return True, "instantaneous_candidate_in_durative_aspect_slot"
+
+        # 5. Bound Degree / Intensifier Collocation Clash (e.g. sound asleep vs sound *sleepy/*awake; wide awake vs wide *asleep)
+        _BOUND_INTENSIFIERS = {"sound", "wide", "fast", "bitterly", "highly", "gravely", "utterly", "dead"}
+        norm_anc = (anchor or "").strip().lower()
+        if not norm_anc and quote:
+            q_low = quote.lower()
+            for bi in _BOUND_INTENSIFIERS:
+                if re.search(rf"\b{re.escape(bi)}\s+{re.escape(t)}\b", q_low):
+                    norm_anc = bi
+                    break
+
+        if norm_anc in _BOUND_INTENSIFIERS:
+            t_bound = cls.lookup_ldoce_phrase(f"{norm_anc} {t}")
+            c_bound = cls.lookup_ldoce_phrase(f"{norm_anc} {c}")
+            if t_bound and not c_bound:
+                return True, "unattested_bound_degree_collocation_clash"
 
         return False, ""
 
