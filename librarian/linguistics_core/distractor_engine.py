@@ -111,6 +111,19 @@ class DistractorEngineMixin:
         return bool(re.search(slot_pattern, q, re.IGNORECASE))
 
     @classmethod
+    def is_light_verb_collocation_context(
+        cls,
+        quote: Optional[str] = None,
+        anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> bool:
+        """Returns True if the context represents the verb slot of an attested light-verb collocation."""
+        return cls.detect_light_verb_collocation_context(
+            quote=quote, anchor=anchor, anchor_type=anchor_type, target=target
+        ) is not None
+
+    @classmethod
     def _are_orthogonal_collective_nouns(cls, w1: str, w2: str) -> bool:
         """True when `w1` and `w2` belong to DIFFERENT synonym subgroups in `_COLLECTIVE_NOUN_ONTOLOGY`
         (e.g., `staff` vs `crew`/`cast`/`jury`/`faculty`, or `flock` vs `herd`/`pack`/`swarm`).
@@ -2098,7 +2111,7 @@ class DistractorEngineMixin:
                 if cls.is_cefr_compliant_distractor(a, clean_target) and not _is_informal_or_slang_distractor(a)
             ]
             if _is_collective_noun_target:
-                candidates = tier0_ldoce_thesaurus + tier3_coordinates + tier2_hyponyms + tier1_synonyms + extra_noun_ants
+                candidates = tier3_coordinates + tier0_ldoce_thesaurus + tier2_hyponyms + tier1_synonyms + extra_noun_ants
             else:
                 candidates = tier0_ldoce_thesaurus + tier1_synonyms + tier2_hyponyms + tier3_coordinates + extra_noun_ants
         else:
@@ -2174,12 +2187,13 @@ class DistractorEngineMixin:
             )
         cxn_cand_set: Set[str] = set()
         if active_cxn:
-            cxn_banned = cls.get_cxn_banned_words(active_cxn.get("ban_groups"))
+            cxn_banned = cls.get_cxn_banned_words(active_cxn.get("ban_groups")) | set(active_cxn.get("ban_groups") or [])
             forbidden_words |= cxn_banned
             sense_antonyms = [ant for ant in sense_antonyms if ant not in cxn_banned]
             if cxn_cands:
                 cxn_cand_set = set(cxn_cands)
-                candidates = [c for c in cxn_cands if c not in forbidden_words] + [
+                cxn_excl = cxn_banned | (exclude_words or set()) | {clean_target}
+                candidates = [c for c in cxn_cands if c not in cxn_excl] + [
                     c for c in candidates if c not in cxn_cand_set
                 ]
         is_fronted_inv_slot = cls.is_fronted_inversion_context(
@@ -2260,7 +2274,7 @@ class DistractorEngineMixin:
             if is_fronted_inv_slot and cand_clash_r == "non_inverting_candidate_in_fronted_inversion_slot":
                 continue
             # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
-            if not has_cand_clash and cand in near_only_for_pile and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
+            if not has_cand_clash and cand in near_only_for_pile and cand not in cxn_cand_set and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
                 continue
             # Countability Symmetry Gate for Nouns:
             # - For strictly uncountable noun targets: allow at most 1 countable foil into safe_distractors.
@@ -2290,7 +2304,7 @@ class DistractorEngineMixin:
                 and cand in sense_antonyms
                 and sum(1 for s in safe_distractors if distractor_metadata.get(s) == "antonym") < 2
             )
-            if not is_noun_fallback_ant and any(
+            if not is_noun_fallback_ant and cand not in cxn_cand_set and any(
                 (s in cand_syns or cand in cls.get_synonyms(s))
                 and not cls._are_orthogonal_collective_nouns(cand, s)
                 for s in safe_distractors
@@ -2310,7 +2324,7 @@ class DistractorEngineMixin:
                 if is_dk or (dk_reason == "contrast" and cand not in sense_antonyms):
                     continue
 
-            if cand not in forbidden_words and cand not in exclude_words and len(cand) >= 2:
+            if (cand in cxn_cand_set or cand not in forbidden_words) and cand not in exclude_words and len(cand) >= 2:
                 safe_distractors.append(cand)
                 if cand in cxn_cand_set:
                     distractor_metadata[cand] = "cxn_subcat_contrast"
@@ -4808,6 +4822,22 @@ class DistractorEngineMixin:
                             if h_t not in cls._DEFINING_GENUS_VERBS and re.search(rf"\b{re.escape(tf)}\b", d_def_text):
                                 return True, "double_key_slot"
 
+        # Light-Verb Collocation Double-Key Guard:
+        # If target verb occupies a light-verb collocation, dictionary idiom validation is the sole arbiter:
+        # Any distractor that ALSO forms an attested collocation with that noun (and prep) in LDOCE
+        # is an alternative key (double key). Any candidate that is strictly unattested is a safe foil
+        # (NOT a double key), preventing generic synset overlaps from blocking high-discrimination foils.
+        lv_slot_ctx = cls.detect_light_verb_collocation_context(
+            quote=quote, anchor=anchor, anchor_type=anchor_type, target=t
+        )
+        if lv_slot_ctx:
+            lv_n = lv_slot_ctx["noun"]
+            lv_p = lv_slot_ctx.get("prep")
+            d_is_attested, _ = cls.is_attested_light_verb_collocation(verb=d, noun=lv_n, prep=lv_p)
+            if d_is_attested:
+                return True, "double_key_collocation"
+            return False, "none"
+
         # Construction Family Subcategorization Gate (`pedlex_cxn_index`):
         # When `anchor_type` or `quote` locks one of the 8 construction families, any candidate in
         # `ban_groups` (sharing the target's subcategorization frame in the same semantic/syntactic class)
@@ -4816,17 +4846,18 @@ class DistractorEngineMixin:
             anchor_type == "fronted_inv"
             or cls.is_fronted_inversion_context(quote=quote, anchor=anchor, anchor_type=anchor_type, target=t)
         )
+        is_lv_verb_cxn = bool(lv_slot_ctx)
         if anchor_type in (
             "it_extrapos", "gerund", "to_inf", "sb_to_do",
             "shell_to_do", "shell_of_doing", "shell_that",
             "correl_pair", "fronted_inv", "npi", "mandative_subj", "lv_triad",
-        ) or is_fronted_inv_cxn:
+        ) or is_fronted_inv_cxn or is_lv_verb_cxn:
             cxn_cands, active_cxn = cls.get_construction_contrast_distractors(
                 t_lem,
-                pos=pos or ("adv" if is_fronted_inv_cxn else "noun"),
+                pos=pos or ("adv" if is_fronted_inv_cxn else ("verb" if is_lv_verb_cxn else "noun")),
                 quote=quote,
                 context_anchor=anchor,
-                anchor_type="fronted_inv" if is_fronted_inv_cxn else anchor_type,
+                anchor_type="fronted_inv" if is_fronted_inv_cxn else ("lv_triad" if is_lv_verb_cxn else anchor_type),
                 target_count=12,
                 require_context_match=True,
             )
@@ -7368,6 +7399,217 @@ class DistractorEngineMixin:
         "use": (["attention", "impact", "role", "place", "effort", "decision"], {"advantage", "use", "sense", "fun", "room", "way"}),
     }
 
+    _LIGHT_VERB_SLOT_PEERS: Dict[str, List[str]] = {
+        "cast": ["throw", "shed", "put", "drop", "lay", "send"],
+        "shed": ["cast", "throw", "drop", "shine", "pour", "spread"],
+        "strike": ["hit", "beat", "keep", "reach", "make", "hold", "catch"],
+        "pay": ["give", "offer", "bring", "make", "render", "present"],
+        "pose": ["present", "cause", "create", "raise", "set", "make"],
+        "wreak": ["cause", "bring", "make", "create", "play"],
+        "bear": ["have", "hold", "keep", "carry", "show", "bring"],
+        "exert": ["put", "apply", "impose", "exercise", "bring"],
+        "draw": ["make", "reach", "pull", "take", "write"],
+        "run": ["take", "bear", "have", "face", "meet"],
+        "take": ["make", "have", "get", "give", "bring", "hold"],
+        "make": ["take", "do", "have", "give", "create", "bring"],
+        "give": ["make", "bring", "provide", "offer", "take", "grant"],
+        "catch": ["see", "get", "take", "find", "hold"],
+        "keep": ["hold", "take", "make", "have", "save"],
+        "lose": ["miss", "drop", "waste", "forget"],
+        "put": ["set", "place", "lay", "bring", "make"],
+        "set": ["put", "place", "lay", "make", "give"],
+        "lay": ["put", "set", "place", "make", "give"],
+        "play": ["act", "take", "make", "perform", "do"],
+        "hold": ["keep", "take", "have", "bear", "carry"],
+        "bring": ["take", "give", "make", "carry", "put"],
+    }
+
+    _STANDARD_COLLOC_PREPS: Set[str] = {
+        "on", "in", "to", "at", "for", "from", "with", "between",
+        "over", "against", "into", "upon", "under", "about", "beyond",
+        "through", "toward", "towards",
+    }
+
+    @classmethod
+    def is_attested_light_verb_collocation(
+        cls,
+        verb: str,
+        noun: str,
+        prep: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Validates whether `verb` forms an attested idiom or established collocation with `noun` (and `prep`).
+        
+        Returns `(is_attested, reason)` where:
+        - `is_attested == True` indicates that `verb` is co-attested with `noun` in standard English (LDOCE),
+          meaning that using `verb` as a distractor for a light-verb collocation with `noun` would create a DOUBLE KEY.
+        - `is_attested == False` guarantees that `verb` is strictly unattested with `noun`, making it a
+          high-discrimination, single-fit safe foil.
+        """
+        v_clean = (verb or "").strip().lower()
+        n_clean = (noun or "").strip().lower()
+        if not v_clean or not n_clean:
+            return False, ""
+        v_base = cls.lemma_of(v_clean).lower() if " " not in v_clean else v_clean
+        n_base = cls.lemma_of(n_clean).lower() if " " not in n_clean else n_clean
+        p_base = (prep or "").strip().lower()
+
+        # 1. lookup_ldoce_phrase (gold standard curated idioms and multi-word phrases)
+        phrs = [
+            f"{v_base} {n_base}",
+            f"{v_base} a {n_base}",
+            f"{v_base} an {n_base}",
+            f"{v_base} the {n_base}",
+        ]
+        if p_base:
+            phrs.extend([
+                f"{v_base} {n_base} {p_base}",
+                f"{v_base} a {n_base} {p_base}",
+                f"{v_base} an {n_base} {p_base}",
+                f"{v_base} the {n_base} {p_base}",
+            ])
+        for p in phrs:
+            if cls.lookup_ldoce_phrase(p):
+                return True, f"phrase_index:{p}"
+
+        # 2. LDOCE noun entry curated collocations (source != 'corpus')
+        n_ent = cls.get_ldoce_entry(n_base)
+        if n_ent:
+            colls = n_ent.get("collocations") or {}
+            if isinstance(colls, dict):
+                candidates = []
+                for v_item in colls.get("verbs", []):
+                    if v_item.get("source") != "corpus":
+                        candidates.append((v_item.get("collocation") or "").lower())
+                for p_item in colls.get("phrases", []):
+                    if p_item.get("source") != "corpus":
+                        candidates.append((p_item.get("collocation") or "").lower())
+
+                for c_text in candidates:
+                    if not re.search(rf"\b{re.escape(v_base)}\b", c_text):
+                        continue
+
+                    # If n_base is immediately preceded by certain prepositions (e.g. 'into doubt', 'beyond doubt'),
+                    # the verb does not take n_base as direct object
+                    m_prep_before = re.search(
+                        rf"\b([a-z]+)\s+(?:a\s+|an\s+|the\s+)?{re.escape(n_base)}\b", c_text
+                    )
+                    if m_prep_before:
+                        pb = m_prep_before.group(1).lower()
+                        if pb in ("into", "beyond", "without", "out of", "under"):
+                            continue
+
+                    # Check governed preposition AFTER noun
+                    m_prep_after = re.search(rf"\b{re.escape(n_base)}(?:s)?\s+([a-z]+)", c_text)
+                    gov_p = (
+                        m_prep_after.group(1).lower()
+                        if m_prep_after and m_prep_after.group(1).lower() in cls._STANDARD_COLLOC_PREPS
+                        else None
+                    )
+                    if gov_p and p_base and gov_p != p_base:
+                        # Collocation specifies a specific post-noun preposition (e.g. 'on') that clashes with p_base
+                        continue
+
+                    return True, f"curated_colloc:{c_text}"
+
+        return False, "unattested"
+
+    @classmethod
+    def detect_light_verb_collocation_context(
+        cls,
+        quote: Optional[str] = None,
+        anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Detects whether `target` (or the blank in `quote`) represents the verb slot of a light-verb collocation.
+        
+        Returns a dict `{'verb': base_verb, 'noun': noun_lemma, 'prep': prep_or_none, 'is_light_verb': True}`
+        if verified as an attested light-verb collocation, else `None`."""
+        t_clean = (target or "").strip().lower()
+        t_lem = cls.lemma_of(t_clean) if t_clean else ""
+        base_v = None
+        if t_clean in cls._LIGHT_VERB_SLOT_PEERS:
+            base_v = t_clean
+        elif t_lem in cls._LIGHT_VERB_SLOT_PEERS:
+            base_v = t_lem
+
+        if not base_v:
+            return None
+
+        noun: Optional[str] = None
+        prep: Optional[str] = None
+
+        if quote:
+            parse_quote = re.sub(r'_{2,}', t_clean or base_v, quote)
+            try:
+                doc = cls.get_spacy()(parse_quote)
+                for tok in doc:
+                    if cls.form_matches(tok.text.lower(), t_clean) or cls.form_matches(tok.lemma_.lower(), base_v):
+                        objs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass")]
+                        if objs:
+                            d = objs[0]
+                            noun = d.lemma_.lower()
+                            preps = [ch for ch in d.children if ch.dep_ in ("prep", "dative")]
+                            if not preps:
+                                preps = [ch for ch in tok.children if ch.dep_ in ("prep", "dative") and ch.i > d.i]
+                            if preps:
+                                prep = preps[0].text.lower()
+                            break
+            except Exception:
+                pass
+
+        if not noun and quote:
+            v_pat = rf"(?:{re.escape(t_clean)}|{re.escape(base_v)}|_{{2,}})"
+            m = re.search(
+                rf"\b{v_pat}\s+(?:(?:a|an|the|his|her|their|our|its|my|your|no|any|some|much|more|little|less)\s+)?(?:[a-z]+\s+)?([a-z]+)(?:\s+([a-z]+))?",
+                quote,
+                re.IGNORECASE,
+            )
+            if m:
+                cand_n = m.group(1).lower()
+                cand_p = (m.group(2) or "").lower()
+                if cand_p in cls._STANDARD_COLLOC_PREPS:
+                    noun = cls.lemma_of(cand_n)
+                    prep = cand_p
+                else:
+                    noun = cls.lemma_of(cand_n)
+                    prep = None
+
+        if not noun and anchor and anchor_type in ("lv_triad", "colloc", "noun"):
+            noun = cls.lemma_of(anchor.strip().lower())
+
+        if noun:
+            is_attested, _ = cls.is_attested_light_verb_collocation(verb=base_v, noun=noun, prep=prep)
+            if is_attested:
+                return {"verb": base_v, "noun": noun, "prep": prep, "is_light_verb": True}
+
+        return None
+
+    @classmethod
+    def inflect_verb_like_target(cls, cand_base: str, target_word: str, base_verb: str) -> str:
+        """Morphologically inflects `cand_base` to match the exact surface form/tag of `target_word`."""
+        t_clean = (target_word or "").strip().lower()
+        b_clean = (base_verb or "").strip().lower()
+        c_clean = (cand_base or "").strip().lower()
+        if not t_clean or not c_clean or t_clean == b_clean:
+            return c_clean
+
+        tag = cls.verb_form_tag_of(t_clean)
+        if not tag:
+            if t_clean.endswith("s") and (t_clean in (b_clean + "s", b_clean + "es") or b_clean in ("have", "be", "do")):
+                tag = "VBZ"
+            elif t_clean.endswith("ing"):
+                tag = "VBG"
+            elif t_clean.endswith("ed"):
+                tag = "VBD"
+
+        if tag:
+            inf = cls.verb_form_for_tag(c_clean, tag) or cls._inflect_verb(c_clean, tag)
+            if inf:
+                return inf
+
+        return c_clean
+
     @classmethod
     def get_cxn_banned_words(cls, ban_groups: Optional[List[str]]) -> Set[str]:
         """Return all words belonging to `ban_groups` in `pedlex_cxn_index`,
@@ -7684,6 +7926,51 @@ class DistractorEngineMixin:
                 "ban_groups": inv_banned,
             }
             return cands[:target_count], synth_spec
+
+        # Special handler 5: Family 6 Light-Verb Collocation Verb Slot ('cast doubt on', 'strike a balance', etc.)
+        lv_ctx = cls.detect_light_verb_collocation_context(
+            quote=quote, anchor=context_anchor, anchor_type=anchor_type, target=w_clean
+        )
+        if lv_ctx:
+            lv_verb = lv_ctx["verb"]
+            lv_noun = lv_ctx["noun"]
+            lv_prep = lv_ctx.get("prep")
+            peer_verbs = cls._LIGHT_VERB_SLOT_PEERS.get(lv_verb, [])
+            if peer_verbs:
+                banned_double_keys: List[str] = []
+                contrast_candidates: List[str] = []
+                for cand_v in peer_verbs:
+                    cand_base = cand_v.lower() if cand_v in cls._LIGHT_VERB_SLOT_PEERS else cls.lemma_of(cand_v).lower()
+                    if cand_base == lv_verb or cand_base in excl:
+                        continue
+                    is_attested, _ = cls.is_attested_light_verb_collocation(
+                        verb=cand_base, noun=lv_noun, prep=lv_prep
+                    )
+                    if is_attested:
+                        banned_double_keys.append(cand_base)
+                    else:
+                        contrast_candidates.append(cand_base)
+
+                if w_clean != lv_verb:
+                    contrast_candidates = [
+                        cls.inflect_verb_like_target(cand_base=c_v, target_word=w_clean, base_verb=lv_verb)
+                        for c_v in contrast_candidates
+                    ]
+                    banned_double_keys.extend([
+                        cls.inflect_verb_like_target(cand_base=b_v, target_word=w_clean, base_verb=lv_verb)
+                        for b_v in list(banned_double_keys)
+                    ])
+
+                synth_spec = {
+                    "word": w_clean,
+                    "pos": "verb",
+                    "family_id": 6,
+                    "subcat_group": "LV_VERB_SLOT",
+                    "canonical_blank": w_clean,
+                    "contrast_groups": ["LV_VERB_CONTRAST"],
+                    "ban_groups": banned_double_keys,
+                }
+                return contrast_candidates[:target_count], synth_spec
 
         specs = cls.get_word_cxn_specs(w_clean, sense_idx=sense_idx)
         if not specs:
