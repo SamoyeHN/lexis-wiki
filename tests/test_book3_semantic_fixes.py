@@ -306,3 +306,36 @@ def test_possessive_idiom_whole_preservation_and_pronoun_tense_sync():
         assert all(not opt.endswith(" " + bad_frag) for opt in utmost_skel["prescribed_options"])
 
 
+def test_catch_up_with_patient_ontology_and_frame():
+    """Verify that phrasal/prepositional verbs like 'catch up with' do not leak base-verb direct
+    object collocations (e.g. 'the act', 'the attention' from 'catch') into patient ontology,
+    and resolve the human patient from prepositional pronoun objects ('her', 'him') and definition."""
+    res = LE._extract_verb_patient_ontology(
+        word="catch up with",
+        canonical_pos="phrase",
+        target_entry=None,
+        locked_sense=None,
+        definition="if something bad from the past catches up with you, you cannot avoid dealing with it any longer",
+        authentic_example="At the end of the movie his murky past catches up with him.",
+        quote="Eventually, the bureaucracy caught up with her, and she was given 10 days to leave her apartment for good.",
+    )
+    assert res is not None
+    assert res["ontology_type"] == "person_group"
+    assert "person" in res["slot_label"].lower() or "someone" in res["slot_label"].lower()
+    assert "act" not in res["slot_label"].lower()
+    assert "attention" not in res["slot_label"].lower()
+
+    frame = LE.derive_cloze_slot_frame_from_example(
+        example_text="At the end of the movie his murky past catches up with him.",
+        final_target="catch up with",
+        base_word="catch up with",
+        canonical_pos="phrase",
+        patient_ontology_slot=res.get("slot_label"),
+    )
+    assert frame is not None
+    assert "act" not in frame
+    assert "attention" not in frame
+    assert "person" in frame or "someone" in frame
+
+
+

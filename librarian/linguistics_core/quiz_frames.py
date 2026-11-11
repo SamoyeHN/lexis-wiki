@@ -133,6 +133,8 @@ class QuizFramesMixin:
 
     @classmethod
     def _classify_noun_patient_ontology(cls, lemma: str) -> str:
+        if lemma in ("person", "people", "someone", "somebody", "human", "individual"):
+            return "person"
         wn = cls.get_wordnet()
         if not wn:
             return "unknown"
@@ -220,26 +222,40 @@ class QuizFramesMixin:
                     direct_cands = [
                         c for c in tok.children
                         if c.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass")
-                        and c.pos_ in ("NOUN", "PROPN")
+                        and c.pos_ in ("NOUN", "PROPN", "PRON")
                         and c.is_alpha
                     ]
                     # Coordinated verbs sharing object (e.g. 'peel and dice the potatoes')
                     for conj_c in tok.children:
-                        if conj_c.dep_ == "conj" and conj_c.pos_ == "VERB":
+                        if conj_c.dep_ == "conj" and conj_c.pos_ == "VERB" and not any(c.dep_ in ("nsubj", "nsubjpass") for c in conj_c.children):
                             direct_cands.extend([
                                 c for c in conj_c.children
                                 if c.dep_ in ("dobj", "obj")
-                                and c.pos_ in ("NOUN", "PROPN")
+                                and c.pos_ in ("NOUN", "PROPN", "PRON")
                                 and c.is_alpha
                             ])
+                    # Prepositional objects for phrasal/prepositional verbs (e.g. 'catch up with her', 'rely on parents')
+                    for p_c in tok.children:
+                        if p_c.dep_ == "prep" and (len(w_toks) == 1 or p_c.text.lower() in w_toks[1:] or p_c.i > tok.i):
+                            for gc in p_c.children:
+                                if gc.dep_ == "pobj" and gc.is_alpha:
+                                    direct_cands.append(gc)
                     if not direct_cands and tok.dep_ in ("acl", "amod", "relcl") and tok.head.pos_ in ("NOUN", "PROPN") and tok.head.is_alpha:
                         direct_cands = [tok.head]
 
                     for c_tok in direct_cands:
+                        c_text = c_tok.text.lower()
                         c_lem = c_tok.lemma_.lower()
+                        if c_text in ("him", "her", "them", "us", "you", "whom", "someone", "somebody") or c_tok.ent_type_ == "PERSON" or c_lem in ("person", "people", "man", "woman", "child", "student", "victim", "suspect", "worker"):
+                            if "person" not in seen_lem:
+                                seen_lem.add("person")
+                                cands.append(("someone", "person"))
+                            continue
+                        if c_tok.pos_ not in ("NOUN", "PROPN"):
+                            continue
                         if c_lem in (
                             "thing", "something", "someone", "somebody", "one", "way",
-                            "time", "place", "part", "side", "rapist", "murderer", "corpse",
+                            "time", "day", "days", "week", "month", "year", "place", "part", "side", "rapist", "murderer", "corpse",
                         ) or _is_forb(c_lem):
                             continue
                         # Quantifier / partitive of-phrase resolution (e.g. 'wave of rioting', 'forms of illness')
@@ -264,11 +280,17 @@ class QuizFramesMixin:
             try:
                 def_doc = nlp(defn_low)
                 for d_tok in def_doc:
+                    d_text = d_tok.text.lower()
+                    d_lem = d_tok.lemma_.lower()
+                    if d_text in ("you", "someone", "somebody", "people", "person") and d_tok.dep_ in ("dobj", "obj", "pobj"):
+                        if "person" not in seen_lem:
+                            seen_lem.add("person")
+                            cands.append(("someone", "person"))
+                        continue
                     if d_tok.dep_ in ("dobj", "obj", "conj", "pobj") and d_tok.pos_ == "NOUN" and d_tok.is_alpha:
-                        d_lem = d_tok.lemma_.lower()
                         if d_lem in (
                             "thing", "something", "someone", "somebody", "one", "way",
-                            "time", "place", "part", "side", "example", "order", "fact",
+                            "time", "day", "days", "week", "month", "year", "place", "part", "side", "example", "order", "fact",
                         ) or _is_forb(d_lem):
                             continue
                         if d_lem not in seen_lem:
@@ -277,8 +299,8 @@ class QuizFramesMixin:
             except Exception:
                 pass
 
-        # 3. Fallback to Oxford collocations if still sparse
-        if len(cands) < 2 and head_v:
+        # 3. Fallback to Oxford collocations if still sparse (STRICTLY for single-word base verbs)
+        if len(cands) < 2 and head_v and len(w_toks) == 1:
             collocs = cls.get_oxford_collocations(head_v)
             for cn in (collocs or {}).get("colloc_nouns") or []:
                 cn_clean = re.sub(r"[^a-z]", "", str(cn).lower())
@@ -311,9 +333,17 @@ class QuizFramesMixin:
                 r"^\s*to\s+(?:make|tell|persuade|advise|help|ask|allow|force|encourage|cause|give|show|teach|remind|warn|comfort|treat)\s+(?:someone|somebody|people)\b",
                 defn_low,
             )
-        ) or bool(re.search(r"\b(?:someone|somebody)\s+(?:feel|think|believe|understand|do)\b", defn_low))
+        ) or bool(
+            re.search(r"\b(?:someone|somebody)\s+(?:feel|think|believe|understand|do)\b", defn_low)
+        ) or bool(
+            re.search(r"\b(?:with|to|for|about|against|upon|after|at)\s+(?:you|someone|somebody|a person|people)\b", defn_low)
+        ) or bool(
+            re.search(r"\b(?:affect|affects|punish|punishes|harm|harms|catch up with|befall|befalls)\s+(?:you|someone|somebody|a person|people)\b", defn_low)
+        ) or bool(
+            re.search(r"\b\((?:sb|somebody|someone)\b", (word or "").lower())
+        )
 
-        if has_person_def and person_cands:
+        if (has_person_def or (person_cands and not abs_cands and not phys_cands)) and person_cands:
             exemplars = person_cands[:2]
             ex_inline = " / ".join(exemplars)
             slot_label = f"[person/group, e.g. {ex_inline}]"
