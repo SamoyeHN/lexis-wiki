@@ -65,6 +65,51 @@ class DistractorEngineMixin:
         ],
     }
 
+    # Family 7 Fronted Negative / Restrictive Inversion Arena:
+    # High-order negative or restrictive triggers that trigger Subject-Auxiliary Inversion (SAI)
+    # when fronted at the beginning of a clause/sentence (e.g. 'Hardly had the meeting begun when...').
+    _NEGATIVE_INVERSION_ADVERBS: Set[str] = {
+        "hardly", "scarcely", "barely",
+        "seldom", "rarely",
+        "little", "no sooner",
+    }
+    _NEGATIVE_INVERSION_PHRASES: Set[str] = {
+        "no sooner", "not only", "not until",
+        "under no circumstances", "on no account", "in no way",
+        "at no time", "by no means", "only then", "only later",
+        "only when", "only after", "only by", "only if",
+    }
+    _ALL_NEGATIVE_INVERSION_TRIGGERS: Set[str] = _NEGATIVE_INVERSION_ADVERBS | _NEGATIVE_INVERSION_PHRASES
+
+    _AUX_INV_RE: str = r"(?:had|have|has|did|do|does|was|were|is|are|can|could|will|would|should|must|shall|might|may)"
+    _SUBJ_INV_RE: str = r"(?:i|you|he|she|it|we|they|one|the|a|an|passengers?|students?|people|[a-z]+)"
+
+    @classmethod
+    def is_fronted_inversion_context(
+        cls,
+        quote: Optional[str] = None,
+        anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> bool:
+        """True when the syntactic context represents a fronted negative/restrictive inversion slot (Aux + Subj inversion)."""
+        if anchor_type == "fronted_inv" or anchor == "inversion":
+            return True
+        if not quote:
+            return False
+        q = quote.strip()
+        inv_triggers_pat = "|".join(re.escape(w) for w in sorted(cls._NEGATIVE_INVERSION_ADVERBS, key=len, reverse=True))
+        target_esc = (
+            rf"(?:{re.escape(target)}|{inv_triggers_pat})"
+            if target
+            else r"[a-zA-Z -]+"
+        )
+        slot_pattern = (
+            rf"(?:^|[.;!?]\s*|(?:^|[,;!?])\s*\b(?:and|but)\s+)[\"\'“”‘’\s]*"
+            rf"(?:_{{2,}}|{target_esc})\s+{cls._AUX_INV_RE}\s+{cls._SUBJ_INV_RE}\b"
+        )
+        return bool(re.search(slot_pattern, q, re.IGNORECASE))
+
     @classmethod
     def _are_orthogonal_collective_nouns(cls, w1: str, w2: str) -> bool:
         """True when `w1` and `w2` belong to DIFFERENT synonym subgroups in `_COLLECTIVE_NOUN_ONTOLOGY`
@@ -2137,6 +2182,9 @@ class DistractorEngineMixin:
                 candidates = [c for c in cxn_cands if c not in forbidden_words] + [
                     c for c in candidates if c not in cxn_cand_set
                 ]
+        is_fronted_inv_slot = cls.is_fronted_inversion_context(
+            quote=quote, anchor=context_anchor, anchor_type=anchor_type, target=clean_target
+        )
         if context_anchor:
             clean_anchor = context_anchor.strip().lower()
             if (wn_pos in ("a", "n") or not wn_pos) and anchor_type == "prep":
@@ -2206,6 +2254,11 @@ class DistractorEngineMixin:
             has_cand_clash, cand_clash_r = cls.evaluate_syntactic_slot_clash(
                 clean_target, cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
             )
+            # Fronted Negative Inversion Arena Gate:
+            # In an inverted clause (Aux + Subj), ban all non-inverting adverbs (*often, *steadily, *completely)
+            # so multiple-choice distractors test SLA correlative/aspectual nuances rather than syntax giveaways.
+            if is_fronted_inv_slot and cand_clash_r == "non_inverting_candidate_in_fronted_inversion_slot":
+                continue
             # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
             if not has_cand_clash and cand in near_only_for_pile and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
                 continue
@@ -2387,7 +2440,7 @@ class DistractorEngineMixin:
         # Fallback for Focus / Degree / Approximation / Discourse / Temporal Adverbs before Orthographic Paronym Tier
         # (so focus/degree/discourse/temporal adverbs like 'merely', 'virtually', 'barely', 'similarly', 'nowadays'
         # get semantic/functional contrasts rather than orthographic rhymes or generic manner adverbs)
-        if len(safe_distractors) < target_count and wn_pos == "r":
+        if len(safe_distractors) < target_count and wn_pos == "r" and not is_fronted_inv_slot:
             _adv_contrast_map = [
                 (
                     {"merely", "solely", "purely", "simply", "exclusively", "just"},
@@ -2516,7 +2569,7 @@ class DistractorEngineMixin:
         #      industrial/industrious, considerate/considerable, respectful/respective) exists, OR
         #    - All 3 slots are generic coordinates and a clean orthogonal-domain root peer (score >= 28,
         #      e.g. specimen -> spectrum/spectacle/speculation) exists.
-        if wn_pos in ("n", "v", "a", "r"):
+        if wn_pos in ("n", "v", "a", "r") and not is_fronted_inv_slot:
             need_paronym_fill = len(safe_distractors) < target_count
             pure_generic_coords = (
                 len(safe_distractors) >= target_count
@@ -2978,8 +3031,25 @@ class DistractorEngineMixin:
                     if len(safe_distractors) >= target_count:
                         break
 
+        # Negative Inversion Fallback: strictly select peer inversion triggers
+        if len(safe_distractors) < target_count and is_fronted_inv_slot and clean_target in cls._NEGATIVE_INVERSION_ADVERBS:
+            for inv_peer in ("seldom", "hardly", "scarcely", "barely", "little", "no sooner", "rarely"):
+                if (
+                    inv_peer != clean_target
+                    and inv_peer not in safe_distractors
+                    and inv_peer not in forbidden_words
+                    and inv_peer not in exclude_words
+                    and not cls.evaluate_syntactic_slot_clash(
+                        clean_target, inv_peer, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )[0]
+                ):
+                    safe_distractors.append(inv_peer)
+                    distractor_metadata[inv_peer] = "fronted_inv_peer"
+                    if len(safe_distractors) >= target_count:
+                        break
+
         # Universal Fallback if candidates pool is still sparse: select stratified core corpus items
-        if len(safe_distractors) < target_count:
+        if len(safe_distractors) < target_count and not is_fronted_inv_slot:
             needed = target_count - len(safe_distractors)
             excl = set(forbidden_words) | set(exclude_words) | set(safe_distractors) | {clean_target}
             pref_vowel: Optional[bool] = None
@@ -4553,6 +4623,31 @@ class DistractorEngineMixin:
             if is_to_prep_slot and c_inf and not c_prep:
                 return True, "incompatible_to_gerund_subcat_clash"
 
+        # 8. Fronted Negative Inversion Slot & Correlative Clash
+        # In a fronted inversion slot (Aux + Subj inversion), candidates must be valid negative/restrictive
+        # inversion triggers. Non-inverting adverbs (*often, *steadily, *completely) are hard-clashing ungrammatical giveaways.
+        # Furthermore, correlative pairs must match:
+        # - 'no sooner' requires 'than' (clashes with 'when' / 'before')
+        # - 'hardly', 'scarcely', 'barely' require 'when' / 'before' (clash with 'than')
+        # - 'seldom', 'rarely', 'little' are aspectually incompatible with point-in-time 'when' / 'before'
+        is_fronted_inv_slot = cls.is_fronted_inversion_context(
+            quote=quote, anchor=anchor, anchor_type=anchor_type, target=t
+        )
+        if is_fronted_inv_slot:
+            if c not in cls._ALL_NEGATIVE_INVERSION_TRIGGERS:
+                return True, "non_inverting_candidate_in_fronted_inversion_slot"
+            if quote:
+                q_has_than = bool(re.search(r"\bthan\b", quote, re.IGNORECASE))
+                q_has_when_before = bool(re.search(r"\b(?:when|before)\b", quote, re.IGNORECASE))
+                if q_has_than:
+                    if c in ("hardly", "scarcely", "barely", "seldom", "rarely", "little"):
+                        return True, "correlative_than_mismatch_in_inversion_slot"
+                if q_has_when_before:
+                    if c == "no sooner":
+                        return True, "correlative_when_mismatch_in_inversion_slot"
+                    if c in ("seldom", "rarely", "little"):
+                        return True, "aspectual_when_mismatch_in_inversion_slot"
+
         return False, ""
 
     @classmethod
@@ -4717,17 +4812,21 @@ class DistractorEngineMixin:
         # When `anchor_type` or `quote` locks one of the 8 construction families, any candidate in
         # `ban_groups` (sharing the target's subcategorization frame in the same semantic/syntactic class)
         # is a constructional double-key, whereas verified `contrast_groups` candidates are single-fit safe.
+        is_fronted_inv_cxn = (
+            anchor_type == "fronted_inv"
+            or cls.is_fronted_inversion_context(quote=quote, anchor=anchor, anchor_type=anchor_type, target=t)
+        )
         if anchor_type in (
             "it_extrapos", "gerund", "to_inf", "sb_to_do",
             "shell_to_do", "shell_of_doing", "shell_that",
             "correl_pair", "fronted_inv", "npi", "mandative_subj", "lv_triad",
-        ):
+        ) or is_fronted_inv_cxn:
             cxn_cands, active_cxn = cls.get_construction_contrast_distractors(
                 t_lem,
-                pos=pos or "noun",
+                pos=pos or ("adv" if is_fronted_inv_cxn else "noun"),
                 quote=quote,
                 context_anchor=anchor,
-                anchor_type=anchor_type,
+                anchor_type="fronted_inv" if is_fronted_inv_cxn else anchor_type,
                 target_count=12,
                 require_context_match=True,
             )
@@ -7271,21 +7370,43 @@ class DistractorEngineMixin:
 
     @classmethod
     def get_cxn_banned_words(cls, ban_groups: Optional[List[str]]) -> Set[str]:
-        """Return all words belonging to `ban_groups` in `pedlex_cxn_index`."""
-        if not ban_groups or not cls._ensure_ldoce_conn() or not cls._ldoce_table_exists("pedlex_cxn_index"):
+        """Return all words belonging to `ban_groups` in `pedlex_cxn_index`,
+        or directly in `ban_groups` if explicit word strings are provided."""
+        if not ban_groups:
             return set()
-        clean_groups = [str(g).strip() for g in ban_groups if g]
+        clean_groups = [str(g).strip().lower() for g in ban_groups if g]
         if not clean_groups:
             return set()
-        placeholders = ",".join("?" for _ in clean_groups)
-        try:
-            cur = cls._ldoce_conn.execute(
-                f"SELECT DISTINCT word FROM pedlex_cxn_index WHERE subcat_group IN ({placeholders})",
-                tuple(clean_groups),
+
+        # Collect direct word entries (e.g. lowercase words/phrases or explicit words)
+        result: Set[str] = {
+            g for g in clean_groups
+            if not g.isupper() and not g.startswith("phr_") and not g.startswith("adv_") and not g.startswith("v_") and not g.startswith("adj_") and not g.startswith("n_")
+        }
+
+        # Subcat table keys (typically UPPERCASE like 'PHR_FRONTED_INV')
+        table_keys = [
+            str(g).strip() for g in ban_groups
+            if g and (
+                str(g).isupper()
+                or str(g).startswith("PHR_")
+                or str(g).startswith("ADV_")
+                or str(g).startswith("V_")
+                or str(g).startswith("ADJ_")
+                or str(g).startswith("N_")
             )
-            return {str(r[0]).strip().lower() for r in cur.fetchall() if r and r[0]}
-        except Exception:
-            return set()
+        ]
+        if table_keys and cls._ensure_ldoce_conn() and cls._ldoce_table_exists("pedlex_cxn_index"):
+            placeholders = ",".join("?" for _ in table_keys)
+            try:
+                cur = cls._ldoce_conn.execute(
+                    f"SELECT DISTINCT word FROM pedlex_cxn_index WHERE subcat_group IN ({placeholders})",
+                    tuple(table_keys),
+                )
+                result.update({str(r[0]).strip().lower() for r in cur.fetchall() if r and r[0]})
+            except Exception:
+                pass
+        return result
 
     @classmethod
     def _match_cxn_spec_to_context(
@@ -7502,6 +7623,65 @@ class DistractorEngineMixin:
                 "canonical_blank": w_clean,
                 "contrast_groups": ["MAKE_IT_COMP_CONTRAST"],
                 "ban_groups": sorted(_fam1a_ease_group) if w_clean in _fam1a_ease_group else [],
+            }
+            return cands[:target_count], synth_spec
+
+        # Special handler 4: Family 7 Fronted Negative / Restrictive Inversion Adverbs ('hardly', 'scarcely', 'seldom', etc.)
+        is_fronted_inv = (
+            anchor_type == "fronted_inv"
+            or context_anchor == "inversion"
+            or cls.is_fronted_inversion_context(
+                quote=quote, anchor=context_anchor, anchor_type=anchor_type, target=w_clean
+            )
+        )
+        if is_fronted_inv and w_clean in cls._NEGATIVE_INVERSION_ADVERBS:
+            q_low = (quote or "").lower()
+            q_has_than = bool(re.search(r"\bthan\b", q_low))
+            q_has_when_before = bool(re.search(r"\b(?:when|before)\b", q_low))
+
+            # Determine contrast candidates and banned synonyms based on correlative connectives
+            if q_has_than:
+                # Target is typically 'no sooner' (No sooner had ... than ...)
+                # Distractors: 'hardly', 'scarcely', 'barely', 'seldom', 'rarely', 'little'
+                # All of them clash with 'than' (hardly/scarcely require 'when'/'before')
+                inv_cands = ["hardly", "scarcely", "barely", "seldom", "rarely", "little"]
+                inv_banned = []
+            elif q_has_when_before or w_clean in ("hardly", "scarcely", "barely"):
+                # Instantaneous temporal correlatives with 'when'/'before'
+                # 'hardly', 'scarcely', 'barely' are synonymous triplets taking 'when'/'before'
+                if w_clean == "hardly":
+                    inv_banned = ["scarcely", "barely"]
+                elif w_clean == "scarcely":
+                    inv_banned = ["hardly", "barely"]
+                elif w_clean == "barely":
+                    inv_banned = ["hardly", "scarcely"]
+                else:
+                    inv_banned = []
+                inv_cands = ["no sooner", "seldom", "rarely", "little"]
+            else:
+                # Frequency/extent inversion without temporal connectives (e.g. 'Seldom have I seen...')
+                if w_clean == "seldom":
+                    inv_banned = ["rarely"]
+                    inv_cands = ["little", "hardly", "scarcely", "barely", "no sooner"]
+                elif w_clean == "rarely":
+                    inv_banned = ["seldom"]
+                    inv_cands = ["little", "hardly", "scarcely", "barely", "no sooner"]
+                elif w_clean == "little":
+                    inv_banned = []
+                    inv_cands = ["seldom", "rarely", "hardly", "scarcely", "barely"]
+                else:
+                    inv_banned = []
+                    inv_cands = ["seldom", "rarely", "hardly", "scarcely", "barely", "no sooner"]
+
+            cands = [c for c in inv_cands if c != w_clean and c not in excl and c not in inv_banned]
+            synth_spec = {
+                "word": w_clean,
+                "pos": "adv",
+                "family_id": 7,
+                "subcat_group": "ADV_FRONTED_INV",
+                "canonical_blank": w_clean,
+                "contrast_groups": ["ADV_FRONTED_INV_CONTRAST"],
+                "ban_groups": inv_banned,
             }
             return cands[:target_count], synth_spec
 
