@@ -14,10 +14,19 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     finish_dt = end_time if isinstance(end_time, datetime.datetime) else datetime.datetime.now()
-    timestamp = finish_dt.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    timestamp = finish_dt.strftime("%Y%m%d_%H%M%S")
     # Sanitize task_name for filesystem compatibility (eliminate Windows NTFS stream colons ':', slashes, etc.)
     safe_task_name = re.sub(r'[\\/:*?"<>|\r\n]+', '_', str(task_name)).strip('_')
-    filename = f"{timestamp}_{safe_task_name}.log"
+    # Strip redundant trailing mode annotations from filename (mode is recorded inside the log header)
+    safe_task_name = re.sub(r'_(?:JSON_MODE|TEXT_MODE|STRICT_SCHEMA)$', '', safe_task_name)
+    safe_task_name = re.sub(r'_+', '_', safe_task_name).strip('_')
+
+    base_name = f"{timestamp}_{safe_task_name}"
+    filename = f"{base_name}.log"
+    counter = 1
+    while (logs_dir / filename).exists():
+        filename = f"{base_name}_{counter}.log"
+        counter += 1
     log_path = logs_dir / filename
 
     actual_model = model or config.get('model') or 'unknown'
@@ -140,10 +149,15 @@ def log_wsd_session(unit_name, model, records, duration=None, start_time=None, e
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     finish_dt = end_time if isinstance(end_time, datetime.datetime) else datetime.datetime.now()
-    timestamp = finish_dt.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    timestamp = finish_dt.strftime("%Y%m%d_%H%M%S")
     safe_unit = re.sub(r'[\\/:*?"<>|\r\n]+', '_', str(unit_name or "unit")).strip('_') or "unit"
-    task_name = f"extract_wsd_{safe_unit}_TEXT_MODE"
-    filename = f"{timestamp}_{task_name}.log"
+    task_name = f"{safe_unit}_extract_wsd"
+    base_name = f"{timestamp}_{task_name}"
+    filename = f"{base_name}.log"
+    counter = 1
+    while (logs_dir / filename).exists():
+        filename = f"{base_name}_{counter}.log"
+        counter += 1
     log_path = logs_dir / filename
 
     actual_model = model or config.get('model') or 'unknown'

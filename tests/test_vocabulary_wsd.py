@@ -450,7 +450,7 @@ class TestVocabularyWSD:
             )
         assert res_timeout == -1
 
-        log_files = list((tmp_path / "logs").glob("*extract_wsd_Unit_Test_Timeout*.log"))
+        log_files = list((tmp_path / "logs").glob("*Unit_Test_Timeout*extract_wsd*.log")) or list((tmp_path / "logs").glob("*extract_wsd_Unit_Test_Timeout*.log"))
         assert len(log_files) == 1
 
         # Case 2: LLM returns unparseable response -> returns -1 (never returns 0)

@@ -298,9 +298,9 @@ class ExtractionRunnerMixin:
         needs_llm = bool(tasks) or run_vocab or run_expressions
         if needs_llm:
             preflight_task = (
-                f"extract_wsd_{file_stem}"
+                f"{file_stem}_extract_wsd"
                 if (run_vocab or run_expressions)
-                else f"extract_{tasks[0][0]}_{file_stem}"
+                else f"{file_stem}_extract_{tasks[0][0]}"
             )
             try:
                 llm.ensure_available(
@@ -554,7 +554,7 @@ class ExtractionRunnerMixin:
         try:
             with ThreadPoolExecutor(max_workers=max_p) as executor:
                 futures = {
-                    executor.submit(llm.chat, [{"role": "user", "content": prompt}], schema=schema, task_name=f"extract_{name}_{file_stem}"): name 
+                    executor.submit(llm.chat, [{"role": "user", "content": prompt}], schema=schema, task_name=f"{file_stem}_extract_{name}"): name 
                     for name, prompt, schema in tasks
                 }
                 failed_tasks = []

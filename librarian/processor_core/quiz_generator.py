@@ -1321,11 +1321,11 @@ class QuizGeneratorMixin:
         if not (is_pure_cloze and not self.config.get("enable_expert_audit", False)):
             try:
                 llm.ensure_available(
-                    task_name=f"quiz_{template_name}_{core_name}",
+                    task_name=f"{core_name}_quiz_{template_name}",
                     prompt_summary=f"Quiz generation ({template_name}_quiz) pre-flight check for unit '{core_name}'.",
                 )
             except Exception as pre_err:
-                logger.error(f"Pre-flight LLM check failed for quiz_{template_name}_{core_name}: {pre_err}")
+                logger.error(f"Pre-flight LLM check failed for {core_name}_quiz_{template_name}: {pre_err}")
                 return f"Error: {pre_err}"
 
         # 2. Resolve Data
@@ -1761,7 +1761,7 @@ class QuizGeneratorMixin:
                 quiz_obj = llm.chat(
                     [{"role": "user", "content": prompt}],
                     schema=interpolated_schema,
-                    task_name=f"quiz_{template_name}_{core_name}"
+                    task_name=f"{core_name}_quiz_{template_name}"
                 )
 
                 if not quiz_obj:
@@ -1961,7 +1961,8 @@ class QuizGeneratorMixin:
                         target_language=curr_tgt_lang,
                         unit_headwords=unit_headwords,
                         unit_grammar_patterns=unit_grammar_patterns,
-                        cefr_level=kwargs.get("cefr_level", "B2")
+                        cefr_level=kwargs.get("cefr_level", "B2"),
+                        unit_slug=core_name
                     )
 
                     # If distinct models, unload judge model to free memory
@@ -2298,9 +2299,12 @@ class QuizGeneratorMixin:
                         # Synchronize Pre-Cure vs Post-Cure scores to the expert audit log file
                         try:
                             logs_dir = Path(self.config.get("project_root", ".")).resolve() / "logs"
-                            task_prefix = f"expert_audit_{quiz_dict_eval.get('title', 'quiz')[:20]}"
-                            safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', task_prefix).strip('_')
-                            matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+                            audit_task = f"{core_name}_audit_{template_name}"
+                            matching_logs = sorted(logs_dir.glob(f"*{audit_task}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+                            if not matching_logs:
+                                task_prefix = f"expert_audit_{quiz_dict_eval.get('title', 'quiz')[:20]}"
+                                safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', task_prefix).strip('_')
+                                matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
                             if matching_logs:
                                 latest_log = matching_logs[0]
                                 log_txt = latest_log.read_text(encoding="utf-8")

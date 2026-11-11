@@ -172,6 +172,27 @@ def audit_one(ref: Dict[str, Any], judge_model: Optional[str] = None,
         row["prev_blind_solve_accuracy"] = prev.get("blind_solve_accuracy")
 
     source_text = resolve_source_text(ref["unit"], project_root)
+    # For listening and video quizzes, ground directly on the authentic script/transcript embedded in quizData
+    if ref.get("template") == "listening":
+        script_val = quiz_data.get("script")
+        if isinstance(script_val, list):
+            lines = []
+            for turn in script_val:
+                if isinstance(turn, dict):
+                    spk = turn.get("speaker") or turn.get("role") or "Speaker"
+                    txt = turn.get("text") or turn.get("line") or ""
+                    lines.append(f"{spk}: {txt}")
+                elif isinstance(turn, str):
+                    lines.append(turn)
+            if lines:
+                source_text = "\n".join(lines)
+        elif isinstance(script_val, str) and script_val.strip():
+            source_text = script_val.strip()
+    elif ref.get("template") == "video":
+        transcript_val = quiz_data.get("transcript")
+        if isinstance(transcript_val, str) and transcript_val.strip():
+            source_text = transcript_val.strip()
+
     unit_cefr = (quiz_data.get("cefr_level") or "B2").upper()
     try:
         report = ExpertAuditor.audit_quiz(
@@ -179,7 +200,8 @@ def audit_one(ref: Dict[str, Any], judge_model: Optional[str] = None,
             quiz_data,
             judge_model=judge_model,
             quiz_type=ref.get("template"),
-            cefr_level=unit_cefr
+            cefr_level=unit_cefr,
+            unit_slug=ref.get("unit"),
         )
     except Exception as e:
         logger.exception("Re-audit failed for %s [%s]", ref["unit"], ref["template"])

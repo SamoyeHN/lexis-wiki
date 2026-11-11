@@ -673,7 +673,7 @@ def _detect_task_type(task: str, parsed: Any) -> str:
         return "intermediate_prose"
     if "extract_wsd" in t or "wsd_arbitration" in t or "chat_text_mode" in t:
         return "wsd_arbitration"
-    if "expert_audit" in t or "quality_audit" in t:
+    if "expert_audit" in t or "quality_audit" in t or "_audit_" in t or t.endswith("_audit") or t.startswith("audit_"):
         return "expert_audit"
     if isinstance(parsed, dict):
         if ("pass_audit" in parsed and "blind_solve_accuracy" in parsed) or (

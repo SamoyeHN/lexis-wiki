@@ -133,7 +133,8 @@ class ExpertAuditor:
         target_language: Optional[str] = None,
         unit_headwords: Optional[List[str]] = None,
         unit_grammar_patterns: Optional[List[str]] = None,
-        cefr_level: Optional[str] = None
+        cefr_level: Optional[str] = None,
+        unit_slug: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Executes Level 2 semantic audit on a quiz payload."""
         questions = quiz_data.get("questions", [])
@@ -193,11 +194,22 @@ class ExpertAuditor:
 
         resolved_cefr = (cefr_level or quiz_data.get("cefr_level") or "B2").upper()
 
+        resolved_source_text = ""
+        if isinstance(source_text, list):
+            resolved_source_text = "\n".join(
+                f"{t.get('speaker', 'Speaker')}: {t.get('text', '')}" if isinstance(t, dict) else str(t)
+                for t in source_text
+            ).strip()
+        elif isinstance(source_text, str):
+            resolved_source_text = source_text.strip()
+        elif source_text:
+            resolved_source_text = str(source_text).strip()
+
         format_kwargs = {
             "target_language": lang,
             "content": formatted_content,
             "quiz_content": formatted_content,
-            "source_text": source_text.strip() if source_text else "(No explicit source transcript/dialogue provided.)",
+            "source_text": resolved_source_text if resolved_source_text else "(No explicit source transcript/dialogue provided.)",
             "total_items": len(questions),
             "unit_vocabulary_list": unit_vocab_str,
             "vocabulary_list": unit_vocab_str,
@@ -223,9 +235,24 @@ class ExpertAuditor:
             system_content = system_content.replace("{cefr_level}", resolved_cefr)
             user_content = parts[1].strip()
 
+        # Resolve clean unit-first audit task name
+        resolved_unit = (
+            unit_slug
+            or quiz_data.get("unit")
+            or quiz_data.get("unit_slug")
+            or ""
+        )
+        if not resolved_unit:
+            m = re.search(r"(Book_\d+_Unit_\d+(?:_[A-Za-z0-9]+)?)", str(quiz_data.get("title", "")))
+            if m:
+                resolved_unit = m.group(1)
+
+        task_unit_prefix = f"{resolved_unit}_" if resolved_unit else ""
+        audit_modality = str(quiz_type or "quiz").lower()
+        audit_task_name = f"{task_unit_prefix}audit_{audit_modality}"
+
         llm = LLMClient(model=eval_model)
         logger.info(f"Initiating Level 2 Expert Quality Audit via judge model: {eval_model}...")
-
 
         try:
             report_obj = llm.chat(
@@ -234,7 +261,7 @@ class ExpertAuditor:
                     {"role": "user", "content": user_content}
                 ],
                 schema=schema_cls,
-                task_name=f"expert_audit_{quiz_data.get('title', 'quiz')[:20]}",
+                task_name=audit_task_name,
                 _disable_qa_retry=True # Avoid infinite recursive audits
             )
 
@@ -426,7 +453,6 @@ class ExpertAuditor:
 
             # Synchronize penalized score into the written task log file if needed
             try:
-                logs_dir = Path(config.project_root).resolve() / "logs"
                 penalized_score = report_dict.get("overall_quality_score", 100)
                 base_avg = report_dict.get("base_quality_score", penalized_score)
                 flawed_count = (
@@ -434,19 +460,29 @@ class ExpertAuditor:
                     + confident_divergences
                     + int(report_dict.get("missing_audit_items", 0) or 0)
                 )
-                task_prefix = f"expert_audit_{quiz_data.get('title', 'quiz')[:20]}"
-                safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', task_prefix).strip('_')
-                matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if matching_logs:
-                    latest_log = matching_logs[0]
-                    log_txt = latest_log.read_text(encoding="utf-8")
+                latest_log = getattr(llm, "last_log_path", None)
+                if not latest_log or not Path(latest_log).exists():
+                    logs_dir = Path(config.project_root).resolve() / "logs"
+                    matching_logs = sorted(
+                        logs_dir.glob(f"*{audit_task_name}*.log"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True
+                    )
+                    if not matching_logs:
+                        safe_prefix = re.sub(r'[\\/:*?"<>|\r\n]+', '_', f"expert_audit_{quiz_data.get('title', 'quiz')[:20]}").strip('_')
+                        matching_logs = sorted(logs_dir.glob(f"*_{safe_prefix}*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if matching_logs:
+                        latest_log = matching_logs[0]
+                if latest_log and Path(latest_log).exists():
+                    log_file = Path(latest_log)
+                    log_txt = log_file.read_text(encoding="utf-8")
                     if "=== COMPOSITE_SCORE:" in log_txt:
                         log_txt = re.sub(
                             r"(?:=== L2_QUALITY_SCORE:\s*[\d\.]+%\s*===\n)?=== COMPOSITE_SCORE:\s*[\d\.]+%\s*===",
                             f"=== L2_QUALITY_SCORE: {penalized_score}.0% ===\n=== COMPOSITE_SCORE: {penalized_score}.0% ===\n=== L2_PENALTY: Capped from Base {base_avg}% due to {flawed_count} Flaw(s) ===",
                             log_txt
                         )
-                        latest_log.write_text(log_txt, encoding="utf-8")
+                        log_file.write_text(log_txt, encoding="utf-8")
             except Exception as log_sync_err:
                 logger.debug(f"Could not sync penalized score to log file: {log_sync_err}")
 
