@@ -51,8 +51,8 @@
 
 ## 3. Modular Sense-First Quiz Blueprint Pipeline
 
-### 3.1 Downstream Markdown Decoupling
-- `extractions/<Unit>_{vocabulary,grammar}.md` are user-facing presentation artifacts; assessment pipelines ground directly on `sources/<Unit>.md` via fresh deterministic extraction.
+### 3.1 Downstream Markdown Decoupling & Read-Only Assessment Truth
+- `extractions/<Unit>_{vocabulary,grammar}.md` are canonical, user-verified knowledge nodes. Assessment blueprint pipelines consume these verified extraction artifacts in read-only mode, with absolute zero disk writes to `extractions/` during quiz generation. Missing extractions are strictly intercepted by the Prerequisite Extraction Gate.
 
 ### 3.2 Modular Blueprint Mixins & Pure Five-Source LDOCE Pool
 - **Modular Architecture (`librarian/linguistics_core/`)**:
@@ -130,5 +130,5 @@ wiki/<UnitName>/
 - [x] **Light-Verb Collocation Mutual Exclusion Web**: For delexical/light-verb collocations (`cast doubt on`, `shed light on`, `strike a balance`, `pay tribute to`), provide high-discrimination verb-slot peer distractors (`cast` vs `throw` vs `shed` vs `put`) with dictionary idiom validation as the sole arbiter.
 - [ ] **Extraction Semantic Re-Audit Suite (`re-audit --target extraction`)**: Extend Level-2 expert judge (`qwen3.8:27b`) semantic evaluation to cover `extractions/` artifacts (`summary`, `mindmap`, `grammar`, `vocabulary`) focusing on factual entailment / anti-hallucination verification against source text, MECE cognitive hierarchy and structural orthogonality for mindmaps, Quirk/Biber academic grammar precision, and contextual sense alignment.
 - [ ] **Paired Listening–Speaking Workbench**: Two-act receptive-to-productive pairing (`Act I: Listening` $\rightarrow$ `Act II: Speaking`) with 3-level progressive fading scaffolding (Cue Card $\rightarrow$ Acoustic Cloze $\rightarrow$ Blind Production) and cross-scenario transfer.
-- [ ] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts.
+- [x] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts and eliminate side-effect overwrites.
 - [ ] **ESP Specialized Domain Extension**: Multi-source trade/logistics corpus collection, Incoterms/UCP600 legal consistency gates, and domain-gated WSD (`pedlex_esp.db`).

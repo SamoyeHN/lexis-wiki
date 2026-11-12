@@ -2,6 +2,7 @@ import http.server
 import socketserver
 import json
 import os
+import shutil
 import threading
 import traceback
 import mimetypes
@@ -139,7 +140,7 @@ def background_quiz_worker(job_id, filename, count, template, listening_archetyp
             spec_parts.append(f"Scenario: {listening_scenario}")
         arch_info = f" [{', '.join(spec_parts)}]" if spec_parts else ""
         DashboardState.update_job(job_id, progress=20, stage="generating", log=f"[QUIZ] Triggering generation from unit '{filename}'{arch_info}...")
-        DashboardState.update_job(job_id, progress=40, stage="generating", log=f"[QUIZ] Auto-syncing deterministic Vocabulary & Grammar extractions for '{filename}'...")
+        DashboardState.update_job(job_id, progress=40, stage="generating", log=f"[QUIZ] Loading verified extraction nodes for '{filename}'...")
         DashboardState.update_job(job_id, progress=60, stage="generating", log=f"[QUIZ] Prompting LLM with template '{template}' (Target count: {count}){arch_info}...")
         
         processor = WikiProcessor()
@@ -291,6 +292,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Handle API routes
         if path.startswith("/api/"):
+            if path == "/api/export-zip":
+                self.serve_export_zip(url.query)
+                return
             if path.startswith("/api/media/"):
                 self.serve_wiki_file(path)
                 return
@@ -327,6 +331,46 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self.send_error(404, "Not Found")
+
+    def serve_export_zip(self, query_str):
+        query = urllib.parse.parse_qs(query_str or "")
+        unit_name = query.get("unit_name", [None])[0]
+        target_dir = query.get("target_dir", [None])[0]
+        if not unit_name:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "unit_name query parameter is required"}).encode("utf-8"))
+            return
+        try:
+            from .exporter import export_unit_to_zip
+            res = export_unit_to_zip(unit_name, custom_target_dir=target_dir)
+            if not res.get("success"):
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": res.get("error", "ZIP export failed")}).encode("utf-8"))
+                return
+            zip_path = Path(res["zip_path"])
+            if not zip_path.exists():
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": "Exported ZIP file not found"}).encode("utf-8"))
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{zip_path.name}"')
+            self.send_header("Content-Length", str(zip_path.stat().st_size))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            with open(zip_path, "rb") as f:
+                shutil.copyfileobj(f, self.wfile)
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": f"Error generating ZIP: {e}"}).encode("utf-8"))
 
     def serve_wiki_file(self, path):
         # Resolve path relative to project root
@@ -552,10 +596,15 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 
                                 # Extract frontmatter title if present (e.g. title: "...")
                                 title_match = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
-                                if title_match:
-                                    t_val = title_match.group(1).strip()
-                                    if t_val:
-                                        display_title = t_val
+                                if title_match and title_match.group(1).strip():
+                                    display_title = title_match.group(1).strip()
+                                else:
+                                    text_title_match = re.search(r'^text_title:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                    unit_title_match = re.search(r'^unit_title:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                    if text_title_match and text_title_match.group(1).strip():
+                                        display_title = text_title_match.group(1).strip()
+                                    elif unit_title_match and unit_title_match.group(1).strip():
+                                        display_title = unit_title_match.group(1).strip()
                             except Exception:
                                 pass
                                 
@@ -566,6 +615,30 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                         if mf.is_file() and mf.suffix in [".md", ".txt"]:
                                             is_video = True
                                             break
+
+                            # Detect CEFR level from extractions
+                            cefr_level = None
+                            if extractions_dir.exists():
+                                vocab_candidate = extractions_dir / f"{stem}_vocabulary.md"
+                                if not vocab_candidate.exists():
+                                    for vf in extractions_dir.glob("*_vocabulary.md"):
+                                        vocab_candidate = vf
+                                        break
+                                if vocab_candidate.exists():
+                                    try:
+                                        with open(vocab_candidate, "r", encoding="utf-8") as vf:
+                                            v_head = vf.read(1000)
+                                            m_cefr = re.search(r'overall_cefr_level:\s*["\']?(.*?)["\']?\s*$', v_head, re.MULTILINE)
+                                            if m_cefr and m_cefr.group(1).strip():
+                                                cefr_level = m_cefr.group(1).strip().upper()
+                                    except Exception:
+                                        pass
+
+                            # Check handouts / quizzes count
+                            handouts_dir = unit_dir / "handouts"
+                            quizzes_list = [h.name for h in handouts_dir.glob("*_quiz.html")] if handouts_dir.exists() else []
+                            quiz_count = len(quizzes_list)
+                            has_quizzes = quiz_count > 0
                             
                             files_list.append({
                                 "name": primary_file.name,
@@ -573,6 +646,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 "title": display_title,
                                 "size": primary_file.stat().st_size,
                                 "compiled": compiled,
+                                "cefr_level": cefr_level,
+                                "has_quizzes": has_quizzes,
+                                "quiz_count": quiz_count,
                                 "is_video": is_video,
                                 "is_transcribing": is_transcribing,
                                 "path": str(primary_file.resolve()),
@@ -1008,6 +1084,39 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 t.daemon = True
                 t.start()
                 response_data = {"success": True, "job_id": job_id, "message": "Re-audit task spawned successfully."}
+
+            elif path == "/api/export-unit":
+                data = json.loads(body) if body else {}
+                unit_name = data.get("unit_name")
+                target_dir = data.get("target_dir")
+                save_as_default = bool(data.get("save_as_default", False))
+                if not unit_name:
+                    response_data = {"success": False, "error": "unit_name is required"}
+                else:
+                    try:
+                        from .exporter import export_unit_to_directory
+                        if save_as_default and target_dir:
+                            config.update_config("export_dir", str(target_dir).strip())
+                        response_data = export_unit_to_directory(unit_name, custom_target_dir=target_dir)
+                    except Exception as e:
+                        response_data = {"success": False, "error": str(e)}
+
+            elif path == "/api/open-folder":
+                data = json.loads(body) if body else {}
+                folder_path = data.get("path")
+                if not folder_path:
+                    response_data = {"success": False, "error": "path is required"}
+                else:
+                    try:
+                        from .exporter import open_directory_in_explorer
+                        p = Path(folder_path).resolve()
+                        if p.exists():
+                            ok = open_directory_in_explorer(p)
+                            response_data = {"success": ok, "path": str(p)}
+                        else:
+                            response_data = {"success": False, "error": f"Folder does not exist: {p}"}
+                    except Exception as e:
+                        response_data = {"success": False, "error": str(e)}
 
             elif path == "/api/export-exe":
                 data = json.loads(body)

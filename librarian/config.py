@@ -45,7 +45,8 @@ DEFAULT_CONFIG = {
     "enable_authentic_cloze": True,
     "disable_pedlex": False,
     "disable_ldoce": False,
-    "dashboard_port": 8000
+    "dashboard_port": 8000,
+    "export_dir": ""
 }
 
 class Config:

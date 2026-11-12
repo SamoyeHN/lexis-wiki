@@ -1008,14 +1008,15 @@ class DistractorEngineMixin:
             # so polysemous targets (e.g. 'compulsion' sense 1 'strong desire' vs sense 2 'forcing/obligation')
             # do not pull Activator/Thesaurus clusters belonging to a different sense.
             cluster_self_distinction: Dict[str, Set[str]] = {}
+            target_ortho_set = set(cls.orthographic_variants(clean_target)) if hasattr(cls, "orthographic_variants") else {clean_target}
             for it in thes_items:
                 it_w = str(it.get("word", "")).strip().lower()
                 it_concept = str(it.get("concept", "")).strip().lower()
                 it_cluster_key = it_concept or (f"sec_{it.get('section_index')}" if it.get("section_index") is not None else "")
-                if it_w == clean_target and it_cluster_key:
+                if it_w in target_ortho_set and it_cluster_key:
                     self_toks = {
                         w for w in re.findall(r"\b[a-zA-Z]{3,}\b", (str(it.get("distinction", "")) + " " + it_concept).lower())
-                        if w not in _thes_stopwords and w != clean_target
+                        if w not in _thes_stopwords and w not in target_ortho_set
                     }
                     cluster_self_distinction[it_cluster_key] = self_toks
 
@@ -1078,10 +1079,11 @@ class DistractorEngineMixin:
                     if not any(ph in raw_w.split() for ph in ("sb", "sth", "someone", "something", "oneself")):
                         continue
                 # If phrase contains spaces and slashes (e.g. 'the Department of Science/English/Trade'),
-                # it is a template frame, not an atomic candidate list; skip to prevent fragmentary distractor leaks
-                if "/" in raw_w:
-                    parts_check = [p.strip() for p in raw_w.split("/")]
-                    if any(" " in p for p in parts_check):
+                # it is a template frame when the first alternative itself contains a space (unless verb phrase);
+                # if the first alternative is a single word (e.g. 'compete/take part'), keep single-word alternatives.
+                if "/" in raw_w and wn_pos != "v":
+                    parts_check = [p.strip() for p in raw_w.split("/") if p.strip()]
+                    if parts_check and " " in parts_check[0]:
                         continue
                 chunks = [ch.strip() for ch in raw_w.split("/")] if "/" in raw_w else [raw_w]
                 for chunk in chunks:
@@ -1093,12 +1095,19 @@ class DistractorEngineMixin:
                         cand = parts[0]
                     elif len(parts) >= 2:
                         # Extract verb head from verb phrases ONLY if followed by standard placeholders (e.g. 'perform sth')
+                        # or bound prepositions (e.g. 'derive from', 'stem from', 'result from')
                         # Do NOT extract verb head from phrasal verbs or idiomatic phrases (e.g. 'come forward', 'let me')
                         if wn_pos == "v":
                             _light_verbs = {"make", "get", "have", "take", "give", "do", "put", "set", "keep", "let", "go", "come", "be"}
                             if (
                                 len(parts) == 2
                                 and parts[1] in ("sb", "sth", "someone", "something", "oneself")
+                                and parts[0].lower() not in _light_verbs
+                            ):
+                                cand = parts[0]
+                            elif (
+                                len(parts) == 2
+                                and parts[1] in cls._STANDARD_PREPOSITIONS
                                 and parts[0].lower() not in _light_verbs
                             ):
                                 cand = parts[0]
@@ -1284,26 +1293,51 @@ class DistractorEngineMixin:
                                 ):
                                     seen.add(lemma)
                                     tier3_attributes.append(lemma)
-                # Tier 3b: Relational Adjective Pertainym / Derivation Graph Traversal (for `adj.pert` like `doctoral`, `medical`, `musical`)
-                if not tier2_satellites and not tier3_attributes:
-                    pert_noun_syns = []
+                # Tier 3b: Relational Adjective Pertainym / Derivation Graph Traversal
+                # Covers both denominal pertainyms (`adj.pert` like `doctoral`, `medical`, `musical`)
+                # and deverbal/institutional relational adjectives (`regulatory`, `compensatory`, `descriptive`, `advisory`)
+                # whose WordNet `derivation` links point to verbs (`pos == "v"`) or LDOCE `word_family` nouns/verbs.
+                if len(tier2_satellites) + len(tier3_attributes) < target_count * 2:
+                    pert_base_syns = []
+                    pert_base_lemmas = []
                     for sn in s.senses():
                         for rel_sn in sn.get_related("pertainym") + sn.get_related("derivation"):
                             try:
                                 rs = rel_sn.synset()
-                                if rs and rs.pos == "n" and rs not in pert_noun_syns:
-                                    pert_noun_syns.append(rs)
+                                if rs and rs.pos in ("n", "v") and rs not in pert_base_syns:
+                                    pert_base_syns.append(rs)
+                                r_lem = rel_sn.word().lemma().lower()
+                                r_pos = rs.pos if rs else None
+                                if r_lem and r_pos in ("n", "v") and (r_lem, r_pos) not in pert_base_lemmas:
+                                    pert_base_lemmas.append((r_lem, r_pos))
                             except Exception:
                                 pass
-                    sister_noun_syns = []
-                    for pns in pert_noun_syns:
+                    for _b_lem, _b_pos in pert_base_lemmas:
+                        if _b_pos == "v":
+                            for _bs in wn.synsets(_b_lem, "v")[:3]:
+                                if _bs not in pert_base_syns:
+                                    pert_base_syns.append(_bs)
+                    if not pert_base_syns:
+                        _t_ent_wf = cls.get_ldoce_entry(clean_target) or {}
+                        _wf_map = _t_ent_wf.get("word_family") or {}
+                        for _wf_w in list(_wf_map.get("noun") or []) + list(_wf_map.get("verb") or []):
+                            _wf_clean = str(_wf_w or "").strip().lower()
+                            if _wf_clean and _wf_clean != clean_target:
+                                for _rs in wn.synsets(_wf_clean, "n")[:2] + wn.synsets(_wf_clean, "v")[:2]:
+                                    if _rs not in pert_base_syns:
+                                        pert_base_syns.append(_rs)
+                    sister_base_syns = []
+                    for pns in pert_base_syns:
                         for hyp in pns.hypernyms():
-                            if hyp not in sister_noun_syns:
-                                sister_noun_syns.append(hyp)
+                            if hyp.id in ("oewn-05844071-n", "oewn-00002137-n"):
+                                continue
+                            if hyp not in sister_base_syns:
+                                sister_base_syns.append(hyp)
                             for coh in hyp.hyponyms()[:25]:
-                                if coh not in sister_noun_syns:
-                                    sister_noun_syns.append(coh)
-                    for sns in sister_noun_syns:
+                                if coh not in sister_base_syns:
+                                    sister_base_syns.append(coh)
+                    _tier3b_cands: List[str] = []
+                    for sns in sister_base_syns:
                         for n_sn in sns.senses():
                             for drv_sn in n_sn.get_related("derivation") + n_sn.get_related("pertainym"):
                                 try:
@@ -1314,6 +1348,7 @@ class DistractorEngineMixin:
                                     if (
                                         lemma not in seen
                                         and lemma not in global_synonyms
+                                        and not cls.are_same_word_family(lemma, clean_target)
                                         and " " not in lemma
                                         and "_" not in lemma
                                         and "-" not in lemma
@@ -1322,10 +1357,33 @@ class DistractorEngineMixin:
                                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                         and not _is_informal_or_slang_distractor(lemma)
                                     ):
+                                        _c_ent_3b = cls.get_ldoce_entry(lemma) or {}
+                                        if (_c_ent_3b.get("pos") or "").lower() in ("noun", "verb", "adverb"):
+                                            continue
                                         seen.add(lemma)
-                                        tier3_attributes.append(lemma)
+                                        _tier3b_cands.append(lemma)
                                 except Exception:
                                     pass
+                    if _tier3b_cands:
+                        _rel_sfx = ("ory", "ary", "ive", "al", "ic", "ar", "ular", "ental")
+                        _deverbal_sfx = ("ory", "ary", "ive")
+                        _t_has_rel_sfx = clean_target.endswith(_rel_sfx)
+                        _t_is_deverbal_sfx = clean_target.endswith(_deverbal_sfx)
+                        _tier3b_cands.sort(
+                            key=lambda w: (
+                                0 if cls._common_suffix_len(clean_target, w) >= 3 else 1,
+                                0 if (_t_is_deverbal_sfx and w.endswith(_deverbal_sfx)) else 1,
+                                0 if (_t_has_rel_sfx and w.endswith(_rel_sfx)) else 1,
+                                0
+                                if (
+                                    w in ocd
+                                    or int((cls.get_ldoce_entry(w) or {}).get("core_level") or 0) > 0
+                                    or cls._lexicon_profile(w)[2] in ("A2", "B1", "B2")
+                                )
+                                else 1,
+                            )
+                        )
+                        tier3_attributes.extend(_tier3b_cands)
             else:
                 # Tier 2b/3r: Adverb Pertainym & Base-Adjective Bridge (`wn_pos == "r"`)
                 # WordNet adverb synsets have 0 hypernyms/hyponyms; they connect to their base adjective
@@ -1969,6 +2027,45 @@ class DistractorEngineMixin:
                                     coord_hyper_overlap[_lem] = max(coord_hyper_overlap.get(_lem, 0), int(_cnt))
                                 tier3_coordinates.append(_lem)
 
+        # Tier 3.35: Pustejovsky Qualia Scenario Lifecycle Verb Bridge (for sparse WordNet verb branches like `enroll`)
+        if (
+            wn_pos == "v"
+            and definition
+            and len(tier0_ldoce_thesaurus) + len(tier2_hyponyms) + len(tier3_coordinates) < target_count * 2
+        ):
+            _qualia_peers = cls._get_verb_qualia_scenario_peers(
+                clean_target,
+                definition=definition,
+                quote=quote,
+                context_anchor=context_anchor,
+                anchor_type=anchor_type,
+            )
+            for _qv, _qinfo in sorted(_qualia_peers.items(), key=lambda kv: (-kv[1]["score"], kv[0])):
+                if (
+                    _qv in seen
+                    or not _qv.isalpha()
+                    or not cls.is_exact_pedlex_headword(_qv)
+                    or _is_primarily_noun_or_adj_for_verb(_qv)
+                    or not _pos_ok(_qv)
+                    or not cls.is_cefr_compliant_distractor(_qv, clean_target)
+                    or _is_informal_or_slang_distractor(_qv)
+                ):
+                    continue
+                if _qv in global_synonyms:
+                    _has_slot_clash, _ = cls.evaluate_syntactic_slot_clash(
+                        clean_target,
+                        _qv,
+                        anchor=context_anchor,
+                        anchor_type=anchor_type,
+                        pos=pos,
+                        quote=quote,
+                    )
+                    if not _has_slot_clash:
+                        continue
+                seen.add(_qv)
+                coord_hyper_overlap[_qv] = max(coord_hyper_overlap.get(_qv, 0), int(_qinfo["score"]))
+                tier3_coordinates.append(_qv)
+
         # Tier 3.4: Orthogonal-Domain Collective Noun Peer Pool (`_COLLECTIVE_NOUN_ONTOLOGY`)
         # For collective nouns (human role collectives, animal collectives, vessel/batch collectives),
         # ban co-synonyms in the same subgroup and inject orthogonal subgroup heads from the same macro class.
@@ -2036,9 +2133,13 @@ class DistractorEngineMixin:
         if tier2_hyponyms or tier3_coordinates or wn_pos == "n":
             t_lvl_str = cls._lexicon_profile(clean_target)[2] or "B1"
             t_rank = min(cls.CEFR_ORDER.get(t_lvl_str, 3), 4)
+            analyzer = cls.get_cefr_analyzer()
+            t_float = analyzer.get_average_word_level_float(clean_target) if hasattr(analyzer, "get_average_word_level_float") else float(t_rank)
+            if t_float is None:
+                t_float = float(t_rank)
             p_code_coord = {"n": "n", "v": "v", "a": "adj", "r": "adv"}.get(wn_pos or "n", "n")
 
-            def _coord_sort_key(cand_w: str) -> Tuple[int, int, int, int, int, int, int, int, int]:
+            def _coord_sort_key(cand_w: str) -> Tuple[int, int, int, int, int, int, int, int, int, int]:
                 c_ent = cls.get_ldoce_entry(cand_w) or {}
                 c_senses = c_ent.get("senses") or []
                 pos_senses = [sn for sn in c_senses if not sn.get("pos") or cls._pos_code(sn.get("pos")) == p_code_coord] or c_senses
@@ -2063,17 +2164,22 @@ class DistractorEngineMixin:
                 c_lvl_raw = cls._lexicon_profile(cand_w)[2]
                 c_lvl = c_lvl_raw or "C1"
                 c_rank = cls.CEFR_ORDER.get(c_lvl, 5)
+                c_float = analyzer.get_average_word_level_float(cand_w) if hasattr(analyzer, "get_average_word_level_float") else float(c_rank)
+                if c_float is None:
+                    c_float = float(c_rank)
+                diff_overshoot = 1 if (c_float > t_float + 0.6) else 0
                 has_ldoce_core = 0 if int(c_ent.get("core_level") or 0) > 0 else 1
-                is_non_core = 0 if (cand_w in ocd or has_ldoce_core == 0 or c_lvl_raw in ("A1", "A2", "B1", "B2", "C1")) else 1
+                is_non_core = 0 if (cand_w in ocd or has_ldoce_core == 0 or (c_lvl_raw in ("A1", "A2", "B1", "B2") and diff_overshoot == 0)) else 1
                 gerund_mismatch = 1 if (wn_pos == "n" and cand_w.endswith("ing") and not clean_target.endswith("ing")) else 0
                 return (
                     gerund_mismatch,
                     countability_mismatch,
+                    diff_overshoot,
+                    has_ldoce_core,
                     is_non_core,
                     -coord_hyper_overlap.get(cand_w, 0),
                     0 if has_ex else 1,
                     0 if prim_aligned else 1,
-                    has_ldoce_core,
                     abs(c_rank - t_rank),
                     1 if c_rank >= 6 else 0,
                 )
@@ -2084,7 +2190,7 @@ class DistractorEngineMixin:
 
         # Candidate prioritization: PedLex Thesaurus & Activators are primary (Tier 0); WordNet is secondary/fallback
         if wn_pos == "v":
-            candidates = tier0_ldoce_thesaurus + [c for c in (tier2_hyponyms + tier3_coordinates) if c not in global_synonyms]
+            candidates = tier0_ldoce_thesaurus + tier2_hyponyms + tier3_coordinates
         elif wn_pos == "a":
             # For adjectives: retain satellite_synonyms first to satisfy existing fine-grained satellite tests,
             # then inject PedLex thesaurus peers, compliant antonyms, followed by attribute coordinates.
@@ -2259,7 +2365,17 @@ class DistractorEngineMixin:
                 w for w in near_set_for_pile
                 if not cls._are_orthogonal_collective_nouns(clean_target, w)
             }
-        near_only_for_pile = (near_set_for_pile | tier0_set) - ants_for_pile - set(sense_antonyms)
+        strict_target_syns = cls.get_strict_pedlex_and_oxford_synonyms(
+            clean_target, pos=pos, definition=definition, quote=quote
+        )
+        wn_same_synset_words: Set[str] = set()
+        if target_synsets:
+            for s in target_synsets:
+                for w in s.words():
+                    wn_same_synset_words.add(w.lemma().lower())
+        near_only_for_pile = (
+            (near_set_for_pile | tier0_set) & (strict_target_syns | wn_same_synset_words)
+        ) - ants_for_pile - set(sense_antonyms)
         for cand in candidates:
             if cand in safe_distractors:
                 continue
@@ -2273,7 +2389,7 @@ class DistractorEngineMixin:
             # so multiple-choice distractors test SLA correlative/aspectual nuances rather than syntax giveaways.
             if is_fronted_inv_slot and cand_clash_r == "non_inverting_candidate_in_fronted_inversion_slot":
                 continue
-            # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside `near_set` (unless syntactically clashing)
+            # Synonym-Pile Gate: at most 1 non-antonym distractor may sit inside near_only_for_pile (strict near-synonyms of target)
             if not has_cand_clash and cand in near_only_for_pile and cand not in cxn_cand_set and sum(1 for s in safe_distractors if s in near_only_for_pile and distractor_metadata.get(s) != "antonym") >= 1:
                 continue
             # Countability Symmetry Gate for Nouns:
@@ -2601,10 +2717,10 @@ class DistractorEngineMixin:
                             *(("synonym",) if wn_pos == "n" else ()),
                         )
                         and (
-                            wn_pos == "n"
+                            wn_pos in ("n", "v")
                             or all(
                                 distractor_metadata.get(d) not in ("antonym", "ldoce_thesaurus")
-                                for d in safe_distractors
+                                for d in safe_distractors[:-1]
                             )
                         )
                     )
@@ -3009,12 +3125,21 @@ class DistractorEngineMixin:
                     "convincing", "appealing", "astonishing", "overwhelming", "confusing",
                     "alarming", "disturbing", "encouraging", "refreshing",
                 ]
-            elif _is_pert_adj or clean_target.endswith(("al", "ic", "ar")):
-                _adj_morph_pool = [
+            elif _is_pert_adj or clean_target.endswith(("al", "ic", "ar", "ory", "ary", "ive")):
+                _ory_ive_pool = [
+                    "advisory", "compulsory", "mandatory", "voluntary", "legislative", "executive",
+                    "administrative", "judicial", "disciplinary", "consultative", "investigative",
+                    "corrective", "preventive", "selective",
+                ]
+                _al_ic_pool = [
                     "academic", "medical", "surgical", "clinical", "legal", "musical",
                     "vocational", "clerical", "dental", "naval", "royal", "rural",
                     "urban", "civil", "regional", "domestic", "internal", "external",
                 ]
+                if clean_target.endswith(("ory", "ive")):
+                    _adj_morph_pool = _ory_ive_pool + [w for w in _al_ic_pool if w not in _ory_ive_pool]
+                else:
+                    _adj_morph_pool = _al_ic_pool + [w for w in _ory_ive_pool if w not in _al_ic_pool]
             elif clean_target.endswith("ed"):
                 _adj_morph_pool = [
                     "Exhausted", "confused", "frustrated", "convinced", "ashamed",
@@ -3713,6 +3838,8 @@ class DistractorEngineMixin:
                     w_ldoce = cls.get_ldoce_entry(w) or {}
                     if int(w_ldoce.get("core_level") or 0) > 0:
                         score += 16
+                if wn_pos == "v" and pref >= 3 and tw.endswith("ate") and w.endswith("ate"):
+                    score += 30
                 if wn_pos == "a" and pref >= 6:
                     score += 18
                 if wn_pos == "n" and pref >= 4:
@@ -3794,18 +3921,28 @@ class DistractorEngineMixin:
         else:
             pos_tags = ("a", "s", "v", "n", "r")
 
+        target_ortho_vars = list(cls.orthographic_variants(target)) if hasattr(cls, "orthographic_variants") else [target]
         seeds = []
-        for p_tag in pos_tags:
-            try:
-                seeds += wn.synsets(target, p_tag)
-            except Exception:
-                pass
-        if not seeds and pos_tags != ("a", "s", "v", "n", "r"):
-            for p_tag in ("a", "s", "v", "n", "r"):
+        seen_seed_ids: Set[str] = set()
+        for q_t in target_ortho_vars:
+            for p_tag in pos_tags:
                 try:
-                    seeds += wn.synsets(target, p_tag)
+                    for ss in wn.synsets(q_t, p_tag):
+                        if ss.id not in seen_seed_ids:
+                            seen_seed_ids.add(ss.id)
+                            seeds.append(ss)
                 except Exception:
                     pass
+        if not seeds and pos_tags != ("a", "s", "v", "n", "r"):
+            for q_t in target_ortho_vars:
+                for p_tag in ("a", "s", "v", "n", "r"):
+                    try:
+                        for ss in wn.synsets(q_t, p_tag):
+                            if ss.id not in seen_seed_ids:
+                                seen_seed_ids.add(ss.id)
+                                seeds.append(ss)
+                    except Exception:
+                        pass
 
         direct_same_pole: Set[str] = set()
         for s in seeds:
@@ -3850,8 +3987,9 @@ class DistractorEngineMixin:
             antonyms.add(g_ant)
 
         antonyms -= direct_same_pole
-        near.discard(target)
-        antonyms.discard(target)
+        for ov in target_ortho_vars:
+            near.discard(ov)
+            antonyms.discard(ov)
         res = (near, antonyms)
         cls._semantic_fields_cache[cache_key] = res
         return res
@@ -4154,10 +4292,11 @@ class DistractorEngineMixin:
         if matching_senses and len(non_empty_sense_grams) == len(matching_senses):
             grams = list(non_empty_sense_grams)
         elif not non_empty_sense_grams:
+            w_ortho_gram = set(cls.orthographic_variants(w_clean)) if hasattr(cls, "orthographic_variants") else {w_clean}
             grams = [
                 str(th["grammar"]).strip().lower()
                 for th in (entry.get("thesaurus") or [])
-                if (th.get("word") or "").strip().lower() == w_clean and th.get("grammar")
+                if (th.get("word") or "").strip().lower() in w_ortho_gram and th.get("grammar")
             ]
         else:
             grams = []
@@ -4281,6 +4420,149 @@ class DistractorEngineMixin:
                             preps.add(tok)
 
         return preps
+
+    @classmethod
+    def _verb_has_intransitive_prep_pattern(cls, word: str, prep: str) -> bool:
+        """Checks whether `word` (or its orthographic variants) has an attested LDOCE verb pattern
+        where the verb is immediately followed by `prep` without an intervening object (`sb`/`sth`/`somebody`/`something`),
+        e.g., `enrol in`, `participate in`, `graduate from`, `apply for`, `listen to`."""
+        w = (word or "").strip().lower()
+        p = (prep or "").strip().lower()
+        if not w or not p:
+            return False
+        entry = cls.get_ldoce_entry(w) or cls.get_ldoce_entry(cls.lemma_of(w))
+        if not entry:
+            return False
+        variants = set(cls.orthographic_variants(w)) | set(cls.orthographic_variants(cls.lemma_of(w)))
+        for s in entry.get("senses", []):
+            all_pats = list(s.get("patterns") or []) + [
+                b.get("pattern", "") for b in (s.get("pattern_bundles") or []) if isinstance(b, dict)
+            ]
+            for pat in all_pats:
+                if not pat or not isinstance(pat, str):
+                    continue
+                p_low = pat.strip().lower()
+                for v_var in variants:
+                    m = re.match(rf"^{re.escape(v_var)}\s+([a-z/]+)\b", p_low)
+                    if m:
+                        prep_cluster = [tok.strip() for tok in m.group(1).split("/") if tok.strip()]
+                        if p in prep_cluster:
+                            return True
+        return False
+
+    @classmethod
+    def _get_verb_qualia_scenario_peers(
+        cls,
+        target_word: str,
+        definition: Optional[str] = None,
+        quote: Optional[str] = None,
+        context_anchor: Optional[str] = None,
+        anchor_type: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Pustejovsky Generative Lexicon Qualia Scenario Verb Bridge:
+        Extracts concrete scenario/institution/activity nouns from the target verb's definition
+        and harvests co-scenario lifecycle verbs from `ocd[noun]['verb_before']` that share the same
+        domain scenario while exhibiting contrasting syntactic valency (e.g., `apply for`, `attend [obj]`,
+        `graduate from`, `withdraw from` for `enroll in [school/university/course]`)."""
+        t = (target_word or "").strip().lower()
+        if not t:
+            return {}
+        ocd = cls.get_oxford_collocations()
+        if ocd is None:
+            return {}
+        def_text = (definition or "").strip()
+        if not def_text:
+            t_ent = cls.get_ldoce_entry(t) or cls.get_ldoce_entry(cls.lemma_of(t))
+            if t_ent and t_ent.get("senses"):
+                def_text = str(t_ent["senses"][0].get("definition") or "")
+        if not def_text:
+            return {}
+
+        _meta_stop_nouns = {
+            "something", "somebody", "someone", "person", "people", "thing", "things",
+            "way", "time", "part", "place", "kind", "type", "form", "amount", "number",
+            "state", "action", "process", "result", "effect", "use", "order", "group",
+            "system", "area", "point", "level", "fact", "case", "situation", "problem",
+            "information", "work", "life", "world", "day", "year", "man", "woman", "child",
+        }
+        _delexical_or_generic_verbs = {
+            "have", "get", "make", "take", "give", "do", "be", "go", "come", "put", "set",
+            "keep", "let", "start", "begin", "stop", "stay", "send", "offer", "provide",
+            "run", "follow", "change", "alter", "shape", "decide", "determine", "influence",
+            "steer", "pass", "fail", "teach", "hold", "miss", "train", "find", "use", "show",
+            "bring", "move", "turn", "call", "try", "ask", "need", "feel", "become", "mean",
+        }
+        t_variants = set(cls.orthographic_variants(t)) | set(cls.orthographic_variants(cls.lemma_of(t)))
+        scenario_nouns: List[str] = []
+        for raw_tok in re.findall(r"[a-z]{4,}", def_text.lower()):
+            lem_n = cls.lemma_of(raw_tok)
+            for cand_n in (raw_tok, lem_n):
+                if (
+                    cand_n
+                    and cand_n not in _meta_stop_nouns
+                    and cand_n not in t_variants
+                    and cand_n in ocd
+                    and cand_n not in scenario_nouns
+                ):
+                    n_ent = cls.get_ldoce_entry(cand_n)
+                    if n_ent and cls._pos_code(n_ent.get("pos") or "") == "n":
+                        scenario_nouns.append(cand_n)
+        if not scenario_nouns:
+            return {}
+
+        anc_prep = (context_anchor or "").strip().lower() if anchor_type == "prep" else ""
+        peers: Dict[str, Dict[str, Any]] = {}
+        for n in scenario_nouns[:5]:
+            vb_list = ocd.get(n, {}).get("verb_before", [])
+            for raw_item in vb_list:
+                if not isinstance(raw_item, str):
+                    continue
+                for chunk in [c.strip().lower() for c in raw_item.split("/") if c.strip()]:
+                    if chunk.startswith(("something ", "somebody ", "someone ")):
+                        continue
+                    # 1. Prepositional frame: `V + prep + (det) + N` (e.g. `apply for a course`, `graduate from university`)
+                    m_prep = re.match(
+                        rf"^([a-z]{{4,}})\s+(for|from|to|with|at|on|in|into|of)\s+(?:a\s+|an\s+|the\s+|\(a\)\s+|\(your\)\s+)?{re.escape(n)}\b",
+                        chunk,
+                    )
+                    if m_prep:
+                        vh, vp = m_prep.group(1), m_prep.group(2)
+                        if vh in t_variants or vh in _delexical_or_generic_verbs:
+                            continue
+                        if anc_prep and vp == anc_prep:
+                            # Same preposition on the same scenario noun would risk a double-key collision
+                            continue
+                        info = peers.setdefault(
+                            vh,
+                            {"score": 0, "nouns": set(), "preps": set(), "transitive": False, "contrasting_prep": False},
+                        )
+                        if (n, "prep", vp) not in info["nouns"]:
+                            info["nouns"].add((n, "prep", vp))
+                            info["preps"].add(vp)
+                            info["contrasting_prep"] = True
+                            info["score"] += 4
+                        continue
+
+                    # 2. Direct transitive frame: `V + (det) + N` (e.g. `attend (a) school`, `attend a course`, `leave school`)
+                    m_trans = re.match(
+                        rf"^([a-z]{{4,}})\s+(?:a\s+|an\s+|the\s+|\(a\)\s+|\(your\)\s+)?{re.escape(n)}\b",
+                        chunk,
+                    )
+                    if m_trans:
+                        vh = m_trans.group(1)
+                        if vh in t_variants or vh in _delexical_or_generic_verbs:
+                            continue
+                        if anc_prep and cls._verb_has_intransitive_prep_pattern(vh, anc_prep):
+                            continue
+                        info = peers.setdefault(
+                            vh,
+                            {"score": 0, "nouns": set(), "preps": set(), "transitive": False, "contrasting_prep": False},
+                        )
+                        if (n, "trans", "") not in info["nouns"]:
+                            info["nouns"].add((n, "trans", ""))
+                            info["transitive"] = True
+                            info["score"] += 3
+        return peers
 
     @classmethod
     def _is_attested_verb(cls, word: str) -> bool:
@@ -4485,7 +4767,17 @@ class DistractorEngineMixin:
                         if any(ch.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for ch in tok.children):
                             is_passive_verb_slot = True
                         if any(ch.dep_ in ("dobj", "obj") for ch in tok.children):
-                            has_direct_obj_slot = True
+                            # When the quiz slot is an intransitive prepositional frame (`... ____ <prep>`)
+                            # derived from an ambitransitive verb whose original passage quote had an object
+                            # (e.g., passage: "Sue enrolled her kids in a nearby public school." vs quiz slot: "... ____ in"),
+                            # do not mark the slot as having a direct object.
+                            if not (
+                                anchor_type == "prep"
+                                and anchor
+                                and not re.search(r"_{2,}", quote or "")
+                                and cls._verb_has_intransitive_prep_pattern(t, anchor.strip().lower())
+                            ):
+                                has_direct_obj_slot = True
                         if not active_verb_frame:
                             if any(ch.dep_ in ("dobj", "obj") for ch in tok.children) and any(
                                 ch.dep_ == "xcomp" and any(gc.lemma_.lower() == "to" for gc in ch.children)
@@ -4627,6 +4919,27 @@ class DistractorEngineMixin:
             c_preps = cls.get_governed_prepositions(c, pos=pos)
             if c_preps and gov_prep not in c_preps:
                 if not cls.lookup_ldoce_phrase(f"{c} {gov_prep}"):
+                    return True, "unattested_prepositional_government_clash"
+        elif (
+            gov_prep
+            and (wn_pos == "v" or pos_norm in ("v", "verb"))
+            and anchor_type == "prep"
+            and not has_direct_obj_slot
+            and cls._verb_has_intransitive_prep_pattern(t, gov_prep)
+        ):
+            c_preps = cls.get_governed_prepositions(c, pos="verb")
+            if gov_prep not in c_preps and not cls.lookup_ldoce_phrase(f"{c} {gov_prep}") and not cls._verb_has_intransitive_prep_pattern(c, gov_prep):
+                qualia_peers = cls._get_verb_qualia_scenario_peers(
+                    t,
+                    quote=quote,
+                    context_anchor=gov_prep,
+                    anchor_type="prep",
+                )
+                if c_preps or (
+                    c in qualia_peers and (
+                        qualia_peers[c].get("contrasting_prep") or qualia_peers[c].get("transitive")
+                    )
+                ):
                     return True, "unattested_prepositional_government_clash"
 
         # 7. Subcategorization Frame Clash: to + infinitive vs to + gerund/preposition
@@ -5044,6 +5357,14 @@ class DistractorEngineMixin:
                         d_v_hyps = {h for s in d_v_syns for h in s.hypernyms() if h.lexfile() not in ("verb.stative", "verb.change")}
                         if (t_v_hyps & d_v_hyps) and anchor.lower() in d_preps:
                             return True, "double_key_prep"
+                        if (
+                            cls._verb_has_intransitive_prep_pattern(t_lem, anchor.lower())
+                            and cls._verb_has_intransitive_prep_pattern(d_lem, anchor.lower())
+                        ):
+                            t_all_hyps = {h for s in t_v_syns for h in s.hypernyms()}
+                            d_all_hyps = {h for s in d_v_syns for h in s.hypernyms()}
+                            if t_all_hyps & d_all_hyps:
+                                return True, "double_key_prep"
             if anchor.lower() in d_preps:
                 if d in near or d_lem in near:
                     return True, "double_key_prep"
@@ -6940,12 +7261,15 @@ class DistractorEngineMixin:
     def get_synonyms(cls, word: str) -> Set[str]:
         """Returns all synonymous lemma strings for the word across all synsets."""
         wn = cls.get_wordnet()
+        w_low = (word or "").strip().lower()
+        w_ortho = set(cls.orthographic_variants(w_low)) if hasattr(cls, "orthographic_variants") else {w_low}
         synonyms = set()
-        for syn in wn.synsets(word.lower()):
-            for w in syn.words():
-                lemma = w.lemma().replace("_", " ").lower()
-                if lemma != word.lower():
-                    synonyms.add(lemma)
+        for q_w in w_ortho:
+            for syn in wn.synsets(q_w):
+                for w in syn.words():
+                    lemma = w.lemma().replace("_", " ").lower()
+                    if lemma not in w_ortho:
+                        synonyms.add(lemma)
         return synonyms
 
     @classmethod
@@ -6962,6 +7286,7 @@ class DistractorEngineMixin:
         target = (word or "").strip().lower()
         if not target:
             return set()
+        target_ortho = set(cls.orthographic_variants(target)) if hasattr(cls, "orthographic_variants") else {target}
         wn_pos = None
         p_single = None
         if pos:
@@ -6981,20 +7306,21 @@ class DistractorEngineMixin:
 
         candidate_synsets = []
         seen_syn_ids = set()
-        for w in wn.words(target):
-            if w.lemma().lower() != target:
-                continue
-            for syn in w.synsets():
-                if wn_pos and syn.pos not in wn_pos:
+        for q_t in target_ortho:
+            for w in wn.words(q_t):
+                if w.lemma().lower() not in target_ortho:
                     continue
-                if syn.id not in seen_syn_ids:
-                    seen_syn_ids.add(syn.id)
-                    candidate_synsets.append(syn)
+                for syn in w.synsets():
+                    if wn_pos and syn.pos not in wn_pos:
+                        continue
+                    if syn.id not in seen_syn_ids:
+                        seen_syn_ids.add(syn.id)
+                        candidate_synsets.append(syn)
 
         if (definition or quote) and len(candidate_synsets) > 1:
             nlp = cls.get_spacy()
             ctx_doc = nlp(((definition or "") + " " + (quote or "")).lower())
-            ctx_toks = {t.lemma_.lower() for t in ctx_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - {target}
+            ctx_toks = {t.lemma_.lower() for t in ctx_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - target_ortho
             if ctx_toks:
                 scored_syns = []
                 for syn in candidate_synsets:
@@ -7012,7 +7338,7 @@ class DistractorEngineMixin:
             al = lem.replace("_", " ").strip().lower()
             if (
                 al
-                and al != target
+                and al not in target_ortho
                 and " " not in al
                 and not cls._is_taboo_or_proper_noun(al, wn_pos=p_single)
                 and cls.is_exact_pedlex_headword(al)
@@ -7036,7 +7362,7 @@ class DistractorEngineMixin:
                 "noun.food", "noun.object", "noun.body", "noun.location",
             }
             for sense in syn.senses():
-                if sense.word().lemma().lower() != target:
+                if sense.word().lemma().lower() not in target_ortho:
                     continue
                 if syn.pos == "n" and syn.lexfile() in _CONCRETE_NOUN_LEXFILES_ANT:
                     continue

@@ -1335,7 +1335,7 @@ class QuizGeneratorMixin:
             logger.error(f"Failed loading/extracting wiki data for {core_name} ({template_name}): {load_err}", exc_info=True)
             return f"Error: Failed to prepare source data for {core_name} ({template_name}): {load_err}"
         if not data:
-            return f"Error: Could not find extracted {template_name} data for {core_name}. If this is a fresh setup, please verify that Ollama or your LLM API is running, and check if the extraction pipeline ran successfully."
+            return f"Error: Missing prerequisite extraction for unit '{core_name}'. Please compile and extract knowledge nodes (extractions/{core_name}_vocabulary.md) before generating quizzes."
 
         # 3. Build Prompt
         prompt_template, schema_cls = Prompts.get(f"{template_name}_quiz")

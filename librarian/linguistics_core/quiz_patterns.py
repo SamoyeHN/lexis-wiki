@@ -203,7 +203,8 @@ class QuizPatternsMixin:
         if native_bundles:
             out: List[Dict[str, Any]] = []
             t_low = (target_word or "").strip().lower()
-            t_low_esc = re.escape(t_low)
+            t_vars = cls.orthographic_variants(t_low) if (t_low and hasattr(cls, "orthographic_variants")) else ([t_low] if t_low else [])
+            t_low_esc = "(?:" + "|".join(re.escape(v) for v in (t_vars or [t_low])) + ")" if t_low else ""
             for nb in native_bundles:
                 raw_pat = (nb.get("pattern") or "").strip()
                 if not raw_pat:
@@ -387,7 +388,9 @@ class QuizPatternsMixin:
             p_clean_search = re.sub(r"\[.*?\]|\(.*?\)", "", clean_pat).strip().lower()
             p_for_prep = re.sub(r"\bto\s+(?:do\s+something|\w+ing)\b", "", p_clean_search)
             if "adj" in str(sense.get("pos") or "").lower() and target_word:
-                tw_esc_fb = re.escape(target_word.strip().lower())
+                tw_low_fb = target_word.strip().lower()
+                tw_vars_fb = cls.orthographic_variants(tw_low_fb) if hasattr(cls, "orthographic_variants") else [tw_low_fb]
+                tw_esc_fb = "(?:" + "|".join(re.escape(v) for v in (tw_vars_fb or [tw_low_fb])) + ")"
                 if re.search(rf"\bit\s+is\s+{tw_esc_fb}\b.*\bto\b", p_clean_search):
                     p_for_prep = ""
                 else:
@@ -970,7 +973,11 @@ class QuizPatternsMixin:
         if " " not in ft_low and not any(
             len(re.findall(r"[A-Za-z]+", str(r_ex or ""))) >= 5
             and str(r_ex or "").strip()[-1:] in ".?!"
-            and re.search(rf"\b{re.escape(ft_low)}\b", str(r_ex or "").lower())
+            and (
+                re.search(rf"\b{re.escape(ft_low)}\b", str(r_ex or "").lower())
+                if canonical_pos == "adv"
+                else (cls.text_contains_form(r_ex, ft_low) or cls.text_contains_form(r_ex, bw_low))
+            )
             and re.sub(r"\s+", " ", str(r_ex or "").strip()).lower() != q_norm
             for r_ex, _, _ in raw_candidates
         ):
@@ -992,13 +999,14 @@ class QuizPatternsMixin:
                             raw_candidates.append((wn_ex_s, None, "sense_example"))
             except Exception:
                 pass
-            try:
-                for ch_ex in (cls.search_corpus_examples(ft_low, limit=8) or []):
-                    ch_s = str(ch_ex or "").strip()
-                    if ch_s and re.search(rf"\b{re.escape(ft_low)}\b", ch_s.lower()):
-                        raw_candidates.append((ch_s, None, "sense_example"))
-            except Exception:
-                pass
+            if not is_poly:
+                try:
+                    for ch_ex in (cls.search_corpus_examples(ft_low, limit=8) or []):
+                        ch_s = str(ch_ex or "").strip()
+                        if ch_s and re.search(rf"\b{re.escape(ft_low)}\b", ch_s.lower()):
+                            raw_candidates.append((ch_s, None, "sense_example"))
+                except Exception:
+                    pass
 
         if not raw_candidates:
             return current_example, best_pattern, "none"
@@ -1099,7 +1107,13 @@ class QuizPatternsMixin:
                 elif not (cls.text_contains_form(ex_clean, ft_low) or cls.text_contains_form(ex_clean, bw_low)):
                     continue
                 if canonical_pos == "verb" and ft_low == bw_low and not current_example and quote:
-                    if not re.search(rf"\b{re.escape(ft_low)}\b", ex_norm):
+                    _has_non_noun_exact = any(
+                        re.search(rf"\b{re.escape(ft_low)}\b", str(r_ex or "").lower())
+                        and not re.search(rf"\b(?:a|an|the|his|her|their|its|my|our|your|this|that)\s+{re.escape(ft_low)}\b", str(r_ex or "").lower())
+                        and re.sub(r"\s+", " ", str(r_ex or "").strip()).lower() != q_norm
+                        for r_ex, _, _ in raw_candidates
+                    )
+                    if _has_non_noun_exact and not re.search(rf"\b{re.escape(ft_low)}\b", ex_norm):
                         continue
 
             if anchor and anchor_type == "partitive":
@@ -1292,8 +1306,11 @@ class QuizPatternsMixin:
                             and t_tok.head.pos_ in ("NOUN", "PROPN")
                             and t_tok.i > t_tok.head.i
                         )
-                        if t_tok.pos_ == "NOUN" and t_tok.dep_ in ("pobj", "dobj", "nsubj"):
-                            sc -= 80
+                        if t_tok.pos_ == "NOUN" and (
+                            t_tok.dep_ in ("pobj", "dobj", "nsubj", "attr")
+                            or any(c.dep_ in ("det", "poss") for c in t_tok.children)
+                        ):
+                            sc -= 220 if any(c.dep_ in ("det", "poss") for c in t_tok.children) else 80
                         elif t_tok.dep_ == "amod" and not _is_postnom_root_verb:
                             sc -= 120 if ft_low == bw_low else 45
                         else:

@@ -1911,34 +1911,17 @@ class CefrAndMorphologyMixin:
                 elif w.endswith("y") and len(w) > 2 and w[-2] not in "aeiou":
                     forms.update({w[:-1] + "ier", w[:-1] + "iest"})
 
-        # US/UK -or / -our, -ll / -l, -ize / -ise, and -gram / -gramme spelling equivalence
+        # US/UK orthographic equivalence closure across all inflected forms
         for f_cand in list(forms):
+            if hasattr(cls, "_pure_orthographic_variants"):
+                for ov in cls._pure_orthographic_variants(f_cand):
+                    forms.add(ov)
             if f_cand.endswith(("enroll", "unroll", "fulfill", "instill", "distill", "appall", "enthrall")):
                 uk_l = f_cand[:-1]
                 forms.update({uk_l, uk_l + "s", uk_l + "led", uk_l + "ling"})
             elif f_cand.endswith(("enrol", "unrol", "fulfil", "instil", "distil", "appal", "enthral")):
                 us_ll = f_cand + "l"
                 forms.update({us_ll, us_ll + "s", us_ll + "ed", us_ll + "ing"})
-            elif "llful" in f_cand:
-                forms.add(f_cand.replace("llful", "lful"))
-            elif "lful" in f_cand and "llful" not in f_cand:
-                forms.add(f_cand.replace("lful", "llful"))
-            elif len(f_cand) >= 5 and f_cand.endswith("or") and not f_cand.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior", "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor", "mirror", "error", "terror", "horror", "sensor")):
-                uk_f = f_cand[:-2] + "our"
-                forms.add(uk_f)
-                forms.add(uk_f + "s")
-            elif len(f_cand) >= 6 and f_cand.endswith("our") and not f_cand.endswith(("four", "hour", "pour", "tour", "sour", "flour", "devour")):
-                us_f = f_cand[:-3] + "or"
-                forms.add(us_f)
-                forms.add(us_f + "s")
-            elif f_cand == "gram" or f_cand.endswith(("program", "kilogram", "milligram")):
-                uk_m = f_cand + "me"
-                forms.add(uk_m)
-                forms.add(uk_m + "s")
-            elif f_cand == "gramme" or f_cand.endswith(("programme", "kilogramme", "milligramme")):
-                us_m = f_cand[:-2]
-                forms.add(us_m)
-                forms.add(us_m + "s")
 
         forms = {f for f in forms if f}
         cls._inflected_forms_cache[key] = set(forms)

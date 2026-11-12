@@ -34,6 +34,46 @@
     let libraryFilter = 'all';
     let librarySortOption = 'recent';
     let libraryViewMode = 'grid';
+    let librarySearchQuery = '';
+
+    function onLibrarySearchInput(val) {
+        librarySearchQuery = (val || '').trim().toLowerCase();
+        const clearBtn = document.getElementById('library-search-clear');
+        if (clearBtn) {
+            if (librarySearchQuery) clearBtn.classList.remove('d-none');
+            else clearBtn.classList.add('d-none');
+        }
+        fetchRawFiles();
+    }
+
+    function clearLibrarySearch() {
+        const input = document.getElementById('library-search-input');
+        if (input) input.value = '';
+        librarySearchQuery = '';
+        const clearBtn = document.getElementById('library-search-clear');
+        if (clearBtn) clearBtn.classList.add('d-none');
+        fetchRawFiles();
+    }
+
+    function onLibrarySearchKeydown(event) {
+        if (event.key === 'Escape') {
+            clearLibrarySearch();
+            const input = document.getElementById('library-search-input');
+            if (input) input.blur();
+        }
+    }
+
+    // Global keyboard shortcut: '/' or 'Ctrl+K' focuses search input
+    document.addEventListener('keydown', (e) => {
+        if ((e.key === '/' || (e.ctrlKey && e.key.toLowerCase() === 'k')) && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+            const input = document.getElementById('library-search-input');
+            if (input) {
+                e.preventDefault();
+                input.focus();
+                input.select();
+            }
+        }
+    });
 
     function setLibraryFilter(filter) {
         libraryFilter = filter;
@@ -2101,7 +2141,7 @@
             max_parallel: parseInt(document.getElementById('config-max-p').value)
         };
 
-        const vocab_mode = document.getElementById('config-quiz-vocab-mode')?.value || 'cloze';
+        const vocab_mode = document.getElementById('config-quiz-vocab-mode')?.value || 'generative';
         const quiz_defaults = {
             vocabulary: {
                 count: parseInt(document.getElementById('config-quiz-vocabulary').value) || 0,
@@ -2127,6 +2167,7 @@
         const target_language = document.getElementById('config-target-language').value;
         const enable_expert_audit = document.getElementById('config-enable-expert-audit').checked;
         const judge_model = document.getElementById('config-judge-model').value.trim();
+        const export_dir = (document.getElementById('config-export-dir')?.value || '').trim();
 
         fetch('/api/config/update', {
             method: 'POST',
@@ -2135,7 +2176,7 @@
                 api_type, model, api_url, api_key,
                 compile_defaults, quiz_defaults,
                 tts_engine, tts_voice_a, tts_voice_b, target_language,
-                enable_expert_audit, judge_model
+                enable_expert_audit, judge_model, export_dir
             })
         })
         .then(res => res.json())
@@ -2219,6 +2260,10 @@
                 // Level 2 Expert Audit options
                 document.getElementById('config-enable-expert-audit').checked = !!appConfig.enable_expert_audit;
                 document.getElementById('config-judge-model').value = appConfig.judge_model || '';
+
+                if (document.getElementById('config-export-dir')) {
+                    document.getElementById('config-export-dir').value = appConfig.export_dir || '';
+                }
 
                 // Refresh the "Total questions" badge to match the loaded config
                 refreshQuizTotal();
@@ -2494,6 +2539,19 @@
                     });
                 }
 
+                // Real-time search query filtering
+                if (librarySearchQuery) {
+                    const q = librarySearchQuery;
+                    filesToRender = filesToRender.filter(f => {
+                        const name = (f.name || '').toLowerCase();
+                        const stem = (f.stem || '').toLowerCase();
+                        const readableStem = stem.replace(/_/g, ' ');
+                        const title = (f.title || '').toLowerCase();
+                        const cefr = (f.cefr_level || '').toLowerCase();
+                        return name.includes(q) || stem.includes(q) || readableStem.includes(q) || title.includes(q) || cefr === q || (cefr && cefr.includes(q));
+                    });
+                }
+
                 // 3. Sorting ("recent", "name", "size")
                 if (librarySortOption === 'recent') {
                     filesToRender.sort((a, b) => b.mtime - a.mtime);
@@ -2514,10 +2572,32 @@
                 `;
                 grid.appendChild(createNewCol);
 
+                if (filesToRender.length === 0) {
+                    const emptyCol = document.createElement('div');
+                    emptyCol.className = libraryViewMode === 'grid' ? 'col-sm-6 col-md-8' : 'col-12';
+                    if (librarySearchQuery) {
+                        emptyCol.innerHTML = `
+                            <div class="text-center py-5 border rounded-3" style="background: var(--card-bg); border-color: var(--card-border) !important;">
+                                <i class="bi bi-search text-muted fs-2 d-block mb-2"></i>
+                                <div class="text-muted fw-semibold">No matching units found for "${esc(librarySearchQuery)}"</div>
+                                <button class="btn btn-sm btn-outline-secondary rounded-pill mt-3 px-3" onclick="clearLibrarySearch()"><i class="bi bi-x-circle me-1"></i> Clear Search</button>
+                            </div>
+                        `;
+                    } else {
+                        emptyCol.innerHTML = `
+                            <div class="text-center py-5 border rounded-3" style="background: var(--card-bg); border-color: var(--card-border) !important;">
+                                <i class="bi bi-folder2-open text-muted fs-2 d-block mb-2"></i>
+                                <div class="text-muted">No units found in this category.</div>
+                            </div>
+                        `;
+                    }
+                    grid.appendChild(emptyCol);
+                }
+
                 // Render matching notebooks
                 filesToRender.forEach(f => {
                     const baseName = f.stem || f.name.replace(/\.[^/.]+$/, "");
-                    const displayName = f.title || baseName.replace(/_/g, " ");
+                    const displayName = baseName;
                     
                     const vocabName = `${baseName}_vocabulary.md`;
                     const grammarName = `${baseName}_grammar.md`;
@@ -2534,6 +2614,22 @@
                     const mindmapName = `${baseName}_mindmap.html`;
                     const hasMindmap = compiledUnits.quizzes && compiledUnits.quizzes.some(q => q.toLowerCase().endsWith(mindmapName.toLowerCase()));
                     const mindmapClass = hasMindmap ? 'mindmap-done' : '';
+
+                    const isCompiled = Boolean(f.compiled || hasVocab || hasGrammar || hasSummary);
+                    const hasQuizzes = f.has_quizzes !== undefined ? Boolean(f.has_quizzes) : (compiledUnits.quizzes && compiledUnits.quizzes.some(q => q.toLowerCase().includes(baseName.toLowerCase()) && !q.toLowerCase().endsWith('_mindmap.html') && !q.toLowerCase().endsWith('_mindmap.json')));
+
+                    let exportDisabled = false;
+                    let exportTooltip = 'Download complete handouts package (.zip)';
+
+                    if (!isCompiled) {
+                        exportDisabled = true;
+                        exportTooltip = 'Unit not compiled yet. Compile to generate extractions.';
+                    } else if (!hasQuizzes) {
+                        exportDisabled = true;
+                        exportTooltip = 'No quizzes generated yet. Generate quizzes first.';
+                    }
+
+                    const cefrBadgeHtml = f.cefr_level ? `<span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill py-0 px-1.5" style="font-size: 0.62rem; font-weight: 600;">${esc(f.cefr_level)}</span>` : '';
 
                     const card = document.createElement('div');
                     card.className = libraryViewMode === 'grid' ? 'col-sm-6 col-md-4' : 'col-12';
@@ -2560,6 +2656,8 @@
                                                 <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                             </ul>
                                         </div>
                                     </div>
@@ -2571,7 +2669,7 @@
                                     </div>
                                     ` : ''}
 
-                                    <h6 class="fw-bold mb-1 text-truncate" title="${displayName}">${displayName}</h6>
+                                    <h6 class="fw-bold mb-1 text-truncate" title="${f.title ? esc(f.title) : esc(displayName)}">${esc(displayName)}</h6>
                                     <!-- Date & Source Metadata -->
                                     <div class="d-flex align-items-center gap-2 mb-3" style="font-size: 0.7rem; color: var(--on-surface-variant);">
                                         <span>${dateStr}</span>
@@ -2581,16 +2679,21 @@
                                 </div>
                                 
                                 <div class="d-flex align-items-center justify-content-between pt-2 border-top" style="border-color: var(--card-border) !important;">
-                                    <span class="text-muted small" style="font-size: 0.65rem;">${f.is_transcribing ? 'Processing audio...' : 'Linguistic Nodes'}</span>
-                                    <div class="d-flex gap-1">
-                                        ${f.is_transcribing ? `
-                                        <span class="spinner-border spinner-border-sm text-info flex-shrink-0" role="status"></span>
-                                        ` : `
-                                        <span class="unit-target-pill ${vocabClass}" title="Vocabulary unit">V</span>
-                                        <span class="unit-target-pill ${grammarClass}" title="Grammar structures">G</span>
-                                        <span class="unit-target-pill ${summaryClass}" title="Unit summary concepts">S</span>
-                                        <span class="unit-target-pill ${mindmapClass}" title="Mind Map">M</span>
-                                        `}
+                                    <div class="d-flex align-items-center gap-1.5">
+                                        ${f.is_transcribing ? `<span class="text-muted small" style="font-size: 0.65rem;">Processing audio...</span>` : ''}
+                                        ${cefrBadgeHtml}
+                                    </div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="d-flex gap-1">
+                                            ${f.is_transcribing ? `
+                                            <span class="spinner-border spinner-border-sm text-info flex-shrink-0" role="status"></span>
+                                            ` : `
+                                            <span class="unit-target-pill ${vocabClass}" title="Vocabulary unit">V</span>
+                                            <span class="unit-target-pill ${grammarClass}" title="Grammar structures">G</span>
+                                            <span class="unit-target-pill ${summaryClass}" title="Unit summary concepts">S</span>
+                                            <span class="unit-target-pill ${mindmapClass}" title="Mind Map">M</span>
+                                            `}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2605,7 +2708,7 @@
                                         <i class="bi ${f.is_transcribing ? 'bi-soundwave text-info' : 'bi-book-fill'}" style="font-size: 0.95rem; color: #ffffff; opacity: 0.95;"></i>
                                     </div>
                                     <div class="text-truncate">
-                                        <h6 class="fw-bold mb-0 text-truncate" style="font-size: 0.9rem;" title="${displayName}">${displayName}</h6>
+                                        <h6 class="fw-bold mb-0 text-truncate" style="font-size: 0.9rem;" title="${f.title ? esc(f.title) : esc(displayName)}">${esc(displayName)}</h6>
                                         <div class="d-flex align-items-center gap-2" style="font-size: 0.68rem; color: var(--on-surface-variant);">
                                             <span>${dateStr}</span>
                                             <span class="text-muted">•</span>
@@ -2613,7 +2716,8 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="d-flex align-items-center gap-3">
+                                <div class="d-flex align-items-center gap-2">
+                                    ${cefrBadgeHtml}
                                     ${f.is_transcribing ? `
                                     <span class="badge bg-info-subtle text-info border border-info-subtle py-0.5 px-2 rounded-pill font-monospace" style="font-size: 0.6rem;"><i class="bi bi-cpu animate-pulse me-1"></i>WHISPER</span>
                                     ` : `
@@ -2634,6 +2738,8 @@
                                             <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                         </ul>
                                     </div>
                                 </div>
@@ -2642,6 +2748,13 @@
                     }
                     grid.appendChild(card);
                 });
+
+                // Initialize Bootstrap tooltips on newly rendered cards
+                if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+                    grid.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+                        new bootstrap.Tooltip(el);
+                    });
+                }
 
                 // Restore scroll position after DOM rebuild (after all cards appended)
                 if (grid) grid.scrollTop = gridScrollTop;
@@ -3284,6 +3397,20 @@
             return;
         }
 
+        // Prerequisite Extraction Gate: Quizzes strictly consume compiled extraction nodes
+        if (template !== 'video') {
+            const baseName = currentUnit.replace(/\.[^/.]+$/, "");
+            const vocabName = `${baseName}_vocabulary.md`;
+            const hasVocab = compiledUnits.vocabulary && compiledUnits.vocabulary.some(v => v.endsWith(vocabName) || v === vocabName);
+            if (!hasVocab) {
+                showInfoModal(
+                    "Extraction Required",
+                    `The unit <strong>${esc(baseName)}</strong> has not been extracted yet.<br><br>Please compile and extract knowledge nodes (Vocabulary &amp; Grammar) before generating quizzes.`
+                );
+                return;
+            }
+        }
+
         if (template === 'video') {
             fetch('/api/check-video-source', {
                 method: 'POST',
@@ -3511,7 +3638,7 @@
 
     function selectQuizArch(val) {
         document.getElementById('quiz-template-select').value = val;
-        ['translation', 'reading', 'vocabulary', 'cloze', 'listening', 'video'].forEach(arch => {
+        ['vocabulary', 'reading', 'translation', 'listening', 'video'].forEach(arch => {
             const btn = document.getElementById('btn-arch-' + arch);
             if (btn) {
                 if (arch === val) btn.classList.add('active');
@@ -4688,6 +4815,60 @@
             toast.style.opacity = '0';
             setTimeout(() => { toast.remove(); }, 300);
         }, 4000);
+    }
+
+    function exportUnit(unitName) {
+        if (!unitName) {
+            showToast('No unit selected for export.', 'error');
+            return;
+        }
+        const cleanUnit = unitName.replace(/\.[^/.]+$/, "");
+
+        showToast(`Preparing handouts package for ${cleanUnit}...`, 'info');
+
+        fetch(`/api/export-zip?unit_name=${encodeURIComponent(cleanUnit)}`)
+            .then(async response => {
+                if (!response.ok) {
+                    let errMsg = `Server returned ${response.status}`;
+                    try {
+                        const errJson = await response.json();
+                        if (errJson && errJson.error) errMsg = errJson.error;
+                    } catch (_) {
+                        try {
+                            const errText = await response.text();
+                            if (errText) errMsg = errText;
+                        } catch (_) {}
+                    }
+                    throw new Error(errMsg);
+                }
+                const disposition = response.headers.get('Content-Disposition');
+                let filename = `${cleanUnit}_handouts.zip`;
+                if (disposition && disposition.indexOf('filename=') !== -1) {
+                    const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                    if (matches != null && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
+                return response.blob().then(blob => ({ blob, filename }));
+            })
+            .then(({ blob, filename }) => {
+                const blobUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => window.URL.revokeObjectURL(blobUrl), 30000);
+            })
+            .catch(err => {
+                showToast(`Export failed: ${err.message}`, 'error');
+            });
+    }
+
+    function exportCurrentUnitHandouts() {
+        if (!currentUnit) { showToast('No active unit selected.', 'error'); return; }
+        exportUnit(currentUnit);
     }
 
     document.addEventListener('click', (e) => {

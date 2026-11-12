@@ -879,11 +879,15 @@ class QuizVocabMixin:
                 pat_str = f"{chosen_v} {art} {t_clean}"
                 if pat_str not in seen_pats:
                     seen_pats.add(pat_str)
+                    m_prep = re.search(rf"\b{re.escape(t_clean)}\b\s+([a-z]+)\b", chosen_ex, re.IGNORECASE)
+                    found_prep = m_prep.group(1).lower() if m_prep else None
+                    if found_prep not in {"of", "for", "on", "in", "to", "with", "from", "into", "against", "about", "towards", "toward", "over", "under", "between"}:
+                        found_prep = None
                     out_bundles.append({
                         "pattern": pat_str,
                         "example": chosen_ex,
-                        "prep": None,
-                        "preps": [],
+                        "prep": found_prep,
+                        "preps": [found_prep] if found_prep else [],
                         "verb_anchor": chosen_v,
                         "from_quote_verb": bool(matched_quote_v and chosen_v == matched_quote_v),
                         "from_sense_example": bool(any(_verb_in_text(chosen_v, s_ex) for s_ex in sense_examples)),
@@ -934,11 +938,15 @@ class QuizVocabMixin:
                 pat_str = f"{v_norm} {art} {t_clean}"
                 if pat_str not in seen_pats:
                     seen_pats.add(pat_str)
+                    m_prep = re.search(rf"\b{re.escape(t_clean)}\b\s+([a-z]+)\b", ex, re.IGNORECASE)
+                    found_prep = m_prep.group(1).lower() if m_prep else None
+                    if found_prep not in {"of", "for", "on", "in", "to", "with", "from", "into", "against", "about", "towards", "toward", "over", "under", "between"}:
+                        found_prep = None
                     out_bundles.append({
                         "pattern": pat_str,
                         "example": ex,
-                        "prep": None,
-                        "preps": [],
+                        "prep": found_prep,
+                        "preps": [found_prep] if found_prep else [],
                         "verb_anchor": v_norm,
                         "from_quote_verb": bool(re.search(rf"\b{re.escape(v_norm)}\w*\b", q_low)),
                         "from_sense_example": True,
@@ -2508,7 +2516,18 @@ class QuizVocabMixin:
                 pos_char = "v" if canonical_pos == "verb" else ("a" if canonical_pos == "adj" else ("r" if canonical_pos == "adv" else "n"))
                 distractors = cls.generate_zero_collision_distractors(w_lower, pos=pos_char, count=3)
 
-            verb_requires_object = cls._verb_takes_object(w_lower) if canonical_pos == "verb" else None
+            if canonical_pos == "verb":
+                if (
+                    anchor_type == "prep"
+                    and anchor
+                    and not orig_disc_prep
+                    and cls._verb_has_intransitive_prep_pattern(w_lower, str(anchor).lower())
+                ):
+                    verb_requires_object = False
+                else:
+                    verb_requires_object = cls._verb_takes_object(w_lower)
+            else:
+                verb_requires_object = None
 
             # Determine plural-noun target status before distractor screening so _is_valid_distractor
             # rejects uncountable or invariant-plural noun candidates before they enter the final 3 slots.
@@ -2867,12 +2886,19 @@ class QuizVocabMixin:
                 best_pattern = atomic_bundle.get("pattern")
                 if atomic_bundle.get("example"):
                     ldoce_pattern_example = atomic_bundle["example"]
-                if atomic_bundle.get("verb_anchor") and anchor_type not in _cxn_anchor_types:
-                    anchor = atomic_bundle["verb_anchor"]
-                    anchor_type = "verb"
-                    pattern_anchor = anchor
-                elif atomic_bundle.get("prep") and anchor_type not in _cxn_anchor_types:
-                    pat_prep = atomic_bundle["prep"]
+                v_anc = atomic_bundle.get("verb_anchor")
+                p_anc = atomic_bundle.get("prep")
+                if v_anc and anchor_type not in _cxn_anchor_types:
+                    if str(v_anc).lower() in cls.GENERIC_COLLOCATION_VERBS and p_anc:
+                        anchor = p_anc
+                        anchor_type = "prep"
+                        pattern_anchor = p_anc
+                    else:
+                        anchor = v_anc
+                        anchor_type = "verb"
+                        pattern_anchor = v_anc
+                elif p_anc and anchor_type not in _cxn_anchor_types:
+                    pat_prep = p_anc
                     anchor_in_bundle_ex = bool(
                         anchor
                         and ldoce_pattern_example

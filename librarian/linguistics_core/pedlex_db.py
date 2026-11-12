@@ -35,6 +35,224 @@ class PedlexDbMixin:
         "adverb": "adverbs", "phrase": "phrases",
     }
 
+    _NATIVE_LL_STEMS = frozenset({
+        "fill", "will", "bill", "kill", "drill", "chill", "skill", "spill", "thrill",
+        "grill", "mill", "pill", "till", "still", "distill", "instill", "fulfill",
+        "spell", "shell", "smell", "swell", "dwell", "tell", "sell", "bell", "well", "yell",
+        "call", "fall", "hall", "mall", "stall", "tall", "wall", "install", "recall", "appall", "enthrall",
+        "poll", "roll", "enroll", "unroll", "scroll", "stroll", "toll", "troll",
+        "dull", "full", "hull", "lull", "mull", "null", "pull", "skull",
+    })
+
+    @classmethod
+    def _pure_orthographic_variants(cls, word: str) -> List[str]:
+        """
+        Pure rule-based AmE <-> BrE orthographic spelling alternations for a single token `word`.
+        Returns an ordered list starting with `w` followed by its regional spelling variants.
+        """
+        st = (word or "").strip().lower()
+        if not st or len(st) < 4 or " " in st:
+            return [st] if st else []
+
+        ortho_cands: List[str] = [st]
+        # 1. -ll <-> -l root verbs & -ment derivatives ('enroll'/'enrol', 'fulfill'/'fulfil', 'enrollment'/'enrolment')
+        if st.endswith(("enroll", "unroll", "fulfill", "instill", "distill", "appall", "enthrall")):
+            ortho_cands.append(st[:-1])
+        elif st.endswith(("enrol", "unrol", "fulfil", "instil", "distil", "appal", "enthral")):
+            ortho_cands.append(st + "l")
+        elif st.endswith(("enrollment", "unrollment", "fulfillment", "instillment", "distillment", "installment")):
+            ortho_cands.append(st[:-5] + "ment")
+        elif st.endswith(("enrolment", "unrolment", "fulfilment", "instilment", "distilment", "instalment")):
+            ortho_cands.append(st[:-4] + "lment")
+        if "llful" in st:
+            ortho_cands.append(st.replace("llful", "lful"))
+        elif "lful" in st and "llful" not in st:
+            ortho_cands.append(st.replace("lful", "llful"))
+
+        # 2. Single -l- <-> Double -ll- before vowel suffixes ('traveler'/'traveller', 'counselor'/'counsellor', 'marvelous'/'marvellous')
+        if len(st) >= 6:
+            m_ll = re.match(r"^([a-z]{2,}[eaoiu]l)l(ed|ing|er|ers|or|ors|ous|ist|ists|ery)$", st)
+            if m_ll and (m_ll.group(1) + "l") not in cls._NATIVE_LL_STEMS:
+                ortho_cands.append(m_ll.group(1) + m_ll.group(2))
+            m_l = re.match(
+                r"^([a-z]{2,}(?:vel|sel|cel|pel|tel|del|nal|gal|tal|kal|ral|ual|oil|cil|rel|nel|bel))(?<!ll)(ed|ing|er|ers|or|ors|ous|ist|ists)$",
+                st,
+            )
+            if m_l:
+                ortho_cands.append(m_l.group(1) + "l" + m_l.group(2))
+        if st == "jewelry":
+            ortho_cands.append("jewellery")
+        elif st == "jewellery":
+            ortho_cands.append("jewelry")
+        elif st == "woolen":
+            ortho_cands.append("woollen")
+        elif st == "woollen":
+            ortho_cands.append("woolen")
+
+        # 3. Mute -e retention/drop ('sizable'/'sizeable', 'likable'/'likeable', 'judgment'/'judgement', 'aging'/'ageing')
+        for am_e, br_e in (
+            ("sizable", "sizeable"), ("sizably", "sizeably"),
+            ("likable", "likeable"), ("lovable", "loveable"),
+            ("movable", "moveable"), ("shakable", "shakeable"),
+            ("usable", "useable"), ("livable", "liveable"),
+            ("salable", "saleable"), ("blamable", "blameable"),
+            ("unmistakable", "unmistakeable"), ("unmistakably", "unmistakeably"),
+            ("judgment", "judgement"), ("judgments", "judgements"), ("judgmental", "judgemental"),
+            ("acknowledgment", "acknowledgement"), ("acknowledgments", "acknowledgements"),
+            ("abridgment", "abridgement"), ("lodgment", "lodgement"),
+            ("aging", "ageing"),
+        ):
+            if st == am_e:
+                ortho_cands.append(br_e)
+            elif st == br_e:
+                ortho_cands.append(am_e)
+
+        # 4. -or <-> -our & productive derivatives ('color'/'colour', 'colorful'/'colourful', 'favorable'/'favourable')
+        _non_our_stems = (
+            "door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior",
+            "author", "doctor", "actor", "factor", "sector", "motor", "editor", "visitor",
+            "mirror", "error", "terror", "horror", "sensor", "pastor", "victor", "mentor",
+            "tutor", "sponsor", "cursor", "tensor", "vector", "donor", "tenor", "liquor",
+        )
+        m_or = re.match(r"^([a-z]{2,}?)or(s|ed|ing|able|ably|ite|ites|less|ful|fully|al|ally)?$", st)
+        if m_or and len(st) >= 5:
+            base_or = m_or.group(1) + "or"
+            suf_or = m_or.group(2) or ""
+            if not base_or.endswith(_non_our_stems):
+                ortho_cands.append(m_or.group(1) + "our" + suf_or)
+        m_our = re.match(r"^([a-z]{2,}?)our(s|ed|ing|able|ably|ite|ites|less|ful|fully|al|ally)?$", st)
+        if m_our and len(st) >= 6:
+            base_our = m_our.group(1) + "our"
+            suf_our = m_our.group(2) or ""
+            if not base_our.endswith(("four", "hour", "pour", "tour", "sour", "flour", "devour", "scour")):
+                ortho_cands.append(m_our.group(1) + "or" + suf_our)
+
+        # 5. -er <-> -re ('center'/'centre', 'theater'/'theatre', 'fiber'/'fibre')
+        if len(st) >= 5:
+            m_er = re.match(r"^([a-z]*(?:cent|theat|fib|met|lit|calib|sab|somb|spect|lust|meag|manoeuv|maneuv|och|reconnoit|sepulch|mit|goit))er(s|ed)?$", st)
+            if m_er:
+                ortho_cands.append(m_er.group(1) + "re" + (m_er.group(2) or ""))
+            elif len(st) >= 6 and st.endswith(("ter", "ber", "ger", "ver", "ker")):
+                ortho_cands.append(st[:-2] + "re")
+            m_re = re.match(r"^([a-z]*(?:cent|theat|fib|met|lit|calib|sab|somb|spect|lust|meag|manoeuv|maneuv|och|reconnoit|sepulch|mit|goit))re(s|d)?$", st)
+            if m_re:
+                suf_re = "ed" if m_re.group(2) == "d" else (m_re.group(2) or "")
+                ortho_cands.append(m_re.group(1) + "er" + suf_re)
+            elif len(st) >= 6 and st.endswith(("tre", "bre", "gre", "vre", "kre")):
+                ortho_cands.append(st[:-2] + "er")
+
+        # 6. -og <-> -ogue & -gram <-> -gramme ('catalog'/'catalogue', 'dialog'/'dialogue', 'program'/'programme')
+        if len(st) >= 6 and st.endswith("og"):
+            ortho_cands.append(st + "ue")
+        elif len(st) >= 7 and st.endswith("ogs"):
+            ortho_cands.append(st[:-1] + "ues")
+        elif len(st) >= 8 and st.endswith("ogue"):
+            ortho_cands.append(st[:-2])
+        elif len(st) >= 9 and st.endswith("ogues"):
+            ortho_cands.append(st[:-3] + "s")
+        if st.endswith(("program", "kilogram", "milligram")):
+            ortho_cands.append(st + "me")
+        elif st.endswith(("programs", "kilograms", "milligrams")):
+            ortho_cands.append(st[:-1] + "mes")
+        elif st.endswith(("programme", "kilogramme", "milligramme")):
+            ortho_cands.append(st[:-2])
+        elif st.endswith(("programmes", "kilogrammes", "milligrammes")):
+            ortho_cands.append(st[:-3] + "s")
+
+        # 7. -ize <-> -ise & -yze <-> -yse (including inflections and -ization/-isation)
+        m_ize = re.match(r"^([a-z]{3,})(iz|is)(e|es|ed|ing|er|ers|ation|ations|able)$", st)
+        if m_ize:
+            alt_z = "is" if m_ize.group(2) == "iz" else "iz"
+            ortho_cands.append(m_ize.group(1) + alt_z + m_ize.group(3))
+        m_yze = re.match(r"^([a-z]{2,})(yz|ys)(e|es|ed|ing|er|ers)$", st)
+        if m_yze:
+            alt_y = "ys" if m_yze.group(2) == "yz" else "yz"
+            ortho_cands.append(m_yze.group(1) + alt_y + m_yze.group(3))
+
+        # 8. -ense <-> -ence ('defense'/'defence', 'offense'/'offence', 'pretense'/'pretence', 'license'/'licence')
+        if len(st) >= 6:
+            if st.endswith("ense"):
+                ortho_cands.append(st[:-4] + "ence")
+            elif st.endswith("enses"):
+                ortho_cands.append(st[:-5] + "ences")
+            elif st.endswith("ence"):
+                ortho_cands.append(st[:-4] + "ense")
+            elif st.endswith("ences"):
+                ortho_cands.append(st[:-5] + "enses")
+
+        # 9. Classical/stem prefix & root alternations ('skeptic'/'sceptic', 'gray'/'grey', 'inquire'/'enquire', etc.)
+        for am_p, br_p in (
+            ("skeptic", "sceptic"), ("artifact", "artefact"), ("gray", "grey"),
+            ("inquir", "enquir"), ("glamor", "glamour"), ("mustache", "moustache"), ("sulfur", "sulphur"),
+            ("esthetic", "aesthetic"), ("anesthe", "anaesthe"), ("archeolog", "archaeolog"),
+            ("paleontolog", "palaeontolog"), ("encyclopedi", "encyclopaedi"),
+            ("pediatric", "paediatric"), ("orthopedic", "orthopaedic"),
+            ("gynecolog", "gynaecolog"), ("hemorrhag", "haemorrhag"),
+            ("hemoglobin", "haemoglobin"), ("leukemia", "leukaemia"),
+            ("diarrhea", "diarrhoea"), ("esophag", "oesophag"), ("estrogen", "oestrogen"),
+            ("fetus", "foetus"), ("fetal", "foetal"), ("medieval", "mediaeval"),
+            ("maneuver", "manoeuvre"), ("mold", "mould"), ("plow", "plough"),
+            ("smolder", "smoulder"), ("molt", "moult"), ("cozy", "cosy"),
+            ("math", "maths"), ("pajamas", "pyjamas"), ("aluminum", "aluminium"),
+            ("specialty", "speciality"), ("specialties", "specialities"),
+        ):
+            if st.startswith(am_p):
+                ortho_cands.append(br_p + st[len(am_p):])
+            elif st.startswith(br_p):
+                ortho_cands.append(am_p + st[len(br_p):])
+
+        seen: Set[str] = set()
+        out: List[str] = []
+        for cand in ortho_cands:
+            if cand and cand not in seen:
+                seen.add(cand)
+                out.append(cand)
+        return out
+
+    @classmethod
+    def orthographic_variants(cls, word: str) -> List[str]:
+        """
+        Full Orthographic Equivalence Closure for `word`:
+        Combines rule-based AmE <-> BrE variants (`_pure_orthographic_variants`) with
+        any cross-linked `payload_headword` / `alias_of` / `base_word` recorded in `pedlex.db`.
+        """
+        w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip().lower()
+        if not w_clean:
+            return []
+        if " " in w_clean:
+            toks = w_clean.split()
+            tok_vars = [cls._pure_orthographic_variants(t) for t in toks]
+            out_phrases = [w_clean]
+            for idx, v_list in enumerate(tok_vars):
+                if len(v_list) > 1:
+                    for v in v_list[1:]:
+                        cand_p = " ".join(toks[:idx] + [v] + toks[idx + 1 :])
+                        if cand_p not in out_phrases:
+                            out_phrases.append(cand_p)
+            return out_phrases
+
+        cands = list(cls._pure_orthographic_variants(w_clean))
+        try:
+            entry = cls.get_ldoce_entry(w_clean)
+            if entry:
+                for k in ("word", "payload_headword", "base_word", "alias_of"):
+                    val = str(entry.get(k) or "").strip().lower()
+                    val = re.sub(r"_\d+$", "", val)
+                    if val and " " not in val and val not in cands:
+                        # Only include if it is an orthographic variant or shares the same lemma/stem
+                        if (
+                            val in cls._pure_orthographic_variants(w_clean)
+                            or w_clean in cls._pure_orthographic_variants(val)
+                            or (hasattr(cls, "are_spelling_variants") and cls.are_spelling_variants(w_clean, val))
+                        ):
+                            cands.append(val)
+                            for sub_v in cls._pure_orthographic_variants(val):
+                                if sub_v not in cands:
+                                    cands.append(sub_v)
+        except Exception:
+            pass
+        return cands
+
     @classmethod
     def _headword_candidates(cls, surface: str) -> List[str]:
         """Surface form -> plausible PedLex headwords, most literal first."""
@@ -67,49 +285,9 @@ class PedlexDbMixin:
         # Systematic AmE <-> BrE headword spelling alternations (evaluated after literal stems)
         ortho_cands: List[str] = []
         for st in list(cands):
-            if len(st) < 4:
-                continue
-            if st.endswith(("enroll", "unroll", "fulfill", "instill", "distill", "appall", "enthrall")):
-                ortho_cands.append(st[:-1])
-            elif st.endswith(("enrol", "unrol", "fulfil", "instil", "distil", "appal", "enthral")):
-                ortho_cands.append(st + "l")
-            if "llful" in st:
-                ortho_cands.append(st.replace("llful", "lful"))
-            elif "lful" in st and "llful" not in st:
-                ortho_cands.append(st.replace("lful", "llful"))
-            if len(st) >= 5 and st.endswith("or") and not st.endswith(("door", "floor", "poor", "moor", "prior", "major", "minor", "senior", "junior")):
-                ortho_cands.append(st[:-2] + "our")
-            elif len(st) >= 6 and st.endswith("our"):
-                ortho_cands.append(st[:-3] + "or")
-            if len(st) >= 6 and st.endswith(("ter", "ber", "ger", "ver", "ker")):
-                ortho_cands.append(st[:-2] + "re")
-            elif len(st) >= 6 and st.endswith(("tre", "bre", "gre", "vre", "kre")):
-                ortho_cands.append(st[:-2] + "er")
-            if len(st) >= 6 and st.endswith("og"):
-                ortho_cands.append(st + "ue")
-            elif len(st) >= 8 and st.endswith("ogue"):
-                ortho_cands.append(st[:-2])
-            if len(st) >= 5 and st.endswith("ize"):
-                ortho_cands.append(st[:-3] + "ise")
-            elif len(st) >= 5 and st.endswith("ise"):
-                ortho_cands.append(st[:-3] + "ize")
-            if len(st) >= 5 and st.endswith("yze"):
-                ortho_cands.append(st[:-3] + "yse")
-            elif len(st) >= 5 and st.endswith("yse"):
-                ortho_cands.append(st[:-3] + "yze")
-            if len(st) >= 6 and st.endswith("ense"):
-                ortho_cands.append(st[:-4] + "ence")
-            elif len(st) >= 6 and st.endswith("ence"):
-                ortho_cands.append(st[:-4] + "ense")
-            for am_p, br_p in (
-                ("skeptic", "sceptic"), ("artifact", "artefact"), ("gray", "grey"),
-                ("esthetic", "aesthetic"), ("archeolog", "archaeolog"), ("maneuver", "manoeuvre"),
-                ("mold", "mould"), ("plow", "plough"), ("smolder", "smoulder"),
-            ):
-                if st.startswith(am_p):
-                    ortho_cands.append(br_p + st[len(am_p):])
-                elif st.startswith(br_p):
-                    ortho_cands.append(am_p + st[len(br_p):])
+            for ov in cls._pure_orthographic_variants(st):
+                if ov != st:
+                    ortho_cands.append(ov)
         cands.extend(ortho_cands)
 
         seen, out = set(), []
@@ -167,40 +345,185 @@ class PedlexDbMixin:
                 cls._ldoce_tables = set()
         return name in cls._ldoce_tables
 
+    _XREF_SPELLING_RE = re.compile(
+        r"^(?:(?:a|an|the)\s+)?(?:(?:usual|old|old-fashioned|informal)\s+)?(?:American|British|US|UK|another|variant|alternative)\s+(?:English\s+)?(?:spelling|form)\s+of\s+([a-zA-Z\-]+?)(?:\d+|\(\d+\))?(?:\s*\(.*\))?\.?$|^(?:same\s+as|see)\s+([a-zA-Z\-]+)\.?$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _norm_def_for_ortho_dedup(cls, text: str) -> str:
+        s = re.sub(r"\s+", " ", (text or "").strip().lower())
+        if hasattr(cls, "_normalize_bre_ame"):
+            return " ".join(
+                cls._normalize_bre_ame(tok) if tok.isalpha() else tok
+                for tok in re.findall(r"[a-z]+|[^a-z]+", s)
+            )
+        return s
+
     @classmethod
     def _finish_ldoce_entry(cls, w_clean: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Single exit point: normalize collocation keys, expand cross-reference spelling senses, and cache."""
+        """Single exit point: normalize collocation keys, expand cross-reference spelling senses,
+        merge regional AmE <-> BrE orthographic variant payloads, and cache."""
         data["collocations"] = cls._normalize_collocations(data.get("collocations"))
-        # Expand bare cross-reference senses (e.g. 'the American spelling of programme', 'another spelling of sizeable')
-        raw_senses = data.get("senses")
-        if isinstance(raw_senses, list) and raw_senses:
-            expanded_senses = []
-            for s in raw_senses:
+
+        def _expand_xref_senses(entry_dict: Dict[str, Any], owner_w: str) -> List[Dict[str, Any]]:
+            raw_s = entry_dict.get("senses")
+            if not isinstance(raw_s, list) or not raw_s:
+                return []
+            expanded: List[Dict[str, Any]] = []
+            for s in raw_s:
                 if isinstance(s, dict):
                     s_defn = str(s.get("definition") or "").strip()
-                    m_xref = re.match(
-                        r"^(?:(?:the\s+)?(?:American|British|US|UK|another|variant|alternative)\s+(?:English\s+)?(?:spelling|form)\s+of|same\s+as|see)\s+([a-zA-Z\-]+)\.?$",
-                        s_defn,
-                        re.IGNORECASE,
-                    )
+                    m_xref = cls._XREF_SPELLING_RE.match(s_defn)
                     if m_xref:
-                        target_hw = m_xref.group(1).strip().lower()
-                        if target_hw and target_hw != w_clean:
+                        target_hw = (m_xref.group(1) or m_xref.group(2) or "").strip().lower()
+                        if target_hw and target_hw != owner_w:
                             t_row = cls._ldoce_raw_row(target_hw)
                             if t_row:
                                 t_data = cls._resolve_ldoce_kind(target_hw, target_hw, *t_row)
                                 t_senses = [
                                     ts for ts in (t_data.get("senses") or [])
-                                    if isinstance(ts, dict) and str(ts.get("definition") or "").strip()
+                                    if isinstance(ts, dict)
+                                    and str(ts.get("definition") or "").strip()
+                                    and not cls._XREF_SPELLING_RE.match(str(ts.get("definition") or "").strip())
                                 ]
                                 if t_senses:
-                                    expanded_senses.extend(t_senses)
-                                    for meta_k in ("collocations", "cross_collocations", "thesaurus", "grammar_boxes", "word_family", "phrases"):
-                                        if not data.get(meta_k) and t_data.get(meta_k):
-                                            data[meta_k] = t_data[meta_k]
+                                    expanded.extend(t_senses)
+                                    for meta_k in ("collocations", "cross_collocations", "thesaurus", "language_activator", "grammar_boxes", "word_family", "phrases", "phrasal_verbs", "units", "all_poses"):
+                                        if not entry_dict.get(meta_k) and t_data.get(meta_k):
+                                            entry_dict[meta_k] = t_data[meta_k]
                                     continue
-                expanded_senses.append(s)
-            data["senses"] = expanded_senses
+                expanded.append(s)
+            return expanded
+
+        orig_had_only_xref = bool(
+            data.get("senses")
+            and all(
+                isinstance(s, dict) and bool(cls._XREF_SPELLING_RE.match(str(s.get("definition") or "").strip()))
+                for s in (data.get("senses") or [])
+            )
+        )
+        data["senses"] = _expand_xref_senses(data, w_clean)
+
+        # Orthographic Equivalence Closure across AmE <-> BrE rows in `ldoce`:
+        # When both regional spellings exist as rows in `ldoce` (e.g. `favor` has only noun senses while
+        # `favour` has noun + verb senses and 13 `language_activator` clusters; `analyze` and `analyse`
+        # each hold 1 distinct `language_activator` cluster), merge their senses and lexicographic compartments
+        # so AmE and BrE queries observe identical lexical knowledge.
+        if " " not in w_clean:
+            ortho_peers = [ov for ov in cls._pure_orthographic_variants(w_clean) if ov != w_clean]
+            if ortho_peers:
+                cur_senses = list(data.get("senses") or [])
+                sense_by_sig: Dict[Tuple[str, str], Dict[str, Any]] = {}
+                for s in cur_senses:
+                    if isinstance(s, dict):
+                        sp = str(s.get("pos") or data.get("pos") or "").strip().lower()
+                        sd = cls._norm_def_for_ortho_dedup(str(s.get("definition") or ""))
+                        if sd:
+                            sense_by_sig.setdefault((sp, sd), s)
+
+                for ov in ortho_peers:
+                    ov_row = cls._ldoce_raw_row(ov)
+                    if not ov_row:
+                        continue
+                    ov_data = cls._resolve_ldoce_kind(ov, ov, *ov_row)
+                    ov_senses = _expand_xref_senses(ov_data, ov)
+                    for os_item in ov_senses:
+                        if not isinstance(os_item, dict):
+                            continue
+                        os_def = str(os_item.get("definition") or "").strip()
+                        if not os_def or cls._XREF_SPELLING_RE.match(os_def):
+                            continue
+                        os_pos = str(os_item.get("pos") or ov_data.get("pos") or "").strip().lower()
+                        sig = (os_pos, cls._norm_def_for_ortho_dedup(os_def))
+                        existing_s = sense_by_sig.get(sig)
+                        if existing_s is None:
+                            s_copy = dict(os_item)
+                            if not s_copy.get("pos") and os_pos:
+                                s_copy["pos"] = os_pos
+                            cur_senses.append(s_copy)
+                            sense_by_sig[sig] = s_copy
+                        else:
+                            for list_k in ("patterns", "units", "examples"):
+                                if os_item.get(list_k):
+                                    merged_l = list(existing_s.get(list_k) or [])
+                                    for elem in os_item[list_k]:
+                                        if elem and elem not in merged_l:
+                                            merged_l.append(elem)
+                                    existing_s[list_k] = merged_l
+                            for syn_k in ("synonym", "opposite"):
+                                if os_item.get(syn_k) and not existing_s.get(syn_k):
+                                    existing_s[syn_k] = os_item[syn_k]
+                    data["senses"] = cur_senses
+
+                    # Merge all_poses
+                    all_p = list(data.get("all_poses") or ([data["pos"]] if data.get("pos") else []))
+                    for op in (ov_data.get("all_poses") or ([ov_data["pos"]] if ov_data.get("pos") else [])):
+                        if op and op not in all_p:
+                            all_p.append(op)
+                    if all_p:
+                        data["all_poses"] = all_p
+                    if orig_had_only_xref and ov_data.get("pos"):
+                        data["pos"] = ov_data["pos"]
+
+                    # Merge collocations
+                    ov_collocs = cls._normalize_collocations(ov_data.get("collocations"))
+                    if ov_collocs:
+                        cur_collocs = data.get("collocations") or {}
+                        for ck, citems in ov_collocs.items():
+                            cbucket = cur_collocs.setdefault(ck, [])
+                            for ci in citems or []:
+                                if ci and ci not in cbucket:
+                                    cbucket.append(ci)
+                        data["collocations"] = cur_collocs
+
+                    # Merge language_activator
+                    if ov_data.get("language_activator"):
+                        cur_la = list(data.get("language_activator") or [])
+                        seen_la = {str(x.get("concept") or "").strip().lower() for x in cur_la if isinstance(x, dict)}
+                        for la_item in ov_data["language_activator"]:
+                            if isinstance(la_item, dict):
+                                c_key = str(la_item.get("concept") or "").strip().lower()
+                                if c_key not in seen_la:
+                                    seen_la.add(c_key)
+                                    cur_la.append(la_item)
+                        data["language_activator"] = cur_la
+
+                    # Merge thesaurus
+                    if ov_data.get("thesaurus"):
+                        cur_th = list(data.get("thesaurus") or [])
+                        seen_th = {
+                            (cls._norm_def_for_ortho_dedup(str(x.get("word") or "")), x.get("section_index", 0))
+                            for x in cur_th if isinstance(x, dict)
+                        }
+                        for th_item in ov_data["thesaurus"]:
+                            if isinstance(th_item, dict):
+                                t_key = (cls._norm_def_for_ortho_dedup(str(th_item.get("word") or "")), th_item.get("section_index", 0))
+                                if t_key not in seen_th:
+                                    seen_th.add(t_key)
+                                    cur_th.append(th_item)
+                        data["thesaurus"] = cur_th
+
+                    # Merge grammar_boxes, phrases, phrasal_verbs, units
+                    for blk_k, id_field in (
+                        ("grammar_boxes", "heading"),
+                        ("phrases", "phrase"),
+                        ("phrasal_verbs", "phrase"),
+                        ("units", "phrase"),
+                    ):
+                        if ov_data.get(blk_k):
+                            cur_blks = list(data.get(blk_k) or [])
+                            seen_blks = {
+                                cls._norm_def_for_ortho_dedup(str(b.get(id_field) or b.get("headword") or b.get("title") or ""))
+                                for b in cur_blks if isinstance(b, dict)
+                            }
+                            for b_item in ov_data[blk_k]:
+                                if isinstance(b_item, dict):
+                                    b_key = cls._norm_def_for_ortho_dedup(str(b_item.get(id_field) or b_item.get("headword") or b_item.get("title") or ""))
+                                    if b_key and b_key not in seen_blks:
+                                        seen_blks.add(b_key)
+                                        cur_blks.append(b_item)
+                            data[blk_k] = cur_blks
 
         # Enrich 'stand-by' / 'standby' with electronic power-saving mode sense if missing
         if w_clean in ("stand-by", "standby"):
@@ -521,9 +844,10 @@ class PedlexDbMixin:
         }
         is_multi_pos_entry = len(sense_poses) > 1
         collocs = entry.get("collocations", {})
-        head = (entry.get("base_word") or word).lower()
+        head_variants = cls.orthographic_variants((entry.get("base_word") or word).lower()) or [(entry.get("base_word") or word).lower()]
+        head_alt_pat = "|".join(re.escape(hv) for hv in head_variants)
         head_prep_re = re.compile(
-            rf"\b{re.escape(head)}(?:s|es|ed|d|ing)?(?:\s+(?:somebody|something|someone|sb|sth|oneself|/|\.\.\.))*\s+"
+            rf"\b(?:{head_alt_pat})(?:s|es|ed|d|ing)?(?:\s+(?:somebody|something|someone|sb|sth|oneself|/|\.\.\.))*\s+"
             rf"({'|'.join(std_preps)})\b"
         )
         if not (norm_pos and is_multi_pos_entry):
@@ -1575,6 +1899,14 @@ class PedlexDbMixin:
                     if rows:
                         return rows[0]
 
+        # Track 4: Orthographic variant fallback (e.g. "in favor of" -> "in favour of", "enroll in" -> "enrol in")
+        for ortho_p in cls.orthographic_variants(raw)[1:]:
+            ortho_key = " ".join(cls._unit_tokens(ortho_p))
+            if ortho_key and ortho_key != canon_key:
+                rows = by_key.get(ortho_key)
+                if rows:
+                    return rows[0]
+
         return None
 
     @classmethod
@@ -1641,6 +1973,16 @@ class PedlexDbMixin:
                         if sig not in seen:
                             seen.add(sig)
                             results.append(r)
+
+        # Track 4: Orthographic variant fallback
+        for ortho_p in cls.orthographic_variants(raw)[1:]:
+            ortho_key = " ".join(cls._unit_tokens(ortho_p))
+            if ortho_key and ortho_key != canon_key:
+                for r in by_key.get(ortho_key, ()):
+                    sig = (r[0], r[1], r[2])
+                    if sig not in seen:
+                        seen.add(sig)
+                        results.append(r)
 
         return results
 
@@ -2090,26 +2432,42 @@ class PedlexDbMixin:
             return []
 
         out: List[Dict[str, Any]] = []
+        by_pos_merged: Dict[str, List[Dict[str, Any]]] = {}
+        seen_sense_sigs: Set[Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = set()
         try:
-            cur = conn.execute(
-                "SELECT data_json FROM oxford_thesaurus WHERE word = ?",
-                (w_clean,),
-            )
-            for (data_str,) in cur.fetchall():
-                try:
-                    data = json.loads(data_str)
-                    if isinstance(data, list):
-                        by_pos: Dict[str, List[Dict[str, Any]]] = {}
-                        for blk in data:
-                            if isinstance(blk, dict):
-                                p = str(blk.get("pos", "other") or "other").strip().lower()
-                                by_pos.setdefault(p, []).append(blk)
-                        for p, blks in by_pos.items():
-                            out.append({"pos": p, "senses": blks})
-                    elif isinstance(data, dict):
-                        out.append(data)
-                except Exception:
-                    pass
+            for q_var in sorted(set(cls.orthographic_variants(w_clean))):
+                cur = conn.execute(
+                    "SELECT data_json FROM oxford_thesaurus WHERE word = ?",
+                    (q_var,),
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    continue
+                for (data_str,) in rows:
+                    try:
+                        data = json.loads(data_str)
+                        blks_to_add: List[Dict[str, Any]] = []
+                        if isinstance(data, list):
+                            blks_to_add = [b for b in data if isinstance(b, dict)]
+                        elif isinstance(data, dict):
+                            p_top = str(data.get("pos", "other") or "other").strip().lower()
+                            for b in (data.get("senses") or []):
+                                if isinstance(b, dict):
+                                    b_copy = dict(b)
+                                    b_copy.setdefault("pos", p_top)
+                                    blks_to_add.append(b_copy)
+                        for blk in blks_to_add:
+                            p = str(blk.get("pos", "other") or "other").strip().lower()
+                            core_sig = tuple(str(x).lower() for x in (blk.get("core_synonyms") or []))
+                            syn_sig = tuple(str(x).lower() for x in (blk.get("synonyms") or [])[:5])
+                            sig = (p, core_sig, syn_sig)
+                            if sig not in seen_sense_sigs:
+                                seen_sense_sigs.add(sig)
+                                by_pos_merged.setdefault(p, []).append(blk)
+                    except Exception:
+                        pass
+            for p, blks in by_pos_merged.items():
+                out.append({"pos": p, "senses": blks})
         except Exception:
             pass
 
@@ -2162,6 +2520,9 @@ class PedlexDbMixin:
         if cached_sa is not None:
             return set(cached_sa[0]), list(cached_sa[1])
 
+        w_lemma = cls.lemma_of(w_clean) if " " not in w_clean else w_clean
+        w_ortho_set: Set[str] = set(cls.orthographic_variants(w_clean)) | set(cls.orthographic_variants(w_lemma))
+
         def _clean_term(raw_t: str) -> str:
             t = re.sub(r"\[.*?\]|\(.*?\)", "", str(raw_t or "")).strip().lower()
             t = re.sub(r"^to\s+", "", t).strip()
@@ -2171,30 +2532,29 @@ class PedlexDbMixin:
             raw_s = str(raw_t or "")
             if "/" in raw_s and any(" " in seg.strip() for seg in raw_s.split("/")):
                 t = _clean_term(raw_s)
-                if t and t != w_clean and "/" not in t:
+                if t and t not in w_ortho_set and "/" not in t:
                     synonyms.add(t)
                 return
             for part in re.split(r"[,;/]", raw_s):
                 t = _clean_term(part)
-                if t and t != w_clean:
+                if t and t not in w_ortho_set:
                     synonyms.add(t)
 
         def _add_ant(raw_t: str) -> None:
             raw_s = str(raw_t or "")
             if "/" in raw_s and any(" " in seg.strip() for seg in raw_s.split("/")):
                 t = _clean_term(raw_s)
-                if t and t != w_clean and "/" not in t and t not in seen_ant:
+                if t and t not in w_ortho_set and "/" not in t and t not in seen_ant:
                     seen_ant.add(t)
                     antonyms.append(t)
                 return
             for part in re.split(r"[,;/]", raw_s):
                 t = _clean_term(part)
-                if t and t != w_clean and t not in seen_ant:
+                if t and t not in w_ortho_set and t not in seen_ant:
                     seen_ant.add(t)
                     antonyms.append(t)
 
         # 1. PedLex native entry (senses, thesaurus, language_activator)
-        w_lemma = cls.lemma_of(w_clean) if " " not in w_clean else w_clean
         entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_lemma) if w_lemma != w_clean else None)
         def_low = re.sub(r"^\[.*?\]\s*", "", str(definition or "").strip().lower())
         def_tokens = {
@@ -2204,7 +2564,7 @@ class PedlexDbMixin:
         def_lemmas = set(def_tokens) | {cls.lemma_of(tok) for tok in def_tokens}
         quote_tokens = {
             tok for tok in re.findall(r"[a-z]{4,}", str(quote or "").lower())
-            if tok not in (w_clean, w_lemma)
+            if tok not in w_ortho_set
         }
         matched_sense_syns: Set[str] = set()
 
@@ -2284,14 +2644,14 @@ class PedlexDbMixin:
                     self_dists = [
                         str(it.get("distinction", "")).lower()
                         for it in sec_items
-                        if _clean_term(it.get("word", "")) in (w_clean, w_lemma)
+                        if _clean_term(it.get("word", "")) in w_ortho_set
                     ]
                     if len(thes_sections) == 1 or any(
                         set(re.findall(r"[a-z]{3,}", sd)) & def_tokens for sd in self_dists
                     ):
                         for it in sec_items:
                             ct_th = _clean_term(it.get("word", ""))
-                            if ct_th and ct_th not in (w_clean, w_lemma):
+                            if ct_th and ct_th not in w_ortho_set:
                                 matched_sense_syns.add(ct_th)
 
             for la in entry.get("language_activator", []):
@@ -2305,9 +2665,9 @@ class PedlexDbMixin:
                         for exp in (la.get("words") or la.get("exponents") or [])
                         if isinstance(exp, dict) and exp.get("word")
                     ]
-                    # Only include cluster if target headword/lemma is an actual standalone exponent in the cluster
+                    # Only include cluster if target headword/lemma (or its orthographic variant) is an actual standalone exponent in the cluster
                     _max_la_cluster = 45 if norm_pos == "noun" else 20
-                    if (w_clean in la_words or w_lemma in la_words) and len(la_words) <= _max_la_cluster:
+                    if bool(w_ortho_set & set(la_words)) and len(la_words) <= _max_la_cluster:
                         for lw in la_words:
                             _add_syn(lw)
 
@@ -2367,7 +2727,8 @@ class PedlexDbMixin:
                         _add_ant(ant_w)
 
             # Append antonyms from remaining senses only when no context signal disambiguated a primary sense
-            if not has_context_signal:
+            # (or when the primary sense had no antonyms at all, fall back to other senses of the same headword)
+            if not has_context_signal or not antonyms:
                 for _sc, _idx, s_blk, _all_syns, _core_syns in scored_senses:
                     for ant_w in (s_blk.get("antonyms") or []):
                         _add_ant(ant_w)
@@ -2426,7 +2787,7 @@ class PedlexDbMixin:
                         for cs_blk in (cs_ox.get("senses") or []):
                             cs_syns = {_clean_term(x) for x in (cs_blk.get("synonyms") or []) if _clean_term(x)}
                             cs_core = {_clean_term(x) for x in (cs_blk.get("core_synonyms") or []) if _clean_term(x)}
-                            if w_clean in cs_syns or w_lemma in cs_syns or w_clean in cs_core:
+                            if bool(w_ortho_set & cs_syns) or bool(w_ortho_set & cs_core):
                                 for ant_w in (cs_blk.get("antonyms") or []):
                                     _add_ant(ant_w)
                 # Pass 2: Fallback shared-synonym overlap only if strict reciprocal hop found no antonyms
@@ -2449,7 +2810,7 @@ class PedlexDbMixin:
             # into the reciprocal opposite sense's core_synonyms so multiple distinct opposite-polarity nouns
             # are available when slots or cross-item deduplication require them.
             if norm_pos == "noun" and antonyms:
-                reciprocal_targets = {w_clean, w_lemma} | matched_sense_syns
+                reciprocal_targets = set(w_ortho_set) | matched_sense_syns
                 if scored_senses:
                     for _sc, _idx, _sb, _asyns, _csyns in scored_senses[:2]:
                         reciprocal_targets.update(_csyns)
@@ -2508,6 +2869,7 @@ class PedlexDbMixin:
             "used", "make", "have", "give", "take", "very", "more", "most", "much", "many",
         }
         w_lemma = cls.lemma_of(w_clean) if hasattr(cls, "lemma_of") and " " not in w_clean else w_clean
+        w_ortho_set: Set[str] = set(cls.orthographic_variants(w_clean)) | set(cls.orthographic_variants(w_lemma))
         strict_syns: Set[str] = set()
 
         def _clean_t(t: str) -> str:
@@ -2520,7 +2882,7 @@ class PedlexDbMixin:
         )
         quote_tokens = {
             tok for tok in re.findall(r"[a-z]{4,}", str(quote or "").lower())
-            if tok not in (w_clean, w_lemma)
+            if tok not in w_ortho_set
         }
         entry = cls.get_ldoce_entry(w_clean) or (cls.get_ldoce_entry(w_lemma) if w_lemma != w_clean else None)
         if entry:
@@ -2563,11 +2925,11 @@ class PedlexDbMixin:
                 s_def_toks = set(re.findall(r"[a-z]{3,}", s_def))
                 if any_strict_sense_matched and not is_matched_sense and len(s_def_toks & def_tokens) < 2:
                     continue
-                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def):
+                if s_def and len(s_def.split()) <= 2 and re.match(r"^[a-z-]+$", s_def) and s_def not in w_ortho_set:
                     strict_syns.add(s_def)
                 for syn in ([s.get("synonym")] if isinstance(s.get("synonym"), str) else (s.get("synonym") or [])):
                     ct = _clean_t(syn)
-                    if ct and ct not in (w_clean, w_lemma):
+                    if ct and ct not in w_ortho_set:
                         strict_syns.add(ct)
 
         ox_entries = list(cls.get_oxford_thesaurus_entries(w_clean))
@@ -2594,10 +2956,10 @@ class PedlexDbMixin:
             for rank, (sc, _idx, core_s, all_s) in enumerate(scored):
                 if rank == 0 or sc >= 4 or (not has_sig and len(scored) <= 2):
                     for cs in core_s:
-                        if cs not in (w_clean, w_lemma):
+                        if cs not in w_ortho_set:
                             strict_syns.add(cs)
                     for sw in all_s:
-                        if sw not in (w_clean, w_lemma):
+                        if sw not in w_ortho_set:
                             strict_syns.add(sw)
 
         _, ants = cls.get_pedlex_and_oxford_synonyms_antonyms(word, pos=pos, definition=definition, quote=quote)
@@ -2622,16 +2984,20 @@ class PedlexDbMixin:
         w_clean = (word or "").strip().lower()
         if not w_clean or not cls._ensure_ldoce_conn():
             return []
+        q_words = list(cls.orthographic_variants(w_clean)) or [w_clean]
         # Also resolve multi-word preparatory-object idioms like 'make it possible' -> 'make'
-        q_words = [w_clean]
         m_it = re.match(r"^(make|find|keep|leave|consider|think|deem|regard)\s+it\s+[a-z]+\b", w_clean)
         if m_it and m_it.group(1) not in q_words:
             q_words.append(m_it.group(1))
 
         out: List[Dict[str, Any]] = []
+        seen_cxn_sigs: Set[Tuple[str, int, str]] = set()
         if cls._ldoce_table_exists("pedlex_cxn_index"):
             try:
                 for qw in q_words:
+                    if qw == m_it.group(1) if m_it else False:
+                        if out:
+                            break
                     if sense_idx is not None:
                         rows = cls._ldoce_conn.execute(
                             "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
@@ -2650,10 +3016,15 @@ class PedlexDbMixin:
                         r_subcat, r_fam, r_word, r_pos, r_sidx, r_cefr, r_zipf,
                         r_pat, r_blank, r_cloze, r_contrasts, r_bans
                     ) in rows:
+                        norm_pat = re.sub(rf"\b{re.escape(qw)}\b", w_clean, str(r_pat or ""))
+                        sig = (str(r_subcat or ""), int(r_sidx if r_sidx is not None else -1), norm_pat)
+                        if sig in seen_cxn_sigs:
+                            continue
+                        seen_cxn_sigs.add(sig)
                         c_list = [g.strip() for g in (r_contrasts or "").split(",") if g.strip()]
                         b_list = [g.strip() for g in (r_bans or "").split(",") if g.strip()]
                         out.append({
-                            "word": r_word,
+                            "word": w_clean if qw != (m_it.group(1) if m_it else "") else r_word,
                             "sense_idx": r_sidx,
                             "pos": r_pos,
                             "subcat_group": r_subcat,
@@ -2661,14 +3032,12 @@ class PedlexDbMixin:
                             "family_id": r_fam,
                             "cefr_int": r_cefr,
                             "zipf_score": r_zipf,
-                            "canonical_pattern": r_pat,
+                            "canonical_pattern": norm_pat,
                             "canonical_blank": r_blank,
                             "cloze_frame": r_cloze,
                             "contrast_groups": c_list,
                             "ban_groups": b_list,
                         })
-                    if out:
-                        break
             except Exception:
                 pass
         if not out:
@@ -2761,59 +3130,70 @@ class PedlexDbMixin:
             return []
         p_low = cls.normalize_pos(pos) if pos else ""
         out: List[Dict[str, Any]] = []
+        seen_trap_sigs: Set[Tuple[str, int, str]] = set()
+        q_vars = list(cls.orthographic_variants(w_clean)) or [w_clean]
+        var_alt_re = re.compile(r"\b(?:" + "|".join(re.escape(v) for v in q_vars) + r")\b", re.IGNORECASE)
         if cls._ldoce_table_exists("pedlex_error_traps"):
             try:
-                if p_low:
-                    rows = cls._ldoce_conn.execute(
-                        "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
-                        "FROM pedlex_error_traps WHERE word = ? AND (pos = ? OR pos = '' OR pos = 'other')",
-                        (w_clean, p_low),
-                    ).fetchall()
-                else:
-                    rows = cls._ldoce_conn.execute(
-                        "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
-                        "FROM pedlex_error_traps WHERE word = ?",
-                        (w_clean,),
-                    ).fetchall()
-                for r in rows:
-                    r_pos = str(r[1] or "").strip().lower()
-                    r_sidx = r[2]
-                    t_type = str(r[3] or "").strip()
-                    # Sense-level isolation: sense-specific <gram> traps must match the locked sense_idx
-                    if sense_idx is not None and r_sidx is not None and r_sidx >= 0 and r_sidx != sense_idx:
-                        continue
-                    # Strict POS compatibility guard for <gram> property traps
+                for qv in q_vars:
                     if p_low:
-                        if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN") and p_low != "adjective":
-                            continue
-                        if t_type == "GRAM_UNCOUNTABLE" and p_low != "noun":
-                            continue
-                        if t_type == "GRAM_INTRANSITIVE" and p_low not in ("verb", "phrasal verb"):
-                            continue
-                    if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY"):
-                        c_frame = f"{w_clean} + noun"
-                    elif t_type == "GRAM_NOT_BEFORE_NOUN":
-                        c_frame = f"be/seem + {w_clean}"
-                    elif t_type == "GRAM_UNCOUNTABLE":
-                        c_frame = f"{w_clean} [uncountable]"
-                    elif t_type == "GRAM_INTRANSITIVE":
-                        c_frame = f"{w_clean} [intransitive]"
+                        rows = cls._ldoce_conn.execute(
+                            "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
+                            "FROM pedlex_error_traps WHERE word = ? AND (pos = ? OR pos = '' OR pos = 'other')",
+                            (qv, p_low),
+                        ).fetchall()
                     else:
-                        c_frame = w_clean
-                    out.append({
-                        "word": r[0],
-                        "pos": r_pos,
-                        "sense_idx": r_sidx,
-                        "trap_type": "GRAM_ATTRIBUTIVE_ONLY" if t_type == "GRAM_ONLY_BEFORE_NOUN" else t_type,
-                        "forbidden_frame": r[4],
-                        "bad_example": r[5],
-                        "good_example": r[6],
-                        "rule_note": r[7],
-                        "correct_frame": c_frame,
-                        "wrong_frame": r[5] or r[4],
-                        "warning_note": r[7],
-                        "authentic_example": r[6],
-                    })
+                        rows = cls._ldoce_conn.execute(
+                            "SELECT word, pos, sense_idx, trap_type, forbidden_frame, bad_example, good_example, rule_note "
+                            "FROM pedlex_error_traps WHERE word = ?",
+                            (qv,),
+                        ).fetchall()
+                    for r in rows:
+                        r_pos = str(r[1] or "").strip().lower()
+                        r_sidx = r[2]
+                        t_type = str(r[3] or "").strip()
+                        # Sense-level isolation: sense-specific <gram> traps must match the locked sense_idx
+                        if sense_idx is not None and r_sidx is not None and r_sidx >= 0 and r_sidx != sense_idx:
+                            continue
+                        # Strict POS compatibility guard for <gram> property traps
+                        if p_low:
+                            if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY", "GRAM_NOT_BEFORE_NOUN") and p_low != "adjective":
+                                continue
+                            if t_type == "GRAM_UNCOUNTABLE" and p_low != "noun":
+                                continue
+                            if t_type == "GRAM_INTRANSITIVE" and p_low not in ("verb", "phrasal verb"):
+                                continue
+                        norm_type = "GRAM_ATTRIBUTIVE_ONLY" if t_type == "GRAM_ONLY_BEFORE_NOUN" else t_type
+                        norm_forb = var_alt_re.sub(w_clean, str(r[4] or ""))
+                        norm_rule = var_alt_re.sub(w_clean, str(r[7] or ""))
+                        sig = (norm_type, int(r_sidx if r_sidx is not None else -1), norm_forb or norm_rule)
+                        if sig in seen_trap_sigs:
+                            continue
+                        seen_trap_sigs.add(sig)
+                        if t_type in ("GRAM_ONLY_BEFORE_NOUN", "GRAM_ATTRIBUTIVE_ONLY"):
+                            c_frame = f"{w_clean} + noun"
+                        elif t_type == "GRAM_NOT_BEFORE_NOUN":
+                            c_frame = f"be/seem + {w_clean}"
+                        elif t_type == "GRAM_UNCOUNTABLE":
+                            c_frame = f"{w_clean} [uncountable]"
+                        elif t_type == "GRAM_INTRANSITIVE":
+                            c_frame = f"{w_clean} [intransitive]"
+                        else:
+                            c_frame = w_clean
+                        out.append({
+                            "word": w_clean,
+                            "pos": r_pos,
+                            "sense_idx": r_sidx,
+                            "trap_type": norm_type,
+                            "forbidden_frame": norm_forb,
+                            "bad_example": r[5],
+                            "good_example": r[6],
+                            "rule_note": norm_rule,
+                            "correct_frame": c_frame,
+                            "wrong_frame": r[5] or norm_forb,
+                            "warning_note": norm_rule,
+                            "authentic_example": r[6],
+                        })
             except Exception:
                 pass
         # Supplement with deterministic <gram>, valency, and L1 negative-transfer traps when not in grambox table
