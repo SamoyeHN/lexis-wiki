@@ -187,6 +187,86 @@ def background_quiz_worker(job_id, filename, count, template, listening_archetyp
         err_msg = traceback.format_exc()
         DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Exception occurred: {err_msg}")
 
+def background_all_quizzes_worker(job_id, filename):
+    try:
+        DashboardState.update_job(job_id, progress=10, stage="generating", log=f"[ALL-QUIZZES] Starting batch quiz generation for '{filename}'...")
+        processor = WikiProcessor()
+
+        # Resolve canonical unit name and folder
+        unit_stem = Path(filename).stem
+        wiki_dir = Path(config.project_root) / "wiki"
+        unit_dir = wiki_dir / unit_stem
+        if not unit_dir.exists() and wiki_dir.exists():
+            norm_target = normalize_name(unit_stem)
+            for child in wiki_dir.iterdir():
+                if child.is_dir() and normalize_name(child.name) == norm_target:
+                    unit_dir = child
+                    unit_stem = child.name
+                    break
+        unit_name = unit_stem
+
+        # Prerequisite check: verified vocabulary extraction must exist
+        vocab_path = unit_dir / "extractions" / f"{unit_name}_vocabulary.md"
+        if not vocab_path.exists():
+            DashboardState.update_job(job_id, progress=15, stage="generating", log=f"[ALL-QUIZZES] Prerequisite missing: compiling extractions for '{unit_name}' first...")
+            status, saved = processor.run_pipeline(filename)
+            if "Error" in status or not vocab_path.exists():
+                DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Prerequisite extraction compilation failed: {status}")
+                return
+
+        # Check for media/video source
+        media_dir = unit_dir / "sources" / "media"
+        has_video = media_dir.exists() and any(media_dir.glob("*.md"))
+
+        templates = ["vocabulary", "cloze", "reading", "translation", "listening"]
+        if has_video:
+            templates.append("video")
+
+        saved_handouts = []
+        total = len(templates)
+
+        for idx, t in enumerate(templates):
+            current_pct = int(20 + (idx / total) * 75)
+            target_count = config.get_quiz_config(t, "count", 10 if t in ("vocabulary", "cloze") else 5)
+            DashboardState.update_job(
+                job_id,
+                progress=current_pct,
+                stage="generating",
+                log=f"[{idx+1}/{total}] Generating '{t}' quiz (count: {target_count}) for '{unit_name}'..."
+            )
+            result = processor.generate_quiz(unit_name, count=target_count, template_name=t)
+            if "Error" in result:
+                DashboardState.update_job(job_id, log=f"[WARN] Quiz '{t}' generation encountered error: {result}")
+            else:
+                try:
+                    rel_path = str(Path(result).relative_to(Path(config.project_root))).replace("\\", "/")
+                except Exception:
+                    rel_path = result
+                saved_handouts.append(rel_path)
+                DashboardState.update_job(job_id, log=f"✅ Saved handout: {os.path.basename(result)}")
+
+        if saved_handouts:
+            DashboardState.update_job(
+                job_id,
+                progress=100,
+                status="completed",
+                stage="completed",
+                audit_progress=100,
+                log=f"[ALL-QUIZZES] Successfully generated {len(saved_handouts)}/{total} quizzes for '{unit_name}'!",
+                saved_files=saved_handouts
+            )
+        else:
+            DashboardState.update_job(
+                job_id,
+                progress=100,
+                status="failed",
+                stage="failed",
+                log="[ALL-QUIZZES] Failed to generate any quizzes."
+            )
+    except Exception as e:
+        err_msg = traceback.format_exc()
+        DashboardState.update_job(job_id, progress=100, status="failed", stage="failed", log=f"[ERROR] Exception occurred: {err_msg}")
+
 def background_video_import_worker(job_id, url_or_path, cookies_from_browser=None, cookies=None, subtitle=None, current_unit=None):
     try:
         DashboardState.update_job(job_id, progress=20, log=f"[VIDEO-IMPORT] Detecting source for '{url_or_path}'...")
@@ -1171,6 +1251,22 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     t.daemon = True
                     t.start()
                     response_data = {"success": True, "job_id": job_id, "message": "Quiz generation task spawned successfully."}
+
+            elif path == "/api/generate-all-quizzes":
+                data = json.loads(body) if body else {}
+                filename = data.get("filename")
+                if not filename:
+                    response_data = {"success": False, "error": "Unit or vocabulary filename is required"}
+                else:
+                    target_label = f"{filename} (All Quizzes)"
+                    job_id = DashboardState.create_job("quiz", target_label)
+                    t = threading.Thread(
+                        target=background_all_quizzes_worker,
+                        args=(job_id, filename)
+                    )
+                    t.daemon = True
+                    t.start()
+                    response_data = {"success": True, "job_id": job_id, "message": "Batch quiz generation task spawned successfully."}
 
             elif path == "/api/check-video-source":
                 req = json.loads(body) if body else {}

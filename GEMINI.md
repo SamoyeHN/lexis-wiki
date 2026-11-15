@@ -111,8 +111,10 @@ wiki/<UnitName>/
 
 ### 6.1 Documentation Index (`docs/`)
 - [docs/vocabulary-selection-and-distractor-methodology.md](docs/vocabulary-selection-and-distractor-methodology.md): Single source of truth for candidate extraction, POS resolution, optimal example selection principles across parts of speech, valency cascades, distractor generation, and the 8 lexico-syntactic construction families.
+- [docs/multi-word-units-slicing-and-distractor-architecture.md](docs/multi-word-units-slicing-and-distractor-architecture.md): Technical specification and applied lexicographic taxonomy for 9 multi-word unit (MWU) assessment families, deterministic cloze slot slicing frames, PedLex SQL mapping, Oxford Thesaurus near-synonym harvesting, and zero-collision collocational mutual exclusion gates.
 - [docs/pedlex-database-architecture.md](docs/pedlex-database-architecture.md): PedLex SQLite database schemas (`ldoce`, `pedlex_phrase_index`, `pedlex_cxn_index`, `pedlex_error_traps`), JSON payload specifications, and runtime query interfaces.
 - [docs/listening-functional-dialogue-architecture.md](docs/listening-functional-dialogue-architecture.md): Four pragmatic interaction paradigms, 14 functional dialogue archetypes, conversation analysis turn structures, and listening blueprints.
+- [docs/paired-listening-speaking-workbench-architecture.md](docs/paired-listening-speaking-workbench-architecture.md): Receptive-to-productive pairing architecture, AI-generated scene dossiers, Conversation Analysis (CA) turn microscopes, paired jigsaw role cards, and role-reversal automaticity drills.
 - [docs/reading-discourse-architecture.md](docs/reading-discourse-architecture.md): Discourse graph extraction, 6 discourse relation types, 10 psychometric distractor fallacy operators, single-step inference entailment, and verbatim lexical leakage guard.
 - [docs/audit-scores-guide.md](docs/audit-scores-guide.md): Level 1 deterministic code gate and Level 2 expert evaluator rubrics.
 - [docs/digital-human-characters.md](docs/digital-human-characters.md): Digital human dialogue cast archetypes, facial geometry standards, and multi-character rendering pipelines.

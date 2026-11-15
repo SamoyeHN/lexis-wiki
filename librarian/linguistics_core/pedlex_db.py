@@ -34,6 +34,10 @@ class PedlexDbMixin:
         "adjective": "adjectives", "noun": "nouns", "verb": "verbs",
         "adverb": "adverbs", "phrase": "phrases",
     }
+    _DERIVED_BORROW_KEYS = (
+        "collocations", "cross_collocations", "word_family",
+        "grammar_boxes", "thesaurus", "language_activator"
+    )
 
     _NATIVE_LL_STEMS = frozenset({
         "fill", "will", "bill", "kill", "drill", "chill", "skill", "spill", "thrill",
@@ -541,48 +545,54 @@ class PedlexDbMixin:
                 })
                 data["senses"] = s_list
 
-        # Promote phrasal_verbs senses into entry["senses"] when an entry has phrasal_verbs
-        # but 0 verb senses in data["senses"] (e.g., 'account' where verb senses live solely under
-        # 'account for something' in phrasal_verbs). Setting sensenum="" and homograph_num=None
-        # activates _lock_sense's Phrasal Verb Particle Gate (pv_sense_map) and keeps entry["senses"][idx] valid.
+        # Promote phrasal_verbs senses into entry["senses"] immediately after base verb senses
+        # (or appended at the end if 0 verb senses exist, e.g. 'account').
+        # Setting sensenum="" and from_phrasal_verb=True activates _lock_sense's Phrasal Verb Particle Gate (pv_sense_map)
+        # and keeps entry["senses"][idx] valid for disambiguation.
         pv_blocks = data.get("phrasal_verbs")
-        if isinstance(pv_blocks, list) and pv_blocks:
+        if isinstance(pv_blocks, list) and pv_blocks and not any(isinstance(s, dict) and s.get("from_phrasal_verb") for s in (data.get("senses") or [])):
             cur_senses = list(data.get("senses") or [])
-            has_verb_sense = any(
-                cls._pos_code(s.get("pos")) == "v"
+            last_v_idx = -1
+            for idx, s in enumerate(cur_senses):
+                if isinstance(s, dict) and cls._pos_code(s.get("pos")) == "v":
+                    last_v_idx = idx
+
+            existing_hnums = [
+                int(s["homograph_num"])
                 for s in cur_senses
-                if isinstance(s, dict)
-            )
-            if not has_verb_sense:
-                existing_hnums = [
-                    int(s["homograph_num"])
-                    for s in cur_senses
-                    if isinstance(s, dict) and isinstance(s.get("homograph_num"), int) and s.get("homograph_num") > 0
-                ]
-                next_hnum = (max(existing_hnums) + 1) if existing_hnums else None
-                for pv_blk in pv_blocks:
-                    if not isinstance(pv_blk, dict):
+                if isinstance(s, dict) and isinstance(s.get("homograph_num"), int) and s.get("homograph_num") > 0
+            ]
+            next_hnum = (max(existing_hnums) + 1) if existing_hnums else None
+
+            promoted_senses = []
+            for pv_blk in pv_blocks:
+                if not isinstance(pv_blk, dict):
+                    continue
+                pv_phrase = str(pv_blk.get("phrase") or pv_blk.get("headword") or "").strip()
+                for pv_s in (pv_blk.get("senses") or []):
+                    if not isinstance(pv_s, dict) or not str(pv_s.get("definition") or "").strip():
                         continue
-                    pv_phrase = str(pv_blk.get("phrase") or pv_blk.get("headword") or "").strip()
-                    for pv_s in (pv_blk.get("senses") or []):
-                        if not isinstance(pv_s, dict) or not str(pv_s.get("definition") or "").strip():
-                            continue
-                        promoted = dict(pv_s)
-                        promoted["pos"] = "verb"
-                        promoted["sensenum"] = ""
-                        promoted["homograph_num"] = next_hnum
-                        promoted["from_phrasal_verb"] = True
-                        if pv_phrase:
-                            units = list(promoted.get("units") or [])
-                            if pv_phrase not in units:
-                                units.insert(0, pv_phrase)
-                            promoted["units"] = units
-                            pats = list(promoted.get("patterns") or [])
-                            if pv_phrase not in pats:
-                                pats.insert(0, pv_phrase)
-                            promoted["patterns"] = pats
-                        cur_senses.append(promoted)
-                data["senses"] = cur_senses
+                    promoted = dict(pv_s)
+                    promoted["pos"] = "verb"
+                    promoted["sensenum"] = ""
+                    promoted["homograph_num"] = next_hnum
+                    promoted["from_phrasal_verb"] = True
+                    if pv_phrase:
+                        units = list(promoted.get("units") or [])
+                        if pv_phrase not in units:
+                            units.insert(0, pv_phrase)
+                        promoted["units"] = units
+                        pats = list(promoted.get("patterns") or [])
+                        if pv_phrase not in pats:
+                            pats.insert(0, pv_phrase)
+                        promoted["patterns"] = pats
+                    promoted_senses.append(promoted)
+
+            if promoted_senses:
+                if last_v_idx >= 0:
+                    data["senses"] = cur_senses[:last_v_idx + 1] + promoted_senses + cur_senses[last_v_idx + 1:]
+                else:
+                    data["senses"] = cur_senses + promoted_senses
 
         cls._ldoce_cache[w_clean] = data
         return data
@@ -752,11 +762,6 @@ class PedlexDbMixin:
         data["kind"] = kind
         if base_word:
             data["base_word"] = base_word
-        if kind == "derived":
-            # Run-on derived entries in LDOCE lack independent dictionary definitions and examples.
-            # Do not splice definitions or scavenge base-word examples.
-            data["senses"] = []
-            return data
         if not base_word or depth >= 3:
             return data
 
@@ -769,6 +774,26 @@ class PedlexDbMixin:
                 )
         else:
             base_data, base_kind, base_base = {}, "", ""
+
+        if kind == "derived":
+            # Own sense, own gloss - only the borrowable assets come from the base.
+            if base_data:
+                for key in cls._DERIVED_BORROW_KEYS:
+                    theirs = base_data.get(key)
+                    if not theirs:
+                        continue
+                    if key == "collocations" and isinstance(theirs, dict):
+                        mine = data.get("collocations")
+                        merged_cols: Dict[str, Any] = dict(mine) if isinstance(mine, dict) else {}
+                        for section, items in theirs.items():
+                            bucket = merged_cols.setdefault(section, [])
+                            for item in items or []:
+                                if item and item not in bucket:
+                                    bucket.append(item)
+                        data["collocations"] = merged_cols
+                    elif not data.get(key):
+                        data[key] = theirs
+            return data
 
         if kind == "alias":
             if not base_data:
@@ -2974,9 +2999,12 @@ class PedlexDbMixin:
     def get_word_cxn_specs(
         cls,
         word: str,
+        pos: Optional[str] = None,
         sense_idx: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve construction specifications (`cxn_spec`) from `pedlex_cxn_index` (or entry JSON fallback).
+        When `pos` is provided:
+          - strictly filters for matching POS so cross-homograph entries (e.g. 'attempt' noun vs verb) never collide.
         When `sense_idx` is provided:
           - returns entry-level (`sense_idx = -1`) specs plus sense-specific (`sense_idx == sense_idx`) specs.
         When `sense_idx` is None:
@@ -2984,6 +3012,8 @@ class PedlexDbMixin:
         w_clean = (word or "").strip().lower()
         if not w_clean or not cls._ensure_ldoce_conn():
             return []
+        p_code = cls._pos_code(pos) if pos else ""
+        p_norm = cls.normalize_pos(pos) if pos else ""
         q_words = list(cls.orthographic_variants(w_clean)) or [w_clean]
         # Also resolve multi-word preparatory-object idioms like 'make it possible' -> 'make'
         m_it = re.match(r"^(make|find|keep|leave|consider|think|deem|regard)\s+it\s+[a-z]+\b", w_clean)
@@ -2998,20 +3028,20 @@ class PedlexDbMixin:
                     if qw == m_it.group(1) if m_it else False:
                         if out:
                             break
+                    sql_conds = ["word = ?"]
+                    sql_params: List[Any] = [qw]
+                    if p_norm:
+                        sql_conds.append("(pos = ? OR pos = '' OR pos = 'other')")
+                        sql_params.append(p_norm)
                     if sense_idx is not None:
-                        rows = cls._ldoce_conn.execute(
-                            "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
-                            "canonical_pattern, canonical_blank, cloze_frame, contrast_groups, ban_groups "
-                            "FROM pedlex_cxn_index WHERE word = ? AND (sense_idx = -1 OR sense_idx = ?)",
-                            (qw, int(sense_idx)),
-                        ).fetchall()
-                    else:
-                        rows = cls._ldoce_conn.execute(
-                            "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
-                            "canonical_pattern, canonical_blank, cloze_frame, contrast_groups, ban_groups "
-                            "FROM pedlex_cxn_index WHERE word = ?",
-                            (qw,),
-                        ).fetchall()
+                        sql_conds.append("(sense_idx = -1 OR sense_idx = ?)")
+                        sql_params.append(int(sense_idx))
+                    sql_query = (
+                        "SELECT subcat_group, family_id, word, pos, sense_idx, cefr_int, zipf_score, "
+                        "canonical_pattern, canonical_blank, cloze_frame, contrast_groups, ban_groups "
+                        f"FROM pedlex_cxn_index WHERE {' AND '.join(sql_conds)}"
+                    )
+                    rows = cls._ldoce_conn.execute(sql_query, sql_params).fetchall()
                     for (
                         r_subcat, r_fam, r_word, r_pos, r_sidx, r_cefr, r_zipf,
                         r_pat, r_blank, r_cloze, r_contrasts, r_bans

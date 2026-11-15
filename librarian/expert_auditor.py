@@ -376,7 +376,7 @@ class ExpertAuditor:
                             all_uncountable_clashes = True
                             for _, d_item in non_key_dks:
                                 d_txt = str(d_item.get("option_text") or "").strip().lower()
-                                d_prof = LinguisticEngine.get_word_grammar_profile(d_txt)
+                                d_prof = LinguisticEngine.get_word_gram_profile(d_txt)
                                 if not (d_prof.get("uncountable") and not d_prof.get("countable")):
                                     all_uncountable_clashes = False
                                     break

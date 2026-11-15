@@ -155,6 +155,107 @@ class QuizListeningMixin:
         "clarification": "arch_14_resolving_misunderstandings_and_mediation",
     }
 
+    _UNIT_TITLE_FUNCTIONAL_INTENTS: List[Tuple[Any, str, int, Optional[str]]] = [
+        # (Compiled regex pattern on unit_title, target archetype_id, Tier-1 intent boost, preferred_scenario_id)
+        # 1. Directions, Transit, Getting There -> arch_02 (enquiring, comparing & deciding)
+        (
+            re.compile(r"\b(how\s+(can|do)\s+i\s+get\s+there|where\s+is|directions?|way\s+to|getting\s+there|route|map|transit|navigate)\b", re.I),
+            "arch_02_enquiring_comparing_and_deciding",
+            45,
+            "arch_02_a2_form_sc02",  # Asking for directions or information about a campus facility/route
+        ),
+        # 2. Greetings, Introductions, Social Catching-up -> arch_08
+        (
+            re.compile(r"\b(hello|hi|meet(ing)?|welcome|introduce|introduction|catching\s+up|nice\s+to\s+meet)\b", re.I),
+            "arch_08_social_catching_up_and_closing",
+            40,
+            None,
+        ),
+        # 3. Apologies, Gratitude, Remedies & Help -> arch_03 or arch_07
+        (
+            re.compile(r"\b(sorry\s+and\s+thank|thank\s+you|thanks|gratitude|grateful|appreciat(e|ion))\b", re.I),
+            "arch_03_requesting_and_negotiating_help",
+            40,
+            None,
+        ),
+        (
+            re.compile(r"\b(sorry|apolog(y|ize)|regret|pardon)\b", re.I),
+            "arch_07_complaints_apologies_and_remedies",
+            35,
+            None,
+        ),
+        # 4. Punctuality, Appointments, Scheduling & Time -> arch_01
+        (
+            re.compile(r"\b(on\s+time|in\s+time|punctual(ity)?|schedule|appointment|reschedule|delay|timing|clock|deadline)\b", re.I),
+            "arch_01_arranging_and_rescheduling",
+            45,
+            "arch_01_a2_inf_sc02",  # Coordinating meetup time and spot
+        ),
+        # 5. Weather, Fine Day, Outdoor Plans -> arch_08 / arch_01
+        (
+            re.compile(r"\b(fine\s+day|weather|sunny|rain|forecast|climate\s+and\s+day|nice\s+day)\b", re.I),
+            "arch_08_social_catching_up_and_closing",
+            35,
+            None,
+        ),
+        # 6. Cheering, Team Collaboration, Sports, Encouragement -> arch_06 / arch_04
+        (
+            re.compile(r"\b(come\s+on|go\s+go|cheer|encourage|team\s+spirit|rally|strive)\b", re.I),
+            "arch_06_collaborative_proposals_and_tradeoffs",
+            40,
+            None,
+        ),
+        # 7. Parties, Celebrations, Social Events & Invitations -> arch_01 / arch_08
+        (
+            re.compile(r"\b(throw\s+a\s+party|party|celebrat(e|ion)|festival|gathering|invitation|hang\s+out)\b", re.I),
+            "arch_01_arranging_and_rescheduling",
+            40,
+            "arch_01_a2_inf_sc01",  # Planning a weekend outing or party
+        ),
+        # 8. Health, Fitness, Diet, Weight, Medical -> arch_13 / arch_04
+        (
+            re.compile(r"\b(keep\s+fit|not\s+fat|fit(ness)?|diet|weight|workout|exercise|health(y)?|gym|clinic|doctor|lifestyle)\b", re.I),
+            "arch_13_medical_consultation_and_health_triage",
+            45,
+            None,
+        ),
+        # 9. Shopping, Ordering, Comparing Products/Services -> arch_02
+        (
+            re.compile(r"\b(shopping|buy(ing)?|order(ing)?|purchase|price|store|market|choose)\b", re.I),
+            "arch_02_enquiring_comparing_and_deciding",
+            35,
+            None,
+        ),
+        # 10. Job Hunting, Interviews, Resume, Careers -> arch_10
+        (
+            re.compile(r"\b(job|career|interview|internship|resume|cv|apply|recruitment|hire)\b", re.I),
+            "arch_10_interviews_and_credential_pitching",
+            40,
+            None,
+        ),
+        # 11. Instructions, Rules, How-to, Manuals, Onboarding -> arch_11
+        (
+            re.compile(r"\b(instruction|guide|manual|safety|how\s+to\s+use|protocol|rules?|operate)\b", re.I),
+            "arch_11_instruction_walkthrough_and_onboarding",
+            40,
+            None,
+        ),
+        # 12. Negotiations, Bargaining, Compromise, Business terms -> arch_12
+        (
+            re.compile(r"\b(negotiat(e|ion)|bargain|deal|contract|discount|terms|compromise)\b", re.I),
+            "arch_12_negotiating_terms_and_compromise",
+            40,
+            None,
+        ),
+        # 13. Misunderstandings, Conflicts, Roommate Mediation -> arch_14
+        (
+            re.compile(r"\b(misunderstanding|conflict|mediate|roommate|relationship|awkward|tension)\b", re.I),
+            "arch_14_resolving_misunderstandings_and_mediation",
+            40,
+            None,
+        ),
+    ]
+
     @classmethod
     def resolve_functional_dialogue_archetype_id(cls, spec: str) -> str:
         """
@@ -267,12 +368,16 @@ class QuizListeningMixin:
         forced_archetype_id: str = "",
         forced_trajectory_id: str = "",
         forced_scenario_id: str = "",
+        unit_title: str = "",
     ) -> Dict[str, Any]:
         """
         Deterministically selects the best-matching Functional Dialogue Archetype (`arch_01`..`arch_14`),
         register-isolated 8-turn Trajectory (`A1_A2` vs `B1_C2`), Everyday Scenario (with optional
         scenario-bound lexis `optional=True`), and compatible Micro-Move Plugin from
         `functional_dialogue_archetypes.json`.
+
+        Prioritizes `unit_title` as the Tier-1 Pragmatic Driver (communicative intent of the syllabus)
+        while treating reading passage topics as Tier-2 physical context shells.
         """
         config_data = cls._load_functional_dialogue_archetypes()
         archetypes = config_data.get("archetypes") or []
@@ -313,6 +418,26 @@ class QuizListeningMixin:
         cefr_upper = str(cefr_level or "B2").strip().upper()
         target_band = "A1_A2" if cefr_upper in ("A1", "A2", "A2+", "B1") else "B1_C2"
         is_advanced_academic = cefr_upper in ("B2", "C1", "C2")
+
+        # Resolve clean unit_title if not explicitly passed
+        clean_unit_title = str(unit_title or "").strip()
+        if not clean_unit_title and thematic_topic:
+            first_line = str(thematic_topic).splitlines()[0].strip() if thematic_topic else ""
+            m_first = re.search(r"^1\.\s*([^(\r\n]+?)(?:\s*\([^)]*\))?\s*$", first_line)
+            if m_first:
+                clean_unit_title = m_first.group(1).strip()
+
+        unit_title_lower = clean_unit_title.lower()
+        unit_title_tokens = set(re.findall(r"[a-z]{3,}", unit_title_lower))
+
+        # Evaluate Tier-1 Unit Title Functional Intent Engine
+        preferred_scenarios_by_arch: Dict[str, str] = {}
+        unit_title_intent_boosts: Dict[str, int] = {}
+        for pattern, target_arch, boost, pref_sc in cls._UNIT_TITLE_FUNCTIONAL_INTENTS:
+            if pattern.search(clean_unit_title):
+                unit_title_intent_boosts[target_arch] = max(unit_title_intent_boosts.get(target_arch, 0), boost)
+                if pref_sc and target_arch not in preferred_scenarios_by_arch:
+                    preferred_scenarios_by_arch[target_arch] = pref_sc
 
         topic_norm = str(thematic_topic or "").lower()
         topic_tokens = set(re.findall(r"[a-z]{3,}", topic_norm))
@@ -359,8 +484,22 @@ class QuizListeningMixin:
                 continue
 
             score = 0
-            # 1. Keyword & phrase matching against thematic_topic
+            # Tier 1: Unit Title Functional Intent Engine Boost (+35..45)
+            intent_boost = unit_title_intent_boosts.get(arch_id, 0)
+            if intent_boost:
+                score += intent_boost
+
             kw_list = [str(k).lower().strip() for k in (arch.get("thematic_keywords") or []) if str(k).strip()]
+
+            # Tier 1.5: Unit Title direct keyword match (3x weight vs body text)
+            for kw in kw_list:
+                if " " in kw:
+                    if kw in unit_title_lower:
+                        score += 30
+                elif kw in unit_title_tokens:
+                    score += 25
+
+            # Tier 2: Reading text / Summary topic tokens match (1x weight)
             for kw in kw_list:
                 if " " in kw:
                     if kw in topic_norm:
@@ -373,7 +512,7 @@ class QuizListeningMixin:
                 ):
                     score += 5
 
-            # 2. Check scenario settings and communicative goals for thematic resonance
+            # Check scenario settings and communicative goals for thematic resonance
             for sc in matched_traj.get("everyday_scenarios") or []:
                 sc_text = f"{sc.get('setting', '')} {sc.get('communicative_goal', '')}".lower()
                 sc_tokens = set(re.findall(r"[a-z]{4,}", sc_text))
@@ -383,9 +522,7 @@ class QuizListeningMixin:
                 }
                 score += min(12, len(overlap) * 4)
 
-            # 3. Everyday reflective/discussion affinity when no narrow transactional/specialized keyword hits:
-            # Provide an equal baseline score across versatile conversational/academic archetypes and let
-            # deterministic CRC32 tie-breaker rotate across units to prevent single-archetype monoculture.
+            # Everyday reflective/discussion affinity when no narrow transactional/specialized keyword hits:
             if score == 0:
                 versatile_archs = {
                     "arch_02_enquiring_comparing_and_deciding",
@@ -413,10 +550,16 @@ class QuizListeningMixin:
         # Select the best-matching everyday_scenario within chosen_traj
         scenarios = chosen_traj.get("everyday_scenarios") or []
         chosen_scenario: Dict[str, Any] = {}
+        preferred_sc_id = preferred_scenarios_by_arch.get(str(chosen_arch.get("archetype_id") or ""))
         if scenarios:
             if forced_scenario_id:
                 for sc in scenarios:
                     if str(sc.get("scenario_id") or "") == forced_scenario_id:
+                        chosen_scenario = sc
+                        break
+            if not chosen_scenario and preferred_sc_id:
+                for sc in scenarios:
+                    if str(sc.get("scenario_id") or "") == preferred_sc_id:
                         chosen_scenario = sc
                         break
             if not chosen_scenario:
@@ -629,6 +772,7 @@ class QuizListeningMixin:
         forced_archetype_id: str = "",
         forced_trajectory_id: str = "",
         forced_scenario_id: str = "",
+        unit_title: str = "",
     ) -> Dict[str, Any]:
         """
         Builds the Symbolic Functional Dialogue & Question Micro-Task Blueprint for `listening_quiz`
@@ -668,6 +812,7 @@ class QuizListeningMixin:
             forced_archetype_id=forced_archetype_id,
             forced_trajectory_id=forced_trajectory_id,
             forced_scenario_id=forced_scenario_id,
+            unit_title=unit_title,
         )
         arch = selection.get("archetype") or {}
         traj = selection.get("trajectory") or {}

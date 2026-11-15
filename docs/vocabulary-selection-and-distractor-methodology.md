@@ -18,6 +18,7 @@
 6. [Valency Cascades & Single-Fit Collocational Anchors](#6-valency-cascades--single-fit-collocational-anchors)
 7. [Distractor Generation Architecture & Universal Double-Key Guard](#7-distractor-generation-architecture--universal-double-key-guard)
 8. [Eight Lexico-Syntactic Construction Families](#8-eight-lexico-syntactic-construction-families)
+9. [Nine Multi-Word Unit (MWU) Slicing Families](#9-nine-multi-word-unit-mwu-slicing-families)
 
 ---
 
@@ -261,6 +262,18 @@ Once the final options are assembled and inflected, `has_double_key_collision` c
 - Detects predicate phrase collisions via `pedlex_phrase_index` (`be through with`).
 - Auto-refills colliding distractors from the dynamic fallback pool, guaranteeing **0 double keys across all items**.
 
+### 7.3 Foundational CEFR Ceiling & LDOCE Defining Lexicon Gate (`is_cefr_compliant_distractor`)
+For foundational learner tiers ($A1, A2, B1$, i.e. $t_{\text{rank}} \le 3$), statistical frequency algorithms (such as `cefrpy`) possess heuristic blind spots that inadvertently assign low CEFR scores (e.g. A2/B1) to obscure, formal, or theological C1/C2 terms (e.g., `subjugation`, `pretext`, `commiserate`, `impasse`, `salvation`).
+
+To eliminate cognitive overload and inappropriate distractor difficulty:
+1. **LDOCE 3000 Core Defining Lexicon Verification**: Distractors for A1/A2/B1 targets must have `core_level >= 1` (LDOCE 3000 core words), non-empty `freq_tags` (`S1..S3`, `W1..W3`), or `is_awl` (Academic Word List, for B1) in `pedlex.db` on either the surface form or its lemma.
+2. **Unified Pipeline Compliance**: Closes prior bypasses where construction family contrasts (`cxn_cands`) or primary sense antonyms (`sense_antonyms[0]`) bypassed the CEFR compliance check. Every distractor from any tier must pass `is_cefr_compliant_distractor`.
+
+### 7.4 Collocation Part-of-Speech & Slot Agreement Gate
+In multi-word expression slicing (`collocation_half_slice`), Rule 1 (Copular / Passive + Participle/Adjective + Preposition, e.g. `be filled with`, `be proud of`) matches adjacent copular verbs (`is/was/are/were/be/been/being`).
+- Base verbs (e.g. `worry about`, `care about`) appearing near copular structures (e.g. `there is worry about...`) are strictly prevented from being tagged as adjectives.
+- Sliced tokens must be verified as legitimate adjectives or participles via LDOCE `all_poses`, WordNet (`a`/`s`), or explicit participle lists (`_PARTICIPLE_DISTRACTORS`), completely preventing adjective-verb slot clashes (e.g. `worry` receiving `[advanced, popular, embarrassed]`). Non-adjectives cleanly cascade to phrasal verb particle slicing (`about` $\rightarrow$ `['down', 'up', 'off']`) or whole-chunk testing.
+
 ---
 
 ## 8. Eight Lexico-Syntactic Construction Families
@@ -279,3 +292,22 @@ Lexical items projecting structural catenae are classified into **Eight Construc
 | **Family 7: NPIs & Inversion Triggers** | `Fronted Chunk + Aux + S + V` | Trigger chunk (`under no circumstances`)| Non-inverting prepositional phrases (`in addition`) |
 | **Family 8: Mandative Subjunctives** | `<Trigger> + that S (should) V`| Matrix trigger (`suggest`, `vital`) | Subordinate bare infinitive / minimal-pair grammar traps |
 | **Family 9: Internal Possessive Idioms**| `<V> + <Prep> + one's + <N>` | Whole idiom (`came to her aid`) | Symmetric `one's` idioms + possessive & tense sync |
+
+---
+
+## 9. Nine Multi-Word Unit (MWU) Slicing Families
+
+For comprehensive technical specifications on cloze slot extraction, inflection synchronization, PedLex SQL mapping, and Oxford Thesaurus zero-collision distractor harvesting across multi-word units, refer to the authoritative architecture guide:
+- 📖 [docs/multi-word-units-slicing-and-distractor-architecture.md](multi-word-units-slicing-and-distractor-architecture.md)
+
+### Summary Taxonomy Matrix
+1. **Phrasal Verbs (`shut down`, `get ahead`)**: Preserved as complete units. Distractors draw strictly from symmetric particle/verb contrast families (`get ahead` $\rightarrow$ `get along, get by, get away`).
+2. **Compound Nouns (`passenger plane`)**: Evaluated via Attributive Classifier slot (`____ planes` $\rightarrow$ `passenger, cargo, fighter, charter`) or category contrast (`passenger plane, freight train, cargo ship, public bus`).
+3. **Nominal Genitive Idioms (`peace of mind`)**: Tested via Head Noun slot (`____ of mind` $\rightarrow$ `peace, ease, calm, rest`). Distractors harvested from Oxford Thesaurus and verified against `ldoce_phrase_index` to guarantee zero collocational validity with `of mind`.
+4. **Irreversible Binomials (`pros and cons`)**: Evaluated via Slot 1 (`the ____ and cons` $\rightarrow$ `pros, merits, gains, perks`) or symmetric binomial contrast (`ins and outs, ups and downs, dos and don'ts`).
+5. **Exclamatory Formulas (`hats off to`)**: Tested via Metaphor Noun slot (`take my ____ off to` $\rightarrow$ `hats, caps, coats, gloves`) or conversational pragmatic peers.
+6. **Composite Verbal-Prepositional Frames (`keep in touch with`)**: Tested via Medial Prepositional Noun (`stay in ____ with` $\rightarrow$ `touch, line, step, tune`) or aspectual light verb (`____ in touch with` $\rightarrow$ `keep, hold, take, catch`).
+7. **Complex Prepositions (`in terms of`, `on behalf of`)**: Sliced at Medial Noun (`in ____ of` $\rightarrow$ `terms, light, view, spite`; `on ____ of` $\rightarrow$ `behalf, account, basis, charge`).
+8. **Preposition-Stranding Bare Verbal Idioms (`give rise to`, `shed light on`)**: Sliced at Bare Nominal collocator (`give ____ to` $\rightarrow$ `rise, birth, way, place`) or governing verb (`shed, cast, throw, beam`).
+9. **Prepositional Zero-Article Adverbials (`by accident`, `at stake`)**: Sliced at Adverbial Noun (`by ____` $\rightarrow$ `accident, incident, event, happening`). Zero collocation filter blocks pseudo-synonyms that form double keys (`by mistake`).
+

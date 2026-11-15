@@ -1093,8 +1093,9 @@ class WsdEngineMixin:
                                         continue
                                 else:
                                     # Enforce selectional restrictions: human vs inanimate (across active dobj AND passive nsubjpass)
-                                    has_sb = "somebody" in br or " sb " in f" {br} "
-                                    has_sth = "something" in br or " sth " in f" {br} "
+                                    br_obj = re.sub(r"\bto\s+do\s+(?:something|somebody|someone|sth|sb)\b", "", br, flags=re.IGNORECASE)
+                                    has_sb = "somebody" in br_obj or " sb " in f" {br_obj} " or "someone" in br_obj
+                                    has_sth = "something" in br_obj or " sth " in f" {br_obj} "
                                     if has_sb and not has_sth:
                                         # Requires human object/patient
                                         is_human = any(
@@ -1104,10 +1105,8 @@ class WsdEngineMixin:
                                             for c in governing_objs
                                         )
                                         if not is_human:
-                                            score -= 65
                                             matched_pat = False
-                                            sense_selectional_violation = True
-                                            break
+                                            continue
                                     elif has_sth and not has_sb:
                                         # Requires non-human/inanimate object/patient
                                         is_pure_human = any(
@@ -1116,10 +1115,8 @@ class WsdEngineMixin:
                                             for c in governing_objs
                                         )
                                         if is_pure_human:
-                                            score -= 65
                                             matched_pat = False
-                                            sense_selectional_violation = True
-                                            break
+                                            continue
                             except Exception:
                                 pass
 
@@ -2571,15 +2568,15 @@ class WsdEngineMixin:
                                     # Human subject physical body movement / posture alignment vs situation/business turnaround
                                     # (e.g. 'She turned around and walked away', 'The student turned around and smiled')
                                     if any(k in sp or k in s_defn for k in ("your body", "body", "look in a different direction", "move your body", "posture")):
-                                        score += 45
-                                    elif any(k in s_defn for k in ("if a situation", "if a business", "if a shop or business")):
+                                        score += 60
+                                    elif any(k in s_defn for k in ("if a situation", "if a business", "if a shop or business", "consider an idea", "making a product")):
                                         score -= 40
                                 else:
                                     # Non-human / abstract subject alignment (e.g. situation / crisis / event vs business / corporate)
                                     is_business_subj = (
                                         subj_lem in ("business", "company", "firm", "department", "division", "corporation", "organization", "enterprise", "airline", "bank", "shop", "store", "factory", "pub", "bar", "restaurant", "hotel", "cafe") or
-                                        "noun.group" in subj_supersenses
-                                    )
+                                        ("noun.group" in subj_supersenses and subj_lem not in ("economy", "market", "trade", "society", "system", "world"))
+                                    ) and subj_lem not in ("economy", "market", "trade")
                                     is_situation_subj = (
                                         subj_lem in ("situation", "crisis", "problem", "event", "condition", "economy", "market", "game", "match", "trend", "matter", "affair", "life") or
                                         bool(subj_supersenses & {"noun.state", "noun.event"})
@@ -3470,7 +3467,7 @@ class WsdEngineMixin:
                     for u in sense.get("units") or []:
                         u_str = u.get("phrase") if isinstance(u, dict) else str(u or "")
                         if u_str and bool(keys_0 & cls._declared_unit_spellings(u_str)):
-                            return (host, sense, "unit_sense")
+                            return (host, sense, "sense_pattern")
             matching_cands = []
             for host in ordered_hosts_0:
                 entry = cls.get_ldoce_entry(host)
@@ -4796,7 +4793,7 @@ class WsdEngineMixin:
         """
         active = getattr(cls._wsd_session_local, "session", None)
         if active is not None:
-            if unit_name and unit_name != "unit" and active.get("unit_name") == "unit":
+            if unit_name and unit_name not in ("unit", "vocabulary", "expressions") and active.get("unit_name") in ("unit", "vocabulary", "expressions"):
                 active["unit_name"] = unit_name
             yield active
             return

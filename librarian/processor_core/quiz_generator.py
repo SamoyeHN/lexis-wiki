@@ -1426,7 +1426,19 @@ class QuizGeneratorMixin:
                         micro_task_str,
                     ).strip()
                     if extra_note.startswith("(") and extra_note.endswith(")."):
-                        extra_note = extra_note[1:-2].strip() + "."
+                        # Verify that depth only returns to 0 at the very end of the string
+                        depth = 0
+                        is_single_outer = True
+                        for ch in extra_note[:-2]:
+                            if ch == "(":
+                                depth += 1
+                            elif ch == ")":
+                                depth -= 1
+                                if depth == 0:
+                                    is_single_outer = False
+                                    break
+                        if is_single_outer and depth == 1:
+                            extra_note = extra_note[1:-2].strip() + "."
                     note_line = f"\n- 🎯 Slot / Grammar Note: {extra_note}" if extra_note else ""
                     skeleton_bullets.append(
                         f"### Item {idx} ###\n"
@@ -1697,6 +1709,7 @@ class QuizGeneratorMixin:
                     speaker_2_name=s2_name,
                     forced_archetype_id=forced_arch,
                     forced_scenario_id=forced_scenario,
+                    unit_title=u_t,
                 )
             except Exception as e:
                 logger.warning(f"Failed to build listening micro-task blueprints: {e}")

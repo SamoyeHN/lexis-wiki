@@ -1636,6 +1636,52 @@
         });
     }
 
+    function triggerUnitCompileAll(unitName) {
+        if (!unitName) return;
+        showToast(`Compiling all extractions for ${unitName}...`, 'info');
+        fetch('/api/compile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: unitName })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                pollJobStatus(data.job_id, 'compiler');
+                fetchRecentJobs();
+                showToast(`Extraction compilation queued for ${unitName}`, 'success');
+            } else {
+                showInfoModal("Compilation Failed", "Failed to start extraction compilation: " + (data.error || "Unknown error"));
+            }
+        })
+        .catch(err => {
+            showInfoModal("Network Error", "Failed to trigger compilation: " + err.message);
+        });
+    }
+
+    function triggerUnitGenerateAllQuizzes(unitName) {
+        if (!unitName) return;
+        showToast(`Generating all quizzes for ${unitName}...`, 'info');
+        fetch('/api/generate-all-quizzes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: unitName })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                pollJobStatus(data.job_id, 'all-quizzes');
+                fetchRecentJobs();
+                showToast(`Quiz batch generation queued for ${unitName}`, 'success');
+            } else {
+                showInfoModal("Quiz Generation Failed", "Failed to start quiz batch generation: " + (data.error || "Unknown error"));
+            }
+        })
+        .catch(err => {
+            showInfoModal("Network Error", "Failed to trigger quiz batch generation: " + err.message);
+        });
+    }
+
     // ------------------ SETTINGS TAB SWITCHING ------------------
     function switchSettingsTab(tabId) {
         document.querySelectorAll('.settings-tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -2652,10 +2698,8 @@
                                                 <i class="bi bi-three-dots-vertical"></i>
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                                <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); return false;"><i class="bi bi-folder2-open me-2 text-info"></i>Open Workspace</a></li>
-                                                <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
-                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
-                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                             </ul>
@@ -2734,10 +2778,8 @@
                                             <i class="bi bi-three-dots-vertical"></i>
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                            <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); return false;"><i class="bi bi-folder2-open me-2 text-info"></i>Open Workspace</a></li>
-                                            <li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openSourceEditorForUnit('${esc(f.name)}'); return false;"><i class="bi bi-pencil-square me-2 text-warning"></i>Edit Syllabus</a></li>
-                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="currentUnit='${esc(f.name)}'; triggerWorkspaceCompile(); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Run Compiler</a></li>`}
-                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="openUnitWorkspace('${esc(f.name)}'); switchWorkspaceSubTab('handout'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quiz</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                         </ul>
@@ -3284,6 +3326,9 @@
                         loadHandoutPreview(job.saved_files[0]);
                         document.getElementById('quiz-progress-section').style.display = 'none';
                         switchWorkspaceSubTab('handout');
+                    } else if (service === 'all-quizzes' && job.status === 'completed') {
+                        const count = (job.saved_files && job.saved_files.length) ? job.saved_files.length : 'all';
+                        showToast(`Successfully generated ${count} quizzes for ${job.name || 'unit'}!`, 'success');
                     }
                 } else {
                     activePollTimers[jobId] = setTimeout(() => pollJobStatus(jobId, service), 1500);
@@ -3814,9 +3859,7 @@
         fullMarkdown += '\n';
 
         const saveBtn = document.getElementById('editor-save-btn');
-        const saveCompileBtn = document.getElementById('editor-save-compile-btn');
-        saveBtn.disabled = true;
-        saveCompileBtn.disabled = true;
+        if (saveBtn) saveBtn.disabled = true;
 
         fetch('/api/upload-file', {
             method: 'POST',
@@ -3828,8 +3871,7 @@
         })
         .then(res => res.json())
         .then(data => {
-            saveBtn.disabled = false;
-            saveCompileBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = false;
             if (data.success) {
                 const modalEl = document.getElementById('source-editor-modal');
                 const modal = bootstrap.Modal.getInstance(modalEl);
@@ -3850,8 +3892,7 @@
             }
         })
         .catch(err => {
-            saveBtn.disabled = false;
-            saveCompileBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = false;
             showInfoModal("Network Error", "Failed to save source file: " + err.message);
         });
     }

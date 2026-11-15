@@ -122,7 +122,9 @@ def degenerate_grammar_slots(formula: str) -> List[str]:
 FATAL_QA_FLAGS = (
     "does not appear in quoted sentence",
     "Non-verbatim quote detected",
-    "duplicate",
+    "duplicate item",
+    "duplicate options",
+    "duplicate common_mistakes",
     "copy-pasted definition",
     "Selection clustering",
     "Redundant headwords",
@@ -1686,7 +1688,7 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     t_head = t_parts[0].lower()
                     t_base = LinguisticEngine.lemma_of(t_head) or t_head
                     t_is_verb = (
-                        bp_pos in ("verb", "phrase", "phrasal verb")
+                        bp_pos in ("verb", "phrasal verb")
                         or LinguisticEngine._is_base_verb_lemma(t_base)
                     )
                     if t_is_verb and t_head != t_base:
@@ -1714,6 +1716,79 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                                 flags.append(
                                     f"❌ Quiz item '{target}': Verb option inflection mismatch (动词同型错误) — target is inflected ({t_verb_tag}), but options contain base-form verbs: {base_clashing}"
                                 )
+
+                # Auxiliary & Modal Agreement Gate (助动词/补足语语法门禁)
+                # Inspect the immediate left context of `____` in question stem
+                q_text = str(item.get("question") or "")
+                if is_list_valid and options and len(options) == 4 and "____" in q_text:
+                    m_left_aux = re.search(r"\b(has|have|had)(?:\s+been)?\s+____", q_text, re.IGNORECASE)
+                    if m_left_aux:
+                        aux_word = m_left_aux.group(1).lower()
+                        vb_clashing = []
+                        for o in options:
+                            o_head = str(o).strip().split()[0].lower()
+                            o_base = LinguisticEngine.lemma_of(o_head) or o_head
+                            if o_head == o_base and LinguisticEngine._is_base_verb_lemma(o_base):
+                                vbn_form = (LinguisticEngine._inflect_verb(o_base, "VBN") or "").lower()
+                                if vbn_form and vbn_form != o_base and o_head != vbn_form:
+                                    vb_clashing.append(o)
+                        if vb_clashing:
+                            no_verb_inflection_clash = False
+                            flags.append(
+                                f"❌ Quiz item '{target}': Auxiliary agreement clash (助动词语法冲突) — stem has '{aux_word} ____' requiring past participle (VBN), but options contain base-form verbs: {vb_clashing}"
+                            )
+
+                    m_modal = re.search(r"\b(can|could|will|would|shall|should|may|might|must|did|does|do)\s+____", q_text, re.IGNORECASE)
+                    if m_modal:
+                        modal_word = m_modal.group(1).lower()
+                        infl_clashing = []
+                        for o in options:
+                            o_head = str(o).strip().split()[0].lower()
+                            o_base = LinguisticEngine.lemma_of(o_head) or o_head
+                            if o_head != o_base and LinguisticEngine._is_base_verb_lemma(o_base):
+                                infl_clashing.append(o)
+                        if infl_clashing:
+                            no_verb_inflection_clash = False
+                            flags.append(
+                                f"❌ Quiz item '{target}': Modal agreement clash (情态动词语法冲突) — stem has '{modal_word} ____' requiring base verb (VB), but options contain inflected verbs: {infl_clashing}"
+                            )
+
+                    m_to_inf = re.search(r"\bto\s+____", q_text, re.IGNORECASE)
+                    if m_to_inf and bp_pos in ("verb", "phrase", "phrasal verb"):
+                        infl_clashing = []
+                        for o in options:
+                            o_head = str(o).strip().split()[0].lower()
+                            o_base = LinguisticEngine.lemma_of(o_head) or o_head
+                            if o_head != o_base and LinguisticEngine._is_base_verb_lemma(o_base):
+                                infl_clashing.append(o)
+                        if infl_clashing:
+                            no_verb_inflection_clash = False
+                            flags.append(
+                                f"❌ Quiz item '{target}': Infinitive agreement clash (不定式语法冲突) — stem has 'to ____' requiring base verb (VB), but options contain inflected verbs: {infl_clashing}"
+                            )
+
+                    # Uniform Option Inflection Gate (选项群曲折一致性门禁)
+                    # Options must not mix base verbs and past participles (e.g., 3 VBNs and 1 VB)
+                    vbn_count = 0
+                    vb_count = 0
+                    vb_opts = []
+                    vbn_opts = []
+                    for o in options:
+                        o_head = str(o).strip().split()[0].lower()
+                        o_base = LinguisticEngine.lemma_of(o_head) or o_head
+                        if LinguisticEngine._is_base_verb_lemma(o_base):
+                            vbn_form = (LinguisticEngine._inflect_verb(o_base, "VBN") or "").lower()
+                            if o_head == o_base and vbn_form != o_base:
+                                vb_count += 1
+                                vb_opts.append(o)
+                            elif o_head == vbn_form and vbn_form != o_base:
+                                vbn_count += 1
+                                vbn_opts.append(o)
+                    if vb_count > 0 and vbn_count > 0 and (vb_count + vbn_count == 4):
+                        no_verb_inflection_clash = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Mixed verb inflections among options (选项曲折形式混杂) — base verbs: {vb_opts}, past participles: {vbn_opts}"
+                        )
 
                 # Prescribed Options Contract Gate — the blueprint owns the
                 # options and the answer index (CRC32-positioned distractors); the writer

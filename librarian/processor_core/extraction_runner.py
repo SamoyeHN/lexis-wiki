@@ -333,6 +333,7 @@ class ExtractionRunnerMixin:
                         raw_source_text,
                         target_count=target_expr_count,
                         syllabus_expressions=syllabus_expressions,
+                        unit_name=file_stem,
                     )
                     for it in raw_e_items:
                         if not str(it.get("definition", "")).strip() and syllabus_expressions:
@@ -491,6 +492,7 @@ class ExtractionRunnerMixin:
                         syllabus_vocab=cleaned_syllabus_vocab if syllabus_vocab else None,
                         target_count=effective_vocab_count,
                         exclude_words=vocab_exclude_words if vocab_exclude_words else None,
+                        unit_name=file_stem,
                     )
                     v_items_list = []
                     for it in raw_v_items:

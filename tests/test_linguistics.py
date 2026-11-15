@@ -4325,6 +4325,34 @@ class TestHomographSenseLock:
         assert senses[idx_verb].get("homograph_num") == 2
 
 
+class TestComparativeCausativeAdjectiveResolution:
+    """Verifies that comparative/superlative adjectives in causative object complement
+    frames (e.g. 'make the Earth warmer') de-inflect to base adjectives and are not
+    misclassified as accidental noun homographs (e.g. 'warmer' noun).
+    """
+
+    def test_deinflect_comparative_superlative(self):
+        assert LinguisticEngine.deinflect_comparative_superlative("warmer") == "warm"
+        assert LinguisticEngine.deinflect_comparative_superlative("cooler") == "cool"
+        assert LinguisticEngine.deinflect_comparative_superlative("cleaner") == "clean"
+        assert LinguisticEngine.deinflect_comparative_superlative("hotter") == "hot"
+        assert LinguisticEngine.deinflect_comparative_superlative("biggest") == "big"
+
+    def test_causative_object_complement_pos_resolution(self):
+        sent = "As we have learned, these greenhouse gases trap energy in the atmosphere and make the Earth warmer."
+        pos = LinguisticEngine.determine_contextual_pos("warmer", sent)
+        assert pos == "adjective", f"Expected 'adjective', got '{pos}'"
+
+    def test_causative_warmer_not_extracted_as_noun(self):
+        sent = "[S-1] As we have learned, these greenhouse gases trap energy in the atmosphere and make the Earth warmer."
+        items = LinguisticEngine.extract_deterministic_vocabulary(sent, target_count=5)
+        for item in items:
+            if item.get("word") == "warmer":
+                pytest.fail("Accidental noun homograph 'warmer' was extracted instead of being de-inflected or filtered")
+            if item.get("word") == "warm":
+                assert item.get("pos") == "adjective"
+
+
 class TestMarkdownHeaderSlotBrackets:
     """Backlog F1. Markdown headers and wikilinks must sanitize inner slot brackets
     (e.g. [[have to do with [sth/sb]]]) so that Obsidian wikilinks do not break
@@ -4509,7 +4537,7 @@ class TestImitationInstantiatesFormula:
             "pattern_formula": "It + is/was + [NP/PP] + that/who + [Clause]",
             "quote": "It was during the Renaissance that great artistic breakthroughs occurred.",
             "design_audit": "Cleft sentence structure emphasizing time.",
-            "category": "Information Packaging",
+            "category": "Rhetoric & Emphasis",
             "pedagogical_function": "Fronts key constituent for emphatic focus.",
             "imitation_example": "It is transparent communication that fosters mutual trust within academic teams.",
             "common_mistakes": "Omitting 'that' or misusing auxiliary verbs.",
@@ -4522,7 +4550,7 @@ class TestImitationInstantiatesFormula:
             "pattern_formula": "It + is/was + [NP/PP] + that/who + [Clause]",
             "quote": "It was during the Renaissance that great artistic breakthroughs occurred.",
             "design_audit": "Cleft sentence structure emphasizing time.",
-            "category": "Information Packaging",
+            "category": "Rhetoric & Emphasis",
             "pedagogical_function": "Fronts key constituent for emphatic focus.",
             "imitation_example": "Transparent communication always fosters mutual trust within academic teams.",
             "common_mistakes": "Omitting 'that' or misusing auxiliary verbs.",

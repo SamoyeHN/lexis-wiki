@@ -23,14 +23,15 @@ def test_smoke_book1_passage_a_unit(unit_num: int):
     assert len(text) > 200, f"Source text is unexpectedly short in {unit_name}"
 
     # 1. Deterministic Extractions
-    vocab = LE.extract_deterministic_vocabulary(text, target_count=10)
-    assert len(vocab) >= 8, f"Extracted vocabulary count {len(vocab)} < 8 in {unit_name}"
+    with LE.wsd_log_session(unit_name):
+        vocab = LE.extract_deterministic_vocabulary(text, target_count=10, unit_name=unit_name)
+        assert len(vocab) >= 8, f"Extracted vocabulary count {len(vocab)} < 8 in {unit_name}"
 
-    exprs = LE.mine_expression_skeletons(text, target_count=5)
-    assert len(exprs) >= 3, f"Extracted expressions count {len(exprs)} < 3 in {unit_name}"
+        exprs = LE.mine_expression_skeletons(text, target_count=5)
+        assert len(exprs) >= 3, f"Extracted expressions count {len(exprs)} < 3 in {unit_name}"
 
-    grams = LE.extract_deterministic_grammar(text, target_count=5)
-    assert len(grams) >= 3, f"Extracted grammar count {len(grams)} < 3 in {unit_name}"
+        grams = LE.extract_deterministic_grammar(text, target_count=5)
+        assert len(grams) >= 3, f"Extracted grammar count {len(grams)} < 3 in {unit_name}"
 
     # 2. Modality 1: Vocab Skeletons (Proficiency MCQ) & Authentic Cloze
     skeletons = LE.build_precomputed_target_skeletons(vocab, target_count=10)

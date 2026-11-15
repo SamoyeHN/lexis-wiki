@@ -2730,17 +2730,32 @@ class ExtractionPipelineMixin:
                     continue
                 l_entry = cls.get_ldoce_entry(lemma) or {}
                 # Comparative/Superlative Adjective De-inflection Fallback:
-                # If spaCy leaves a comparative/superlative surface form un-lemmatized (e.g. 'plumper' -> 'plump'),
-                # resolve to the attested base adjective entry in PedLex.
-                if not l_entry and token.pos_ == "ADJ" and lemma.endswith(("er", "est")) and len(lemma) >= 6:
-                    stem_cands = [lemma[:-2], lemma[:-1], lemma[:-3] + "y"] if lemma.endswith("er") else [lemma[:-3], lemma[:-2], lemma[:-4] + "y"]
-                    for sc_w in stem_cands:
-                        if len(sc_w) >= 3:
-                            sc_ld = cls.get_ldoce_entry(sc_w)
-                            if sc_ld and sc_ld.get("kind") != "derived" and sc_ld.get("senses"):
-                                lemma = sc_w
-                                l_entry = sc_ld
-                                break
+                # If a token is an inflected comparative (-er) or superlative (-est) adjective (e.g. 'plumper' -> 'plump', 'warmer' -> 'warm'),
+                # resolve to the attested base adjective lemma in PedLex and prevent spurious agent/instrument noun entries
+                # (e.g. 'warmer' [noun = plate warmer], 'cooler' [noun = cool box]) from hijacking predicative or causative adjective slots.
+                base_adj = cls.deinflect_comparative_superlative(surf_low) or cls.deinflect_comparative_superlative(lemma)
+                if base_adj:
+                    is_causative = cls.is_causative_object_complement(token, doc)
+                    is_copula_pred = (
+                        token.head.lemma_.lower() in ("be", "become", "seem", "look", "feel", "get", "remain", "stay", "grow", "appear", "sound")
+                        and not any(c.pos_ == "VERB" and c.tag_ in ("VBN", "VBG") for c in token.head.children)
+                    )
+                    is_attr_before_noun = (
+                        token.dep_ == "amod"
+                        or (token.i + 1 < len(doc) and doc[token.i + 1].pos_ in ("NOUN", "PROPN") and not doc[token.i + 1].text.startswith((".", ",", "!", "?", ":", ";", '"', "'", "”", "’")))
+                    )
+                    if (
+                        token.pos_ == "ADJ"
+                        or token.tag_ in ("JJR", "JJS")
+                        or is_causative
+                        or is_copula_pred
+                        or is_attr_before_noun
+                        or token.dep_ in ("acomp", "oprd")
+                    ):
+                        lemma = base_adj
+                        l_entry = cls.get_ldoce_entry(base_adj) or {}
+                        w_cefr = cls.get_word_cefr(base_adj) or "B1"
+                        is_awl = w_cefr in ("B2", "C1", "C2")
                 if l_entry.get("kind") == "derived":
                     continue
                 if cls._ldoce_conn is not None and not l_entry.get("senses"):
@@ -2957,7 +2972,7 @@ class ExtractionPipelineMixin:
             if u_res and u_res[0] and u_res[1]:
                 u_owner, u_sense, _u_row = u_res
                 entry = {"headword": word, "pos": pos or u_sense.get("pos"), "senses": [dict(u_sense, pos=pos or u_sense.get("pos"))]}
-        if entry and entry.get("kind") == "derived":
+        if entry and entry.get("kind") == "derived" and not entry.get("senses"):
             return []
         raw_senses = entry.get("senses", []) if entry else []
 
@@ -4066,6 +4081,10 @@ class ExtractionPipelineMixin:
                     return False
                 if s_obj.get("units") and not _sense_matches_unit_strictly(s_obj, allow_sub=True)[0] and not s_obj.get("patterns") and not s_obj.get("pattern_bundles"):
                     return False
+                if is_trivalent_prep_frame:
+                    s_gram = f"{s_obj.get('grammar') or ''} {s_obj.get('syntax_codes') or ''}".lower()
+                    if "no passive" in s_gram or ("intransitive" in s_gram and "transitive" not in s_gram.replace("intransitive", "")):
+                        return False
                 excl_toks = {c_tok, "be", "feel", "get"}
                 if tokens[0] in ("be", "feel", "get") and len(tokens) >= 2 and c_tok != tokens[1]:
                     excl_toks.add(tokens[1])
@@ -4146,6 +4165,10 @@ class ExtractionPipelineMixin:
             if not c_entry:
                 continue
             for s_i, s in enumerate(c_entry.get("senses") or []):
+                if is_trivalent_prep_frame:
+                    s_gram = f"{s.get('grammar') or ''} {s.get('syntax_codes') or ''}".lower()
+                    if "no passive" in s_gram or ("intransitive" in s_gram and "transitive" not in s_gram.replace("intransitive", "")):
+                        continue
                 is_match, matched_unit_ex = _sense_matches_unit_strictly(s)
                 if not is_match:
                     continue
@@ -4587,7 +4610,7 @@ class ExtractionPipelineMixin:
                 _allowed_sense_toks = _s_pats_toks | (_s_own_toks - _other_s_toks)
 
                 def _colloc_matches_locked_sense(_c_str: str) -> bool:
-                    if len(_ent_senses) <= 1:
+                    if len(_ent_senses) <= 1 or all(not s.get("examples") for s in _ent_senses):
                         return True
                     for _ct in re.findall(r"\b[a-z]{3,}\b", (_c_str or "").lower()):
                         if _ct == clean_target or cls.form_matches(_ct, clean_target):
@@ -4600,13 +4623,13 @@ class ExtractionPipelineMixin:
                     return False
 
                 for _xc in (_ent_for_sense.get("cross_collocations") or []):
-                    if isinstance(_xc, dict) and _xc.get("example") and len(_ent_senses) <= 1:
+                    if isinstance(_xc, dict) and _xc.get("example"):
                         if _colloc_matches_locked_sense(str(_xc.get("collocation") or "")):
                             cand_pool.append(str(_xc["example"]).strip())
 
                 for _th in (_ent_for_sense.get("thesaurus") or []):
                     if isinstance(_th, dict) and cls._thesaurus_variant_matches(_th.get("word"), clean_target):
-                        if len(_ent_senses) <= 1:
+                        if len(_ent_senses) <= 1 or all(not s.get("examples") for s in _ent_senses):
                             for _th_ex in (_th.get("examples") or ([_th["example"]] if _th.get("example") else [])):
                                 if _th_ex:
                                     cand_pool.append(str(_th_ex).strip())
@@ -4621,7 +4644,7 @@ class ExtractionPipelineMixin:
                             _cc_s_idxs = _cc.get("sense_indices")
                             _cc_word = str(_cc.get("collocation") or "").strip().lower()
                             if (isinstance(_cc_s_idxs, list) and _locked_idx >= 0 and _locked_idx in _cc_s_idxs) or (
-                                len(_ent_senses) <= 1 and _cc_word and _colloc_matches_locked_sense(_cc_word)
+                                (len(_ent_senses) <= 1 or all(not s.get("examples") for s in _ent_senses)) and _cc_word and _colloc_matches_locked_sense(_cc_word)
                             ):
                                 cand_pool.append(str(_cc["example"]).strip())
 
@@ -4711,8 +4734,6 @@ class ExtractionPipelineMixin:
 
         # Determine whether the entry (or multi-word unit) is monosemous under the target POS
         entry = cls.get_ldoce_entry(clean_target)
-        if entry and entry.get("kind") == "derived":
-            return fallback_short_ex or ""
         target_p = cls._pos_code(pos_low)
         entry_senses = (entry.get("senses") or []) if entry else []
         pos_senses = [s for s in entry_senses if not target_p or cls._sense_matches_pos(s, target_p)]
@@ -4766,12 +4787,14 @@ class ExtractionPipelineMixin:
                 )
                 if pos_senses and not in_pedlex:
                     return fallback_short_ex or ""
-                if not is_monosemous:
+                all_senses_empty_examples = bool(pos_senses and all(not s.get("examples") for s in pos_senses))
+                if not is_monosemous and not all_senses_empty_examples:
                     # Polysemous word whose locked sense has 0 full-sentence examples: do NOT steal from another sense or corpus
                     return fallback_short_ex or ""
 
         # 2. Monosemous or unlocked entry-level & cross-entry corpus examples
-        if entry and is_monosemous:
+        all_senses_empty_examples = bool(pos_senses and all(not s.get("examples") for s in pos_senses))
+        if entry and (is_monosemous or all_senses_empty_examples):
             for s in pos_senses:
                 for pb in (s.get("pattern_bundles") or []):
                     if isinstance(pb, dict) and pb.get("example"):
@@ -4812,7 +4835,7 @@ class ExtractionPipelineMixin:
                     fallback_short_ex = c_ex_str
 
         # 4. Search corpus examples in PedLex SQLite (only for monosemous words or monosemous dedicated multi-word units)
-        if (not is_multi and is_monosemous) or (is_multi and (is_monosemous_multi or (not sense and not has_poly_block))):
+        if (not is_multi and (is_monosemous or all_senses_empty_examples)) or (is_multi and (is_monosemous_multi or (not sense and not has_poly_block))):
             try:
                 search_queries = [u_key] if is_multi else [clean_target]
                 if is_multi and u_key_no_cop and u_key_no_cop not in search_queries:
@@ -4879,7 +4902,8 @@ class ExtractionPipelineMixin:
         syllabus_vocab: Optional[List[str]] = None,
         target_count: int = 20,
         enable_llm_disambiguation: bool = True,
-        exclude_words: Optional[Set[str]] = None
+        exclude_words: Optional[Set[str]] = None,
+        unit_name: str = ""
     ) -> List[Dict[str, Any]]:
         """
         Pure Computational Linguistic & Lexicographic Extractor (0 Tokens, 100% Deterministic).
@@ -4887,7 +4911,7 @@ class ExtractionPipelineMixin:
         tags contextual Part of Speech via spaCy, and hydrates authoritative definitions & authentic
         corpus examples from PedLex 6th Edition.
         """
-        with cls.wsd_log_session("vocabulary"):
+        with cls.wsd_log_session(unit_name or "vocabulary"):
             _, pool = cls.tokenize_and_index_sentences(text)
             if not pool:
                 return []
@@ -5034,10 +5058,17 @@ class ExtractionPipelineMixin:
                 w = cand["word"].strip().lower()
                 if not w or w in seen_words or w in excl_set:
                     continue
+                if not cand.get("is_syllabus"):
+                    base_adj = cls.deinflect_comparative_superlative(w)
+                    cand_quote = cand.get("quote", "")
+                    if base_adj and cand_quote and cls.determine_contextual_pos(w, cand_quote) == "adjective":
+                        w = base_adj
+                        if w in seen_words or w in excl_set:
+                            continue
                 if not cls.is_pedagogical_target(w):
                     continue
                 w_ld_check = cls.get_ldoce_entry(w)
-                if w_ld_check and w_ld_check.get("kind") == "derived":
+                if not cand.get("is_syllabus") and w_ld_check and w_ld_check.get("kind") == "derived":
                     continue
                 if not cand.get("is_syllabus") and any(cls.are_same_word_family(w, sw) for sw in seen_words):
                     continue
@@ -5294,8 +5325,12 @@ class ExtractionPipelineMixin:
                 # Gate 2 (Evidence-Completeness Gate - 宁缺勿滥):
                 # Drop any candidate lacking a valid definition OR an authentic, non-duplicate dictionary example
                 # for its locked sense, allowing a fully attested reserve candidate to take its slot.
+                # If a mandated syllabus item lacks a distinct dictionary example, use the authentic passage sentence.
                 if not definition or cls.is_boilerplate_definition(definition) or not example:
-                    continue
+                    if cand.get("is_syllabus") and definition and not cls.is_boilerplate_definition(definition) and matching_sent and cls.text_contains_form(matching_sent, w):
+                        example = matching_sent
+                    else:
+                        continue
                 # Gate 2b (Sense-Level Pedagogical Filter):
                 # Drop single-word nouns locked to:
                 # (1) Phrase-bound bare noun senses ('odds' -> "if two statements... are at odds", 'sake' -> "in order to help...")
@@ -5349,7 +5384,8 @@ class ExtractionPipelineMixin:
         syllabus_expressions: Optional[List[str]] = None,
         enable_llm_disambiguation: bool = True,
         exclude_words: Optional[Set[str]] = None,
-        exclude_definitions: Optional[Set[str]] = None
+        exclude_definitions: Optional[Set[str]] = None,
+        unit_name: str = ""
     ) -> List[Dict[str, Any]]:
         """
         Extracts genuine multi-word academic expressions and collocations from text
@@ -5365,7 +5401,7 @@ class ExtractionPipelineMixin:
                 "design_audit": "AUDIT: [S-ID] -> [Formula] -> [VERBATIM_CONFIRMED]"
             }
         """
-        with cls.wsd_log_session("expressions"):
+        with cls.wsd_log_session(unit_name or "expressions"):
             sent_pool = cls.tokenize_and_index_sentences(text)[1] if text else {}
             skeletons = cls.mine_expression_skeletons(
                 text,

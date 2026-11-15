@@ -38,6 +38,7 @@ class CefrAndMorphologyMixin:
     _ldoce_tables: Optional[Set[str]] = None
     _ldoce_compounds: Optional[Dict[str, str]] = None
     _ocd_lexfile_cache: Dict[str, List[str]] = {}
+    _ocd_verb_lexfile_cache: Dict[str, List[str]] = {}
     _phrase_text_cache: Dict[str, List[Tuple[str, str]]] = {}
     _phrase_evidence_cache: Dict[Tuple[str, str], List[str]] = {}
     _wsd_llm_cache: Dict[str, Tuple[int, str]] = {}
@@ -762,6 +763,30 @@ class CefrAndMorphologyMixin:
         if c_rank > ceiling_rank and not is_direct_negation:
             return False
 
+        # SLA & Psychometric Ceiling Gate for Foundational Levels (A1, A2, B1):
+        # A distractor must come from the foundational core vocabulary:
+        # (LDOCE 3000 defining lexicon: core_level >= 1 or non-empty freq_tags, or is_awl, or inflection of such).
+        # Rejects obscure/C1/C2 words like 'subjugation', 'pretext', 'commiserate', 'impasse', 'salvation'
+        # which cefrpy heuristically/statistically misclassifies as A2 or B1.
+        if t_rank <= 2 and not is_direct_negation and not cls._is_ldoce_disabled():
+            c_entry = cls.get_ldoce_entry(c_clean)
+            c_core = (c_entry.get("core_level") or 0) if c_entry else 0
+            c_freq = bool(c_entry.get("freq_tags")) if c_entry else False
+            c_awl = bool(c_entry.get("is_awl")) if c_entry else False
+            if not (c_core >= 1 or c_freq or (t_rank == 3 and c_awl)):
+                lem = cls._surface_lemma(c_clean)
+                if lem and lem != c_clean:
+                    lem_entry = cls.get_ldoce_entry(lem)
+                    c_core = (lem_entry.get("core_level") or 0) if lem_entry else 0
+                    c_freq = bool(lem_entry.get("freq_tags")) if lem_entry else False
+                    c_awl = bool(lem_entry.get("is_awl")) if lem_entry else False
+            if t_rank <= 2:
+                if not (c_core >= 1 or c_freq):
+                    return False
+            else:
+                if not (c_core >= 1 or c_freq or c_awl):
+                    return False
+
         return in_ocd or is_acad or analyzer.is_word_in_database(resolved) or is_direct_negation
 
     CEFR_CEILING_BY_LEVEL = {
@@ -1344,15 +1369,17 @@ class CefrAndMorphologyMixin:
             s for s in (entry.get("senses", []) or [])
             if not (s.get("pos") or "") or "verb" in (s.get("pos") or "").lower()
         ]
+        base_verb_senses = [s for s in verb_senses if not s.get("from_phrasal_verb")]
+        target_senses = base_verb_senses or verb_senses
         verb_grams = [
             str(s.get("grammar") or "").strip().lower()
-            for s in verb_senses
+            for s in target_senses
             if str(s.get("grammar") or "").strip()
         ]
         if verb_grams:
             if any(re.search(r"\btransitive\b", g) for g in verb_grams):
                 return True
-            if len(verb_grams) == len(verb_senses) and all(
+            if len(verb_grams) == len(target_senses) and all(
                 ("intransitive" in g or "always + adverb/preposition" in g)
                 and not re.search(r"\btransitive\b", g)
                 for g in verb_grams
@@ -1360,7 +1387,7 @@ class CefrAndMorphologyMixin:
                 return False
         saw_verb_evidence = False
         examples: List[str] = []
-        for sense in verb_senses:
+        for sense in target_senses:
             for pat in sense.get("patterns", []) or []:
                 pl = (pat or "").lower()
                 if not pl:
@@ -1383,8 +1410,11 @@ class CefrAndMorphologyMixin:
             if nlp:
                 v_low = (word or "").strip().lower()
                 for ex in examples[:6]:
+                    ex_clean = re.sub(r"\(.*?\)", "", ex).strip()
+                    if not ex_clean:
+                        continue
                     try:
-                        doc = nlp(ex)
+                        doc = nlp(ex_clean)
                     except Exception:
                         continue
                     for tok in doc:
@@ -1393,7 +1423,7 @@ class CefrAndMorphologyMixin:
                         if tok.pos_ != "VERB":
                             continue
                         for child in tok.children:
-                            if child.dep_ == "dobj" and child.pos_ not in ("PRON", "DET"):
+                            if child.dep_ in ("dobj", "obj") and child.is_alpha and child.pos_ in ("NOUN", "PROPN"):
                                 return True
         return False if saw_verb_evidence else None
 
@@ -1877,16 +1907,38 @@ class CefrAndMorphologyMixin:
                 and p not in ("adjective", "adj", "a", "s", "adverb", "adv", "r")
                 and w not in _pure_adjectives
             )
+            # If multi-word and no POS explicitly provided, check if the head word is a verb
+            if " " in w and not is_verb_eligible and p not in ("noun", "n", "adjective", "adj", "a", "s", "adverb", "adv", "r"):
+                try:
+                    head_tok = w.split()[0]
+                    if head_tok in cls._IRREGULAR_VERB_FORMS or head_tok == "be" or cls.get_spacy()(w)[0].pos_ == "VERB":
+                        is_verb_eligible = True
+                except Exception:
+                    pass
+
             if is_verb_eligible:
-                for tag in ("VBZ", "VBD", "VBN", "VBG"):
-                    inflected = cls._inflect_verb(w, tag)
-                    if inflected:
-                        forms.add(inflected)
+                if " " in w:
+                    w_parts = w.split()
+                    head_v = w_parts[0]
+                    v_tail = " " + " ".join(w_parts[1:])
+                    for tag in ("VB", "VBZ", "VBD", "VBN", "VBG"):
+                        inf_head = cls._inflect_verb(head_v, tag)
+                        if inf_head:
+                            forms.add(inf_head + v_tail)
+                    if head_v == "be" or head_v in ("am", "is", "are", "was", "were", "been", "being"):
+                        for be_form in ("am", "is", "are", "was", "were", "been", "being"):
+                            forms.add(be_form + v_tail)
+                else:
+                    for tag in ("VBZ", "VBD", "VBN", "VBG"):
+                        inflected = cls._inflect_verb(w, tag)
+                        if inflected:
+                            forms.add(inflected)
 
             if p not in ("adjective", "adj", "a", "s", "adverb", "adv", "r", "verb", "v") and w not in _pure_adjectives:
-                plural = cls.pluralize_noun(w)
-                if plural:
-                    forms.add(plural)
+                if " " not in w:
+                    plural = cls.pluralize_noun(w)
+                    if plural:
+                        forms.add(plural)
 
             # Hyphenated prefix/compound spelling variant (e.g. 're-schedule' <-> 'reschedule', 'in-person' <-> 'in person')
             if "-" in w and " " not in w:
@@ -1904,12 +1956,15 @@ class CefrAndMorphologyMixin:
                         forms.add(pl_c)
 
         if p in ("", "adjective", "adj", "a", "s") and " " not in w:
-            if len(w) > 3:
-                forms.update({w + "er", w + "est"})
+            if len(w) >= 3:
                 if w.endswith("e"):
                     forms.update({w + "r", w + "st"})
-                elif w.endswith("y") and len(w) > 2 and w[-2] not in "aeiou":
+                elif w.endswith("y") and w[-2] not in "aeiou":
                     forms.update({w[:-1] + "ier", w[:-1] + "iest"})
+                else:
+                    if len(w) >= 3 and w[-1] in "bdfgklmnprstz" and w[-2] in "aeiou" and (len(w) == 3 or w[-3] not in "aeiou"):
+                        forms.update({w + w[-1] + "er", w + w[-1] + "est"})
+                    forms.update({w + "er", w + "est"})
 
         # US/UK orthographic equivalence closure across all inflected forms
         for f_cand in list(forms):
@@ -1960,6 +2015,82 @@ class CefrAndMorphologyMixin:
                 break
         cls._surface_lemma_cache[f] = lemma
         return lemma
+
+    @classmethod
+    def deinflect_comparative_superlative(cls, word: str) -> Optional[str]:
+        """
+        De-inflects an inflected comparative (-er, -ier, -r) or superlative (-est, -iest, -st)
+        adjective form back to its dictionary base lemma (e.g. 'warmer' -> 'warm', 'colder' -> 'cold',
+        'hotter' -> 'hot', 'happier' -> 'happy', 'largest' -> 'large', 'better' -> 'good').
+        Returns the base adjective lemma if attested in PedLex/LDOCE/WordNet, or None.
+        """
+        w = (word or "").strip().lower()
+        if not w or len(w) < 4:
+            return None
+        irregular = {
+            "better": "good", "best": "good",
+            "worse": "bad", "worst": "bad",
+            "farther": "far", "further": "far", "farthest": "far", "furthest": "far",
+            "less": "little", "least": "little",
+            "more": "much", "most": "much",
+        }
+        if w in irregular:
+            return irregular[w]
+        stems: List[str] = []
+        if w.endswith("iest") and len(w) >= 5:
+            stems.append(w[:-4] + "y")
+        if w.endswith("ier") and len(w) >= 4:
+            stems.append(w[:-3] + "y")
+        if w.endswith("est") and len(w) >= 4:
+            if len(w) >= 5 and w[-4] == w[-5] and w[-4] in "bdfgklmnprstz":
+                stems.append(w[:-4])
+            stems.append(w[:-3])
+            stems.append(w[:-2])
+        if w.endswith("er") and len(w) >= 4:
+            if len(w) >= 4 and w[-3] == w[-4] and w[-3] in "bdfgklmnprstz":
+                stems.append(w[:-3])
+            stems.append(w[:-2])
+            stems.append(w[:-1])
+
+        for stem in stems:
+            if len(stem) < 3:
+                continue
+            ld = cls.get_ldoce_entry(stem)
+            if ld and ld.get("kind") != "derived":
+                all_p = [str(ld.get("pos") or "")] + [str(s.get("pos") or "") for s in (ld.get("senses") or [])]
+                if any("adj" in p.lower() for p in all_p):
+                    if w in cls.inflected_forms(stem, pos="adjective"):
+                        return stem
+            wn = cls.get_wordnet()
+            if wn and (wn.synsets(stem, pos="a") or wn.synsets(stem, pos="s")):
+                if w in cls.inflected_forms(stem, pos="adjective"):
+                    return stem
+        return None
+
+    @classmethod
+    def is_causative_object_complement(cls, tok: Any, doc: Any) -> bool:
+        """
+        Determines whether `tok` functions as the predicative adjective Object Complement
+        in a complex-transitive causative/resultative construction:
+            Verb_causative + Object_NP + Complement_Adj
+        e.g. 'make the Earth warmer', 'keep the water cleaner', 'render the system faster',
+             'leave the door open', 'turn the liquid darker'.
+        """
+        CAUSATIVE_RESULTATIVE_VERBS = frozenset({
+            "make", "keep", "render", "leave", "turn", "get", "drive", "set", "paint", "strike"
+        })
+        head_v = tok.head
+        while head_v and head_v.pos_ not in ("VERB", "AUX") and head_v.head != head_v:
+            head_v = head_v.head
+        if not head_v or head_v.pos_ not in ("VERB", "AUX"):
+            return False
+        if head_v.lemma_.lower() not in CAUSATIVE_RESULTATIVE_VERBS or head_v.i >= tok.i:
+            return False
+        # Intervening direct object NP between head verb and complement token
+        intervening = doc[head_v.i + 1 : tok.i]
+        has_obj = any(t.pos_ in ("NOUN", "PROPN", "PRON") for t in intervening)
+        has_absorbed_compound = any(c.dep_ in ("compound", "nmod") and c.pos_ in ("NOUN", "PROPN") for c in tok.children)
+        return has_obj or has_absorbed_compound
 
     @classmethod
     def form_matches(cls, surface: str, target: str) -> bool:
@@ -2586,6 +2717,27 @@ class CefrAndMorphologyMixin:
                     and ((tok.pos_ == "ADJ" and tok.dep_ != "compound") or (tok.dep_ == "amod" and tok.head.pos_ in ("NOUN", "PROPN")))
                     and (wn.synsets(clean_w, pos="a") or wn.synsets(clean_w, pos="s") or wn.synsets(tok_lower, pos="a") or wn.synsets(tok_lower, pos="s"))
                 ):
+                    dict_poses.add("adjective")
+
+                # Causative/Resultative, Copular Predicative, or Attributive Comparative Adjective Invariant:
+                # When a surface token is an inflected comparative (-er) or superlative (-est) adjective
+                # (e.g. 'warmer' -> 'warm', 'colder' -> 'cold', 'cleaner' -> 'clean', 'faster' -> 'fast'),
+                # resolve to 'adjective' if it occupies an adjective syntactic slot, preventing accidental
+                # noun homographs (e.g. 'warmer' [plate warmer], 'cooler' [cool box], 'cleaner' [carpet cleaner])
+                # from hijacking predicative or causative object complement slots.
+                base_adj = cls.deinflect_comparative_superlative(clean_w) or cls.deinflect_comparative_superlative(tok_lower)
+                if base_adj:
+                    is_causative = cls.is_causative_object_complement(tok, doc)
+                    is_copula_pred = (
+                        tok.head.lemma_.lower() in ("be", "become", "seem", "look", "feel", "get", "remain", "stay", "grow", "appear", "sound")
+                        and not any(c.pos_ == "VERB" and c.tag_ in ("VBN", "VBG") for c in tok.head.children)
+                    )
+                    is_attr_before_noun = (
+                        tok.dep_ == "amod"
+                        or (tok.i + 1 < len(doc) and doc[tok.i + 1].pos_ in ("NOUN", "PROPN") and not doc[tok.i + 1].text.startswith((".", ",", "!", "?", ":", ";", '"', "'", "”", "’")))
+                    )
+                    if is_causative or is_copula_pred or is_attr_before_noun or tok.dep_ in ("acomp", "oprd"):
+                        return "adjective"
                     dict_poses.add("adjective")
 
                 # If PedLex exclusively defines this headword under a single POS (e.g. 'elicit' -> verb, 'namely' -> adverb, 'stripe' -> noun),

@@ -202,7 +202,11 @@ class QuizIntegrityGatesMixin:
                     )
 
                 # Flag any remaining target leak (verbatim, inflectional root, or prefix-stripped derivational root) in the stem outside the blank
-                if target:
+                _is_closed_class_target = (
+                    target.lower() in LinguisticEngine._STANDARD_PREPOSITIONS
+                    or target.lower() in ("to", "in", "on", "at", "by", "for", "with", "from", "of", "about", "as", "the", "a", "an", "is", "was", "are", "were", "be")
+                )
+                if target and not _is_closed_class_target:
                     esc_target = re.escape(target)
                     stem_no_blank = re.sub(r'_{2,}', ' ', stem)
                     stem_words = re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)
@@ -307,7 +311,18 @@ class QuizIntegrityGatesMixin:
                     key_opt = str(options[correct_idx]).strip().lower()
                     target_forms = {target} | set(LinguisticEngine.inflected_forms(target))
                     key_forms = {key_opt} | set(LinguisticEngine.inflected_forms(key_opt))
-                    if not (target_forms & key_forms) and key_opt not in target and target not in key_opt:
+                    matched = bool(target_forms & key_forms) or (key_opt in target) or (target in key_opt)
+                    if not matched:
+                        # Neuro-symbolic multi-word / slot alignment check
+                        nlp = LinguisticEngine.get_spacy()
+                        doc_t = nlp(target)
+                        doc_k = nlp(key_opt)
+                        ignored_tokens = {"'s", "’s", "one", "someone", "somebody", "something", "sb", "sth"}
+                        core_t = [t.lemma_ for t in doc_t if t.pos_ not in ("PRON", "DET") and t.text not in ignored_tokens]
+                        core_k = [t.lemma_ for t in doc_k if t.pos_ not in ("PRON", "DET") and t.text not in ignored_tokens]
+                        if core_t and core_t == core_k:
+                            matched = True
+                    if not matched:
                         flagged_indices.add(idx)
                         defect_messages.append(
                             f"Item #{idx + 1} ('{target}'): Declared key option '{options[correct_idx]}' "

@@ -137,26 +137,42 @@ class CollocationsAndCardsMixin:
                 if has_p and p not in res["prep"]:
                     res["prep"].append(p)
 
-        # 2. Collocation boxes in PedLex
+        # 2. Collocation boxes in PedLex (with strict POS / homograph isolation)
+        def _colloc_pos_matches(item: Dict[str, Any]) -> bool:
+            if not norm_pos:
+                return True
+            it_p = str(item.get("pos") or "").strip().lower()
+            if not it_p:
+                return True
+            return cls._pos_code(it_p) == cls._pos_code(norm_pos)
+
         for it in colls.get("verbs", []):
+            if not _colloc_pos_matches(it):
+                continue
             c_str = it.get("collocation", "")
             if c_str:
                 res["verb_before"].append(c_str)
             if it.get("example"):
                 res["examples"].append(it["example"])
         for it in colls.get("adjectives", []):
+            if not _colloc_pos_matches(it):
+                continue
             c_str = it.get("collocation", "")
             if c_str:
                 res["adj"].append(c_str)
             if it.get("example"):
                 res["examples"].append(it["example"])
         for it in colls.get("nouns", []):
+            if not _colloc_pos_matches(it):
+                continue
             c_str = it.get("collocation", "")
             if c_str:
                 res["colloc_nouns"].append(c_str)
             if it.get("example"):
                 res["examples"].append(it["example"])
         for it in colls.get("phrases", []):
+            if not _colloc_pos_matches(it):
+                continue
             c_str = it.get("collocation", "")
             if c_str:
                 res["noun_after"].append(c_str)
@@ -168,6 +184,8 @@ class CollocationsAndCardsMixin:
         # get_rich_collocations renders 'verb_before' items as '<item> <word>' - a phrase
         # collocate there would repeat the headword ('completely wrong wrong').
         for it in colls.get("adverbs", []):
+            if not _colloc_pos_matches(it):
+                continue
             c_str = it.get("collocation", "")
             if c_str:
                 res["adverb"].append(c_str)
@@ -427,6 +445,10 @@ class CollocationsAndCardsMixin:
         box_examples: dict = {}
         for bucket_items in (ldoce.get("collocations") or {}).values():
             for it in bucket_items or []:
+                if strict_pos and it.get("pos"):
+                    it_p = str(it.get("pos")).strip().lower()
+                    if it_p and cls._pos_code(it_p) != cls._pos_code(declared):
+                        continue
                 key = (it.get("collocation") or "").strip().lower()
                 if key and key not in box_examples:
                     box_examples[key] = it.get("example") or ""
@@ -2390,8 +2412,18 @@ class CollocationsAndCardsMixin:
             if locked_s_idx is not None and 0 <= locked_s_idx < len(senses):
                 locked_sense = senses[locked_s_idx]
 
-        # Strict Sense-First scope: never roam into other senses when locked_sense is resolved
-        candidate_senses = [locked_sense] if locked_sense is not None else senses
+        # Strict Sense-First scope: never roam into other senses when locked_sense is resolved;
+        # if unresolved, filter senses strictly by target POS to prevent cross-homograph leakage.
+        p_code = cls._pos_code(pos) if pos else ""
+        if locked_sense is not None:
+            candidate_senses = [locked_sense]
+        elif p_code:
+            candidate_senses = [
+                s for s in senses
+                if not (s.get("pos") and cls._pos_code(s["pos"]) != p_code)
+            ] or senses
+        else:
+            candidate_senses = senses
 
         # Precompute sense lemma set and other-sense lemma set for filtering entry-level collocations against the locked sense
         sense_lemmas: Set[str] = set()
@@ -2576,7 +2608,10 @@ class CollocationsAndCardsMixin:
                         pass
 
                 if not anchor and entry.get("collocations", {}).get("nouns"):
-                    colloc_nouns = list(entry["collocations"]["nouns"])
+                    colloc_nouns = [
+                        it_c for it_c in entry["collocations"]["nouns"]
+                        if not it_c.get("pos") or cls._pos_code(it_c.get("pos")) == "adj"
+                    ]
                     if sense_lemmas:
                         if is_polysemous:
                             colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
@@ -2604,7 +2639,10 @@ class CollocationsAndCardsMixin:
 
             # Level 2.5: Causative / Linking Predicative Verb Frames (e.g. 'make it possible', 'keep silent', 'feel surprised')
             if not anchor and entry.get("collocations", {}).get("phrases"):
-                colloc_phrases = list(entry["collocations"]["phrases"])
+                colloc_phrases = [
+                    it_c for it_c in entry["collocations"]["phrases"]
+                    if not it_c.get("pos") or cls._pos_code(it_c.get("pos")) == "adj"
+                ]
                 if is_polysemous and sense_lemmas:
                     colloc_phrases = [it_c for it_c in colloc_phrases if _score_colloc_item(it_c) > 0]
                 for it in colloc_phrases:
@@ -2626,7 +2664,10 @@ class CollocationsAndCardsMixin:
 
             # Level 3: Evaluative Adverb Modifiers (e.g. 'deceptively simple', 'perfectly possible')
             if not anchor:
-                verb_collocs = entry.get("collocations", {}).get("verbs", []) + entry.get("collocations", {}).get("adverbs", [])
+                verb_collocs = [
+                    it_c for it_c in (entry.get("collocations", {}).get("verbs", []) + entry.get("collocations", {}).get("adverbs", []))
+                    if not it_c.get("pos") or cls._pos_code(it_c.get("pos")) == "adj"
+                ]
                 if is_polysemous and sense_lemmas:
                     verb_collocs = [it_c for it_c in verb_collocs if _score_colloc_item(it_c) > 0]
                 for it in verb_collocs:
@@ -2691,7 +2732,10 @@ class CollocationsAndCardsMixin:
                     nlp = cls.get_spacy()
                 except Exception:
                     nlp = None
-                colloc_nouns = list(entry["collocations"]["nouns"])
+                colloc_nouns = [
+                    it for it in entry["collocations"]["nouns"]
+                    if not it.get("pos") or cls._pos_code(it.get("pos")) == "v"
+                ]
                 if sense_lemmas and nlp is not None:
                     if is_polysemous:
                         colloc_nouns = [it_c for it_c in colloc_nouns if _score_colloc_item(it_c) > 0]
@@ -2760,7 +2804,10 @@ class CollocationsAndCardsMixin:
         # 3. Noun Cascades (agentive subject verbs >> governing verbs >> locked-sense preposition valency >> descriptive adjectives)
         elif p_low.startswith("n"):
             # Level 1: Agentive / Characteristic Subject Verbs (e.g. 'telephone rings', 'clock chimes', 'heart beats')
-            subj_verb_collocs = list(entry.get("collocations", {}).get("verbs", []))
+            subj_verb_collocs = [
+                it for it in entry.get("collocations", {}).get("verbs", [])
+                if not it.get("pos") or cls._pos_code(it.get("pos")) == "n"
+            ]
             if is_polysemous and sense_lemmas:
                 subj_verb_collocs = [it_c for it_c in subj_verb_collocs if _score_colloc_item(it_c) > 0]
             for it in subj_verb_collocs:
@@ -2791,7 +2838,10 @@ class CollocationsAndCardsMixin:
 
             # Level 2: Governing Verbs scored against locked sense
             if not anchor:
-                c_verbs = list(entry.get("collocations", {}).get("verbs", []))
+                c_verbs = [
+                    it for it in entry.get("collocations", {}).get("verbs", [])
+                    if not it.get("pos") or cls._pos_code(it.get("pos")) == "n"
+                ]
                 if sense_lemmas and c_verbs:
                     if is_polysemous:
                         c_verbs = [it_c for it_c in c_verbs if _score_colloc_item(it_c) > 0]
@@ -2838,7 +2888,10 @@ class CollocationsAndCardsMixin:
 
             # Level 4: Descriptive Adjectives scored against locked sense
             if not anchor:
-                c_adjs = list(entry.get("collocations", {}).get("adjectives", []))
+                c_adjs = [
+                    it for it in entry.get("collocations", {}).get("adjectives", [])
+                    if not it.get("pos") or cls._pos_code(it.get("pos")) == "n"
+                ]
                 if sense_lemmas and c_adjs:
                     if is_polysemous:
                         c_adjs = [it_c for it_c in c_adjs if _score_colloc_item(it_c) > 0]
@@ -3018,6 +3071,10 @@ class CollocationsAndCardsMixin:
                         o_kws |= {w for w in re.findall(r"[a-z]{4,}", o_str) if w != tw_l and w not in cls._ANCHOR_STOPWORDS and w not in s_kws}
 
                 def _colloc_matches_locked_sense(item_obj: Dict[str, Any]) -> bool:
+                    if item_obj.get("pos") and locked_sense is not None:
+                        t_pos = locked_sense.get("pos") or t_entry.get("pos")
+                        if t_pos and cls._pos_code(item_obj["pos"]) != cls._pos_code(t_pos):
+                            return False
                     if not is_poly:
                         return True
                     s_inds = item_obj.get("sense_indices")

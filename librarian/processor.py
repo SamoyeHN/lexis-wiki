@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Set
 from concurrent.futures import ThreadPoolExecutor
-from .config import config
+from .config import config, normalize_name
 from .llm import llm
 from .prompts import Prompts
 from .linguistics import LinguisticEngine
@@ -43,7 +43,9 @@ class WikiProcessor(
     Unified WikiProcessor facade combining syllabus/Markdown I/O, extraction pipeline runner,
     quiz generation, and deterministic Level 1 integrity gates.
     """
-    pass
+    @staticmethod
+    def normalize_name(n: str) -> str:
+        return normalize_name(n)
 
 
 processor = WikiProcessor()

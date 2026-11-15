@@ -440,6 +440,7 @@ class QuizVocabMixin:
 
         cloze_items: List[Dict[str, Any]] = []
         used_distractors: Set[str] = set()
+        used_stem_signatures: Set[str] = set()
 
         # --- Dependent-connective cloze (grammar/collocation axis -> single answer) ---
         connectives_of_taking = frozenset({"regardless", "irrespective"})
@@ -493,186 +494,286 @@ class QuizVocabMixin:
             matched_end = None
             surface_form = ""
             is_multi_word = len(tokens) > 1
+            target_tok = None
+            half_slice_explanation = None
+            is_half_sliced = False
 
-            if not is_multi_word:
-                for t in doc:
-                    if t.text.lower() == w_lower or t.lemma_.lower() == w_lower:
-                        matched_start = t.idx
-                        matched_end = t.idx + len(t.text)
-                        surface_form = t.text
-                        target_tok = t
-                        break
-            else:
-                n = len(tokens)
-                for i in range(len(doc) - n + 1):
-                    window = doc[i : i + n]
-                    if all(window[j].text.lower() == tokens[j] or window[j].lemma_.lower() == tokens[j] for j in range(n)):
-                        matched_start = window[0].idx
-                        matched_end = window[-1].idx + len(window[-1].text)
-                        surface_form = q_clean[matched_start:matched_end]
-                        target_tok = window[0]
-                        break
+            # Collocation Half-Slice for Multi-word Expressions
+            if is_multi_word:
+                hs = cls.collocation_half_slice(w, q_clean, pos=it.get("part_of_speech") or "")
+                if hs:
+                    surface_form = hs["target_slot"]
+                    stem = cls.isolate_cloze_clause(hs["stem"])
+                    distractors = list(hs["distractors"])
+                    half_slice_explanation = hs.get("explanation")
+                    is_half_sliced = True
+                    matched_start = 0
+                    matched_end = 0
 
-                if matched_start is None and ('(' in raw_w or '[' in raw_w) and len(tokens) == 2:
-                    t1, t2 = tokens[0], tokens[1]
-                    for i, tok in enumerate(doc):
-                        if tok.text.lower() == t1 or tok.lemma_.lower() == t1:
-                            for k in range(i + 1, min(len(doc), i + 4)):
-                                target_k = doc[k]
-                                if target_k.text.lower() == t2 or target_k.lemma_.lower() == t2:
-                                    matched_start = tok.idx
-                                    matched_end = target_k.idx + len(target_k.text)
-                                    surface_form = q_clean[matched_start:matched_end]
-                                    target_tok = tok
+            if not is_half_sliced:
+                if not is_multi_word:
+                    for t in doc:
+                        if t.text.lower() == w_lower or t.lemma_.lower() == w_lower:
+                            matched_start = t.idx
+                            matched_end = t.idx + len(t.text)
+                            surface_form = t.text
+                            target_tok = t
+                            break
+                else:
+                    n = len(tokens)
+                    for i in range(len(doc) - n + 1):
+                        window = doc[i : i + n]
+                        if all(window[j].text.lower() == tokens[j] or window[j].lemma_.lower() == tokens[j] for j in range(n)):
+                            matched_start = window[0].idx
+                            matched_end = window[-1].idx + len(window[-1].text)
+                            surface_form = q_clean[matched_start:matched_end]
+                            target_tok = window[0]
+                            break
+
+                    if matched_start is None and ('(' in raw_w or '[' in raw_w) and len(tokens) == 2:
+                        t1, t2 = tokens[0], tokens[1]
+                        for i, tok in enumerate(doc):
+                            if tok.text.lower() == t1 or tok.lemma_.lower() == t1:
+                                for k in range(i + 1, min(len(doc), i + 4)):
+                                    target_k = doc[k]
+                                    if target_k.text.lower() == t2 or target_k.lemma_.lower() == t2:
+                                        matched_start = tok.idx
+                                        matched_end = target_k.idx + len(target_k.text)
+                                        surface_form = q_clean[matched_start:matched_end]
+                                        target_tok = tok
+                                        break
+                                if matched_start is not None:
                                     break
-                            if matched_start is not None:
+
+                if matched_start is None:
+                    # Fallback for hyphenated or compound words where spaCy tokenizes punctuation into separate tokens
+                    m_surf = re.search(rf"(?<!\w){re.escape(w_lower)}(?!\w)", q_clean, re.IGNORECASE)
+                    if not m_surf and "-" in w_lower:
+                        w_no_hyphen = w_lower.replace("-", "")
+                        w_space = w_lower.replace("-", " ")
+                        m_surf = re.search(rf"(?<!\w)(?:{re.escape(w_no_hyphen)}|{re.escape(w_space)})(?!\w)", q_clean, re.IGNORECASE)
+                    if m_surf:
+                        matched_start = m_surf.start()
+                        matched_end = m_surf.end()
+                        surface_form = q_clean[matched_start:matched_end]
+                        for t in doc:
+                            if t.idx >= matched_start:
+                                target_tok = t
                                 break
 
-            if matched_start is None or matched_end is None or not surface_form:
-                continue
+                if matched_start is None or matched_end is None or not surface_form:
+                    continue
 
-            # Replace target span with exact 4 underscores '____'
-            stem = q_clean[:matched_start] + "____" + q_clean[matched_end:]
+                # Replace target span with exact 4 underscores '____'
+                stem = q_clean[:matched_start] + "____" + q_clean[matched_end:]
+
+                # Target Lexical Leakage Gate: ensure target word does not leak into stem outside blank
+                stem_no_blank = re.sub(r'_{2,}', ' ', stem)
+                stem_words = [tok.lower() for tok in re.findall(r'\b[a-zA-Z]+\b', stem_no_blank)]
+                target_lower = w_lower
+                target_root = re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', target_lower)
+                has_leak = any(
+                    tw == target_lower
+                    or (len(target_root) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', tw) == target_root)
+                    or (" " not in w and len(tw) >= 4 and cls.shares_derivational_root(tw, target_lower))
+                    for tw in stem_words
+                )
+                if has_leak:
+                    # Attempt to isolate clause containing the blank (e.g. across compound coordinate clauses)
+                    clauses = re.split(r'(?<=,)\s+(?=and\b|but\b|or\b|so\b)|(?<=;)\s+', stem)
+                    isolated_clause = None
+                    for cl in clauses:
+                        if "____" in cl:
+                            cl_no_blank = re.sub(r'_{2,}', ' ', cl)
+                            cl_words = [tok.lower() for tok in re.findall(r'\b[a-zA-Z]+\b', cl_no_blank)]
+                            if not any(
+                                tw == target_lower
+                                or (len(target_root) >= 4 and re.sub(r'(?:ed|ing|s|es|ly|tion|ment)$', '', tw) == target_root)
+                                or (" " not in w and len(tw) >= 4 and cls.shares_derivational_root(tw, target_lower))
+                                for tw in cl_words
+                            ):
+                                cl_clean = cl.strip().rstrip(",").strip()
+                                if len(cl_clean.split()) >= 6:
+                                    if not cl_clean.endswith((".", "!", "?")):
+                                        cl_clean += "."
+                                    isolated_clause = cl_clean
+                                    break
+                    if isolated_clause:
+                        stem = isolated_clause
+                    else:
+                        continue
+
+                # Isolate clause to create tight, self-contained single-sentence cloze stem
+                iso_stem = cls.isolate_cloze_clause(stem)
+                if iso_stem and len(re.findall(r'_{2,}', iso_stem)) == 1:
+                    stem = iso_stem
 
             # Ensure exactly one blank exists in stem
             if len(re.findall(r'_{2,}', stem)) != 1:
                 continue
 
+            # Ensure stem signature uniqueness across all items in this quiz
+            stem_sig = re.sub(r'[^a-z0-9]', '', stem.lower())
+            if stem_sig in used_stem_signatures:
+                continue
+            used_stem_signatures.add(stem_sig)
+
             # Distractor generation (Sense-Locked WSD & Authentic Phrase Distractors)
-            if is_multi_word:
-                distractors = cls.generate_phrase_distractors(
-                    phrase=w_lower,
-                    count=3,
-                    exclude_words=used_distractors,
-                    definition=it.get("definition"),
-                    quote=it.get("quote"),
-                )
-                pos_raw = (it.get("part_of_speech") or "").lower()
-                is_pv = "phrasal verb" in pos_raw or (tokens and cls._is_base_verb_lemma(tokens[0]))
-                if is_pv and distractors:
-                    head_surf = surface_form.split()[0].lower() if surface_form else ""
-                    head_base = tokens[0].lower() if tokens else ""
-                    verb_tag = None
-                    t_tag = target_tok.tag_.upper() if target_tok is not None else ""
-                    if t_tag == "VBD":
-                        if any(
-                            ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
-                            for ch in target_tok.children
-                        ):
-                            verb_tag = "VBN"
-                        else:
-                            verb_tag = "VBD"
-                    elif t_tag in ("VBN", "VBG", "VBZ"):
-                        verb_tag = t_tag
-                    elif t_tag in ("VB", "VBP"):
-                        verb_tag = "VB"
-                    else:
-                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
-                            if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
-                                verb_tag = cand_tag
-                                break
-                    if not verb_tag and head_surf != head_base:
-                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
-                            if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
-                                verb_tag = cand_tag
-                                break
-                    if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
-                        inflected_pv_d = []
-                        for d in distractors:
-                            p_parts = d.strip().split()
-                            if not p_parts:
-                                continue
-                            p_head = p_parts[0].lower()
-                            p_head_base = p_head if cls._is_base_verb_lemma(p_head) else (cls.lemma_of(p_head) or p_head)
-                            p_head_inf = cls._inflect_verb(p_head_base, verb_tag)
-                            if p_head_inf:
-                                inflected_pv_d.append(" ".join([p_head_inf] + p_parts[1:]))
-                            else:
-                                inflected_pv_d.append(d)
-                        distractors = inflected_pv_d
-            else:
-                pos_raw = it["part_of_speech"].lower()
-                if "verb" in pos_raw:
-                    canonical_pos, pos_tag = "verb", "v"
-                elif "adj" in pos_raw:
-                    canonical_pos, pos_tag = "adj", "a"
-                elif "adv" in pos_raw:
-                    canonical_pos, pos_tag = "adv", "r"
-                else:
-                    canonical_pos, pos_tag = "noun", "n"
-
-                distractors = cls.generate_vocab_distractors(
-                    target_word=w_lower,
-                    pos=canonical_pos,
-                    target_count=3,
-                    exclude_words=used_distractors,
-                    definition=it["definition"],
-                    quote=q_clean
-                )
-                if len(distractors) < 3:
-                    fallback_d = cls.generate_zero_collision_distractors(
-                        target_word=w if w else surface_form,
-                        pos=pos_tag,
+            if not is_half_sliced:
+                if is_multi_word:
+                    distractors = cls.generate_phrase_distractors(
+                        phrase=w_lower,
+                        pos=it.get("part_of_speech") or "",
                         count=3,
-                        context_sentence=q_clean
+                        exclude_words=used_distractors,
+                        definition=it.get("definition"),
+                        quote=it.get("quote"),
                     )
-                    for fd in fallback_d:
-                        if fd not in distractors and len(distractors) < 3:
-                            distractors.append(fd)
-                if canonical_pos == "verb":
-                    verb_tag = None
-                    t_tag = target_tok.tag_.upper() if target_tok is not None else ""
-                    if t_tag == "VBD":
-                        if any(
-                            ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
-                            for ch in target_tok.children
-                        ):
-                            verb_tag = "VBN"
+                    pos_raw = (it.get("part_of_speech") or "").lower()
+                    is_pv = "phrasal verb" in pos_raw or (tokens and cls._is_base_verb_lemma(tokens[0]))
+                    if is_pv and distractors:
+                        head_surf = surface_form.split()[0].lower() if surface_form else ""
+                        head_base = tokens[0].lower() if tokens else ""
+                        verb_tag = None
+                        t_tag = target_tok.tag_.upper() if target_tok is not None else ""
+                        if t_tag == "VBD":
+                            if any(
+                                ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
+                                for ch in target_tok.children
+                            ):
+                                verb_tag = "VBN"
+                            else:
+                                verb_tag = "VBD"
+                        elif t_tag in ("VBN", "VBG", "VBZ"):
+                            verb_tag = t_tag
+                        elif t_tag in ("VB", "VBP"):
+                            verb_tag = "VB"
                         else:
-                            verb_tag = "VBD"
-                    elif t_tag in ("VBN", "VBG", "VBZ"):
-                        verb_tag = t_tag
-                    elif t_tag in ("VB", "VBP"):
-                        verb_tag = "VB"
-                    else:
-                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
-                            if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
-                                verb_tag = cand_tag
-                                break
-                    if not verb_tag and surface_form.lower() != w_lower:
-                        for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
-                            if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
-                                verb_tag = cand_tag
-                                break
-
-                    if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
-                        inflected_d = []
-                        for d in distractors:
-                            d_base = d if cls._is_base_verb_lemma(d) else (cls.lemma_of(d) or d)
-                            d_inf = cls._inflect_verb(d_base, verb_tag)
-                            if d_inf and (cls._morph_form_valid(d_base, d_inf, verb_tag) or cls.is_attested_form(d_inf)):
-                                inflected_d.append(d_inf)
-                        # If any distractor couldn't be inflected, refill with inflected zero-collision fallbacks
-                        if len(inflected_d) < 3:
-                            fallbacks = cls.generate_zero_collision_distractors(
-                                target_word=w_lower, pos="v", count=12, context_sentence=q_clean
-                            )
-                            for fb in fallbacks:
-                                if len(inflected_d) >= 3:
+                            for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                                if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
+                                    verb_tag = cand_tag
                                     break
-                                fb_base = fb if cls._is_base_verb_lemma(fb) else (cls.lemma_of(fb) or fb)
-                                fb_inf = cls._inflect_verb(fb_base, verb_tag)
-                                if (
-                                    fb_inf
-                                    and fb_inf not in inflected_d
-                                    and fb_inf.lower() != surface_form.lower()
-                                    and (cls._morph_form_valid(fb_base, fb_inf, verb_tag) or cls.is_attested_form(fb_inf))
-                                ):
-                                    inflected_d.append(fb_inf)
-                        if inflected_d:
-                            distractors = inflected_d
-                elif pos_tag == "n" and target_tok.tag_ == "NNS":
-                    distractors = [cls.pluralize_noun(d) for d in distractors]
+                        if not verb_tag and head_surf != head_base:
+                            for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                                if (cls._inflect_verb(head_base, cand_tag) or "").lower() == head_surf:
+                                    verb_tag = cand_tag
+                                    break
+                        if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
+                            inflected_pv_d = []
+                            for d in distractors:
+                                p_parts = d.strip().split()
+                                if not p_parts:
+                                    continue
+                                p_head = p_parts[0].lower()
+                                p_head_base = p_head if cls._is_base_verb_lemma(p_head) else (cls.lemma_of(p_head) or p_head)
+                                p_head_inf = cls._inflect_verb(p_head_base, verb_tag)
+                                if p_head_inf:
+                                    inflected_pv_d.append(" ".join([p_head_inf] + p_parts[1:]))
+                                else:
+                                    inflected_pv_d.append(d)
+                            distractors = inflected_pv_d
+                else:
+                    pos_raw = it["part_of_speech"].lower()
+                    if "verb" in pos_raw:
+                        canonical_pos, pos_tag = "verb", "v"
+                    elif "adj" in pos_raw:
+                        canonical_pos, pos_tag = "adj", "a"
+                    elif "adv" in pos_raw:
+                        canonical_pos, pos_tag = "adv", "r"
+                    else:
+                        canonical_pos, pos_tag = "noun", "n"
+
+                    distractors = cls.generate_vocab_distractors(
+                        target_word=w_lower,
+                        pos=canonical_pos,
+                        target_count=3,
+                        exclude_words=used_distractors,
+                        definition=it["definition"],
+                        quote=q_clean
+                    )
+                    if len(distractors) < 3:
+                        fallback_d = cls.generate_zero_collision_distractors(
+                            target_word=w if w else surface_form,
+                            pos=pos_tag,
+                            count=3,
+                            context_sentence=q_clean
+                        )
+                        for fd in fallback_d:
+                            if fd not in distractors and len(distractors) < 3:
+                                distractors.append(fd)
+                    if canonical_pos == "verb":
+                        verb_tag = None
+                        t_tag = target_tok.tag_.upper() if target_tok is not None else ""
+                        if t_tag == "VBD":
+                            if any(
+                                ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
+                                for ch in target_tok.children
+                            ):
+                                verb_tag = "VBN"
+                            else:
+                                verb_tag = "VBD"
+                        elif t_tag in ("VBN", "VBG", "VBZ"):
+                            verb_tag = t_tag
+                        elif t_tag in ("VB", "VBP"):
+                            verb_tag = "VB"
+                        else:
+                            for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                                if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
+                                    verb_tag = cand_tag
+                                    break
+                        if not verb_tag and surface_form.lower() != w_lower:
+                            for cand_tag in ("VBD", "VBG", "VBZ", "VBN"):
+                                if (cls._inflect_verb(w_lower, cand_tag) or "").lower() == surface_form.lower():
+                                    verb_tag = cand_tag
+                                    break
+
+                        if verb_tag in ("VBD", "VBN", "VBG", "VBZ"):
+                            inflected_d = []
+                            for d in distractors:
+                                d_base = d if cls._is_base_verb_lemma(d) else (cls.lemma_of(d) or d)
+                                d_inf = cls._inflect_verb(d_base, verb_tag)
+                                if d_inf and (cls._morph_form_valid(d_base, d_inf, verb_tag) or cls.is_attested_form(d_inf)):
+                                    inflected_d.append(d_inf)
+                            # If any distractor couldn't be inflected, refill with inflected zero-collision fallbacks
+                            if len(inflected_d) < 3:
+                                fallbacks = cls.generate_zero_collision_distractors(
+                                    target_word=w_lower, pos="v", count=12, context_sentence=q_clean
+                                )
+                                for fb in fallbacks:
+                                    if len(inflected_d) >= 3:
+                                        break
+                                    fb_base = fb if cls._is_base_verb_lemma(fb) else (cls.lemma_of(fb) or fb)
+                                    fb_inf = cls._inflect_verb(fb_base, verb_tag)
+                                    if (
+                                        fb_inf
+                                        and fb_inf not in inflected_d
+                                        and fb_inf.lower() != surface_form.lower()
+                                        and (cls._morph_form_valid(fb_base, fb_inf, verb_tag) or cls.is_attested_form(fb_inf))
+                                    ):
+                                        inflected_d.append(fb_inf)
+                            if inflected_d:
+                                distractors = inflected_d
+                        if not verb_tag and distractors:
+                            base_opts = [cls.lemma_of(surface_form) or surface_form] + [
+                                cls.lemma_of(d) or d for d in distractors[:3]
+                            ]
+                            _, reconciled_opts, _, _ = cls._reconcile_prescribed_inflection(
+                                base_options=base_opts,
+                                target_index=0,
+                                target_word=surface_form,
+                                canonical_pos="verb",
+                                inflection_desc="base form",
+                                authentic_example=q_clean,
+                            )
+                            target_lemma = (cls.lemma_of(surface_form) or surface_form).lower()
+                            distractors = [
+                                o for i, o in enumerate(reconciled_opts)
+                                if i != 0
+                                and o.lower() != surface_form.lower()
+                                and (cls.lemma_of(o) or o).lower() != target_lemma
+                            ][:3]
+                    elif pos_tag == "n" and target_tok is not None and target_tok.tag_ == "NNS":
+                        distractors = [cls.pluralize_noun(d) for d in distractors]
 
             used_distractors.update(d for d in distractors if d)
 
@@ -684,7 +785,8 @@ class QuizVocabMixin:
                 "question": stem,
                 "source_sentence": q_clean,
                 "precomputed_distractors": distractors[:3],
-                "is_multi_word": is_multi_word
+                "is_multi_word": is_multi_word,
+                "half_slice_explanation": half_slice_explanation,
             })
 
         # Balance single-word headwords vs multi-word expressions (e.g. 60% single words + 40% multi-word phrases)
@@ -704,7 +806,18 @@ class QuizVocabMixin:
 
             for idx, it in enumerate(balanced_items):
                 target_w = it["target_word"]
-                dist = list(it.get("precomputed_distractors", []))
+                target_lemma = (cls.lemma_of(target_w) or target_w).lower()
+                seen_d = set()
+                dist = []
+                for d in it.get("precomputed_distractors", []):
+                    if not d:
+                        continue
+                    d_clean = d.strip()
+                    d_lower = d_clean.lower()
+                    if d_lower != target_w.lower() and (cls.lemma_of(d_clean) or d_clean).lower() != target_lemma:
+                        if d_lower not in seen_d:
+                            seen_d.add(d_lower)
+                            dist.append(d_clean)
                 if len(dist) < 3:
                     fallbacks = cls.generate_zero_collision_distractors(
                         target_word=it.get("base_headword") or target_w,
@@ -713,8 +826,11 @@ class QuizVocabMixin:
                         context_sentence=it.get("source_sentence", "")
                     )
                     for fb in fallbacks:
-                        if fb not in dist and fb.lower() != target_w.lower():
-                            dist.append(fb)
+                        fb_clean = fb.strip()
+                        fb_lower = fb_clean.lower()
+                        if fb_lower not in seen_d and fb_lower != target_w.lower() and (cls.lemma_of(fb_clean) or fb_clean).lower() != target_lemma:
+                            seen_d.add(fb_lower)
+                            dist.append(fb_clean)
                         if len(dist) >= 3:
                             break
                 slot = balanced_slots[idx]
@@ -722,12 +838,15 @@ class QuizVocabMixin:
                 it["options"] = opts
                 it["precomputed_options"] = opts
                 it["correct_answer_index"] = slot
-                it["explanation"] = cls.synthesize_cloze_explanation(
-                    target_word=target_w,
-                    target_definition=it.get("definition", ""),
-                    distractors=[o for i_o, o in enumerate(opts) if i_o != slot],
-                    part_of_speech=it.get("part_of_speech", "")
-                )
+                if it.get("half_slice_explanation"):
+                    it["explanation"] = it["half_slice_explanation"]
+                else:
+                    it["explanation"] = cls.synthesize_cloze_explanation(
+                        target_word=target_w,
+                        target_definition=it.get("definition", ""),
+                        distractors=[o for i_o, o in enumerate(opts) if i_o != slot],
+                        part_of_speech=it.get("part_of_speech", "")
+                    )
         return balanced_items
 
     @classmethod
@@ -815,6 +934,8 @@ class QuizVocabMixin:
             verb_collocs = (entry.get("collocations") or {}).get("verbs") or []
             for vc in verb_collocs:
                 if vc.get("source") == "corpus":
+                    continue
+                if vc.get("pos") and cls._pos_code(vc["pos"]) != "n":
                     continue
                 c_raw = str(vc.get("collocation") or "").strip()
                 if not c_raw:
@@ -1348,8 +1469,6 @@ class QuizVocabMixin:
             # Lock the authoritative Pedagogical Sense BEFORE anchor selection or distractor generation.
             target_p_code = cls._pos_code(canonical_pos)
             entry_base = cls.get_ldoce_entry(w_lower)
-            if entry_base and entry_base.get("kind") == "derived":
-                continue
             target_entry = entry_base
             entry_p_code = cls._pos_code((target_entry or {}).get("pos")) if target_entry else None
             if (
@@ -1578,6 +1697,8 @@ class QuizVocabMixin:
                 if "(" not in str(it.get("definition", "")):
                     for th in (target_entry.get("thesaurus") or []):
                         if isinstance(th, dict) and str(th.get("word", "")).strip().lower() == w_lower:
+                            if th.get("pos") and canonical_pos in ("noun", "verb", "adj", "adv") and cls._pos_code(th["pos"]) != cls._pos_code(canonical_pos):
+                                continue
                             th_def = str(th.get("distinction", "")).strip()
                             if th_def and len(th_def.split()) > 3 and th_def.lower() not in raw_def_curr.lower():
                                 it["definition"] = f"{raw_def_curr} ({th_def})"
@@ -1622,7 +1743,7 @@ class QuizVocabMixin:
                 anchor = v_obj_pp_tail
                 anchor_type = "v_obj_pp"
 
-            word_cxn_specs_raw = cls.get_word_cxn_specs(w_lower)
+            word_cxn_specs_raw = cls.get_word_cxn_specs(w_lower, pos=canonical_pos)
             word_cxn_specs = [
                 sp for sp in word_cxn_specs_raw
                 if int(sp.get("sense_idx", -1)) < 0
@@ -2457,6 +2578,11 @@ class QuizVocabMixin:
             # 3. Generate 3 Zero-Collision Distractors with Definition-Locked WSD & Sense Antonyms
             is_quantifier_frame = False
             quant_head_noun = None
+            half_slice_target = None
+            half_slice_distractors = None
+            half_slice_frame = None
+            half_slice_meta = None
+            half_slice_explanation = None
             if canonical_pos == "phrase":
                 q_match = re.match(r"^(a|an)\s+([a-z]+)\s+of$", w_lower)
                 if q_match:
@@ -2474,16 +2600,38 @@ class QuizVocabMixin:
                     distractors = q_cands[:3]
                     dist_meta = {d: "quantifier_collocation_contrast" for d in distractors}
                 else:
-                    p_dists = cls.generate_phrase_distractors(
-                        w_lower,
-                        pos=raw_pos or canonical_pos,
-                        count=3,
-                        exclude_words=used_distractors,
-                        definition=it.get("definition"),
-                        quote=it.get("quote"),
-                    )
-                    distractors = p_dists
-                    dist_meta = {d: "phrase_contrast" for d in p_dists}
+                    cand_sent = it.get("quote") or it.get("raw_quote") or ""
+                    if not cand_sent and initial_atomic_bundle:
+                        cand_sent = initial_atomic_bundle.get("example") or ""
+                    if not cand_sent:
+                        p_info = cls.lookup_ldoce_phrase(w_lower)
+                        if p_info:
+                            hw, s_idx = p_info[0], p_info[1]
+                            e = cls.get_ldoce_entry(hw)
+                            if e and 0 <= s_idx < len(e.get("senses", [])):
+                                s_obj = e["senses"][s_idx]
+                                cand_sent = (s_obj.get("examples") or [""])[0]
+                    is_correl = (anchor_type == "correl_pair" or correlative_frame or w_lower in cls._CORREL_FIRST_ARMS)
+                    hs = cls.collocation_half_slice(w_lower, cand_sent, pos=raw_pos) if (cand_sent and not is_correl) else None
+                    if hs:
+                        half_slice_target = hs["target_slot"]
+                        half_slice_distractors = hs["distractors"]
+                        half_slice_frame = hs.get("cloze_slot_frame")
+                        half_slice_meta = {d: f"half_slice_{hs['slot_type']}" for d in hs["distractors"]}
+                        half_slice_explanation = hs.get("explanation")
+                        distractors = half_slice_distractors
+                        dist_meta = half_slice_meta
+                    else:
+                        p_dists = cls.generate_phrase_distractors(
+                            w_lower,
+                            pos=raw_pos or canonical_pos,
+                            count=3,
+                            exclude_words=used_distractors,
+                            definition=it.get("definition"),
+                            quote=it.get("quote"),
+                        )
+                        distractors = p_dists
+                        dist_meta = {d: "phrase_contrast" for d in p_dists}
             elif canonical_pos == "idiom_slot" and w_lower == "granted":
                 i_cands = ["accepted", "given", "known", "certain", "true"]
                 distractors = [c for c in i_cands if c not in used_distractors][:3]
@@ -2522,6 +2670,7 @@ class QuizVocabMixin:
                     and anchor
                     and not orig_disc_prep
                     and cls._verb_has_intransitive_prep_pattern(w_lower, str(anchor).lower())
+                    and not cls._verb_has_transitive_prep_pattern(w_lower, str(anchor).lower())
                 ):
                     verb_requires_object = False
                 else:
@@ -2785,11 +2934,12 @@ class QuizVocabMixin:
                 }
                 return cleared_list, merged_meta
 
-            distractors, dist_meta = _clear_and_refill_distractors(distractors, dist_meta)
+            if not half_slice_target:
+                distractors, dist_meta = _clear_and_refill_distractors(distractors, dist_meta)
 
             # Assemble full options (target + 3 distractors)
             distractors3 = distractors[:3]
-            slot_target = quant_head_noun if is_quantifier_frame else w_lower
+            slot_target = quant_head_noun if is_quantifier_frame else (half_slice_target if half_slice_target else w_lower)
             slot = zlib.crc32(slot_target.encode("utf-8")) % 4
             raw_options = distractors3[:slot] + [slot_target] + distractors3[slot:]
             correct_answer_index = slot
@@ -2820,6 +2970,10 @@ class QuizVocabMixin:
             elif is_quantifier_frame:
                 inflection_desc = "singular quantifier noun"
                 final_target = quant_head_noun
+                final_options = raw_options
+            elif half_slice_target:
+                inflection_desc = f"collocation slot ({half_slice_target})"
+                final_target = half_slice_target
                 final_options = raw_options
             else:
                 inflection_desc = "base form"
@@ -3494,7 +3648,8 @@ class QuizVocabMixin:
             )
             eff_pos = "noun" if is_quantifier_frame else canonical_pos
             has_double_key_collision = (
-                canonical_pos != "function_word"
+                not half_slice_target
+                and canonical_pos != "function_word"
                 and any(
                     opt.lower() != final_target.lower() and cls.double_key_collision(
                         final_target, opt, anchor, anchor_type, pos=eff_pos, quote=it.get("quote")
@@ -3711,6 +3866,8 @@ class QuizVocabMixin:
             if is_quantifier_frame and quant_head_noun:
                 q_det = w_lower.split()[0] if w_lower.split() and w_lower.split()[0] in ("a", "an") else "a"
                 cloze_slot_frame = f"... {q_det} ____ of"
+            elif half_slice_frame:
+                cloze_slot_frame = half_slice_frame
             elif cxn_override_frame:
                 cloze_slot_frame = cxn_override_frame
             elif best_pattern and (_is_cxn_family or ("..." not in best_pattern and "…" not in best_pattern)):
@@ -3807,7 +3964,7 @@ class QuizVocabMixin:
                     re.IGNORECASE,
                 )
             )
-            if not _is_cxn_family and not is_quantifier_frame and anchor_type != "partitive":
+            if not _is_cxn_family and not is_quantifier_frame and not half_slice_frame and anchor_type != "partitive":
                 sliced_frame = cls.derive_cloze_slot_frame_from_example(
                     example_text=ldoce_pattern_example or it.get("quote") or it.get("raw_quote"),
                     final_target=final_target,
@@ -3938,10 +4095,18 @@ class QuizVocabMixin:
                 or (len(_ft_words) >= 3 and _ft_words[1] == "of")
                 or _ft_head_pos in ("noun", "adjective", "adverb", "preposition", "determiner")
             )
+            _frame_has_vbn_aux = bool(
+                cloze_slot_frame
+                and re.search(
+                    r"\b(?:is|are|was|were|been|has|have|had|be|get|got|getting)\s+(?:[a-z]+\s+)?_{2,}",
+                    cloze_slot_frame.lower(),
+                )
+            )
             is_base_verb_slot = (
                 (inflection_desc or "base form") == "base form"
                 and not is_plural_noun
                 and not is_be_led_phrase
+                and not _frame_has_vbn_aux
                 and (
                     canonical_pos == "verb"
                     or (
@@ -3961,7 +4126,12 @@ class QuizVocabMixin:
             )
             non_base_verb_slot_hint = ""
             if canonical_pos in ("verb", "phrase") and not is_base_verb_slot and not is_be_led_phrase:
-                if verb_form_tag == "VBD":
+                if (verb_form_tag == "VBN" or _frame_has_vbn_aux):
+                    non_base_verb_slot_hint = (
+                        f" (Past participle verb slot required for '{final_target}': place 'has/have/had' or "
+                        "passive 'is/are/was/were' immediately before '____')."
+                    )
+                elif verb_form_tag == "VBD":
                     non_base_verb_slot_hint = (
                         f" (Simple past-tense verb slot required for '{final_target}': place '____' directly after the subject "
                         "as a simple past verb — do not put 'have/has/had' or 'to' before '____')."
@@ -3970,11 +4140,6 @@ class QuizVocabMixin:
                     non_base_verb_slot_hint = (
                         f" (Present 3rd-person singular '-s' verb slot required for '{final_target}': place '____' directly after "
                         "a singular subject — do not put any modal or 'to' before '____')."
-                    )
-                elif verb_form_tag == "VBN":
-                    non_base_verb_slot_hint = (
-                        f" (Past participle verb slot required for '{final_target}': place 'has/have/had' or "
-                        "passive 'is/are/was/were' immediately before '____')."
                     )
                 elif verb_form_tag == "VBG":
                     non_base_verb_slot_hint = (
@@ -3990,7 +4155,10 @@ class QuizVocabMixin:
                 else:
                     cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "the ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
 
-            if cloze_slot_frame:
+            if anchor_downgrade == "sense_recognition":
+                cloze_slot_frame = None
+                stem_core = "Write a natural sentence matching the Definition above."
+            elif cloze_slot_frame:
                 if not _is_cxn_family:
                     # Resolve any remaining metasyntax brackets ('[sb]', '[sb/sth]', '[sth]', 'to do [sth]') to concrete single-choice cues
                     cloze_slot_frame = re.sub(r"\bto\s+do\s+\[sth\]", "to [verb]", cloze_slot_frame, flags=re.IGNORECASE)
@@ -4041,6 +4209,8 @@ class QuizVocabMixin:
                     )
                     if is_quantifier_frame and quant_head_noun:
                         stem_core += f" (Quantifier head noun slot: blank only '{quant_head_noun}' inside '{w_lower}')."
+                    elif half_slice_target:
+                        stem_core += f" (Collocation slot: blank only '{half_slice_target}' inside expression '{w_lower}')."
                     elif is_plural_noun and not re.search(r"\b(?:several|many|few|fewer|two|three|four|these|those|various)\s+_{2,}", cloze_slot_frame.lower()):
                         stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
                     elif is_copula_adj and not _frame_has_copula:
@@ -4173,19 +4343,24 @@ class QuizVocabMixin:
             if " " not in w_lower and len(w_lower) >= 6:
                 for _pfx in ("un", "in", "im", "ir", "il", "dis", "non", "re", "mis", "over", "under"):
                     if w_lower.startswith(_pfx) and len(w_lower) - len(_pfx) >= 4:
-                        _stripped_base = w_lower[len(_pfx):]
-                        _base_lem = re.sub(r"(?:ed|ing|s|es|ly|able|ible)$", "", _stripped_base)
+                        _stripped_base = w_lower[len(_pfx):].lstrip("-")
+                        _base_lem = re.sub(r"(?:ed|ing|s|es|ly|able|ible)$", "", _stripped_base).lstrip("-")
                         if len(_base_lem) < 4:
                             _base_lem = _stripped_base
-                        if cls.get_ldoce_entry(_base_lem) or cls._wordnet_pos(_base_lem):
-                            stem_core += f" (Do NOT use root cognates like '{_base_lem}' or '{_stripped_base}' anywhere in the stem)."
+                        _is_hyphenated = w_lower.startswith(f"{_pfx}-")
+                        _is_valid_base = bool(cls.get_ldoce_entry(_base_lem)) or _is_hyphenated
+                        if _is_valid_base and _base_lem not in {"duce", "ceive", "quire", "late", "peat", "sult", "fuse", "turn", "veal", "member", "lieve"}:
+                            if _base_lem == _stripped_base:
+                                stem_core += f" (Do NOT use root cognates like '{_stripped_base}' anywhere in the stem)."
+                            else:
+                                stem_core += f" (Do NOT use root cognates like '{_base_lem}' or '{_stripped_base}' anywhere in the stem)."
                         break
 
             task_parts = [stem_core]
 
             # Data-Driven Grammatical & Usage Discriminator: only emit in Micro-Task when it carries
             # a concrete grammatical slot constraint (`[...]`) or a sense-locked `Grammar Box:` rule
-            target_base = quant_head_noun if is_quantifier_frame else w_lower
+            target_base = quant_head_noun if is_quantifier_frame else (half_slice_target if half_slice_target else w_lower)
             dist_base_list = [
                 o for o in _base_options
                 if o.lower() not in {target_base.lower(), final_target.lower(), slot_target.lower()}
@@ -4225,7 +4400,8 @@ class QuizVocabMixin:
             skeletons.append({
                 "target_word": final_target,
                 "base_headword": w,
-                "part_of_speech": canonical_pos,
+                "part_of_speech": canonical_pos if not half_slice_target else "phrase_slot",
+                "is_multi_word": bool(canonical_pos == "phrase" or " " in w_lower),
                 "inflection": inflection_desc,
                 "verb_form_tag": verb_form_tag,
                 "verb_requires_object": verb_requires_object,
@@ -4246,6 +4422,7 @@ class QuizVocabMixin:
                 "prescribed_options": final_options,
                 "correct_answer_index": correct_answer_index,
                 "definition": skeleton_definition,
+                "explanation": half_slice_explanation or "",
                 # Quote provenance tiering: 'candidate_quote' is the raw curriculum quote and
                 # is display-only when 'quote_provenance' == 'weak'; only 'licensed_quote' was
                 # strong enough to license sense-locking, anchors and valency evidence.

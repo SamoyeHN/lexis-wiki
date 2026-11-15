@@ -849,6 +849,8 @@ class QuizPatternsMixin:
             for th in (target_entry.get("thesaurus") or []):
                 if not isinstance(th, dict):
                     continue
+                if th.get("pos") and canonical_pos in ("noun", "verb", "adj", "adv") and cls._pos_code(th["pos"]) != cls._pos_code(canonical_pos):
+                    continue
                 if not (cls._thesaurus_variant_matches(th.get("word"), final_target) or cls._thesaurus_variant_matches(th.get("word"), bw_low)):
                     continue
                 th_probe = f"{th.get('section') or ''} {th.get('concept') or ''} {th.get('distinction') or ''}"
@@ -900,6 +902,8 @@ class QuizPatternsMixin:
                 for c_it in (c_list or []):
                     if not isinstance(c_it, dict) or not c_it.get("example"):
                         continue
+                    if c_it.get("pos") and canonical_pos in ("noun", "verb", "adj", "adv") and cls._pos_code(c_it["pos"]) != cls._pos_code(canonical_pos):
+                        continue
                     c_src = str(c_it.get("source") or "entry").strip().lower()
                     c_colloc_str = str(c_it.get("collocation") or "").strip()
                     c_colloc_kws = {
@@ -934,6 +938,8 @@ class QuizPatternsMixin:
                             raw_candidates.append((str(c_it["example"]), c_pat_hint, "collocations_entry"))
             for cc_it in (target_entry.get("cross_collocations") or []):
                 if not isinstance(cc_it, dict):
+                    continue
+                if cc_it.get("pos") and canonical_pos in ("noun", "verb", "adj", "adv") and cls._pos_code(cc_it["pos"]) != cls._pos_code(canonical_pos):
                     continue
                 cc_exs = ([cc_it["example"]] if cc_it.get("example") else []) + (cc_it.get("examples") or [])
                 for cc_ex in cc_exs:
@@ -970,7 +976,8 @@ class QuizPatternsMixin:
         # or entries like `thereafter` whose primary sense only stores a short fragment), harvest authentic examples
         # from Oxford Thesaurus, WordNet (`oewn:2025+`), and PedLex cross-entry corpus examples (`search_corpus_examples`)
         # whenever no curated compartment provides a complete finite sentence containing `ft_low`.
-        if " " not in ft_low and not any(
+        # Monosemous words only (Gate 2): polysemous words must NEVER scavenge ungrounded cross-sense examples.
+        if not is_poly and " " not in ft_low and not any(
             len(re.findall(r"[A-Za-z]+", str(r_ex or ""))) >= 5
             and str(r_ex or "").strip()[-1:] in ".?!"
             and (
@@ -982,7 +989,10 @@ class QuizPatternsMixin:
             for r_ex, _, _ in raw_candidates
         ):
             try:
+                p_code = cls._pos_code(canonical_pos)
                 for ox_ent in (cls.get_oxford_thesaurus_entries(ft_low) or []):
+                    if p_code and ox_ent.get("pos") and cls._pos_code(ox_ent["pos"]) != p_code:
+                        continue
                     for ox_s in (ox_ent.get("senses") or []):
                         ox_ex = str(ox_s.get("example") or "").strip()
                         if ox_ex and re.search(rf"\b{re.escape(ft_low)}\b", ox_ex.lower()):
@@ -999,14 +1009,13 @@ class QuizPatternsMixin:
                             raw_candidates.append((wn_ex_s, None, "sense_example"))
             except Exception:
                 pass
-            if not is_poly:
-                try:
-                    for ch_ex in (cls.search_corpus_examples(ft_low, limit=8) or []):
-                        ch_s = str(ch_ex or "").strip()
-                        if ch_s and re.search(rf"\b{re.escape(ft_low)}\b", ch_s.lower()):
-                            raw_candidates.append((ch_s, None, "sense_example"))
-                except Exception:
-                    pass
+            try:
+                for ch_ex in (cls.search_corpus_examples(ft_low, limit=8) or []):
+                    ch_s = str(ch_ex or "").strip()
+                    if ch_s and re.search(rf"\b{re.escape(ft_low)}\b", ch_s.lower()):
+                        raw_candidates.append((ch_s, None, "sense_example"))
+            except Exception:
+                pass
 
         if not raw_candidates:
             return current_example, best_pattern, "none"
@@ -1169,8 +1178,10 @@ class QuizPatternsMixin:
                 )
                 if has_end_punct and has_finite_verb and n_words >= 3:
                     sc += 75
-                elif not has_end_punct or not has_finite_verb or n_words < 3:
-                    sc -= 140  # Strict penalty against verbless/unpunctuated NP/PP fragments ('earthy language', 'a team of experts')
+                elif not has_finite_verb or n_words < 3:
+                    sc -= 140  # Strict penalty against verbless NP/PP fragments ('earthy language', 'a team of experts')
+                elif not has_end_punct:
+                    sc -= 20  # Mild penalty for finite clauses merely missing trailing period
                 if 6 <= n_words <= 22:
                     sc += 15
 
@@ -1306,11 +1317,11 @@ class QuizPatternsMixin:
                             and t_tok.head.pos_ in ("NOUN", "PROPN")
                             and t_tok.i > t_tok.head.i
                         )
-                        if t_tok.pos_ == "NOUN" and (
-                            t_tok.dep_ in ("pobj", "dobj", "nsubj", "attr")
+                        if t_tok.pos_ in ("NOUN", "PROPN") and (
+                            t_tok.dep_ in ("pobj", "dobj", "nsubj", "attr", "compound", "nmod")
                             or any(c.dep_ in ("det", "poss") for c in t_tok.children)
                         ):
-                            sc -= 220 if any(c.dep_ in ("det", "poss") for c in t_tok.children) else 80
+                            sc -= 220 if any(c.dep_ in ("det", "poss") for c in t_tok.children) else 180
                         elif t_tok.dep_ == "amod" and not _is_postnom_root_verb:
                             sc -= 120 if ft_low == bw_low else 45
                         else:
