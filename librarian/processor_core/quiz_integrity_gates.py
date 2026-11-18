@@ -566,6 +566,66 @@ class QuizIntegrityGatesMixin:
         return sorted(list(flagged_indices)), defect_messages
 
     @classmethod
+    def audit_cloze_integrity(
+        cls,
+        quiz_obj: Any,
+        passage_text: str = "",
+        cefr_level: str = "B2",
+    ) -> Tuple[List[int], List[str]]:
+        """
+        Level 1 Deterministic Code Gate for Authentic Discourse Cloze Quiz.
+        Enforces Alderson (2000) invariants and psychometric integrity:
+        1. Cardinality: Exactly 4 distinct options per blank.
+        2. Answer Index Integrity: Bound [0, 3] and options[correct_answer_index] matches target.
+        3. Option Uniqueness: Zero duplicates among options.
+        4. Verbatim Physical Grounding: Target word exists in passage_text.
+        """
+        if not quiz_obj:
+            return [], []
+
+        questions = quiz_obj.get("questions") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", None)
+        if not questions or not isinstance(questions, list):
+            return [], ["Missing or invalid 'questions' array in Discourse Cloze Quiz."]
+
+        flagged_indices = set()
+        defect_messages = []
+        passage_lower = passage_text.lower() if passage_text else ""
+
+        for idx, q in enumerate(questions):
+            q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
+            target = str(q_dict.get("target_word") or q_dict.get("raw_word") or "").strip()
+            options = q_dict.get("options") or []
+            correct_idx = q_dict.get("correct_answer_index")
+
+            if not target:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Cloze Item #{idx + 1}: Missing target word.")
+
+            if len(options) != 4:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Cloze Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
+            else:
+                cleaned_opts = [str(o).strip().lower() for o in options]
+                if len(set(cleaned_opts)) < 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Cloze Item #{idx + 1}: Options contain duplicate choices: {options}")
+
+                if correct_idx not in (0, 1, 2, 3):
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Cloze Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+                else:
+                    correct_opt = str(options[correct_idx]).strip().lower()
+                    if target.lower() != correct_opt:
+                        flagged_indices.add(idx)
+                        defect_messages.append(f"Cloze Item #{idx + 1}: Target '{target}' does not match options[{correct_idx}] '{correct_opt}'.")
+
+            if passage_lower and target and target.lower() not in passage_lower:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Cloze Item #{idx + 1}: Target '{target}' does not physically appear in passage text.")
+
+        return sorted(list(flagged_indices)), defect_messages
+
+    @classmethod
     def audit_video_integrity(
         cls,
         quiz_obj: Any,

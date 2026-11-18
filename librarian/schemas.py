@@ -482,6 +482,27 @@ class QuizQuestion:
     explanation: str = dataclasses.field(default="", metadata={"minLength": 1})
 
 @dataclasses.dataclass
+class DiscourseClozeBlank:
+    blank_index: int = dataclasses.field(default=1)
+    target_word: str = dataclasses.field(default="", metadata={"minLength": 1})
+    pillar: int = dataclasses.field(default=1)
+    pillar_label: str = dataclasses.field(default="")
+    category: str = dataclasses.field(default="")
+    clue: str = dataclasses.field(default="")
+    options: List[str] = dataclasses.field(default_factory=list, metadata={"minItems": 4, "maxItems": 4})
+    correct_answer_index: int = dataclasses.field(default=0, metadata={"enum": [0, 1, 2, 3]})
+    explanation: str = dataclasses.field(default="", metadata={"minLength": 1})
+    question: str = dataclasses.field(default="")
+
+@dataclasses.dataclass
+class DiscourseClozeQuiz:
+    title: str = dataclasses.field(default="Discourse Cloze Assessment", metadata={"minLength": 1})
+    passage: str = dataclasses.field(default="")
+    masked_passage: str = dataclasses.field(default="")
+    blanks: List[DiscourseClozeBlank] = dataclasses.field(default_factory=list)
+    questions: List[DiscourseClozeBlank] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
+
+@dataclasses.dataclass
 class VocabularyQuiz:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
     questions: List[QuizQuestion] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})

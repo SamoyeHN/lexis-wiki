@@ -1114,10 +1114,20 @@ class SyllabusAndMarkdownMixin:
                 )
                 return None
 
-        if quiz_type in ("vocabulary", "vocabulary_quiz", "cloze", "cloze_quiz"):
+        if quiz_type in ("vocabulary", "vocabulary_quiz"):
             vocab_content = vocab_path.read_text(encoding="utf-8")
             unit_cefr = _extract_cefr_from_md(vocab_content, fallback=cefr)
             return {"content": vocab_content, "cefr_level": unit_cefr}
+
+        elif quiz_type in ("cloze", "cloze_quiz"):
+            if not source_path or not source_path.exists():
+                logger.warning(f"[PREREQUISITE_GATE] Missing required source text for unit '{core_name}' at {source_path}.")
+                return None
+            vocab_content = vocab_path.read_text(encoding="utf-8")
+            unit_cefr = _extract_cefr_from_md(vocab_content, fallback=cefr)
+            raw_src = source_path.read_text(encoding="utf-8")
+            clean_passage, _, _, _ = self.parse_syllabus_sections(raw_src)
+            return {"passage": clean_passage.strip() if clean_passage else raw_src.strip(), "cefr_level": unit_cefr}
 
         elif quiz_type == "reading":
             if not source_path or not source_path.exists():

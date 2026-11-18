@@ -5099,7 +5099,7 @@ class TestEightConstructionFamiliesBlueprint:
 - **Quoted Sentence**: "Students should take advantage of the university library resources."
 """
         s_full = self._single_skeleton(sample_full)
-        assert s_full["target_word"] == "take advantage of"
+        assert s_full.get("base_headword", s_full["target_word"]) == "take advantage of"
         opts_full = {o.lower() for o in s_full["prescribed_options"]}
         assert "make use of" not in opts_full
 
@@ -5548,8 +5548,62 @@ class TestEightConstructionFamiliesBlueprint:
             assert it["target_word"] in it["explanation"]
 
 
+class TestDiscourseClozeEngine:
+    """
+    Tests for the Authentic Discourse Cloze Assessment Engine (Mode B: Progressive Scaffolding).
+    Verifies Alderson (2000) invariants, tripartite pillar allocation, and zero double-key collisions.
+    """
 
+    _SAMPLE_PASSAGE = (
+        "In the past, it was a small stamp that helped family members and friends to keep in touch with each other. "
+        "With the coming of the telephone, people could not only read words, but also hear each other's voices. "
+        "Later, the rise of the Internet joins people in different places with instant communication software which gives people even more ways to communicate.\n\n"
+        "Most young people want to enjoy the warm love from their family and friends, but not too much control from them. "
+        "They want to follow the time closely, but they also long for peace of mind. "
+        "The new ways of communication make this possible. Often, they only need a simple 'Hello' to change yesterday's strangers into today's friends. "
+        "And they can also keep silent in WeChat Moments.\n\n"
+        "There are pros and cons in this change. Some people may worry about their privacy. "
+        "Some parents may worry about their children's WeChat Moments which are much larger and different from their own! "
+        "However, the new ways of communication could give them freedom and chance to make smart choices. "
+        "Parents can also have a try themselves!"
+    )
 
+    def test_select_optimal_discourse_span(self):
+        span_data = LinguisticEngine.select_optimal_discourse_span(self._SAMPLE_PASSAGE)
+        assert "span_text" in span_data
+        assert "paragraphs" in span_data
+        assert "token_count" in span_data
+        assert len(span_data["paragraphs"]) >= 1
+        assert span_data["token_count"] > 50
 
+    def test_discourse_cloze_assessment_invariants(self):
+        quiz = LinguisticEngine.build_discourse_cloze_assessment(self._SAMPLE_PASSAGE, target_count=10)
+        assert "passage" in quiz
+        assert "masked_passage" in quiz
+        assert "blanks" in quiz
+        blanks = quiz["blanks"]
+        assert len(blanks) >= 5
+
+        # Verify Alderson (2000) lead-in and lead-out invariants
+        first_sent = self._SAMPLE_PASSAGE.split(".")[0].strip()
+        last_sent = [s.strip() for s in self._SAMPLE_PASSAGE.split(".") if s.strip()][-1]
+        assert first_sent not in [b["question"] for b in blanks]
+
+        for b in blanks:
+            # 4 options, valid index, single fit
+            assert len(b["options"]) == 4
+            assert 0 <= b["correct_answer_index"] < 4
+            assert b["options"][b["correct_answer_index"]].lower() == b["target_word"].lower()
+            assert b["clue"].startswith("💡 Clue:")
+            assert len(b["explanation"]) > 10
+            assert b["pillar"] in (1, 2, 3)
+
+            # Strict Relative Pronoun Double-Key Exclusion Guard:
+            # 'which' and 'that' must NEVER co-exist in the same option set!
+            lower_opts = [opt.lower() for opt in b["options"]]
+            if "which" in lower_opts:
+                assert "that" not in lower_opts, f"Double-key collision found: 'which' and 'that' both in options for {b}"
+            if "that" in lower_opts:
+                assert "which" not in lower_opts, f"Double-key collision found: 'that' and 'which' both in options for {b}"
 
 

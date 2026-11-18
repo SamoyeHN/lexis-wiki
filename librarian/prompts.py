@@ -18,6 +18,7 @@ from .schemas import (
     VideoQuiz,
     MindMapExtraction,
     QuizQualityAuditReport,
+    DiscourseClozeQuiz,
 )
 
 class Prompts:
@@ -29,7 +30,7 @@ class Prompts:
         "extract_summary": SummaryExtraction,
         "extract_mindmap": MindMapExtraction,
         "vocabulary_quiz": VocabularyQuiz,
-        "cloze_quiz": VocabularyQuiz,
+        "cloze_quiz": DiscourseClozeQuiz,
         "reading_quiz": ReadingQuiz,
         "translation_quiz": TranslationQuiz,
         "listening_quiz": ListeningQuiz,

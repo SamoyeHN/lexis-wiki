@@ -22,10 +22,10 @@ class QuizVocabMixin:
         cls,
         items: List[Dict[str, Any]],
         target_count: int = 10,
-        multi_word_ratio: float = 0.4
+        multi_word_ratio: float = 0.0
     ) -> List[Dict[str, Any]]:
         """
-        Balances single-word and multi-word expression items (e.g. 60% single words + 40% multi-word phrases)
+        Balances single-word and multi-word expression items (e.g. 100% single words by default for vocabulary quiz)
         and smoothly interleaves them to provide pedagogical variety and avoid clustering.
         """
         if not items or len(items) <= target_count and not any(it.get("is_multi_word") or len(it.get("target_word", "").split()) > 1 for it in items):
@@ -48,7 +48,10 @@ class QuizVocabMixin:
         if not singles:
             return multis[:target_count]
 
-        # Calculate quotas
+        # Calculate quotas (if multi_word_ratio <= 0.0, strictly return 100% single words)
+        if multi_word_ratio <= 0.0:
+            return singles[:target_count]
+
         quota_multi = max(1, int(round(target_count * multi_word_ratio)))
         quota_single = target_count - quota_multi
 
@@ -695,12 +698,15 @@ class QuizVocabMixin:
                         fallback_d = cls.generate_zero_collision_distractors(
                             target_word=w if w else surface_form,
                             pos=pos_tag,
-                            count=3,
+                            count=6,
                             context_sentence=q_clean
                         )
                         for fd in fallback_d:
-                            if fd not in distractors and len(distractors) < 3:
+                            if fd not in distractors and cls.distractor_occupies_slot(fd, canonical_pos):
                                 distractors.append(fd)
+                            if len(distractors) >= 3:
+                                break
+                    distractors = [d for d in distractors if cls.distractor_occupies_slot(d, canonical_pos)]
                     if canonical_pos == "verb":
                         verb_tag = None
                         t_tag = target_tok.tag_.upper() if target_tok is not None else ""
@@ -1080,7 +1086,8 @@ class QuizVocabMixin:
     def build_precomputed_target_skeletons(
         cls,
         vocab_content: Any,
-        target_count: int = 10
+        target_count: int = 10,
+        multi_word_ratio: float = 0.0,
     ) -> List[Dict[str, Any]]:
         """
         Track 2: Pre-Computed Generative Skeletons (Proficiency Testing / 语境迁移单选题)
@@ -1095,9 +1102,20 @@ class QuizVocabMixin:
 
         nlp = cls.get_spacy()
         parsed_items = cls._normalize_vocab_items_input(vocab_content, preserve_slash_slots=True)
+        if multi_word_ratio <= 0.0:
+            # Vocabulary Quiz evaluates single lexical items exclusively; exclude multi-word collocations/phrases
+            single_candidates = [
+                it for it in parsed_items
+                if not it.get("is_multi_word")
+                and len(str(it.get("word") or "").split()) == 1
+                and it.get("part_of_speech", "").lower() not in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom")
+            ]
+            if single_candidates:
+                parsed_items = single_candidates
+
         if len(parsed_items) > target_count + 4:
             parsed_items = cls._balance_single_and_multi_word(
-                parsed_items, target_count=target_count + 4, multi_word_ratio=0.4
+                parsed_items, target_count=target_count + 4, multi_word_ratio=multi_word_ratio
             )
 
         skeletons: List[Dict[str, Any]] = []
@@ -4104,6 +4122,7 @@ class QuizVocabMixin:
             )
             is_base_verb_slot = (
                 (inflection_desc or "base form") == "base form"
+                and verb_form_tag in (None, "VB")
                 and not is_plural_noun
                 and not is_be_led_phrase
                 and not _frame_has_vbn_aux
@@ -4126,7 +4145,7 @@ class QuizVocabMixin:
             )
             non_base_verb_slot_hint = ""
             if canonical_pos in ("verb", "phrase") and not is_base_verb_slot and not is_be_led_phrase:
-                if (verb_form_tag == "VBN" or _frame_has_vbn_aux):
+                if verb_form_tag == "VBN":
                     non_base_verb_slot_hint = (
                         f" (Past participle verb slot required for '{final_target}': place 'has/have/had' or "
                         "passive 'is/are/was/were' immediately before '____')."
@@ -4432,8 +4451,8 @@ class QuizVocabMixin:
                 "quote_wordcount": quote_wordcount,
             })
 
-        # Balance single-word headwords vs multi-word expressions (e.g. 60% single words + 40% multi-word phrases)
-        skeletons = cls._balance_single_and_multi_word(skeletons, target_count=target_count, multi_word_ratio=0.4)
+        # Balance single-word headwords vs multi-word expressions (e.g. 100% single words by default)
+        skeletons = cls._balance_single_and_multi_word(skeletons, target_count=target_count, multi_word_ratio=multi_word_ratio)
 
         # Balance Correct Answer Index Distribution evenly across 0, 1, 2, 3 (e.g. 3/3/2/2 for 10 items)
         # Prevents CRC32 clustering where one slot gets 4+ occurrences and disrupts psychometric balance

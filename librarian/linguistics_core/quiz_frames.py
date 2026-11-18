@@ -572,6 +572,11 @@ class QuizFramesMixin:
                                                 "thing", "something", "someone", "somebody", "one", "way",
                                                 "time", "day", "days", "week", "month", "year", "place", "part", "side", "example", "order", "fact", "chance",
                                             ) and not _is_forb(gc_lem) and gc_lem not in seen_lem:
+                                                # Exclude resultative state / orientation prepositional complements ('into a sloping position', 'in a circular shape', 'to a standstill')
+                                                if p_c.lemma_.lower() in ("into", "in", "to", "towards", "onto") and gc_lem in (
+                                                    "position", "state", "condition", "shape", "direction", "orientation", "place", "form", "manner", "angle", "degree", "standstill", "halt"
+                                                ):
+                                                    continue
                                                 seen_lem.add(gc_lem)
                                                 cands.append((f"the {gc_text}", gc_lem))
                 # Conditional-subject patient definitions for intransitive verbs ('if a crisis/swelling subsides...', 'if something bad catches up with you...')
@@ -673,7 +678,7 @@ class QuizFramesMixin:
             slot_label = f"[person/group, e.g. {ex_inline}]"
             ont_type = "person_group"
         elif abs_cands and (
-            len(abs_cands) >= len(phys_cands)
+            len(abs_cands) > len(phys_cands)
             or any(w in defn_low for w in ("situation", "problem", "crisis", "conflict", "process", "activity", "tension", "event"))
         ):
             exemplars = abs_cands[:2]
@@ -936,7 +941,7 @@ class QuizFramesMixin:
                             left_aux = f"{prev_raw} "
                     # Copular Adjective Phrase: when phrase head is an adjective followed by a preposition
                     # (e.g. 'full of', 'short of', 'proud of', 'fond of'), recover the finite copula from the example
-                    _head_is_adj = not (ft_toks[0].endswith("ed") or ft_toks[0].endswith("en")) and (
+                    _head_is_adj = not is_verbal_phrase and not (ft_toks[0].endswith("ed") or ft_toks[0].endswith("en")) and (
                         _head_primary_pos == "adjective" or bool(cls._wordnet_pos(ft_toks[0]) & {"a", "s"})
                     )
                     if _head_is_adj and not left_aux:
@@ -946,7 +951,7 @@ class QuizFramesMixin:
                             cop_word = target_tok.head.text.lower()
                         if not cop_word:
                             for c in target_tok.children:
-                                if (c.dep_ in ("cop", "aux") or c.lemma_.lower() == "be") and c.i < start_i:
+                                if (c.dep_ == "cop" or (c.dep_ == "aux" and c.lemma_.lower() in ("be", "seem", "feel", "become", "look", "sound", "remain", "stay"))) and c.i < start_i:
                                     cop_word = c.text.lower()
                                     break
                         if not cop_word:
@@ -1064,7 +1069,7 @@ class QuizFramesMixin:
                             if subj_tok and subj_tok.pos_ in ("NOUN", "PROPN") and not _is_forbidden(subj_tok.lemma_.lower()):
                                 s_low = subj_tok.text.lower()
                                 mid_pv_aux = ""
-                                if is_pv_passive and verb_form_tag == "VBN" and subj_tok.i + 1 < start_i:
+                                if verb_form_tag == "VBN" and subj_tok.i + 1 < start_i:
                                     aux_toks = [
                                         t.text.lower()
                                         for t in doc[subj_tok.i + 1 : start_i]
@@ -1081,6 +1086,25 @@ class QuizFramesMixin:
                                 if subj_tok.tag_ == "NN":
                                     return f"... a {s_low} {mid_pv_aux}____"
                                 return f"... {s_low} {mid_pv_aux}____"
+                            if subj_tok and subj_tok.pos_ == "PRON" and not _is_forbidden(subj_tok.lemma_.lower()):
+                                mid_pv_aux = ""
+                                if verb_form_tag == "VBN" and subj_tok.i + 1 < start_i:
+                                    aux_toks = [
+                                        t.text.lower()
+                                        for t in doc[subj_tok.i + 1 : start_i]
+                                        if t.pos_ in ("AUX", "PART", "ADV") or t.dep_ in ("aux", "auxpass", "neg", "advmod")
+                                    ]
+                                    if aux_toks:
+                                        mid_pv_aux = " ".join(aux_toks) + " "
+                                return f"... {subj_tok.text.lower()} {mid_pv_aux}____"
+                            if verb_form_tag == "VBN":
+                                pre_aux = [
+                                    t.text.lower()
+                                    for t in doc[max(0, start_i - 2) : start_i]
+                                    if (t.pos_ in ("AUX", "VERB") and t.lemma_.lower() in ("have", "be", "get")) or t.dep_ in ("aux", "auxpass")
+                                ]
+                                if pre_aux:
+                                    return f"... {' '.join(pre_aux)} ____"
                             if re.search(r"\bher\b", ft_low):
                                 return "... she ____"
                             if re.search(r"\bhis\b", ft_low):
@@ -1593,7 +1617,7 @@ class QuizFramesMixin:
             if prep_after is None and t_tok.i + 1 < len(doc) and doc[t_tok.i + 1].pos_ == "ADP" and doc[t_tok.i + 1].text.lower() in ("of", "for", "in", "to", "on", "with", "over", "between", "from"):
                 prep_after = doc[t_tok.i + 1]
 
-            # 4.0 Noun + infinitive complement (`a ____ to [verb]`, `several ____ to detect`)
+            # 4.0 Noun + infinitive complement (`a ____ to [verb]`, `several ____ to detect`, or support verb + noun + infinitive `made a ____ to visit`)
             if (
                 t_tok.i + 2 < len(doc)
                 and doc[t_tok.i + 1].text.lower() == "to"
@@ -1602,9 +1626,28 @@ class QuizFramesMixin:
                 d_shell = det_str or ("a" if not is_pure_uncountable_target and not is_plural_noun and not has_mixed_vc_initials else "the")
                 v_inf_tok = doc[t_tok.i + 2]
                 v_inf_lem = v_inf_tok.lemma_.lower()
-                if anchor_type != "shell_to_do" and v_inf_lem not in cls._DELEXICAL_VERBS and not _is_forbidden(v_inf_lem):
-                    return f"... {d_shell + ' ' if d_shell else ''}____ to {v_inf_tok.text.lower()}"
-                return f"... {d_shell + ' ' if d_shell else ''}____ to [verb]"
+                inf_tail = f"to {v_inf_tok.text.lower()}" if (anchor_type != "shell_to_do" and v_inf_lem not in cls._DELEXICAL_VERBS and not _is_forbidden(v_inf_lem)) else "to [verb]"
+
+                # If the target noun is simultaneously the direct object of a support/lexical verb ('made a promise to visit', 'take steps to reduce', 'make an effort to improve')
+                # preserve the governing support verb to lock the collocational trajectory!
+                _SUPPORT_VERBS_NOUN = {
+                    "make", "take", "give", "pay", "hold", "lose", "gain", "keep",
+                    "put", "set", "bear", "lay", "draw", "reach", "strike", "pose", "stand", "fulfill", "fulfil", "break",
+                }
+                if t_tok.dep_ in ("dobj", "obj") and t_tok.head and t_tok.head.pos_ == "VERB":
+                    v_head = t_tok.head
+                    v_lem = v_head.lemma_.lower()
+                    if (
+                        v_lem not in cls._DELEXICAL_VERBS
+                        or v_lem in _SUPPORT_VERBS_NOUN
+                    ) and not _is_forbidden(v_lem):
+                        prt_tok = next((c.text.lower() for c in v_head.children if c.dep_ == "prt" and c.i < t_tok.i), "")
+                        v_surface = v_head.text.lower() if v_head.tag_ in ("VBD", "VBN", "VB", "VBP") else v_lem
+                        v_phrase = f"{v_surface} {prt_tok}".strip()
+                        np_mid = f"{d_shell} " if d_shell else ""
+                        return f"... {v_phrase} {np_mid}____ {inf_tail}"
+
+                return f"... {d_shell + ' ' if d_shell else ''}____ {inf_tail}"
 
             # 4a. Direct object of a lexical or support verb (`take out a ____`, `make a large ____ to`, `take a ten-minute ____`)
             _SUPPORT_VERBS_NOUN = {

@@ -1069,10 +1069,12 @@ class QuizGeneratorMixin:
                 tw_parts = tw_cand.split()
                 tw_head = tw_parts[0].lower()
                 tw_head_base = LinguisticEngine.lemma_of(tw_head) or tw_head
+                pos_str = str(q_dict.get("part_of_speech") or "").lower()
+                is_adj = any(a in pos_str for a in ("adj", "adjective"))
                 is_pv = len(tw_parts) >= 2 and LinguisticEngine._is_base_verb_lemma(tw_head_base)
-                is_v = len(tw_parts) == 1 and (
-                    LinguisticEngine._is_base_verb_lemma(tw_head_base)
-                    or "verb" in str(q_dict.get("part_of_speech") or "").lower()
+                is_v = not is_adj and len(tw_parts) == 1 and (
+                    "verb" in pos_str
+                    or (not pos_str and LinguisticEngine._is_base_verb_lemma(tw_head_base))
                 )
                 if is_v or is_pv:
                     tw_verb_tag = None
@@ -1099,9 +1101,17 @@ class QuizGeneratorMixin:
                                     continue
                                 o_head = o_parts[0].lower()
                                 o_base = o_head if LinguisticEngine._is_base_verb_lemma(o_head) else (LinguisticEngine.lemma_of(o_head) or o_head)
-                                if o_head == o_base and o_head != tw_head:
+                                o_can_be_verb = (
+                                    LinguisticEngine._is_base_verb_lemma(o_base)
+                                    or bool(LinguisticEngine._wordnet_pos(o_base) & {"v"})
+                                )
+                                if o_can_be_verb and o_head == o_base and o_head != tw_head:
                                     o_inf = LinguisticEngine._inflect_verb(o_base, tw_verb_tag)
-                                    if o_inf:
+                                    if (
+                                        o_inf
+                                        and LinguisticEngine._morph_form_valid(o_base, o_inf, tw_verb_tag)
+                                        and LinguisticEngine.is_attested_form(o_inf)
+                                    ):
                                         healed_opt = " ".join([o_inf] + o_parts[1:])
                                         healed_opts.append(healed_opt)
                                         opts_were_healed = True
@@ -1110,9 +1120,17 @@ class QuizGeneratorMixin:
                                 healed_opts.append(opt_str)
                             else:
                                 o_base = opt_str if LinguisticEngine._is_base_verb_lemma(opt_str) else (LinguisticEngine.lemma_of(opt_str) or opt_str)
-                                if o_base == opt_str.lower() and opt_str.lower() != tw_head:
+                                o_can_be_verb = (
+                                    LinguisticEngine._is_base_verb_lemma(o_base)
+                                    or bool(LinguisticEngine._wordnet_pos(o_base) & {"v"})
+                                )
+                                if o_can_be_verb and o_base == opt_str.lower() and opt_str.lower() != tw_head:
                                     o_inf = LinguisticEngine._inflect_verb(o_base, tw_verb_tag)
-                                    if o_inf and (LinguisticEngine._morph_form_valid(o_base, o_inf, tw_verb_tag) or LinguisticEngine.is_attested_form(o_inf)):
+                                    if (
+                                        o_inf
+                                        and LinguisticEngine._morph_form_valid(o_base, o_inf, tw_verb_tag)
+                                        and LinguisticEngine.is_attested_form(o_inf)
+                                    ):
                                         healed_opts.append(o_inf)
                                         opts_were_healed = True
                                         opt_replacements[opt_str] = o_inf
@@ -1311,14 +1329,9 @@ class QuizGeneratorMixin:
             if core_name.endswith(suffix):
                 core_name = core_name[:-len(suffix)]
 
-        # Pre-Flight LLM Availability Gate:
+        # Pre-Flight LLM Availability Gate (Skip for 100% pure symbolic cloze):
         # Fail fast before running fresh extraction or quiz blueprint generation if LLM is offline.
-        vocab_mode_early = self.config.get_quiz_config("vocabulary", "mode", "cloze")
-        is_pure_cloze = (
-            template_name == "cloze"
-            or (template_name == "vocabulary" and (vocab_mode_early == "cloze" or vocab_mode_early is True))
-        )
-        if not (is_pure_cloze and not self.config.get("enable_expert_audit", False)):
+        if template_name != "cloze":
             try:
                 llm.ensure_available(
                     task_name=f"{core_name}_quiz_{template_name}",
@@ -1338,7 +1351,9 @@ class QuizGeneratorMixin:
             return f"Error: Missing prerequisite extraction for unit '{core_name}'. Please compile and extract knowledge nodes (extractions/{core_name}_vocabulary.md) before generating quizzes."
 
         # 3. Build Prompt
-        prompt_template, schema_cls = Prompts.get(f"{template_name}_quiz")
+        prompt_template, schema_cls = None, None
+        if template_name != "cloze":
+            prompt_template, schema_cls = Prompts.get(f"{template_name}_quiz")
         
         kwargs = {"count": count}
         unit_headwords: List[str] = []
@@ -1350,111 +1365,72 @@ class QuizGeneratorMixin:
         cloze_questions: List[Dict[str, Any]] = []
         blueprint_specs: List[Dict[str, Any]] = []
 
-        if template_name in ("vocabulary", "cloze"):
+        if template_name == "vocabulary":
             raw_vocab = data.get("content", "")
             # Extract authorized unit headwords and banned authentic sentences for L1/L2 code gates
             _, unit_headwords, banned_quiz_sentences = self._sanitize_vocab_for_quiz(raw_vocab)
 
-            # Achievement MCQ vs Proficiency MCQ Switch:
-            # - template_name == 'cloze' or Mode 'cloze': Authentic Passage Cloze (0-token 真实原句完形 / 100% 纯符号生成)
-            # - template_name == 'vocabulary' (default / generative): LLM 语境迁移单选题
-            if template_name == "cloze":
-                enable_cloze = True
-            else:
-                vocab_mode = self.config.get_quiz_config("vocabulary", "mode", "cloze")
-                enable_cloze = (vocab_mode == "cloze") if isinstance(vocab_mode, str) else bool(vocab_mode)
-            if enable_cloze:
-                # Track 1: Authentic Passage Cloze (Achievement MCQ Mode - 100% Pure Symbolic Code Generation)
-                raw_cloze_items = LinguisticEngine.build_authentic_cloze_items(raw_vocab, target_count=count)
-                effective_count = min(count, len(raw_cloze_items)) if raw_cloze_items else 0
-                kwargs["count"] = effective_count
-                has_prescribed_options = True
-                logger.info(f"🎯 Built {len(raw_cloze_items)} authentic passage cloze skeletons (Achievement MCQ Mode, count capped at {effective_count}).")
-                for idx, c in enumerate(raw_cloze_items[:effective_count], 1):
-                    tw_key = str(c.get("target_word") or "").strip().lower()
-                    if tw_key and c.get("definition"):
-                        vocab_sense_map[tw_key] = str(c["definition"]).strip()
-                    pre_opts = list(c.get("options") or c.get("precomputed_options") or [])
-                    corr_idx = c.get("correct_answer_index", 0)
-                    cloze_questions.append({
-                        "target_word": c.get("target_word"),
-                        "part_of_speech": c.get("part_of_speech", ""),
-                        "definition": c.get("definition"),
-                        "question": c.get("question"),
-                        "options": pre_opts,
-                        "correct_answer_index": corr_idx,
-                        "explanation": c.get("explanation", ""),
-                    })
-                    blueprint_specs.append({
-                        "target_word": c.get("target_word"),
-                        "part_of_speech": c.get("part_of_speech", ""),
-                        "cloze_slot_frame": "... ____ ...",
-                        "definition": c.get("definition"),
-                        "options": pre_opts if pre_opts else None,
-                        "correct_answer_index": corr_idx,
-                    })
-            else:
-                # Track 2: Pre-Computed Generative Skeletons (Proficiency MCQ Mode)
-                skeletons = LinguisticEngine.build_precomputed_target_skeletons(raw_vocab, target_count=count)
-                effective_count = min(count, len(skeletons)) if skeletons else 0
-                kwargs["count"] = effective_count
-                has_prescribed_options = True
-                logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
-                skeleton_bullets = []
-                for idx, s in enumerate(skeletons[:effective_count], 1):
-                    tw_key = str(s.get("target_word") or "").strip().lower()
-                    if tw_key and s.get("definition"):
-                        vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
-                    prescribed_opts = s.get("prescribed_options", [])
-                    frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
-                    blueprint_specs.append({
-                        "target_word": s.get("target_word"),
-                        "base_headword": s.get("base_headword"),
-                        "part_of_speech": s.get("part_of_speech", ""),
-                        "cloze_slot_frame": frame_str,
-                        "definition": s.get("definition"),
-                        "options": list(prescribed_opts) if prescribed_opts else None,
-                        "correct_answer_index": s.get("correct_answer_index", 0) if prescribed_opts else None,
-                        "micro_task": s.get("micro_task", ""),
-                    })
-                    opts_str = ", ".join(prescribed_opts)
-                    micro_task_str = s.get("micro_task", "")
-                    pattern_line = f"- Required Stem Frame: {frame_str}\n"
-                    extra_note = re.sub(
-                        r"^Fit into (?:frame\s+'[^']*'|the Required Stem Frame above)\.\s*",
-                        "",
-                        micro_task_str,
-                    ).strip()
-                    if extra_note.startswith("(") and extra_note.endswith(")."):
-                        # Verify that depth only returns to 0 at the very end of the string
-                        depth = 0
-                        is_single_outer = True
-                        for ch in extra_note[:-2]:
-                            if ch == "(":
-                                depth += 1
-                            elif ch == ")":
-                                depth -= 1
-                                if depth == 0:
-                                    is_single_outer = False
-                                    break
-                        if is_single_outer and depth == 1:
-                            extra_note = extra_note[1:-2].strip() + "."
-                    note_line = f"\n- 🎯 Slot / Grammar Note: {extra_note}" if extra_note else ""
-                    skeleton_bullets.append(
-                        f"### Item {idx} ###\n"
-                        f"- Target Word: {s['target_word']}\n"
-                        f"- Part of Speech: {s['part_of_speech']}\n"
-                        f"- Contextual Definition: {s['definition']}\n"
-                        + pattern_line
-                        + f"- Prescribed Options: [{opts_str}]\n"
-                        f"- Correct Answer Index: {s.get('correct_answer_index', 0)}"
-                        + note_line
-                    )
-
-                kwargs["vocabulary_content"] = (
-                    f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n\n"
-                    + "\n\n".join(skeleton_bullets)
+            # Pre-Computed Generative Skeletons (Proficiency MCQ Mode - 100% Single Headwords)
+            skeletons = LinguisticEngine.build_precomputed_target_skeletons(raw_vocab, target_count=count, multi_word_ratio=0.0)
+            effective_count = min(count, len(skeletons)) if skeletons else 0
+            kwargs["count"] = effective_count
+            has_prescribed_options = True
+            logger.info(f"🎯 Built {len(skeletons)} pre-computed target skeletons (Proficiency MCQ Mode, count capped at {effective_count}).")
+            skeleton_bullets = []
+            for idx, s in enumerate(skeletons[:effective_count], 1):
+                tw_key = str(s.get("target_word") or "").strip().lower()
+                if tw_key and s.get("definition"):
+                    vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
+                prescribed_opts = s.get("prescribed_options", [])
+                frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
+                blueprint_specs.append({
+                    "target_word": s.get("target_word"),
+                    "base_headword": s.get("base_headword"),
+                    "part_of_speech": s.get("part_of_speech", ""),
+                    "cloze_slot_frame": frame_str,
+                    "definition": s.get("definition"),
+                    "options": list(prescribed_opts) if prescribed_opts else None,
+                    "correct_answer_index": s.get("correct_answer_index", 0) if prescribed_opts else None,
+                    "micro_task": s.get("micro_task", ""),
+                })
+                opts_str = ", ".join(prescribed_opts)
+                micro_task_str = s.get("micro_task", "")
+                pattern_line = f"- Required Stem Frame: {frame_str}\n"
+                extra_note = re.sub(
+                    r"^Fit into (?:frame\s+'[^']*'|the Required Stem Frame above)\.\s*",
+                    "",
+                    micro_task_str,
+                ).strip()
+                if extra_note.startswith("(") and extra_note.endswith(")."):
+                    # Verify that depth only returns to 0 at the very end of the string
+                    depth = 0
+                    is_single_outer = True
+                    for ch in extra_note[:-2]:
+                        if ch == "(":
+                            depth += 1
+                        elif ch == ")":
+                            depth -= 1
+                            if depth == 0:
+                                is_single_outer = False
+                                break
+                    if is_single_outer and depth == 1:
+                        extra_note = extra_note[1:-2].strip() + "."
+                note_line = f"\n- 🎯 Slot / Grammar Note: {extra_note}" if extra_note else ""
+                skeleton_bullets.append(
+                    f"### Item {idx} ###\n"
+                    f"- Target Word: {s['target_word']}\n"
+                    f"- Part of Speech: {s['part_of_speech']}\n"
+                    f"- Contextual Definition: {s['definition']}\n"
+                    + pattern_line
+                    + f"- Prescribed Options: [{opts_str}]\n"
+                    f"- Correct Answer Index: {s.get('correct_answer_index', 0)}"
+                    + note_line
                 )
+
+            kwargs["vocabulary_content"] = (
+                f"### TARGET SPECIFICATIONS ({len(skeleton_bullets)} ITEMS) ###\n\n"
+                + "\n\n".join(skeleton_bullets)
+            )
 
             if blueprint_specs:
                 selected_targets: List[str] = []
@@ -1753,15 +1729,42 @@ class QuizGeneratorMixin:
 
         # 4. Assemble or Generate Quiz Object (100% Pure Symbolic for Cloze, or LLM Direct Structured Output)
         try:
-            if (template_name in ("vocabulary", "cloze")) and enable_cloze:
+            if template_name == "cloze":
+                passage = data.get("passage", "")
+                cefr = data.get("cefr_level", "B2")
+                if not passage:
+                    return f"Error: No passage text found in sources for unit '{core_name}'."
+                
+                cloze_res = LinguisticEngine.build_discourse_cloze_assessment(
+                    passage, target_count=count, cefr_level=cefr
+                )
                 display_title = (
                     data.get("display_title")
                     or data.get("title")
                     or core_name.replace("_", " ").title()
                 )
-                quiz_title_label = "Cloze Assessment" if (template_name == "cloze" or enable_cloze) else "Vocabulary Assessment"
                 quiz_obj = {
-                    "title": f"{display_title} {quiz_title_label}",
+                    "title": f"{display_title} Discourse Cloze Assessment",
+                    "passage": cloze_res["passage"],
+                    "masked_passage": cloze_res["masked_passage"],
+                    "paragraphs": cloze_res["paragraphs"],
+                    "blanks": cloze_res["blanks"],
+                    "questions": cloze_res["questions"],
+                    "token_count": cloze_res["token_count"],
+                    "cefr_level": cefr,
+                }
+                logger.info(
+                    f"⚡ [0-TOKEN CODE GENERATION] Successfully synthesized {len(cloze_res['blanks'])} "
+                    f"authentic discourse cloze blanks via 100% pure symbolic pipeline."
+                )
+            elif (template_name == "vocabulary") and enable_cloze:
+                display_title = (
+                    data.get("display_title")
+                    or data.get("title")
+                    or core_name.replace("_", " ").title()
+                )
+                quiz_obj = {
+                    "title": f"{display_title} Vocabulary Assessment",
                     "questions": cloze_questions,
                 }
                 logger.info(
@@ -1794,7 +1797,7 @@ class QuizGeneratorMixin:
                     )
                 elif template_name == "reading":
                     quiz_obj = self.hydrate_reading_blueprint_items(quiz_obj, blueprint_specs)
-                elif template_name in ("vocabulary", "cloze"):
+                elif template_name == "vocabulary":
                     quiz_obj = self.hydrate_vocabulary_blueprint_items(quiz_obj, blueprint_specs)
                 else:
                     quiz_obj = self.hydrate_vocabulary_blueprint_items(quiz_obj, blueprint_specs)
@@ -1879,14 +1882,16 @@ class QuizGeneratorMixin:
                                 elif hasattr(turn, "speaker") and hasattr(turn, "text"):
                                     script_turns.append(f"{turn.speaker}: {turn.text}")
                         source_context = "\n".join(script_turns)
-                    elif template_name in ("vocabulary", "cloze"):
-                        # For vocabulary/cloze quizzes, each item must be a standalone sentence test.
+                    elif template_name == "vocabulary":
+                        # For vocabulary quizzes, each item must be a standalone sentence test.
                         # We intentionally DO NOT supply the vocabulary dictionary definitions/quoted sentences
                         # to the blind solver, ensuring the judge evaluates pure sentence-level single-fit validity without key-leaks.
                         source_context = ""
+                    elif template_name == "cloze":
+                        source_context = data.get("passage", "")
 
                     quiz_dict_eval = dataclasses.asdict(quiz_obj) if dataclasses.is_dataclass(quiz_obj) else quiz_obj
-                    if template_name in ("vocabulary", "cloze") and vocab_sense_map and isinstance(quiz_dict_eval, dict):
+                    if template_name == "vocabulary" and vocab_sense_map and isinstance(quiz_dict_eval, dict):
                         for q_item in quiz_dict_eval.get("questions", []):
                             if isinstance(q_item, dict):
                                 tw_q = str(q_item.get("target_word") or "").strip().lower()
@@ -1903,6 +1908,12 @@ class QuizGeneratorMixin:
                             passage_text=source_context,
                             cefr_level=kwargs.get("cefr_level", "B2"),
                             blueprint_specs=blueprint_specs,
+                        )
+                    elif template_name == "cloze":
+                        l1_defective, l1_defects = self.audit_cloze_integrity(
+                            quiz_dict_eval,
+                            passage_text=source_context,
+                            cefr_level=kwargs.get("cefr_level", "B2"),
                         )
                     elif template_name == "video":
                         l1_defective, l1_defects = self.audit_video_integrity(
@@ -2180,9 +2191,20 @@ class QuizGeneratorMixin:
                                         passage_text=source_context,
                                     )
                                     cure_item_failed = bool(cure_l1_flagged)
+                                elif template_name == "cloze":
+                                    cure_l1_flagged, cure_l1_defects = self.audit_cloze_integrity(
+                                        {"questions": [healed_item]},
+                                        passage_text=source_context,
+                                        cefr_level=cure_cefr
+                                    )
+                                    cure_item_failed = bool(cure_l1_flagged)
                                 else:
                                     candidate_batch = list(cured_questions)
                                     candidate_batch[item_slot] = healed_item
+                                    is_cloze_mode = (
+                                        enable_cloze
+                                        or (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
+                                    )
                                     cure_l1_flagged, cure_l1_defects = self.audit_quiz_integrity(
                                         {"questions": candidate_batch},
                                         banned_sentences=banned_quiz_sentences,
@@ -2576,7 +2598,7 @@ class QuizGeneratorMixin:
 
     def _render_handout(self, quiz_obj, template_name, audio_url=None, language=None):
         """Renders HTML templates with injected data."""
-        tmpl_file = "vocabulary.html" if template_name == "cloze" else f"{template_name}.html"
+        tmpl_file = f"{template_name}.html"
         template_path = Path(__file__).resolve().parent.parent / "templates" / tmpl_file
         
         # 1. Convert to dict if it's a dataclass

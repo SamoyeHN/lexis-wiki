@@ -1575,9 +1575,28 @@
         });
     }
 
+    function closeAllDropdowns() {
+        document.querySelectorAll('.dropdown-menu.show').forEach(menu => {
+            const toggle = menu.closest('.dropdown')?.querySelector('[data-bs-toggle="dropdown"]');
+            if (toggle && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
+                const inst = bootstrap.Dropdown.getInstance(toggle) || (bootstrap.Dropdown.getOrCreateInstance ? bootstrap.Dropdown.getOrCreateInstance(toggle) : null);
+                if (inst && typeof inst.hide === 'function') {
+                    inst.hide();
+                }
+            }
+            menu.classList.remove('show');
+            if (toggle) {
+                toggle.classList.remove('show');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
+    window.closeAllDropdowns = closeAllDropdowns;
+
     function selectCompileCategory(category) {
         selectedCompileCategory = category ? category.trim() : null;
         updateCompileButtonUI();
+        closeAllDropdowns();
     }
 
     function triggerWorkspaceCompileDirect() {
@@ -1637,6 +1656,7 @@
     }
 
     function triggerUnitCompileAll(unitName) {
+        closeAllDropdowns();
         if (!unitName) return;
         showToast(`Compiling all extractions for ${unitName}...`, 'info');
         fetch('/api/compile', {
@@ -1660,6 +1680,7 @@
     }
 
     function triggerUnitGenerateAllQuizzes(unitName) {
+        closeAllDropdowns();
         if (!unitName) return;
         showToast(`Generating all quizzes for ${unitName}...`, 'info');
         fetch('/api/generate-all-quizzes', {
@@ -2683,7 +2704,7 @@
 
                     if (libraryViewMode === 'grid') {
                         card.innerHTML = `
-                            <div class="source-card d-flex flex-column justify-content-between h-100 position-relative ${f.is_transcribing ? 'transcribing-card' : ''}" onclick="openUnitWorkspace('${esc(f.name)}')">
+                            <div class="source-card d-flex flex-column justify-content-between h-100 position-relative ${f.is_transcribing ? 'transcribing-card' : ''}" onclick="if (!event.target.closest('.notebook-action-dropdown')) openUnitWorkspace('${esc(f.name)}')">
                                 <div>
                                     <!-- Cover Thumbnail and Action menu -->
                                     <div class="d-flex align-items-start justify-content-between mb-3">
@@ -2693,15 +2714,15 @@
                                         </div>
                                         
                                         <!-- Three-dot Action Menu -->
-                                        <div class="dropdown notebook-action-dropdown" onclick="event.stopPropagation()">
+                                        <div class="dropdown notebook-action-dropdown">
                                             <button class="btn btn-link text-muted p-0 border-0" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 1.1rem; line-height: 1;">
                                                 <i class="bi bi-three-dots-vertical"></i>
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
-                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
-                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `closeAllDropdowns(); exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                             </ul>
                                         </div>
                                     </div>
@@ -2745,7 +2766,7 @@
                     } else {
                         // List mode
                         card.innerHTML = `
-                            <div class="source-card d-flex align-items-center justify-content-between py-2.5 px-3 ${f.is_transcribing ? 'transcribing-card' : ''}" onclick="openUnitWorkspace('${esc(f.name)}')">
+                            <div class="source-card d-flex align-items-center justify-content-between py-2.5 px-3 ${f.is_transcribing ? 'transcribing-card' : ''}" onclick="if (!event.target.closest('.notebook-action-dropdown')) openUnitWorkspace('${esc(f.name)}')">
                                 <div class="d-flex align-items-center gap-3 text-truncate" style="flex: 1;">
                                     <div class="notebook-thumbnail d-flex align-items-center justify-content-center ${f.is_transcribing ? 'transcribing-spinner' : ''}" style="width: 32px; height: 40px; border-radius: 4px;">
                                         <div class="notebook-spine" style="width: 4px;"></div>
@@ -2773,15 +2794,15 @@
                                     </div>
                                     `}
                                     <!-- Three-dot Action Menu -->
-                                    <div class="dropdown notebook-action-dropdown" onclick="event.stopPropagation()">
+                                    <div class="dropdown notebook-action-dropdown">
                                         <button class="btn btn-link text-muted p-0 border-0" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 1.1rem; line-height: 1;">
                                             <i class="bi bi-three-dots-vertical"></i>
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
-                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
-                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `closeAllDropdowns(); exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                         </ul>
                                     </div>
                                 </div>
@@ -4859,6 +4880,7 @@
     }
 
     function exportUnit(unitName) {
+        closeAllDropdowns();
         if (!unitName) {
             showToast('No unit selected for export.', 'error');
             return;

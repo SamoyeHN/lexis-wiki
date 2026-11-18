@@ -1836,6 +1836,9 @@ class CefrAndMorphologyMixin:
         tag = (tag or "").upper()
         if not b or not f:
             return False
+        if tag.startswith("VB") or tag in ("VBD", "VBN", "VBG", "VBZ", "VBP"):
+            if not cls._is_base_verb_lemma(b) and not (cls._wordnet_pos(b) & {"v"}):
+                return False
         if b in cls._IRREGULAR_VERB_FORMS and b not in {"found", "wind", "ground", "fell", "saw", "bound", "lie"}:
             expected_irr = cls._inflect_verb(b, tag)
             if expected_irr and f != expected_irr:
@@ -2211,10 +2214,18 @@ class CefrAndMorphologyMixin:
                                     is_inflected_alias = True
                                     break
                         if not is_inflected_alias:
+                            lemma_poses = cls._wordnet_pos(lemma)
+                            lemma_ldoce_pos = str((entry or {}).get("pos") or "").lower()
+                            can_be_noun = bool(lemma_poses & {"n"}) or "noun" in lemma_ldoce_pos
+                            can_be_verb = (
+                                cls._is_base_verb_lemma(lemma)
+                                or bool(lemma_poses & {"v"})
+                                or "verb" in lemma_ldoce_pos
+                            )
                             # Check if f is the legitimate plural or inflected verb form of this attested lemma
-                            if cls.pluralize_noun(lemma) == f:
+                            if can_be_noun and cls.pluralize_noun(lemma) == f:
                                 verdict = True
-                            elif any(cls._inflect_verb(lemma, tag) == f for tag in ("VBZ", "VBD", "VBN", "VBG")):
+                            elif can_be_verb and any(cls._inflect_verb(lemma, tag) == f for tag in ("VBZ", "VBD", "VBN", "VBG")):
                                 verdict = True
         except Exception:
             verdict = False

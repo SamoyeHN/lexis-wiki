@@ -1687,9 +1687,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                     t_parts = target.strip().split()
                     t_head = t_parts[0].lower()
                     t_base = LinguisticEngine.lemma_of(t_head) or t_head
-                    t_is_verb = (
+                    t_is_adj = any(a in bp_pos for a in ("adj", "adjective"))
+                    t_is_verb = not t_is_adj and (
                         bp_pos in ("verb", "phrasal verb")
-                        or LinguisticEngine._is_base_verb_lemma(t_base)
+                        or (not bp_pos and LinguisticEngine._is_base_verb_lemma(t_base))
                     )
                     if t_is_verb and t_head != t_base:
                         t_verb_tag = None
@@ -1706,7 +1707,11 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                                     continue
                                 o_head = o_parts[0].lower()
                                 o_base = o_head if LinguisticEngine._is_base_verb_lemma(o_head) else (LinguisticEngine.lemma_of(o_head) or o_head)
-                                if o_head == o_base and o_head != t_head:
+                                o_can_be_verb = (
+                                    LinguisticEngine._is_base_verb_lemma(o_base)
+                                    or bool(LinguisticEngine._wordnet_pos(o_base) & {"v"})
+                                )
+                                if o_can_be_verb and o_head == o_base and o_head != t_head:
                                     inflected_form = LinguisticEngine._inflect_verb(o_base, t_verb_tag)
                                     if inflected_form and inflected_form.lower() == o_head:
                                         continue

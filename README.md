@@ -1,198 +1,223 @@
-# Lexis Wiki
+# 📖 Lexis Wiki
 
-> **Neuro-Symbolic Educational Knowledge Base & Interactive Assessment Generator**  
-> Transform textbook units, lecture notes, audio, and video into Obsidian-style interlinked wiki nodes, deterministically grounded lexical/grammar extractions, and psychometrically audited interactive HTML quizzes.
+<p align="center">
+  <b>Automated English Lesson Deep-Reading & Self-Grading Interactive Quiz Generator</b><br>
+  <i>Transform textbook units, articles, audio, and video into Obsidian-style study notes and self-contained interactive HTML quizzes.</i>
+</p>
 
----
-
-## 🌟 Key Features
-
-- 🧠 **Neuro-Symbolic Extraction Engine (`LinguisticEngine` + `PedLex`)**:
-  - **Deterministic Vocabulary & Expression Mining**: Combines `spaCy` syntactic dependency trees, `cefrpy` lexical profiling, WordNet (`oewn:2025+`), and the offline Pedagogical Lexicon (`pedlex.db`, 106k+ phrase index) to extract single-word headwords and multi-word expressions (`phrasal verb`, `collocation`, `set phrase`, `idiom`) with zero hallucination.
-  - **True Neuro-Symbolic WSD Reranker**: Locks monosemous words (~71%) instantaneously in 0ms via symbolic syntactic gates, and resolves polysemous words (~29%) via a Top-$K$ ($K \le 4$) symbolic candidate pool + 1-token Local LLM arbitration (~0.3s latency).
-  - **Deterministic Grammar Pattern Extraction**: Automatically mines COBUILD syntactic formulas and structural patterns across 4 macro functional domains (*Rhetoric & Emphasis*, *Cohesion & Framing*, *Information Packaging*, *Logic & Stance*).
-- 🎯 **Sense-First Five-Modality Quiz Generators**:
-  - **Vocabulary in Context**: Pre-computes single-fit collocational anchors, atomic Pattern–Example frames, parallel inflected options, and zero-collision distractors directly from the locked pedagogical sense.
-  - **Reading Comprehension**: Text-grounded inference, detail recall, and main-idea questions calibrated to passage CEFR ceilings.
-  - **Comparative Translation**: Source-grounded bilingual appraisal and contrastive syntactic flaw analysis.
-  - **Listening Comprehension**: Multi-turn spoken dialogues with integrated **Kokoro** / **Edge-TTS** dual-speaker audio synthesis.
-  - **Video Comprehension**: Timestamp-anchored comprehension questions powered by **faster-whisper** transcription.
-- 📏 **Deterministic CEFR Calibration (`cefrpy`)**:
-  - Automatically computes passage and word-level CEFR ratings (`A1`–`C2`) at zero token cost and enforces Zipf/CEFR lexical ceilings across question stems and distractors.
-- 🛡️ **Two-Level QA Quality Audit**:
-  - **Level 1 (Deterministic Code Gate)**: Sub-5ms physical invariant verification (single-blank enforcement, post-inflection double-key collision screening, CEFR option bounds, Fisher-Yates option shuffling, and automatic category remapping).
-  - **Level 2 (Expert LLM-as-a-Judge Audit)**: Optional blind-solver verification, distractor validity proofs, and surgical repair (`PASS` / `REPAIR` / `REWRITE`).
-- ⚡ **Unified One-Shot Structured JSON Pipeline**:
-  - Prompt-guided schema enforcement (`schemas.py`) delivers 100% structural completion in a single turn (~2.2× faster than legacy multi-turn pipelines) with zero secondary-turn drift.
-- 🎨 **Modern Web Dashboard & Standalone Handouts**:
-  - Live configuration hot-reloading, interactive 2D knowledge graph, syllabus editor, dark/light theme support, and self-contained HTML/EXE quiz exports.
+<p align="center">
+  <a href="README.md"><b>English</b></a> •
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 ---
 
-## 🚀 Quick Start Guide
+## 💡 What is Lexis Wiki?
 
-### Option A: Windows One-Click Setup (Recommended)
+Whether you have an English textbook unit, an academic reading, a news article, or an untranscribed lecture video/audio:
 
-1. **Clone or Download** this repository.
-2. **Double-click `install.cmd`**:
-   - Installs `lexis` and all core NLP/lexical dependencies in editable mode.
-   - Optionally installs local video/audio transcription (`faster-whisper`).
-3. **Launch the Web Dashboard**:
-   - Double-click `start_dashboard.vbs` (background launch) or run `lexis dashboard` in a terminal.
-4. **Configure LLM Connection**:
-   - Click the **Settings** icon in the Dashboard top-right bar.
-   - Configure your Ollama (`http://localhost:11434`) or OpenAI-compatible API endpoint and select your model.
-5. **Compile & Generate**:
-   - Drop a source Markdown/Text/Video file into a unit, click **Compile Unit** to generate vocabulary, grammar, summary, and mind map nodes, then click **Generate Quiz**!
+👉 **Just drop in the text or media, and in 30 seconds Lexis Wiki automatically creates:**
+1. **Encyclopedic Study Notes**: Key vocabulary, idiomatic expressions, phrasal verbs, grammar patterns, and interactive Mind Maps with Obsidian-style `[[wikilinks]]`.
+2. **5 Self-Grading Interactive HTML Quizzes**: Vocabulary cloze, reading comprehension, comparative translation, dual-speaker listening dialogues, and video comprehension.
+3. **Single-File Standalone Delivery**: Each quiz is exported as an **independent `.html` file**. Double-click to open in any web browser on your phone, tablet, or PC—featuring a countdown timer, instant grading, answer explanations, and native AI audio narration with zero installation or server requirements!
 
 ---
 
-### Option B: Linux / WSL / macOS One-Click Setup
+## 🥊 Why Lexis Wiki vs. Prompting Raw ChatGPT?
+
+When using generic AI chatbots to generate quizzes, teachers and learners frequently suffer from three major headaches: **arbitrary word choices, hallucinated unnatural examples, and distractor flaws (multiple valid answers or obvious grammatical giveaways)**.
+
+Lexis Wiki solves this with a **Neuro-Symbolic Architecture** that pairs authoritative offline dictionaries with local LLM arbitration:
+
+| Dimension | Raw LLM Prompting (e.g. ChatGPT) | Lexis Wiki (Neuro-Symbolic Engine) |
+| :--- | :--- | :--- |
+| **Vocabulary & Expressions** | Random words; frequently misses multi-word collocations | Analyzes syntactic dependency trees to capture whole collocations and idioms |
+| **Example Authenticity** | Hallucinates unverified, often unnatural sentences | **100% locked to authentic dictionary corpus examples**; zero hallucination |
+| **Word Sense Disambiguation (WSD)** | Often picks irrelevant dictionary definitions | Symbolic grammar-slot constraints + smart candidate arbitration locks the true contextual sense |
+| **Quiz Distractors** | Asymmetric forms, obvious syntax clues, or ambiguous double answers | Auto-inflected parallel forms and synonym collision screening ensure **exactly one valid answer** |
+| **Difficulty Calibration** | The LLM "guesses" difficulty; highly inconsistent | Enforces deterministic CEFR lexical ceilings (`A1`–`C2`) via `cefrpy` |
+| **Output Delivery** | Plain text or Markdown; requires tedious manual formatting | **Exports standalone interactive HTML/EXE files** with auto-grading, audio, and mobile responsiveness |
+
+---
+
+## ✨ Key Features
+
+### 1. 📚 Encyclopedic Lesson Notes
+- **Headwords & Idiomatic Expressions**: Automatically identifies target words and multi-word expressions (`phrasal verb`, `collocation`, `set phrase`, `idiom`), tags CEFR levels, and binds them directly to authentic corpus sentences.
+- **Grammar Formulas & Syntactic Structures**: Outlines sentence formulas (e.g., negative inversion, cleft sentences, passive frames) based on the COBUILD framework, highlighting common student error traps.
+- **Passage Summaries & Concept Mind Maps**: Extracts hierarchical rhetorical outlines into an interactive, draggable concept mind map.
+
+### 2. 📝 5 Self-Contained Interactive Quizzes
+- 🔤 **Vocabulary & Collocation Cloze**: Strict sense-locked context stems with symmetric, zero-collision distractors.
+- 📖 **Reading Comprehension**: Text-grounded main idea, detail recall, and logical inference questions aligned with IELTS / TOEFL / CET standards.
+- ✍️ **Comparative Translation**: Highlighting natural target language phrasing vs. common Chinglish translation flaws.
+- 🎧 **Dual-Speaker Listening Comprehension**: Realistic multi-turn dialogues with built-in **Kokoro** or **Edge-TTS** dual-speaker voice synthesis.
+- 🎬 **Video Comprehension**: Uses **faster-whisper** to auto-transcribe local video/audio, anchoring questions to exact timestamps.
+
+### 3. 📦 Instant Single-File Distribution
+- Every generated quiz is a **standalone `.html` file** with bundled styling, scripts, and media.
+- Share quizzes directly via chat or email—learners open them in any browser without signing up or setting up a server.
+- Optional one-click bundling into a single standalone `.exe` application.
+
+---
+
+## ⚡ 3-Minute Quick Start
+
+### Option A: Windows (Recommended 1-Click Setup)
+
+1. **Clone or Download** this repository;
+2. **Double-click `install.cmd`**: Sets up the Python environment and downloads core linguistic assets automatically;
+3. **Double-click `start_dashboard.vbs`** (or run `lexis dashboard` in your terminal) to open the Web Dashboard;
+4. **Configure your LLM**:
+   - Click the **Settings** gear icon in the top-right corner;
+   - Connect to local **Ollama** (`http://localhost:11434`) or any **OpenAI-compatible API** (DeepSeek, Qwen, Moonshot, OpenAI, etc.);
+5. **Start Creating**:
+   - Add your text or media into a unit folder, click **"Compile Extractions"** to generate notes, then click **"Generate Quizzes"**!
+
+---
+
+### Option B: Linux / macOS / WSL
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/SamoyeHN/lexis-wiki.git
 cd lexis-wiki
+
+# 2. Run the automated installer
 chmod +x install.sh
 ./install.sh
+
+# 3. Launch the Web Dashboard
+lexis dashboard
 ```
 
-- Automatically creates/reuses `.venv` (avoiding PEP 668 `externally-managed-environment` errors on Ubuntu/WSL), installs dependencies and `en_core_web_sm`, and runs `lexis init .` to download and verify `pedlex.db` from mirrors.
+The script sets up a dedicated `.venv`, installs dependencies, downloads `pedlex.db`, and initializes your workspace.
 
 ---
 
-### Option C: Manual Installation (Cross-Platform)
+### Option C: Manual Python Installation
 
 ```bash
-# 1. Clone repository and install core package
+# 1. Install core package
 git clone https://github.com/SamoyeHN/lexis-wiki.git
 cd lexis-wiki
 pip install -e .
 
-# 2. (Optional) Install local Whisper transcription support for video quizzes
+# 2. (Optional) Install Whisper transcription support for video quizzes
 pip install -e ".[video]"
 
-# 3. Initialize workspace and launch the interactive dashboard
+# 3. Initialize workspace and launch the dashboard
 lexis init .
 lexis dashboard
 ```
 
 ---
 
-## 📂 Stateless Project Architecture & Directory Layout
+## 🖥️ Quick CLI Reference
 
-Lexis Wiki uses a **100% stateless, self-contained unit directory layout** without fragile external metadata files:
-
-```text
-wiki/<UnitName>/
-├── sources/                              # Primary lesson text and source media
-│   ├── <UnitName>.md                     # Source passage + optional syllabus wordlist
-│   └── media/                            # Video/audio files and companion transcripts
-├── extractions/                          # Deterministically grounded educational nodes
-│   ├── <UnitName>_vocabulary.md          # Headwords, multi-word expressions, POS, definitions & examples
-│   ├── <UnitName>_grammar.md             # Syntactic formulas, functional domains & grammar warnings
-│   ├── <UnitName>_summary.md             # Structured passage summary & key points
-│   └── <UnitName>_mindmap.json           # Interactive hierarchical concept map data
-└── handouts/                             # Self-contained interactive HTML assessment handouts
-    ├── <UnitName>_vocabulary_quiz.html
-    ├── <UnitName>_reading_quiz.html
-    ├── <UnitName>_translation_quiz.html
-    ├── <UnitName>_listening_quiz.html
-    └── <UnitName>_video_quiz.html
-```
-
-- **Immutable Physical Primary Keys**: Folder slug `<UnitName>` serves as the stable filesystem key, while human-readable lesson titles are decoupled via YAML frontmatter (`title: "..."`).
-- **Source-Grounded Assessments**: Quiz generators always extract fresh semantic blueprints directly from `sources/<UnitName>.md`, ensuring user edits or translations in `extractions/*.md` never corrupt assessment integrity.
-- **Dual-Distribution Ready**: Runs out-of-the-box in open-source mode (`spaCy` + `cefrpy` + Open English WordNet `oewn:2025+`) and automatically upgrades to full corpus-powered mode when `pedlex.db` is present.
-
----
-
-## ⚙️ Configuration (`wiki_config.json`)
-
-Settings can be updated live in the Web Dashboard or in `wiki_config.json` (changes hot-reload automatically without restarting the server):
-
-| Setting | Type | Description | Default / Example |
-|---------|------|-------------|-------------------|
-| `api_type` | `str` | LLM backend engine (`ollama` or `openai`) | `"ollama"` |
-| `api_url` | `str` | API endpoint URL | `"http://localhost:11434"` |
-| `api_key` | `str` | API token (for OpenAI-compatible endpoints) | `""` or `"sk-..."` |
-| `model` | `str` | Primary generation & 1-token WSD arbitration model | `"gemma4:12b"` / `"llama3.1:8b"` |
-| `enable_expert_audit` | `bool` | Master switch for Level 2 LLM-as-a-Judge semantic audit | `false` |
-| `judge_model` | `str` | Independent Level 2 evaluation model | `"gemma4:27b"` / `"mistral-small3.2:24b"` |
-| `enable_authentic_cloze` | `bool` | Enable authentic corpus cloze items in vocabulary quizzes | `true` |
-| `num_ctx` | `int` | LLM context window size (tokens) | `16384` |
-| `max_tokens` | `int` | Maximum generation token budget | `8192` |
-| `compile_defaults.max_parallel` | `int` | Maximum concurrent compilation tasks | `1` |
-| `tts_engine` | `str` | Listening quiz TTS backend (`kokoro` or `edge`) | `"edge"` |
-
-### 💡 Hardware & VRAM Concurrency Recommendations
-
-- **$\le 12\text{ GB}$ VRAM (e.g., RTX 3060 / 4070)**:
-  - Use 7B–12B models (`llama3.1:8b`, `ministral-3:8b`, `gemma4:12b`).
-  - Set `max_parallel: 1` in `wiki_config.json`, `OLLAMA_NUM_PARALLEL=1` in Ollama, or `Max Concurrent Predictions = 1` in LM Studio.
-- **$\ge 24\text{ GB}$ VRAM (e.g., RTX 3090 / 4090)**:
-  - Safely scale to `max_parallel: 2` and run 24B–31B judge models locally.
-
-### Local TTS Service Endpoints
-
-| Engine | Default Endpoint | Default Speaker Voices |
-|--------|------------------|------------------------|
-| **Kokoro** | `http://localhost:8880/v1/audio/speech` | `af_sarah` / `am_michael` |
-| **Edge-TTS** | `http://localhost:5050/v1/audio/speech` | `en-US-AriaNeural` / `en-GB-RyanNeural` |
-
----
-
-## 🛠️ Quick CLI Reference
+Prefer the command line? Run any task directly via the `lexis` CLI:
 
 ```bash
-# 1. Start the interactive Web Dashboard
+# Launch the interactive Web Dashboard
 lexis dashboard
 
-# 2. Compile a unit (or specific categories: vocabulary,grammar,summary,mindmap)
+# Compile study notes (vocabulary, grammar, summary, mindmap) for a unit
 lexis compile Book_2_Unit_1_Section_A
-lexis compile Book_2_Unit_1_Section_A -c vocabulary,grammar
 
-# 3. Generate interactive HTML quizzes (vocabulary | reading | translation | listening | video)
+# Generate interactive HTML quizzes (vocabulary | reading | translation | listening | video)
 lexis quiz Book_2_Unit_1_Section_A --template vocabulary --count 15
 lexis quiz Book_2_Unit_1_Section_A --template reading --count 10
 
-# 4. Re-run Level 2 expert semantic audit on existing quiz handouts
-lexis re-audit Book_2_Unit_1_Section_A --template vocabulary
-
-# 5. Import video/audio media with automatic Whisper transcription
+# Import video/audio media with automatic Whisper transcription
 lexis video-import "lecture.mp4" --name Unit_Video_1
 
-# 6. Bundle an HTML quiz and media into a standalone single-file EXE
+# Bundle an HTML quiz into a standalone single-file EXE
 lexis export-exe wiki/Unit_Video_1/handouts/Unit_Video_1_video_quiz.html
 
-# 7. Lint [[wikilinks]] integrity and clean up orphan files
+# Check [[wikilinks]] consistency and clean up orphans
 lexis lint
 ```
 
 ---
 
-## 📚 Technical Documentation (`docs/`)
+## 📂 Project Directory Layout
 
-For architectural deep dives and algorithmic specifications, see:
-- **[PedLex Database & WSD Architecture](docs/pedlex-database-architecture.md)**: SQLite schema, 106k phrase inverted index, Definition-Locked WSD, and phrase distractor synthesis.
-- **[Vocabulary Selection & Distractor Methodology](docs/vocabulary-selection-and-distractor-methodology.md)**: POS valency cascades, single-fit collocational anchors, and zero-collision distractor filtering.
-- **[QA Audit & Scoring Guide](docs/audit-scores-guide.md)**: Level 1 deterministic code gate invariants and Level 2 LLM-as-a-Judge rubrics.
-- **[Complete CLI Manual](docs/cli.md)**: Full command-line reference and batch automation options.
+Lexis Wiki uses a clean, **self-contained unit structure** with zero external database dependencies:
+
+```text
+wiki/<UnitName>/
+├── sources/                              # Primary input materials
+│   ├── <UnitName>.md                     # Source lesson text + optional syllabus wordlist
+│   └── media/                            # Local audio/video and companion transcripts
+├── extractions/                          # Deterministically generated study notes
+│   ├── <UnitName>_vocabulary.md          # Target words, collocations, definitions & examples
+│   ├── <UnitName>_grammar.md             # Syntactic formulas, grammar domains & error traps
+│   ├── <UnitName>_summary.md             # Passage summary & core takeaways
+│   └── <UnitName>_mindmap.json           # Interactive hierarchical Mind Map data
+└── handouts/                             # Standalone interactive HTML assessment handouts
+    ├── <UnitName>_vocabulary_quiz.html   # Vocabulary in context cloze quiz
+    ├── <UnitName>_reading_quiz.html      # Deep reading comprehension quiz
+    ├── <UnitName>_translation_quiz.html  # Contrastive translation quiz
+    ├── <UnitName>_listening_quiz.html    # Spoken dialogue listening quiz with audio
+    └── <UnitName>_video_quiz.html        # Video timestamp-anchored quiz
+```
 
 ---
 
-## 🧠 Recommended Local LLM Models
+## ⚙️ Configuration & Model Recommendations
 
-| Role | Recommended Models | Highlights |
-|------|--------------------|------------|
-| ⚡ **Fast Extraction & WSD Arbitration** | `llama3.1:8b` / `ministral-3:8b` / `qwen2.5:7b` | ~0.28s–0.40s 1-token sense arbitration; 100% WSD benchmark accuracy |
-| 🥇 **Primary Quiz Generation** | `gemma4:12b` / `qwen3.5:9b` / `gpt-oss:20b` | Natural academic context crafting and high-discrimination distractors |
-| 🛡️ **Level 2 Judge & Audit** | `gemma4:27b` / `mistral-small3.2:24b` | Rigorous blind-solving verification and minimal-invasive surgical repair |
+Settings can be changed on the fly in the Web Dashboard or inside `wiki_config.json` (auto-reloads without restarting):
+
+| Setting | Type | Description | Default / Example |
+| :--- | :--- | :--- | :--- |
+| `api_type` | `str` | LLM API backend (`ollama` or `openai`) | `"ollama"` |
+| `api_url` | `str` | LLM endpoint URL | `"http://localhost:11434"` |
+| `api_key` | `str` | API key (for cloud OpenAI-compatible endpoints) | `""` or `"sk-..."` |
+| `model` | `str` | Primary generation & WSD arbitration model | `"gemma4:12b"` / `"qwen2.5:7b"` |
+| `enable_expert_audit` | `bool` | Enable Level 2 LLM-as-a-Judge quality verification | `false` |
+| `judge_model` | `str` | Independent auditor model for Level 2 verification | `"gemma4:27b"` / `"mistral-small3.2:24b"` |
+| `tts_engine` | `str` | TTS backend for listening quizzes (`kokoro` or `edge`) | `"edge"` |
+
+### 💡 Hardware & VRAM Guidelines
+- **Standard Laptop / 8GB–12GB VRAM (e.g. RTX 3060 / 4060 / 4070)**:
+  - Run 7B–12B models (`qwen2.5:7b`, `llama3.1:8b`, `gemma4:12b`) with `max_parallel: 1`. Fast and reliable.
+- **High-End Desktop / 24GB+ VRAM (e.g. RTX 3090 / 4090)**:
+  - Run 27B–32B models or enable Level 2 expert judge audits locally.
+- **No Dedicated GPU**:
+  - Simply enter any cloud API key (OpenAI, DeepSeek, Qwen, etc.) in the dashboard settings to run seamlessly in the cloud.
+
+---
+
+## 🔬 Under the Hood (For Developers & Linguists)
+
+<details>
+<summary><b>Click to expand: Theoretical foundations & neuro-symbolic mechanisms</b></summary>
+
+Unlike simple prompt wrappers, Lexis Wiki implements computational Second Language Acquisition (SLA) principles and neuro-symbolic constraints:
+
+1. **Deterministic Mining & Sense Locking (WSD)**:
+   - Combines `spaCy` dependency parsing with an offline pedagogical lexicon (`pedlex.db` containing a 106,000+ phrase inverted index);
+   - Monosemous entries (~71%) are locked in 0ms at 0 token cost via syntactic subcategorization frames;
+   - Polysemous entries (~29%) are evaluated using a Top-$K$ ($K \le 4$) symbolic candidate pool followed by 1-token LLM arbitration, preventing semantic drift.
+2. **Five-Source Authentic Corpus Pool**:
+   - Authentic examples are harvested strictly from 5 compartments of the pedagogical corpus (Grammar Box, Sense Examples, Thesaurus, Language Activator, and Collocation dictionaries).
+3. **Two-Level QA Audit Pipeline**:
+   - **Level 1 Deterministic Code Gate (<5ms)**: Validates physical invariants (single-blank constraints, post-inflection double-key screening, CEFR lexical bounds, and Fisher-Yates shuffling);
+   - **Level 2 Expert LLM-as-a-Judge Audit (Optional)**: Employs a blind solver model to evaluate and surgically repair question stems and distractors (`PASS` / `REPAIR` / `REWRITE`).
+4. **In-Depth Documentation Index**:
+   - [Vocabulary Selection & Distractor Methodology](docs/vocabulary-selection-and-distractor-methodology.md)
+   - [Multi-Word Units Slicing & Distractor Architecture](docs/multi-word-units-slicing-and-distractor-architecture.md)
+   - [PedLex Database Schema & Query Specifications](docs/pedlex-database-architecture.md)
+   - [Listening Functional Dialogue Architecture](docs/listening-functional-dialogue-architecture.md)
+   - [Reading Discourse & Psychometric Distractor Model](docs/reading-discourse-architecture.md)
+   - [QA Audit Scores & Rubric Guide](docs/audit-scores-guide.md)
+</details>
 
 ---
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for full details.
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
 ```text
 Copyright (c) 2026 Lexis Wiki Contributors

@@ -1185,8 +1185,18 @@ class DistractorEngineMixin:
                                     continue
                                 if c_primary in ("noun", "adjective", "adverb") and not any(s.get("pos") == "verb" for s in c_senses):
                                     continue
-                            elif wn_pos == "a" and not any("adj" in p for p in c_poses):
-                                continue
+                            elif wn_pos == "a":
+                                if not any("adj" in p for p in c_poses):
+                                    continue
+                                if not cls.distractor_occupies_slot(picked, "adj"):
+                                    continue
+                                # Reject words whose adjective senses are strictly [only before noun] when target is not attributive-only
+                                adj_senses = [s for s in c_senses if s.get("pos") == "adjective"]
+                                if adj_senses and all("[only before noun]" in str(s.get("grammar") or "") for s in adj_senses):
+                                    t_entry = cls.get_ldoce_entry(clean_target)
+                                    t_grams = [str(s.get("grammar") or "") for s in ((t_entry or {}).get("senses") or [])]
+                                    if not (t_grams and all("[only before noun]" in g for g in t_grams)):
+                                        continue
                         seen.add(picked)
                         tier0_ldoce_thesaurus.append(picked)
                         # Cluster Throttling: pick at most 1 distinct distractor per Thesaurus/Activator entry
@@ -7222,6 +7232,51 @@ class DistractorEngineMixin:
         return False
 
     @classmethod
+    def _verbal_phrase_target_tag(cls, example: Optional[str], target_phrase: str) -> Optional[str]:
+        """
+        Reads the verb inflection tag (VBN, VBD, VBZ, VBG, VB) that the authentic example
+        actually uses for the verbal phrase (e.g. 'shut down', 'nail down', 'set out').
+        Returns None when the verbal phrase or its head verb cannot be identified.
+        """
+        ex = (example or "").strip()
+        tw_words = (target_phrase or "").strip().lower().split()
+        if not ex or len(tw_words) < 2:
+            return None
+        head_w, tail_w = tw_words[0], tw_words[-1]
+        nlp = cls.get_spacy()
+        if not nlp:
+            return None
+        try:
+            doc = nlp(ex)
+        except Exception:
+            return None
+        head_forms = {head_w} | {f.lower() for f in cls.inflected_forms(head_w)}
+        for tok in doc:
+            if tok.text.lower() in head_forms or tok.lemma_.lower() == head_w:
+                if not any(t.text.lower() == tail_w for t in doc[tok.i + 1 : min(len(doc), tok.i + 6)]):
+                    continue
+                tag_up = tok.tag_.upper()
+                has_aux = (
+                    any(ch.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for ch in tok.children)
+                    or any(
+                        ch.dep_ in ("aux", "auxpass") and ch.lemma_.lower() in ("have", "be", "get")
+                        for ch in tok.children
+                    )
+                )
+                if tok.i > 0 and doc[tok.i - 1].text.lower() in (
+                    "to", "will", "would", "could", "can", "might", "may", "should", "must", "did", "do", "does", "'ll", "'d"
+                ):
+                    return "VB"
+                if tag_up == "VBG":
+                    return "VBG"
+                if has_aux:
+                    return "VBN"
+                if tag_up in ("VBD", "VBZ", "VB"):
+                    return tag_up
+                return tag_up
+        return None
+
+    @classmethod
     def _reconcile_prescribed_inflection(
         cls,
         base_options: List[str],
@@ -7388,23 +7443,27 @@ class DistractorEngineMixin:
                 and _head_pos not in ("adjective", "adverb", "preposition", "determiner")
                 and bool(cls._wordnet_pos(head_w) & {"v"})
             )
-            if is_verbal_phrase and cls._is_verbal_phrase_passive_in_example(authentic_example or quote, target_word):
-                inflected_pv: List[str] = []
-                all_pv_ok = True
-                for opt in base_options:
-                    ow = opt.strip().split()
-                    if len(ow) < 2:
-                        all_pv_ok = False
-                        break
-                    ow_base = ow[0].lower() if cls._is_base_verb_lemma(ow[0].lower()) else (cls.lemma_of(ow[0].lower()) or ow[0].lower())
-                    v_vbn = cls._inflect_verb(ow_base, "VBN")
-                    if not v_vbn:
-                        all_pv_ok = False
-                        break
-                    inflected_pv.append(" ".join([v_vbn] + ow[1:]))
-                if all_pv_ok and len(inflected_pv) == len(base_options):
-                    new_pv_target = inflected_pv[target_index] if 0 <= target_index < len(inflected_pv) else target_word
-                    return cls._VERB_FORM_LABELS.get("VBN", "past participle (VBN)"), inflected_pv, new_pv_target, "VBN"
+            if is_verbal_phrase:
+                pv_tag = cls._verbal_phrase_target_tag(authentic_example, target_word)
+                if not pv_tag and quote:
+                    pv_tag = cls._verbal_phrase_target_tag(quote, target_word)
+                if pv_tag in ("VBN", "VBD", "VBZ", "VBG"):
+                    inflected_pv: List[str] = []
+                    all_pv_ok = True
+                    for opt in base_options:
+                        ow = opt.strip().split()
+                        if len(ow) < 2:
+                            all_pv_ok = False
+                            break
+                        ow_base = ow[0].lower() if cls._is_base_verb_lemma(ow[0].lower()) else (cls.lemma_of(ow[0].lower()) or ow[0].lower())
+                        v_form = cls._inflect_verb(ow_base, pv_tag)
+                        if not v_form or not cls._morph_form_valid(ow_base, v_form, pv_tag):
+                            all_pv_ok = False
+                            break
+                        inflected_pv.append(" ".join([v_form] + ow[1:]))
+                    if all_pv_ok and len(inflected_pv) == len(base_options):
+                        new_pv_target = inflected_pv[target_index] if 0 <= target_index < len(inflected_pv) else target_word
+                        return cls._VERB_FORM_LABELS.get(pv_tag, f"{pv_tag} form"), inflected_pv, new_pv_target, pv_tag
 
         if pos_low != "verb":
             return inflection_desc, base_options, target_word, None

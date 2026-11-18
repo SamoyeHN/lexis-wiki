@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discourse Cloze Assessment</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg-page: linear-gradient(135deg, #EEF2FF 0%, #FAF5FF 50%, #FCE7F3 100%);
+            --color-card-bg: rgba(255, 255, 255, 0.88);
+            --color-card-border: rgba(224, 231, 255, 0.8);
+            --color-text-main: #1F2937;
+            --color-text-muted: #6B7280;
+            --color-text-body: #374151;
+            
+            --color-primary: #6366F1;
+            --color-primary-hover: #4F46E5;
+            --color-primary-light: #EEF2FF;
+            --color-primary-border: #C7D2FE;
+            --color-gradient-primary: linear-gradient(135deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+            
+            --color-success-bg: #D1FAE5;
+            --color-success-border: #10B981;
+            --color-success-text: #065F46;
+            
+            --color-warning-bg: #FEF3C7;
+            --color-warning-border: #F59E0B;
+            --color-warning-text: #92400E;
+            
+            --color-danger-bg: #FEE2E2;
+            --color-danger-border: #EF4444;
+            --color-danger-text: #991B1B;
+
+            --color-scaffold-1: #06B6D4;
+            --color-scaffold-2: #8B5CF6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            background: var(--color-bg-page);
+            color: var(--color-text-main);
+            min-height: 100vh;
+            padding: 32px 16px;
+        }
+
+        .container {
+            max-width: 1360px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .badge-mode {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: rgba(99, 102, 241, 0.12);
+            color: #4F46E5;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 34px;
+            font-weight: 800;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 15px;
+            color: var(--color-text-muted);
+            max-width: 760px;
+            margin: 0 auto;
+        }
+
+        /* Score Tracker Banner */
+        .score-banner {
+            background: var(--color-card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--color-card-border);
+            border-radius: 18px;
+            padding: 16px 24px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.06);
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .score-stats {
+            display: flex;
+            gap: 28px;
+            align-items: center;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--color-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .stat-val {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--color-primary-hover);
+        }
+
+        .progress-box {
+            flex: 1;
+            max-width: 380px;
+            min-width: 200px;
+        }
+
+        .progress-bar-wrap {
+            height: 10px;
+            background: #E0E7FF;
+            border-radius: 9999px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--color-gradient-primary);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        /* Two-Column Grid */
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+
+        @media (max-width: 1024px) {
+            .grid-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Panel Card */
+        .panel {
+            background: var(--color-card-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--color-card-border);
+            border-radius: 20px;
+            padding: 28px;
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.05);
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(224, 231, 255, 0.8);
+        }
+
+        .panel-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--color-text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Passage Text & Inline Slots */
+        .passage-body {
+            font-size: 16.5px;
+            line-height: 2.2;
+            color: var(--color-text-body);
+        }
+
+        .passage-paragraph {
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+
+        .passage-paragraph:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Interactive Cloze Slot Widget */
+        .cloze-slot {
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+            background: #FFFFFF;
+            border: 1.5px solid #CBD5E1;
+            border-radius: 10px;
+            padding: 2px 6px;
+            margin: 0 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .cloze-slot:focus-within, .cloze-slot.active {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        }
+
+        .slot-index {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #6366F1;
+            background: #EEF2FF;
+            padding: 1px 5px;
+            border-radius: 5px;
+            margin-right: 6px;
+            user-select: none;
+        }
+
+        .cloze-input {
+            border: none;
+            outline: none;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--color-text-main);
+            width: 84px;
+            background: transparent;
+            padding: 2px 4px;
+            text-align: center;
+            transition: width 0.15s ease;
+        }
+
+        .cloze-input::placeholder {
+            color: #94A3B8;
+            font-weight: 400;
+        }
+
+        .slot-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px 4px;
+            border-radius: 4px;
+            opacity: 0.65;
+            transition: all 0.15s ease;
+            line-height: 1;
+        }
+
+        .slot-btn:hover {
+            opacity: 1;
+            background: #F1F5F9;
+            transform: scale(1.1);
+        }
+
+        .slot-btn.active {
+            opacity: 1;
+            background: #E0E7FF;
+        }
+
+        .slot-status-icon {
+            margin-left: 4px;
+            font-size: 13px;
+            display: none;
+        }
+
+        /* Slot Answer States */
+        .cloze-slot.correct-100 {
+            border-color: #10B981;
+            background: #ECFDF5;
+        }
+        .cloze-slot.correct-80 {
+            border-color: #06B6D4;
+            background: #ECFEFF;
+        }
+        .cloze-slot.correct-60 {
+            border-color: #3B82F6;
+            background: #EFF6FF;
+        }
+        .cloze-slot.incorrect {
+            border-color: #EF4444;
+            background: #FEF2F2;
+        }
+
+        .cloze-slot.correct-100 .slot-status-icon,
+        .cloze-slot.correct-80 .slot-status-icon,
+        .cloze-slot.correct-60 .slot-status-icon,
+        .cloze-slot.incorrect .slot-status-icon {
+            display: inline-block;
+        }
+
+        /* Scaffolding Inspector Panel */
+        .inspector-placeholder {
+            text-align: center;
+            padding: 48px 20px;
+            color: var(--color-text-muted);
+        }
+
+        .inspector-content {
+            display: none;
+        }
+
+        .inspector-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .blank-meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .blank-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--color-text-main);
+        }
+
+        .pillar-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .pillar-1 {
+            background: #FDF2F8;
+            color: #DB2777;
+            border: 1px solid #FBCFE8;
+        }
+
+        .pillar-2 {
+            background: #EEF2FF;
+            color: #4F46E5;
+            border: 1px solid #C7D2FE;
+        }
+
+        .pillar-3 {
+            background: #ECFDF5;
+            color: #059669;
+            border: 1px solid #A7F3D0;
+        }
+
+        /* Sentence Anchor Context Box */
+        .sentence-box {
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-left: 4px solid var(--color-primary);
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 20px;
+            font-size: 15px;
+            line-height: 1.6;
+            color: #334155;
+        }
+
+        .sentence-box strong {
+            color: #4F46E5;
+            text-decoration: underline;
+        }
+
+        /* Scaffold Stage 1: Hint Card */
+        .scaffold-card {
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 18px;
+            display: none;
+            animation: slideDown 0.25s ease-out;
+        }
+
+        .scaffold-card.active {
+            display: block;
+        }
+
+        .hint-card {
+            background: #F0FDFA;
+            border: 1px solid #99F6E4;
+            color: #115E59;
+        }
+
+        .hint-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 6px;
+        }
+
+        /* Scaffold Stage 2: 4 Options Fallback */
+        .options-card {
+            background: #FAF5FF;
+            border: 1px solid #E9D5FF;
+            padding: 16px;
+            border-radius: 14px;
+            margin-bottom: 18px;
+        }
+
+        .options-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 700;
+            font-size: 14px;
+            color: #6B21A8;
+            margin-bottom: 12px;
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .opt-btn {
+            background: #FFFFFF;
+            border: 1.5px solid #D8B4FE;
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 14.5px;
+            font-weight: 600;
+            color: #4C1D95;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .opt-btn:hover {
+            border-color: #9333EA;
+            background: #F3E8FF;
+            transform: translateY(-1px);
+        }
+
+        .opt-btn.selected {
+            border-color: #7E22CE;
+            background: #7E22CE;
+            color: #FFFFFF;
+        }
+
+        .opt-label {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            font-size: 12px;
+            background: rgba(0, 0, 0, 0.08);
+            border-radius: 6px;
+            padding: 2px 6px;
+        }
+
+        .opt-btn.selected .opt-label {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        /* Feedback & Explanation Card */
+        .explanation-card {
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 16px;
+            margin-top: 16px;
+            display: none;
+        }
+
+        .explanation-card.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .explanation-title {
+            font-size: 13.5px;
+            font-weight: 700;
+            color: var(--color-text-main);
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .explanation-text {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #475569;
+        }
+
+        /* Bottom Action Bar */
+        .action-bar {
+            margin-top: 24px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 12px 24px;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: var(--color-gradient-primary);
+            color: #FFFFFF;
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.95;
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background: #FFFFFF;
+            border: 1.5px solid #CBD5E1;
+            color: var(--color-text-main);
+        }
+
+        .btn-outline:hover {
+            border-color: #94A3B8;
+            background: #F8FAFC;
+        }
+
+        /* Results Modal */
+        .results-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1000;
+        }
+
+        .results-modal-overlay.active {
+            display: flex;
+            animation: fadeIn 0.25s ease-out;
+        }
+
+        .results-card {
+            background: #FFFFFF;
+            border-radius: 24px;
+            max-width: 600px;
+            width: 100%;
+            padding: 36px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            text-align: center;
+            animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .achievement-icon {
+            font-size: 56px;
+            margin-bottom: 16px;
+        }
+
+        .results-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--color-text-main);
+            margin-bottom: 8px;
+        }
+
+        .results-score-badge {
+            font-family: 'Outfit', sans-serif;
+            font-size: 42px;
+            font-weight: 900;
+            background: var(--color-gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 16px 0;
+        }
+
+        .pillars-breakdown {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin: 24px 0;
+        }
+
+        .pillar-card {
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 12px 8px;
+        }
+
+        .pillar-card-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--color-text-muted);
+            margin-bottom: 4px;
+        }
+
+        .pillar-card-val {
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+            font-weight: 800;
+            color: #4F46E5;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes scaleIn {
+            from { opacity: 0; transform: scale(0.92); }
+            to { opacity: 1; transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="badge-mode">✨ Mode B · Progressive Scaffolding Cloze</div>
+            <h1 id="quiz-title">Discourse Cloze Assessment</h1>
+            <p class="subtitle" id="quiz-subtitle">
+                Complete the passage by retrieving the target words. You may use 💡 Hints (-20 pts) or ⚅ 4 Options (-40 pts) if stuck.
+            </p>
+        </header>
+
+        <!-- Live Stats Banner -->
+        <div class="score-banner">
+            <div class="score-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Total Score</span>
+                    <span class="stat-val" id="stat-total-score">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Answered</span>
+                    <span class="stat-val" id="stat-answered">0 / 10</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Active Recall</span>
+                    <span class="stat-val" id="stat-active-recall">0%</span>
+                </div>
+            </div>
+            <div class="progress-box">
+                <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--color-text-muted);">
+                    <span>Progress</span>
+                    <span id="stat-progress-pct">0%</span>
+                </div>
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar-fill" id="progress-bar-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Layout: Passage vs. Inspector -->
+        <div class="grid-layout">
+            <!-- Left: Continuous Reading Passage with Inline Slots -->
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span>📖</span>
+                        <span>Reading Passage</span>
+                    </div>
+                    <span style="font-size: 13px; color: var(--color-text-muted);" id="token-counter-label"></span>
+                </div>
+                <div class="passage-body" id="passage-container">
+                    <!-- Populated by JavaScript -->
+                </div>
+                <div class="action-bar">
+                    <button class="btn btn-outline" id="btn-reset">Reset</button>
+                    <button class="btn btn-outline" id="btn-toggle-explanations">Reveal All</button>
+                    <button class="btn btn-primary" id="btn-submit-all">Submit &amp; Check Exam</button>
+                </div>
+            </div>
+
+            <!-- Right: Dynamic Inspection & Scaffolding Panel -->
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span>🎯</span>
+                        <span>Scaffolding Microscope</span>
+                    </div>
+                    <span id="active-blank-badge" style="font-size: 13px; font-weight: 600; color: #6366F1;">Select a blank</span>
+                </div>
+
+                <div class="inspector-placeholder" id="inspector-placeholder">
+                    <div style="font-size: 40px; margin-bottom: 12px;">👆</div>
+                    <p style="font-weight: 600; margin-bottom: 4px;">Click any input slot in the passage</p>
+                    <p style="font-size: 13.5px;">Type your answer for maximum score, or use progressive scaffolding if needed.</p>
+                </div>
+
+                <div class="inspector-content" id="inspector-content">
+                    <div class="blank-meta-row">
+                        <div class="blank-title" id="inspector-blank-title">Blank #1</div>
+                        <span class="pillar-tag pillar-1" id="inspector-pillar-tag">Discourse Cohesion</span>
+                    </div>
+
+                    <div class="sentence-box" id="inspector-sentence-box">
+                        Context sentence loading...
+                    </div>
+
+                    <!-- Stage 1 Hint Card -->
+                    <div class="scaffold-card hint-card" id="inspector-hint-card">
+                        <div class="hint-header">
+                            <span>💡</span>
+                            <span>Grammatical Clue (-20 pts max)</span>
+                        </div>
+                        <div id="inspector-hint-text" style="font-size: 14px; line-height: 1.5;"></div>
+                    </div>
+
+                    <!-- Stage 2 Four-Options Card -->
+                    <div class="scaffold-card options-card" id="inspector-options-card">
+                        <div class="options-header">
+                            <span>⚅ 4 Peer Options (-40 pts max)</span>
+                            <span style="font-size: 12px; font-weight: 600; color: #7E22CE;">Single-Fit Discrimination</span>
+                        </div>
+                        <div class="options-grid" id="inspector-options-grid">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Explanation Card -->
+                    <div class="explanation-card" id="inspector-explanation-card">
+                        <div class="explanation-title">
+                            <span>📋</span>
+                            <span>Pedagogical Analysis</span>
+                        </div>
+                        <div class="explanation-text" id="inspector-explanation-text"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Modal -->
+    <div class="results-modal-overlay" id="results-modal">
+        <div class="results-card">
+            <div class="achievement-icon" id="res-icon">🏆</div>
+            <h2 class="results-title" id="res-title">Distinguished Achievement!</h2>
+            <p id="res-desc" style="color: var(--color-text-muted); font-size: 15px;">Superb syntagmatic retrieval and discourse control.</p>
+            <div class="results-score-badge" id="res-score-badge">940 / 1000</div>
+
+            <div class="pillars-breakdown">
+                <div class="pillar-card">
+                    <div class="pillar-card-title">Discourse Cohesion</div>
+                    <div class="pillar-card-val" id="res-pillar-1">100%</div>
+                </div>
+                <div class="pillar-card">
+                    <div class="pillar-card-title">MWU &amp; Valency</div>
+                    <div class="pillar-card-val" id="res-pillar-2">90%</div>
+                </div>
+                <div class="pillar-card">
+                    <div class="pillar-card-title">Lexico-Grammar</div>
+                    <div class="pillar-card-val" id="res-pillar-3">92%</div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: center; gap: 12px; margin-top: 20px;">
+                <button class="btn btn-outline" onclick="closeResultsModal()">Review Mistakes</button>
+                <button class="btn btn-primary" onclick="location.reload()">Try Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Injected data payload
+        const quizData = {};
+
+        // State variables
+        let activeBlankId = 1;
+        let userAnswers = {}; // { blankId: { value: "", stage: 0, points: 0, checked: false, isCorrect: false } }
+        let totalBlanks = 0;
+
+        function initQuiz() {
+            if (!quizData || !quizData.blanks || quizData.blanks.length === 0) {
+                document.getElementById("passage-container").innerHTML = "<p>No cloze data loaded.</p>";
+                return;
+            }
+
+            totalBlanks = quizData.blanks.length;
+            if (quizData.title) {
+                document.getElementById("quiz-title").innerText = quizData.title;
+            }
+            if (quizData.token_count) {
+                document.getElementById("token-counter-label").innerText = `${quizData.token_count} words`;
+            }
+
+            // Initialize user answers state
+            quizData.blanks.forEach(b => {
+                userAnswers[b.blank_index] = {
+                    value: "",
+                    stage: 0, // 0 = Active Recall, 1 = Hint Used, 2 = Options Revealed
+                    points: 0,
+                    checked: false,
+                    isCorrect: false
+                };
+            });
+
+            renderPassage();
+            updateStats();
+            selectBlank(1);
+            attachGlobalEvents();
+        }
+
+        function renderPassage() {
+            const container = document.getElementById("passage-container");
+            container.innerHTML = "";
+
+            // Use paragraphs or fallback to split
+            const paras = quizData.paragraphs || (quizData.passage ? quizData.passage.split("\n\n") : []);
+            
+            // Map each blank to its slot regex
+            let blankMap = {};
+            quizData.blanks.forEach(b => {
+                blankMap[b.blank_index] = b;
+            });
+
+            // Replace occurrences of "[i] _____" in paragraphs
+            paras.forEach((pText, pIdx) => {
+                const pElem = document.createElement("p");
+                pElem.className = "passage-paragraph";
+
+                // Scan for blank placeholders like [1] _____ or [1] ____
+                let replacedHtml = pText;
+                for (let i = 1; i <= totalBlanks; i++) {
+                    const blank = blankMap[i];
+                    if (!blank) continue;
+
+                    // Match `[i] _____` or `[i] ____` or `[i] ...`
+                    const pattern = new RegExp(`\\[${i}\\]\\s*_{2,}`, "g");
+                    const slotHtml = `
+                        <span class="cloze-slot" id="slot-${i}" data-id="${i}">
+                            <span class="slot-index">[${i}]</span>
+                            <input type="text" class="cloze-input" id="input-${i}" data-id="${i}" autocomplete="off" spellcheck="false" placeholder="...">
+                            <button class="slot-btn btn-hint" data-id="${i}" title="Hint (-20 pts)">💡</button>
+                            <button class="slot-btn btn-options" data-id="${i}" title="Options (-40 pts)">⚅</button>
+                            <span class="slot-status-icon" id="status-${i}"></span>
+                        </span>
+                    `;
+                    replacedHtml = replacedHtml.replace(pattern, slotHtml);
+                }
+
+                pElem.innerHTML = replacedHtml;
+                container.appendChild(pElem);
+            });
+
+            // Attach listeners to newly created slot widgets
+            quizData.blanks.forEach(b => {
+                const id = b.blank_index;
+                const slotElem = document.getElementById(`slot-${id}`);
+                const inputElem = document.getElementById(`input-${id}`);
+                const btnHint = slotElem ? slotElem.querySelector(".btn-hint") : null;
+                const btnOptions = slotElem ? slotElem.querySelector(".btn-options") : null;
+
+                if (inputElem) {
+                    inputElem.addEventListener("focus", () => selectBlank(id));
+                    inputElem.addEventListener("input", (e) => {
+                        userAnswers[id].value = e.target.value.trim();
+                        // Auto-adjust width slightly
+                        inputElem.style.width = Math.max(76, (e.target.value.length + 2) * 9.5) + "px";
+                        updateStats();
+                    });
+                    inputElem.addEventListener("keydown", (e) => {
+                        if (e.key === "Enter") {
+                            checkBlankAnswer(id);
+                            // Focus next blank
+                            if (id < totalBlanks) selectBlank(id + 1, true);
+                        } else if (e.key === "Tab" && !e.shiftKey) {
+                            if (id < totalBlanks) {
+                                e.preventDefault();
+                                selectBlank(id + 1, true);
+                            }
+                        }
+                    });
+                }
+
+                if (btnHint) {
+                    btnHint.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        useHint(id);
+                    });
+                }
+
+                if (btnOptions) {
+                    btnOptions.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        useOptions(id);
+                    });
+                }
+
+                if (slotElem) {
+                    slotElem.addEventListener("click", () => selectBlank(id, true));
+                }
+            });
+        }
+
+        function selectBlank(id, focusInput = false) {
+            activeBlankId = id;
+            const blank = quizData.blanks.find(b => b.blank_index === id);
+            if (!blank) return;
+
+            // Highlight active slot in text
+            document.querySelectorAll(".cloze-slot").forEach(s => s.classList.remove("active"));
+            const curSlot = document.getElementById(`slot-${id}`);
+            if (curSlot) {
+                curSlot.classList.add("active");
+                if (focusInput) {
+                    const input = document.getElementById(`input-${id}`);
+                    if (input) input.focus();
+                }
+            }
+
+            // Update Inspector Panel
+            document.getElementById("inspector-placeholder").style.display = "none";
+            const content = document.getElementById("inspector-content");
+            content.classList.add("active");
+
+            document.getElementById("inspector-blank-title").innerText = `Blank #${id}`;
+            document.getElementById("active-blank-badge").innerText = `Slot #${id} of ${totalBlanks}`;
+
+            const pillarTag = document.getElementById("inspector-pillar-tag");
+            pillarTag.className = `pillar-tag pillar-${blank.pillar}`;
+            pillarTag.innerText = blank.pillar_label || `Pillar ${blank.pillar}`;
+
+            // Highlight blank in sentence
+            const sentBox = document.getElementById("inspector-sentence-box");
+            const maskedSentence = blank.question || blank.sentence_text || "Context sentence";
+            sentBox.innerHTML = maskedSentence.replace(new RegExp(`\\[${id}\\]\\s*_{2,}`, "g"), `<strong>[${id}] _____</strong>`);
+
+            // Hint Card
+            const hintCard = document.getElementById("inspector-hint-card");
+            const hintText = document.getElementById("inspector-hint-text");
+            if (userAnswers[id].stage >= 1) {
+                hintCard.classList.add("active");
+                hintText.innerText = blank.clue || "No specific clue available.";
+            } else {
+                hintCard.classList.remove("active");
+            }
+
+            // Options Card
+            const optionsCard = document.getElementById("inspector-options-card");
+            const optionsGrid = document.getElementById("inspector-options-grid");
+            if (userAnswers[id].stage >= 2) {
+                optionsCard.classList.add("active");
+                optionsGrid.innerHTML = "";
+                (blank.options || []).forEach((opt, optIdx) => {
+                    const btn = document.createElement("button");
+                    btn.className = "opt-btn";
+                    if (userAnswers[id].value.toLowerCase() === opt.toLowerCase()) {
+                        btn.classList.add("selected");
+                    }
+                    const letter = String.fromCharCode(65 + optIdx);
+                    btn.innerHTML = `<span class="opt-label">${letter}</span><span>${opt}</span>`;
+                    btn.addEventListener("click", () => {
+                        const inputElem = document.getElementById(`input-${id}`);
+                        if (inputElem) {
+                            inputElem.value = opt;
+                            userAnswers[id].value = opt;
+                            checkBlankAnswer(id);
+                            selectBlank(id);
+                        }
+                    });
+                    optionsGrid.appendChild(btn);
+                });
+            } else {
+                optionsCard.classList.remove("active");
+            }
+
+            // Explanation Card
+            const expCard = document.getElementById("inspector-explanation-card");
+            const expText = document.getElementById("inspector-explanation-text");
+            if (userAnswers[id].checked) {
+                expCard.classList.add("active");
+                expText.innerText = blank.explanation || "Correct answer fits the syntagmatic frame.";
+            } else {
+                expCard.classList.remove("active");
+            }
+        }
+
+        function useHint(id) {
+            if (userAnswers[id].stage < 1) {
+                userAnswers[id].stage = 1;
+            }
+            selectBlank(id);
+            const slot = document.getElementById(`slot-${id}`);
+            if (slot) {
+                const btn = slot.querySelector(".btn-hint");
+                if (btn) btn.classList.add("active");
+            }
+        }
+
+        function useOptions(id) {
+            if (userAnswers[id].stage < 2) {
+                userAnswers[id].stage = 2;
+            }
+            selectBlank(id);
+            const slot = document.getElementById(`slot-${id}`);
+            if (slot) {
+                const btnO = slot.querySelector(".btn-options");
+                if (btnO) btnO.classList.add("active");
+                const btnH = slot.querySelector(".btn-hint");
+                if (btnH) btnH.classList.add("active");
+            }
+        }
+
+        function normalizeWord(w) {
+            return (w || "").trim().toLowerCase().replace(/['’]/g, "'");
+        }
+
+        function checkBlankAnswer(id) {
+            const blank = quizData.blanks.find(b => b.blank_index === id);
+            if (!blank) return;
+
+            const uVal = normalizeWord(userAnswers[id].value);
+            const targetVal = normalizeWord(blank.target_word || blank.raw_word);
+
+            const isMatch = (uVal === targetVal);
+            userAnswers[id].checked = true;
+            userAnswers[id].isCorrect = isMatch;
+
+            const slot = document.getElementById(`slot-${id}`);
+            const statusIcon = document.getElementById(`status-${id}`);
+
+            slot.classList.remove("correct-100", "correct-80", "correct-60", "incorrect");
+
+            if (isMatch) {
+                if (userAnswers[id].stage === 0) {
+                    userAnswers[id].points = 100;
+                    slot.classList.add("correct-100");
+                    statusIcon.innerText = "✓ +100";
+                    statusIcon.style.color = "#059669";
+                } else if (userAnswers[id].stage === 1) {
+                    userAnswers[id].points = 80;
+                    slot.classList.add("correct-80");
+                    statusIcon.innerText = "✓ +80";
+                    statusIcon.style.color = "#0891B2";
+                } else {
+                    userAnswers[id].points = 60;
+                    slot.classList.add("correct-60");
+                    statusIcon.innerText = "✓ +60";
+                    statusIcon.style.color = "#2563EB";
+                }
+            } else {
+                userAnswers[id].points = 0;
+                slot.classList.add("incorrect");
+                statusIcon.innerText = `✗ (${blank.raw_word || blank.target_word})`;
+                statusIcon.style.color = "#DC2626";
+            }
+
+            updateStats();
+            selectBlank(id);
+        }
+
+        function updateStats() {
+            let totalScore = 0;
+            let answeredCount = 0;
+            let directActiveCount = 0;
+
+            quizData.blanks.forEach(b => {
+                const ans = userAnswers[b.blank_index];
+                if (ans.value.length > 0) answeredCount++;
+                if (ans.checked && ans.isCorrect && ans.stage === 0) directActiveCount++;
+                totalScore += ans.points;
+            });
+
+            document.getElementById("stat-total-score").innerText = totalScore;
+            document.getElementById("stat-answered").innerText = `${answeredCount} / ${totalBlanks}`;
+            
+            const activeRecallPct = answeredCount > 0 ? Math.round((directActiveCount / totalBlanks) * 100) : 0;
+            document.getElementById("stat-active-recall").innerText = `${activeRecallPct}%`;
+
+            const progressPct = totalBlanks > 0 ? Math.round((answeredCount / totalBlanks) * 100) : 0;
+            document.getElementById("stat-progress-pct").innerText = `${progressPct}%`;
+            document.getElementById("progress-bar-fill").style.width = `${progressPct}%`;
+        }
+
+        function submitAll() {
+            quizData.blanks.forEach(b => {
+                checkBlankAnswer(b.blank_index);
+            });
+
+            // Calculate pillar scores
+            let pillarPoints = { 1: { scored: 0, max: 0 }, 2: { scored: 0, max: 0 }, 3: { scored: 0, max: 0 } };
+            let totalScored = 0;
+            let totalMax = totalBlanks * 100;
+
+            quizData.blanks.forEach(b => {
+                const ans = userAnswers[b.blank_index];
+                const p = b.pillar || 1;
+                if (!pillarPoints[p]) pillarPoints[p] = { scored: 0, max: 0 };
+                pillarPoints[p].scored += ans.points;
+                pillarPoints[p].max += 100;
+                totalScored += ans.points;
+            });
+
+            const pct1 = pillarPoints[1].max > 0 ? Math.round((pillarPoints[1].scored / pillarPoints[1].max) * 100) : 100;
+            const pct2 = pillarPoints[2].max > 0 ? Math.round((pillarPoints[2].scored / pillarPoints[2].max) * 100) : 100;
+            const pct3 = pillarPoints[3].max > 0 ? Math.round((pillarPoints[3].scored / pillarPoints[3].max) * 100) : 100;
+
+            document.getElementById("res-pillar-1").innerText = `${pct1}%`;
+            document.getElementById("res-pillar-2").innerText = `${pct2}%`;
+            document.getElementById("res-pillar-3").innerText = `${pct3}%`;
+
+            document.getElementById("res-score-badge").innerText = `${totalScored} / ${totalMax}`;
+
+            const overallPct = Math.round((totalScored / totalMax) * 100);
+            const iconElem = document.getElementById("res-icon");
+            const titleElem = document.getElementById("res-title");
+            const descElem = document.getElementById("res-desc");
+
+            if (overallPct >= 90) {
+                iconElem.innerText = "🏆";
+                titleElem.innerText = "Distinguished Achievement!";
+                descElem.innerText = "Outstanding active syntagmatic recall and discourse cohesion mastery!";
+            } else if (overallPct >= 75) {
+                iconElem.innerText = "🎉";
+                titleElem.innerText = "Excellent Proficiency!";
+                descElem.innerText = "Strong command of multi-word units and sentence-linking structures.";
+            } else if (overallPct >= 60) {
+                iconElem.innerText = "💡";
+                titleElem.innerText = "Good Effort!";
+                descElem.innerText = "Solid understanding. Review the collocations and closed-class linkers.";
+            } else {
+                iconElem.innerText = "📚";
+                titleElem.innerText = "Keep Practicing!";
+                descElem.innerText = "Study the pedagogical explanations and practice open-cloze retrieval.";
+            }
+
+            document.getElementById("results-modal").classList.add("active");
+        }
+
+        function closeResultsModal() {
+            document.getElementById("results-modal").classList.remove("active");
+        }
+
+        function toggleAllExplanations() {
+            quizData.blanks.forEach(b => {
+                useOptions(b.blank_index);
+                const input = document.getElementById(`input-${b.blank_index}`);
+                if (input && !input.value) {
+                    input.value = b.raw_word || b.target_word;
+                    userAnswers[b.blank_index].value = input.value;
+                }
+                checkBlankAnswer(b.blank_index);
+            });
+            selectBlank(activeBlankId);
+        }
+
+        function resetAssessment() {
+            if (!confirm("Are you sure you want to reset all your answers?")) return;
+            quizData.blanks.forEach(b => {
+                userAnswers[b.blank_index] = {
+                    value: "",
+                    stage: 0,
+                    points: 0,
+                    checked: false,
+                    isCorrect: false
+                };
+                const input = document.getElementById(`input-${b.blank_index}`);
+                if (input) {
+                    input.value = "";
+                    input.style.width = "84px";
+                }
+                const slot = document.getElementById(`slot-${b.blank_index}`);
+                if (slot) slot.className = "cloze-slot";
+                const status = document.getElementById(`status-${b.blank_index}`);
+                if (status) status.innerText = "";
+                const btnH = slot.querySelector(".btn-hint");
+                if (btnH) btnH.classList.remove("active");
+                const btnO = slot.querySelector(".btn-options");
+                if (btnO) btnO.classList.remove("active");
+            });
+            updateStats();
+            selectBlank(1);
+        }
+
+        function attachGlobalEvents() {
+            document.getElementById("btn-submit-all").addEventListener("click", submitAll);
+            document.getElementById("btn-reset").addEventListener("click", resetAssessment);
+            document.getElementById("btn-toggle-explanations").addEventListener("click", toggleAllExplanations);
+        }
+
+        // Initialize when DOM ready
+        window.addEventListener("DOMContentLoaded", initQuiz);
+    </script>
+</body>
+</html>

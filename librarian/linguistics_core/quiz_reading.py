@@ -413,13 +413,27 @@ class QuizReadingMixin:
         blueprints: List[ReadingItemBlueprint] = []
 
         # Helper: Extract anchor topic noun
+        def clean_topic_text(c_text: str) -> str:
+            t = re.sub(r"^[\s•\-*#>\d\.\(\)]+", "", c_text)
+            t = re.sub(r"\s*-\s*", "-", t)
+            t = re.sub(r"\s+'s\b", "'s", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            t = re.sub(r"^(?:my|your|his|her|its|our|their|this|that|these|those)\s+", "", t, flags=re.I)
+            return t.strip()
+
         def get_topic_noun(s_text: str) -> str:
             stopwords = {
                 "this", "that", "these", "those", "their", "there", "which", "where", "about", "after",
                 "here", "very", "what", "when", "some", "more", "most", "also", "just", "such", "than",
                 "then", "from", "with", "into", "over", "under", "both", "each", "other", "have", "were",
                 "been", "would", "could", "should", "will", "shall", "does", "doing", "done", "make", "made",
-                "many", "much", "few", "several", "every", "all",
+                "many", "much", "few", "several", "every", "all", "not", "no", "never", "neither", "nor",
+                "none", "nobody", "nothing", "and", "but", "or", "so", "as", "well", "if", "while", "even",
+                "only", "too", "quite", "really", "almost", "nearly", "up", "down", "out", "off", "on", "in",
+                "at", "by", "for", "to", "of", "i", "me", "my", "myself", "we", "us", "our", "ours", "you",
+                "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them",
+                "their", "theirs", "is", "am", "are", "was", "be", "has", "had", "having", "did", "can",
+                "may", "might", "must", "let", "today", "now", "yesterday", "tomorrow",
             }
             light_nouns = {
                 "thing", "things", "way", "ways", "fact", "facts", "case", "cases",
@@ -432,6 +446,10 @@ class QuizReadingMixin:
                 "person", "people", "one", "ones", "something", "anything", "nothing",
                 "end", "ends", "start", "starts", "beginning", "beginnings", "time", "times",
                 "year", "years", "day", "days", "week", "weeks", "month", "months",
+                "story", "stories", "example", "examples", "instance", "instances",
+                "passage", "paragraph", "author", "article", "text", "section", "detail",
+                "details", "question", "questions", "answer", "answers", "word", "words",
+                "life", "lives", "rest", "course", "bit", "bits", "side", "sides",
             }
             nlp = cls.get_spacy() if hasattr(cls, "get_spacy") else None
             if nlp:
@@ -439,44 +457,70 @@ class QuizReadingMixin:
                     doc = nlp(s_text)
                     # 1. Prioritize salient named entities (ORG, PERSON, PRODUCT, GPE, etc.)
                     for ent in doc.ents:
-                        if ent.label_ not in ("CARDINAL", "ORDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY"):
-                            ent_text = ent.text.strip()
+                        if ent.label_ in ("ORG", "GPE", "PRODUCT", "EVENT", "WORK_OF_ART", "LAW", "NORP", "PERSON"):
+                            ent_text = clean_topic_text(ent.text)
                             if (
                                 len(ent_text) > 2
                                 and ent_text.lower() not in stopwords
                                 and ent_text.lower() not in light_nouns
+                                and not any(w in stopwords for w in ent_text.lower().split() if len(ent_text.split()) == 1)
                             ):
                                 return ent_text
-                    # 2. Prioritize key noun chunks (multi-word entities or salient concepts)
+
+                    # 2. Prioritize key noun chunks (multi-word concepts or specific nouns)
                     for chunk in doc.noun_chunks:
-                        chunk_words = [
-                            t for t in chunk
-                            if t.pos_ not in ("DET", "PRON")
-                            and t.text.lower() not in stopwords
-                        ]
-                        if chunk_words:
-                            c_text = " ".join(t.text for t in chunk_words).strip()
-                            if (
-                                len(c_text) > 2
-                                and c_text.lower() not in light_nouns
-                                and not all(t.text.lower() in light_nouns for t in chunk_words)
-                            ):
-                                return c_text
-                    # 3. Fall back to individual content nouns
-                    nouns = [
-                        t.text for t in doc
-                        if t.pos_ in ("NOUN", "PROPN")
-                        and t.text.lower() not in stopwords
-                        and t.text.lower() not in light_nouns
-                        and len(t.text) > 2
-                    ]
-                    if nouns:
-                        return nouns[0]
+                        if chunk.root.pos_ not in ("NOUN", "PROPN"):
+                            continue
+                        root_lemma = chunk.root.lemma_.lower()
+                        root_text = chunk.root.text.lower()
+                        if (
+                            root_lemma in light_nouns
+                            or root_text in light_nouns
+                            or root_lemma in stopwords
+                            or root_text in stopwords
+                        ):
+                            continue
+
+                        c_text = clean_topic_text(chunk.text)
+                        if not c_text or len(c_text) < 3:
+                            continue
+
+                        first_w = c_text.split()[0].lower()
+                        if first_w in ("not", "no", "never", "neither", "nor", "what", "which", "how", "why", "only", "even"):
+                            continue
+
+                        if c_text.lower() in light_nouns or c_text.lower() in stopwords:
+                            continue
+
+                        return c_text
                 except Exception:
                     pass
-            matches = re.findall(r"\b[A-Z][a-z]+\b|\b[a-z]{4,}\b", s_text)
-            candidates = [m for m in matches if m.lower() not in stopwords and m.lower() not in light_nouns]
-            return candidates[0] if candidates else ""
+            return ""
+
+        def score_sentence(s_text: str) -> int:
+            score = 10
+            words = s_text.split()
+            w_len = len(words)
+            if w_len < 6:
+                score -= 10
+            elif w_len < 10:
+                score -= 4
+            elif 12 <= w_len <= 35:
+                score += 4
+
+            # Penalize meta-announcements and framing
+            if re.match(r"^(here\s+(?:is|are|'s)|let(?:\'s|\s+us|\s+me)|of course|in this section|for example|as (?:we|you) know)\b", s_text, re.I):
+                score -= 8
+
+            # Penalize quotes / direct speech fragments
+            if re.match(r'^[“\"\'‘]', s_text) or re.search(r'[”\"\'’]$', s_text) or '"' in s_text or '“' in s_text:
+                score -= 5
+
+            # Penalize list bullets if any
+            if s_text.startswith(('•', '-', '*')):
+                score -= 2
+
+            return score
 
         used_sections: Set[int] = set()
         used_anchors: Set[str] = set()
@@ -492,28 +536,33 @@ class QuizReadingMixin:
             candidates: List[Tuple[int, str, str]],
             fallback_pool: Optional[List[Tuple[int, str, str]]] = None,
         ) -> Tuple[int, str, str]:
-            # 1. Prefer candidate in an unused section
+            # 1. Prefer candidate in an unused section (following candidate sequence)
             for c in candidates:
                 if c[0] not in used_sections and c[1] not in used_anchors:
                     return c
-            # 2. Prefer unused section from fallback pool or sentence pool
+
+            # 2. Prefer unused section from fallback pool or sentence pool with highest sentence score
             unused_sec_indices = [s.section_index for s in graph.sections if s.section_index not in used_sections]
-            if unused_sec_indices:
-                target_sec_idx = unused_sec_indices[0]
+            for target_sec_idx in unused_sec_indices:
                 sec_sentences = [
                     s for s in (fallback_pool or graph.sentence_pool)
                     if s[0] == target_sec_idx and s[1] not in used_anchors
                 ]
                 if sec_sentences:
+                    sec_sentences.sort(key=lambda s: score_sentence(s[2]), reverse=True)
                     return sec_sentences[0]
+
             # 3. Candidate not in used anchors
             for c in candidates:
                 if c[1] not in used_anchors:
                     return c
-            # 4. Any sentence not in used anchors
-            for s in (fallback_pool or graph.sentence_pool):
-                if s[1] not in used_anchors:
-                    return s
+
+            # 4. Any sentence not in used anchors with highest sentence score
+            pool = [s for s in (fallback_pool or graph.sentence_pool) if s[1] not in used_anchors]
+            if pool:
+                pool.sort(key=lambda s: score_sentence(s[2]), reverse=True)
+                return pool[0]
+
             return graph.sentence_pool[0]
 
         def get_distant_ref(target_sec_idx: int) -> Tuple[str, str]:
@@ -1136,7 +1185,7 @@ class QuizReadingMixin:
             factual_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.OPPOSITE_FACT,
-                    blueprint_instruction="State the opposite of the fact (e.g. say they refused or did not do it).",
+                    blueprint_instruction="State the opposite of the key fact or action using simple words.",
                     target_misconception="Contradicting explicit information mentioned in the paragraph.",
                 ),
                 ReadingDistractorSpec(
