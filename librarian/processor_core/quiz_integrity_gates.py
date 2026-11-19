@@ -345,6 +345,22 @@ class QuizIntegrityGatesMixin:
                         f"Item #{idx + 1} ('{target}'): Distractor option(s) echo verbatim in question stem outside blank: {echoed_dists_v}"
                     )
 
+            # 2c. Scaffolding & Meta-Placeholder Leakage Gate: reject stems that copy prompt metasyntax verbatim
+            if stem:
+                _meta_leak = re.search(
+                    r"(?:\b(?:to\s+do|doing)\s+something\b"
+                    r"|\b(?:is/are|was/were|sb/sth|sth/sb)\b"
+                    r"|\(\s*should\s*\)"
+                    r"|\[(?:concrete\s+physical|physical\s+(?:object|person)|sb|sth|doing\s+sth|someone|something|V-base|verb|noun)[^\]]*\])",
+                    stem,
+                    flags=re.IGNORECASE,
+                )
+                if _meta_leak:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Prompt metasyntax leaked verbatim into question stem: '{_meta_leak.group(0)}'"
+                    )
+
             # 3. Degraded-Options & Key-Target Alignment Gate (structural option cardinality & key invariant)
             if "target_word" in q_dict and options:
                 if len(options) < 4:

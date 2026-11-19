@@ -1634,7 +1634,10 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                 # Scaffolding & Meta-Instruction Leakage Gate: stem cannot contain prompt template strings or unreplaced bracketed placeholders
                 scaffold_leak = re.search(
                     r"(?:\b(?:Fit into frame|Fit into the Pattern|Plural noun slot required|Complete predicate required|Write a natural sentence|Model:)\b"
-                    r"|\[(?:concrete\s+physical|physical\s+(?:object|person)|sb|sth|doing\s+sth|someone|something)[^\]]*\])",
+                    r"|\b(?:to\s+do|doing)\s+something\b"
+                    r"|\b(?:is/are|was/were|sb/sth|sth/sb)\b"
+                    r"|\(\s*should\s*\)"
+                    r"|\[(?:concrete\s+physical|physical\s+(?:object|person)|sb|sth|doing\s+sth|someone|something|V-base|verb|noun)[^\]]*\])",
                     question,
                     flags=re.IGNORECASE,
                 )
