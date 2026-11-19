@@ -3223,6 +3223,7 @@ class PedlexDbMixin:
                             "wrong_frame": r[5] or norm_forb,
                             "warning_note": norm_rule,
                             "authentic_example": r[6],
+                            "model_example": r[6],
                         })
             except Exception:
                 pass

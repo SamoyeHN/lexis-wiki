@@ -362,7 +362,7 @@ class TestAnchoredTranslation(unittest.TestCase):
         self.assertEqual(bp_lex["target_keyword"], "originate")
         self.assertEqual(bp_lex["target_grammar"], "")
         self.assertEqual(bp_lex["flaw_category"], "lexical")
-        self.assertIn("Preposition Trap", bp_lex["flaw_type"])
+        self.assertTrue(any(t in bp_lex["flaw_type"] for t in ("Preposition Trap", "Usage Trap", "Collocation")))
 
         for bp in blueprints:
             self.assertIn(bp["correct_answer_index"], (0, 1))

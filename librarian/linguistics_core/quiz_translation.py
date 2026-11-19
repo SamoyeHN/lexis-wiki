@@ -396,6 +396,7 @@ class QuizTranslationMixin:
                     "GRAM_BOX_DONTSAY": 0,
                     "GRAMBOX_BADEXA": 0,
                     "GRAMBOX_RULE_TRAP": 1,
+                    "COMMON_ERROR_CORPUS": 1,
                     "PREP_COLLOC_TRAP": 2,
                     "SYNTAX_COMP_TRAP": 3,
                     "LEXICAL_VALENCY_FRAME": 4,
@@ -519,7 +520,7 @@ class QuizTranslationMixin:
             elif t_type == "SYNTAX_COMP_TRAP":
                 lex_flaw_label = f"Subcategorization Complement Trap (`{c_frame}` vs `{w_frame}`)"
                 lex_corruption_step = f"replacing the required complement frame `{c_frame}` with `{w_frame}`"
-            elif t_type in ("GRAM_BOX_DONTSAY", "GRAMBOX_BADEXA", "GRAMBOX_RULE_TRAP"):
+            elif t_type in ("GRAM_BOX_DONTSAY", "GRAMBOX_BADEXA", "GRAMBOX_RULE_TRAP", "COMMON_ERROR_CORPUS"):
                 bad_ex = f" (Do NOT say: {dont_say})" if dont_say else f" (`{w_frame}`)"
                 lex_flaw_label = f"Lexical Collocation / Usage Trap on `{w_clean}`{bad_ex}"
                 lex_corruption_step = f"introducing the authentic learner error `{w_frame or dont_say}` instead of `{c_frame}`"
@@ -1074,6 +1075,7 @@ class QuizTranslationMixin:
                 "GRAM_BOX_DONTSAY",
                 "GRAMBOX_BADEXA",
                 "GRAMBOX_RULE_TRAP",
+                "COMMON_ERROR_CORPUS",
             ):
                 v_copy = dict(v_it)
                 v_copy["lex_info"] = lex_info
