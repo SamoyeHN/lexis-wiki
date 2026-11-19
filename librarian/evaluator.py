@@ -1661,6 +1661,45 @@ def _score_pedagogy(items: List[Dict[str, Any]], task_type: str, user_prompt: st
                         f"❌ Quiz item '{target}': Target word leaks verbatim into question stem outside blank: {leaked_words}"
                     )
 
+                # Distractor Stem Echo Gate (vocabulary single-sentence items only):
+                # non-key content-word distractors (excluding function words & light verbs) must not appear verbatim in the stem
+                if is_list_valid and options and valid_idx and not is_translation and len(question) <= 350:
+                    _stem_words_low = {w.lower() for w in stem_words}
+                    _stem_lemmas_low = {
+                        (LinguisticEngine.lemma_of(w.lower()) or w.lower())
+                        for w in stem_words if len(w) >= 4
+                    }
+                    _echo_exempt = {
+                        "within", "beyond", "across", "around", "behind", "below", "beside", "between",
+                        "during", "except", "inside", "outside", "through", "throughout", "toward",
+                        "towards", "under", "until", "without", "against", "about", "above", "after",
+                        "along", "among", "before", "beneath", "despite",
+                        "make", "take", "give", "have", "keep", "find", "hold", "come", "turn", "bring",
+                        "leave", "work", "play", "show", "call", "help", "need", "want", "feel", "seem",
+                        "become", "start", "begin", "know", "think", "tell", "mean", "send", "use",
+                        "also", "even", "just", "only", "very", "much", "more", "most", "some", "many",
+                        "such", "than", "then", "that", "this", "with", "from", "into", "onto", "over",
+                        "when", "what", "which", "where", "while", "will", "would", "could", "should",
+                        "must", "been", "being", "were",
+                    }
+                    echoed_dists = []
+                    for o_i, opt in enumerate(options):
+                        if o_i == idx:
+                            continue
+                        d_clean = _clean_core(opt)
+                        if not d_clean or " " in d_clean or len(d_clean) < 4 or d_clean in _echo_exempt:
+                            continue
+                        d_lem = LinguisticEngine.lemma_of(d_clean) or d_clean
+                        if d_lem in _echo_exempt:
+                            continue
+                        if d_clean in _stem_words_low or (len(d_lem) >= 4 and d_lem in _stem_lemmas_low):
+                            echoed_dists.append(str(opt).strip())
+                    if echoed_dists:
+                        no_stem_leak = False
+                        flags.append(
+                            f"❌ Quiz item '{target}': Distractor option(s) echo verbatim in question stem outside blank: {echoed_dists}"
+                        )
+
                 # Article Leakage Gate (Pre-blank 'a', 'an', 'a(n)', or 'a/an' leaking answer or invalidating distractors)
                 no_article_leak = True
                 if re.search(r"\ba\s*(?:\(\s*n\s*\)|/\s*an)\s*_{2,}\b", question, flags=re.IGNORECASE):

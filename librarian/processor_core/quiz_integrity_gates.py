@@ -299,6 +299,52 @@ class QuizIntegrityGatesMixin:
                         f"Item #{idx + 1} ('{target}'): Distractors recycle headwords from current unit: {recycled_distractors}"
                     )
 
+            # 2b. Distractor Stem Echo Gate (vocabulary single-sentence items only):
+            # reject items where a non-key content-word distractor (excluding function words & light verbs) appears in the stem
+            _is_vocab_echo_scope = (
+                (not isinstance(quiz_obj, dict) or quiz_obj.get("quiz_type") in (None, "vocabulary"))
+                and len(stem) <= 350
+            )
+            if _is_vocab_echo_scope and options and stem:
+                stem_no_blank_v = re.sub(r'_{2,}', ' ', stem)
+                stem_words_v = re.findall(r'\b[a-zA-Z]+\b', stem_no_blank_v)
+                stem_words_low_v = {w.lower() for w in stem_words_v}
+                stem_lemmas_low_v = {
+                    (LinguisticEngine.lemma_of(w.lower()) or w.lower())
+                    for w in stem_words_v if len(w) >= 4
+                }
+                _echo_exempt_v = {
+                    "within", "beyond", "across", "around", "behind", "below", "beside", "between",
+                    "during", "except", "inside", "outside", "through", "throughout", "toward",
+                    "towards", "under", "until", "without", "against", "about", "above", "after",
+                    "along", "among", "before", "beneath", "despite",
+                    # High-frequency light/delexical verbs & function words that naturally co-occur in stems
+                    "make", "take", "give", "have", "keep", "find", "hold", "come", "turn", "bring",
+                    "leave", "work", "play", "show", "call", "help", "need", "want", "feel", "seem",
+                    "become", "start", "begin", "know", "think", "tell", "mean", "send", "use",
+                    "also", "even", "just", "only", "very", "much", "more", "most", "some", "many",
+                    "such", "than", "then", "that", "this", "with", "from", "into", "onto", "over",
+                    "when", "what", "which", "where", "while", "will", "would", "could", "should",
+                    "must", "been", "being", "were",
+                }
+                echoed_dists_v = []
+                for o_idx, opt in enumerate(options):
+                    if isinstance(correct_idx, int) and o_idx == correct_idx:
+                        continue
+                    d_clean_v = str(opt).strip().lower()
+                    if not d_clean_v or " " in d_clean_v or len(d_clean_v) < 4 or d_clean_v in _echo_exempt_v:
+                        continue
+                    d_lem_v = LinguisticEngine.lemma_of(d_clean_v) or d_clean_v
+                    if d_lem_v in _echo_exempt_v:
+                        continue
+                    if d_clean_v in stem_words_low_v or (len(d_lem_v) >= 4 and d_lem_v in stem_lemmas_low_v):
+                        echoed_dists_v.append(str(opt).strip())
+                if echoed_dists_v:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Item #{idx + 1} ('{target}'): Distractor option(s) echo verbatim in question stem outside blank: {echoed_dists_v}"
+                    )
+
             # 3. Degraded-Options & Key-Target Alignment Gate (structural option cardinality & key invariant)
             if "target_word" in q_dict and options:
                 if len(options) < 4:

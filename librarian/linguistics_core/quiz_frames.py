@@ -810,6 +810,48 @@ class QuizFramesMixin:
                     return "the"
             return d_l
 
+        def _pobj_phrase(prep_tok, max_words: int = 3) -> str:
+            """Extract a concise, non-forbidden prepositional object NP to anchor bare prep frames."""
+            if prep_tok is None:
+                return ""
+            pobj = next(
+                (c for c in prep_tok.children if c.dep_ == "pobj" and c.pos_ in ("NOUN", "PROPN", "PRON")),
+                None,
+            )
+            if pobj is None:
+                pcomp = next((c for c in prep_tok.children if c.dep_ == "pcomp" and c.pos_ == "VERB"), None)
+                if pcomp is not None and not _is_forbidden(pcomp.lemma_.lower()) and pcomp.lemma_.lower() not in cls._DELEXICAL_VERBS:
+                    return f" {pcomp.text.lower()}"
+                return ""
+            if pobj.pos_ == "PRON" or pobj.ent_type_ == "PERSON" or _is_forbidden(pobj.lemma_.lower()):
+                is_human = (
+                    pobj.text.lower() in ("him", "her", "me", "us", "you", "them", "someone", "somebody", "anyone", "everyone")
+                    or pobj.ent_type_ == "PERSON"
+                )
+                return " [someone]" if is_human else " [something]"
+            parts: List[str] = []
+            det_c = next((c for c in pobj.children if c.dep_ in ("det", "poss") and prep_tok.i < c.i < pobj.i), None)
+            if det_c is not None:
+                d_txt = det_c.text.strip().lower()
+                if d_txt.endswith("'s") or d_txt.endswith("’s") or (det_c.dep_ == "poss" and det_c.pos_ in ("NOUN", "PROPN")):
+                    parts.append("their")
+                elif d_txt in ("a", "an", "the", "this", "that", "these", "those", "some", "any", "my", "your", "his", "her", "its", "our", "their"):
+                    parts.append(d_txt)
+            mod_c = next(
+                (
+                    c for c in pobj.children
+                    if c.dep_ in ("amod", "compound")
+                    and prep_tok.i < c.i < pobj.i
+                    and c.is_alpha
+                    and not _is_forbidden(c.lemma_.lower())
+                ),
+                None,
+            )
+            if mod_c is not None:
+                parts.append(mod_c.text.lower())
+            parts.append(pobj.text.lower())
+            return " " + " ".join(parts[-max_words:])
+
         try:
             doc = nlp(ex_clean)
         except Exception:
@@ -1230,8 +1272,8 @@ class QuizFramesMixin:
                         correl_tail = f"as {doc[t_end_i + 1].text.lower()}"
                     return f"... {cop_word} {obj_slot}as ____ {correl_tail}"
 
-                if prep_child is not None and anchor_type != "verb_copula":
-                    return f"... {cop_word} {obj_slot}____ {prep_child.text.lower()}"
+                if prep_child is not None and (anchor_type != "verb_copula" or cop_word in ("be", "is", "are", "was", "were", "been")):
+                    return f"... {cop_word} {obj_slot}____ {prep_child.text.lower()}{_pobj_phrase(prep_child)}"
                 if anchor_type == "prep" and anchor and anchor.lower() != "as":
                     return f"... {cop_word} {obj_slot}____ {anchor.lower()}"
                 return f"... {cop_word} {obj_slot}____"
@@ -1357,7 +1399,7 @@ class QuizFramesMixin:
                     else:
                         _mid_slot = cls._resolve_object_animacy_from_example(ex_clean, ft_low, default_tag="something")
                     return f"... {left_aux}____ {_mid_slot} {prep_c.text.lower()}"
-                return f"... {left_aux}____ {prep_c.text.lower()}"
+                return f"... {left_aux}____ {prep_c.text.lower()}{_pobj_phrase(prep_c)}"
 
             # 3c. Direct object (`dobj` / `obj` / `oprd`)
             _temporal_np_nouns = {
@@ -1681,15 +1723,26 @@ class QuizFramesMixin:
                     return f"... {np_mid} ____ {prep_after.text.lower()}"
                 return f"... {np_mid} ____"
 
-            # 4c. Noun + bound preposition (`the ____ of`, `a ____ for`)
+            # 4c. Noun + bound preposition (`the ____ of the copyright laws`, `a ____ of doctors`)
             if prep_after is not None:
                 d_pref = det_str or (default_noun_det if not is_pure_uncountable_target else "")
-                return f"... {d_pref + ' ' if d_pref else ''}____ {prep_after.text.lower()}"
+                return f"... {d_pref + ' ' if d_pref else ''}____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
 
             # 4d. Subject of a lexical verb (`the ____ unfolds`)
             if t_tok.dep_ in ("nsubj", "nsubjpass") and t_tok.head and t_tok.head.pos_ in ("VERB", "AUX") and t_tok.head.i > t_tok.i:
                 v_head = t_tok.head
-                if v_head.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_head.lemma_.lower()):
+                if v_head.pos_ == "AUX" or v_head.lemma_.lower() in ("be", "have", "do"):
+                    # Sentence-initial existential/cataphoric 'The <noun> is that ...': preserve full clause-opener frame
+                    # without leading '...' so the LLM never embeds it mid-clause (e.g. 'in the ____ is').
+                    if (
+                        (det_tok is not None and det_tok.i == 0 or t_tok.i == 0)
+                        and v_head.lemma_.lower() == "be"
+                        and v_head.i + 1 < len(doc)
+                        and doc[v_head.i + 1].text.lower() == "that"
+                    ):
+                        d_cap = (det_str or "the").capitalize()
+                        return f"{d_cap} ____ {v_head.text.lower()} that ..."
+                elif v_head.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_head.lemma_.lower()):
                     d_pref = det_str or "the"
                     return f"... {d_pref} ____ {v_head.text.lower()}"
 
@@ -1705,9 +1758,31 @@ class QuizFramesMixin:
                 )
                 if is_initial_prep and t_end_i < len(doc) and doc[t_end_i].text in (",", ";"):
                     return f"{p_left.capitalize()} {det_in_ex + ' ' if det_in_ex else ''}____, ..."
+                _gov = t_tok.head.head if (t_tok.head and t_tok.head.head and t_tok.head.head != t_tok.head) else None
+                if (
+                    _gov is not None
+                    and _gov.pos_ in ("VERB", "ADJ", "NOUN")
+                    and _gov.is_alpha
+                    and 0 < (t_tok.head.i - _gov.i) <= 2
+                    and _gov.lemma_.lower() not in cls._DELEXICAL_VERBS
+                    and _gov.lemma_.lower() not in cls._ANCHOR_STOPWORDS
+                    and not _is_forbidden(_gov.lemma_.lower())
+                ):
+                    return f"... {_gov.text.lower()} {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
                 return f"... {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
 
             d_pref = det_str or "the"
+            _acl_v = next(
+                (
+                    c for c in t_tok.children
+                    if c.dep_ in ("acl", "relcl") and c.pos_ == "VERB" and c.i > t_tok.i
+                    and c.lemma_.lower() not in cls._DELEXICAL_VERBS
+                    and not _is_forbidden(c.lemma_.lower())
+                ),
+                None,
+            )
+            if _acl_v is not None:
+                return f"... {d_pref} ____ {_acl_v.text.lower()}"
             return f"... {d_pref} ____"
 
         # 5. Adverb (`canonical_pos == "adv"`)

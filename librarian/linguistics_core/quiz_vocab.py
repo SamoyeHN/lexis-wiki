@@ -5,6 +5,7 @@ Generative vocabulary quiz skeletons and authentic cloze item synthesis.
 import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -113,6 +114,8 @@ class QuizVocabMixin:
                         elif pb.get("verb_anchor"):
                             anc = str(pb.get("verb_anchor") or "").strip().lower()
                             anc_type = "verb"
+            if mechs and all(str(m or "").endswith("fallback") for m in mechs):
+                return 4
             if (
                 (anc_type == "prep" and anc and anc != "of")
                 or anc_type in ("to_inf", "gerund", "that_clause", "sb_to_do", "cxn_frame")
@@ -1147,6 +1150,21 @@ class QuizVocabMixin:
             raw_w_item = it.get("raw_word") or w
             w_lower = w.lower()
             raw_pos = it["part_of_speech"].lower()
+
+            # Gate: Drop proper nouns / brand names (e.g. 'coca-cola') when attested in context as capitalized PROPN+NER
+            _ctx_for_propn = str(it.get("quote") or it.get("raw_quote") or it.get("example") or "").strip()
+            if nlp and _ctx_for_propn and " " not in w_lower:
+                _w_parts = [p for p in re.split(r"[-\s]+", w_lower) if p]
+                _ctx_doc = nlp(_ctx_for_propn)
+                _matched_propn = [t for t in _ctx_doc if t.text.lower() in _w_parts]
+                if _matched_propn and all(
+                    t.text[:1].isupper()
+                    and t.pos_ == "PROPN"
+                    and t.ent_type_ in ("ORG", "PERSON", "GPE", "LOC", "PRODUCT", "WORK_OF_ART", "NORP", "EVENT")
+                    for t in _matched_propn
+                ):
+                    logging.getLogger(__name__).info("[DROP_PROPER_NOUN] Dropping proper noun / brand target '%s'", w)
+                    continue
 
             # Discontinuous Verb + [sb/sth] + Prep Frame Resolution (e.g. "remind [sb] of [sb] / [sth]"):
             # Stripping internal object slots leaves an ungrammatical adjacent string ('remind of') that cannot
@@ -4377,6 +4395,32 @@ class QuizVocabMixin:
 
             task_parts = [stem_core]
 
+            # Sense Guard for non-primary polysemous senses when the slot frame lacks strong disambiguating content cues
+            if canonical_pos in ("noun", "verb", "adj") and " " not in w_lower and skeleton_definition:
+                _sg_ent = cls.get_ldoce_entry(w_lower)
+                _sg_senses = (_sg_ent or {}).get("senses") or []
+                if len(_sg_senses) > 1:
+                    _sg_s0 = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", str(_sg_senses[0].get("definition") or "")).strip()
+                    _sg_locked = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", str(skeleton_definition or "")).strip()
+                    _sg_s0_low = _sg_s0.lower()
+                    _sg_locked_low = _sg_locked.lower()
+                    if _sg_s0_low and _sg_locked_low and _sg_locked_low != _sg_s0_low and _sg_s0_low not in _sg_locked_low and _sg_locked_low not in _sg_s0_low:
+                        _sg_stop = {
+                            "the", "a", "an", "to", "in", "on", "at", "of", "for", "with",
+                            "by", "from", "as", "is", "was", "are", "were", "be", "been", "being",
+                            "something", "someone", "somebody", "that", "this", "it", "they", "verb",
+                        }
+                        _sg_content = [
+                            t for t in re.findall(r"[a-zA-Z]+", cloze_slot_frame or "")
+                            if t.lower() not in _sg_stop
+                        ]
+                        if len(_sg_content) <= 1:
+                            _s0_short = _sg_s0[:65].rstrip(" ,;.")
+                            _lk_short = _sg_locked[:65].rstrip(" ,;.")
+                            task_parts.append(
+                                f"(Sense Guard: lock to '{_lk_short}' — do NOT use primary sense '{_s0_short}')."
+                            )
+
             # Data-Driven Grammatical & Usage Discriminator: only emit in Micro-Task when it carries
             # a concrete grammatical slot constraint (`[...]`) or a sense-locked `Grammar Box:` rule
             target_base = quant_head_noun if is_quantifier_frame else (half_slice_target if half_slice_target else w_lower)
@@ -4402,6 +4446,17 @@ class QuizVocabMixin:
                     discriminator_note,
                 ).strip()
                 if filtered_disc:
+                    if verb_form_tag == "VB" and "Grammar Box:" in filtered_disc:
+                        _gb_tail = filtered_disc.split("Grammar Box:", 1)[1].lower()
+                        for _vb_t in ("VBZ", "VBD", "VBG", "VBN"):
+                            _vb_infl = (cls._inflect_verb(w_lower, _vb_t) or "").lower()
+                            if _vb_infl and _vb_infl != w_lower and re.search(rf"\b{re.escape(_vb_infl)}\b", _gb_tail):
+                                filtered_disc = filtered_disc.replace(
+                                    "Grammar Box:",
+                                    f"Grammar Box (Pattern only — keep base form '{w_lower}' in your stem):",
+                                    1,
+                                )
+                                break
                     task_parts.append(filtered_disc)
 
             micro_task = " ".join(task_parts)
@@ -4415,6 +4470,20 @@ class QuizVocabMixin:
                     anchor_source = "quote"
                 else:
                     anchor_source = "dictionary"
+
+            # Gate 3 (Evidence & Distractor Completeness Gate): drop unanchored items whose distractors
+            # degraded 100% to random corpus/domain fallback when other candidates exist in the unit.
+            if (
+                anchor_downgrade == "sense_recognition"
+                and dist_meta
+                and all(str(m or "").endswith("fallback") for m in dist_meta.values())
+                and len(parsed_items) > 1
+            ):
+                logging.getLogger(__name__).info(
+                    f"🚫 Gate 3 (DROP_UNANCHORED_FALLBACK_ITEM): '{final_target}' has no collocational anchor "
+                    f"and 100% fallback distractors ({list(dist_meta.keys())}) — dropped."
+                )
+                continue
 
             skeletons.append({
                 "target_word": final_target,

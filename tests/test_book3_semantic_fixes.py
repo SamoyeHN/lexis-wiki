@@ -529,7 +529,7 @@ def test_enroll_qualia_scenario_preposition_valency_distractors():
     skels = LE.build_precomputed_target_skeletons(items, target_count=1)
     assert len(skels) == 1
     skel = skels[0]
-    assert skel["cloze_slot_frame"] == "... ____ in"
+    assert skel["cloze_slot_frame"].startswith("... ____ in")
     assert skel["verb_requires_object"] is False
     opts = set(skel["prescribed_options"])
     assert "enroll" in opts
@@ -590,7 +590,7 @@ def test_originated_intransitive_preposition_and_valency_distractors():
     assert len(skels) == 1
     skel = skels[0]
     assert skel["target_word"] == "originated"
-    assert skel["cloze_slot_frame"] == "... ____ in"
+    assert skel["cloze_slot_frame"].startswith("... ____ in")
     assert skel["verb_requires_object"] is False
     opts = set(skel["prescribed_options"])
     assert opts == {"originated", "terminated", "derived", "orientated"}

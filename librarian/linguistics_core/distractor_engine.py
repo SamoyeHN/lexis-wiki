@@ -2200,7 +2200,11 @@ class DistractorEngineMixin:
 
         # Candidate prioritization: PedLex Thesaurus & Activators are primary (Tier 0); WordNet is secondary/fallback
         if wn_pos == "v":
-            candidates = tier0_ldoce_thesaurus + tier2_hyponyms + tier3_coordinates
+            antonym_candidates = [
+                ant for ant in sense_antonyms
+                if ant != clean_target and cls.is_cefr_compliant_distractor(ant, clean_target)
+            ]
+            candidates = tier0_ldoce_thesaurus + tier2_hyponyms + tier3_coordinates + antonym_candidates
         elif wn_pos == "a":
             # For adjectives: retain satellite_synonyms first to satisfy existing fine-grained satellite tests,
             # then inject PedLex thesaurus peers, compliant antonyms, followed by attribute coordinates.
@@ -2529,7 +2533,7 @@ class DistractorEngineMixin:
             s.lexfile() == "noun.person" for s in target_synsets if s.lexfile()
         )
         _pre_fill_cap = (target_count - 1) if (_is_person_target and not is_concrete_physical_noun) else target_count
-        if len(safe_distractors) < _pre_fill_cap and wn_pos == "n" and (is_concrete_physical_noun or _is_person_target):
+        if len(safe_distractors) < _pre_fill_cap and wn_pos == "n":
             target_syns_pre = [s for s in target_synsets if s.lexfile()]
             target_lfs_pre = [s.lexfile() for s in target_syns_pre if s.lexfile()]
             if target_lfs_pre:
@@ -2581,6 +2585,128 @@ class DistractorEngineMixin:
                                 break
                     if len(safe_distractors) >= _pre_fill_cap:
                         break
+
+        # 2-hop WordNet Semantic-Field Harvest for sparse verbs & adjectives before corpus fallback:
+        # (1) Verbs: grandparent hypernym cousins ('admire' -> 'appreciate'/'value'/'consider', 'trap' -> 'release'/'waste'/'remove')
+        # (2) Adjectives: similar_to -> head-antonym & its satellites ('renewable' -> 'exhaustible', 'habitable' -> 'unlivable')
+        if len(safe_distractors) < target_count and wn_pos in ("v", "a") and target_synsets:
+            two_hop_cands: List[Tuple[str, str]] = []
+            two_hop_seen = set(safe_distractors) | set(exclude_words) | {clean_target}
+            if wn_pos == "v":
+                for _s in target_synsets[:2]:
+                    for _h in _s.hypernyms():
+                        for _gp in _h.hypernyms():
+                            for _uncle in _gp.hyponyms():
+                                for _lem in _uncle.lemmas():
+                                    _lw = _lem.lower()
+                                    if (
+                                        _lw not in two_hop_seen
+                                        and _lw.isalpha()
+                                        and cls.is_exact_pedlex_headword(_lw)
+                                        and cls.is_cefr_compliant_distractor(_lw, clean_target)
+                                    ):
+                                        two_hop_seen.add(_lw)
+                                        two_hop_cands.append((_lw, "coordinate"))
+                                        if len(two_hop_cands) >= 30:
+                                            break
+                                if len(two_hop_cands) >= 30:
+                                    break
+                            if len(two_hop_cands) >= 30:
+                                break
+                        if len(two_hop_cands) >= 30:
+                            break
+                    if len(two_hop_cands) >= 30:
+                        break
+            elif wn_pos == "a":
+                for _s in target_synsets[:3]:
+                    for _sim in _s.relations().get("similar", []):
+                        for _sn in _sim.senses():
+                            for _ant_sn in _sn.relations().get("antonym", []):
+                                _aw = _ant_sn.word().lemma().lower()
+                                if (
+                                    _aw not in two_hop_seen
+                                    and _aw.isalpha()
+                                    and cls.is_exact_pedlex_headword(_aw)
+                                    and cls.is_cefr_compliant_distractor(_aw, clean_target)
+                                ):
+                                    two_hop_seen.add(_aw)
+                                    two_hop_cands.append((_aw, "antonym"))
+                                for _ant_sim in _ant_sn.synset().relations().get("similar", []):
+                                    for _as_lem in _ant_sim.lemmas():
+                                        _asw = _as_lem.lower()
+                                        if (
+                                            _asw not in two_hop_seen
+                                            and _asw.isalpha()
+                                            and cls.is_exact_pedlex_headword(_asw)
+                                            and cls.is_cefr_compliant_distractor(_asw, clean_target)
+                                        ):
+                                            two_hop_seen.add(_asw)
+                                            two_hop_cands.append((_asw, "attribute_coordinate"))
+            if "_coord_sort_key" in locals() and two_hop_cands:
+                two_hop_cands.sort(key=lambda pair: _coord_sort_key(pair[0]))
+            for _cw, _cmech in two_hop_cands:
+                if len(safe_distractors) >= target_count:
+                    break
+                if (
+                    _cw not in forbidden_words
+                    and not cls.are_same_word_family(_cw, clean_target)
+                    and not any(cls.are_same_word_family(_cw, s) for s in safe_distractors)
+                    and not cls.double_key_collision(
+                        clean_target, _cw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )[0]
+                    and not cls.evaluate_syntactic_slot_clash(
+                        clean_target, _cw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )[0]
+                ):
+                    safe_distractors.append(_cw)
+                    distractor_metadata[_cw] = _cmech
+
+        # Collocational head-noun adjective harvest for sparse adjectives before corpus_fallback:
+        # e.g. '... of ____ land' -> ocd['land']['adj'] ('industrial', 'dry', 'native', 'public')
+        #      '... of ____ energy' -> ocd['energy']['adj'] ('nuclear', 'atomic', 'alternative')
+        if len(safe_distractors) < target_count and wn_pos == "a" and context_anchor:
+            _anchor_low = str(context_anchor).strip().lower()
+            _m_adj_head = re.search(r"_{2,}\s+([a-z]{3,})\b", _anchor_low)
+            _head_n = _m_adj_head.group(1) if _m_adj_head else (
+                _anchor_low if (anchor_type == "modified_noun" and _anchor_low.isalpha() and len(_anchor_low) >= 3) else ""
+            )
+            if _head_n:
+                _head_ocd = cls.get_oxford_collocations(_head_n) or {}
+                _raw_adj_cands: List[str] = []
+                _seen_adj = set(safe_distractors) | set(exclude_words) | set(forbidden_words) | set(global_synonyms) | {clean_target, _head_n}
+                for _entry in _head_ocd.get("adj", []):
+                    for _tok in str(_entry).replace("/", " ").split():
+                        _tok = _tok.strip().lower()
+                        if (
+                            _tok.isalpha()
+                            and len(_tok) >= 3
+                            and _tok not in _seen_adj
+                            and cls.is_exact_pedlex_headword(_tok)
+                            and any(ws.pos in ("a", "s") for ws in wn.synsets(_tok))
+                            and cls.is_cefr_compliant_distractor(_tok, clean_target)
+                        ):
+                            _tok_ent = cls.get_ldoce_entry(_tok) or {}
+                            _tok_senses = _tok_ent.get("senses") or []
+                            if _tok_senses and any(cls._pos_code(str(sn.get("pos") or "")) == "adj" for sn in _tok_senses[:2]):
+                                _seen_adj.add(_tok)
+                                _raw_adj_cands.append(_tok)
+                if "_coord_sort_key" in locals() and _raw_adj_cands:
+                    _raw_adj_cands.sort(key=_coord_sort_key)
+                for _aw in _raw_adj_cands:
+                    if len(safe_distractors) >= target_count:
+                        break
+                    if (
+                        not cls.are_same_word_family(_aw, clean_target)
+                        and not any(cls.are_same_word_family(_aw, s) for s in safe_distractors)
+                        and not cls.double_key_collision(
+                            clean_target, _aw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                        )[0]
+                        and not cls.evaluate_syntactic_slot_clash(
+                            clean_target, _aw, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                        )[0]
+                    ):
+                        safe_distractors.append(_aw)
+                        distractor_metadata[_aw] = "collocation"
 
         # Fallback for Focus / Degree / Approximation / Discourse / Temporal Adverbs before Orthographic Paronym Tier
         # (so focus/degree/discourse/temporal adverbs like 'merely', 'virtually', 'barely', 'similarly', 'nowadays'
