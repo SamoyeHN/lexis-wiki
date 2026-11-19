@@ -18,7 +18,7 @@ Whether you have an English textbook unit, an academic reading, a news article, 
 
 👉 **Just drop in the text or media, and in 30 seconds Lexis Wiki automatically creates:**
 1. **Encyclopedic Study Notes**: Key vocabulary, idiomatic expressions, phrasal verbs, grammar patterns, and interactive Mind Maps with Obsidian-style `[[wikilinks]]`.
-2. **5 Self-Grading Interactive HTML Quizzes**: Vocabulary cloze, reading comprehension, comparative translation, dual-speaker listening dialogues, and video comprehension.
+2. **6 Self-Grading Interactive HTML Quizzes**: Vocabulary MCQ, Pure Open Cloze (discourse & collocation), reading comprehension, comparative translation, dual-speaker listening dialogues, and video comprehension.
 3. **Single-File Standalone Delivery**: Each quiz is exported as an **independent `.html` file**. Double-click to open in any web browser on your phone, tablet, or PC—featuring a countdown timer, instant grading, answer explanations, and native AI audio narration with zero installation or server requirements!
 
 ---
@@ -47,8 +47,9 @@ Lexis Wiki solves this with a **Neuro-Symbolic Architecture** that pairs authori
 - **Grammar Formulas & Syntactic Structures**: Outlines sentence formulas (e.g., negative inversion, cleft sentences, passive frames) based on the COBUILD framework, highlighting common student error traps.
 - **Passage Summaries & Concept Mind Maps**: Extracts hierarchical rhetorical outlines into an interactive, draggable concept mind map.
 
-### 2. 📝 5 Self-Contained Interactive Quizzes
-- 🔤 **Vocabulary & Collocation Cloze**: Strict sense-locked context stems with symmetric, zero-collision distractors.
+### 2. 📝 6 Self-Contained Interactive Quizzes
+- 🔤 **Vocabulary & Collocation Quiz**: Strict sense-locked context stems with symmetric, zero-collision distractors.
+- 🧩 **Pure Open Cloze (Discourse Cloze)**: Zero-token Cambridge Part 2 style open cloze decoupled from syllabus wordlists, balancing discourse cohesion, bound collocations, and lexico-grammar with Acceptable-Word Scoring (`accepted_answers`).
 - 📖 **Reading Comprehension**: Text-grounded main idea, detail recall, and logical inference questions aligned with IELTS / TOEFL / CET standards.
 - ✍️ **Comparative Translation**: Highlighting natural target language phrasing vs. common Chinglish translation flaws.
 - 🎧 **Dual-Speaker Listening Comprehension**: Realistic multi-turn dialogues with built-in **Kokoro** or **Edge-TTS** dual-speaker voice synthesis.
@@ -155,7 +156,8 @@ wiki/<UnitName>/
 │   ├── <UnitName>_summary.md             # Passage summary & core takeaways
 │   └── <UnitName>_mindmap.json           # Interactive hierarchical Mind Map data
 └── handouts/                             # Standalone interactive HTML assessment handouts
-    ├── <UnitName>_vocabulary_quiz.html   # Vocabulary in context cloze quiz
+    ├── <UnitName>_vocabulary_quiz.html   # Vocabulary in context quiz
+    ├── <UnitName>_cloze_quiz.html        # Pure Open Cloze discourse quiz
     ├── <UnitName>_reading_quiz.html      # Deep reading comprehension quiz
     ├── <UnitName>_translation_quiz.html  # Contrastive translation quiz
     ├── <UnitName>_listening_quiz.html    # Spoken dialogue listening quiz with audio
@@ -196,7 +198,7 @@ Settings can be changed on the fly in the Web Dashboard or inside `wiki_config.j
 Unlike simple prompt wrappers, Lexis Wiki implements computational Second Language Acquisition (SLA) principles and neuro-symbolic constraints:
 
 1. **Deterministic Mining & Sense Locking (WSD)**:
-   - Combines `spaCy` dependency parsing with an offline pedagogical lexicon (`pedlex.db` containing a 106,000+ phrase inverted index);
+   - Combines `spaCy` dependency parsing with an offline pedagogical lexicon (`pedlex.db` containing a 189,000+ `ldoce_phrase_index` inverted index);
    - Monosemous entries (~71%) are locked in 0ms at 0 token cost via syntactic subcategorization frames;
    - Polysemous entries (~29%) are evaluated using a Top-$K$ ($K \le 4$) symbolic candidate pool followed by 1-token LLM arbitration, preventing semantic drift.
 2. **Five-Source Authentic Corpus Pool**:
@@ -210,6 +212,7 @@ Unlike simple prompt wrappers, Lexis Wiki implements computational Second Langua
    - [PedLex Database Schema & Query Specifications](docs/pedlex-database-architecture.md)
    - [Listening Functional Dialogue Architecture](docs/listening-functional-dialogue-architecture.md)
    - [Reading Discourse & Psychometric Distractor Model](docs/reading-discourse-architecture.md)
+   - [Discourse Pure Open Cloze Architecture](docs/cloze-discourse-architecture.md)
    - [QA Audit Scores & Rubric Guide](docs/audit-scores-guide.md)
 </details>
 

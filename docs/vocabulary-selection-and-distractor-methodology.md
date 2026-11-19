@@ -259,7 +259,7 @@ Every cloze question derives its discriminative power from an immutable **Contex
 Once the final options are assembled and inflected, `has_double_key_collision` checks all distractors against the target in the context of the **final context anchor, anchor type, and sentence quote**:
 - Detects bound preposition sharing (`transform` vs. `work` under `into`).
 - Detects light-verb collocation sharing (`take [sth] into practice`).
-- Detects predicate phrase collisions via `pedlex_phrase_index` (`be through with`).
+- Detects predicate phrase collisions via `ldoce_phrase_index` (`be through with`).
 - Auto-refills colliding distractors from the dynamic fallback pool, guaranteeing **0 double keys across all items**.
 
 ### 7.3 Foundational CEFR Ceiling & LDOCE Defining Lexicon Gate (`is_cefr_compliant_distractor`)
