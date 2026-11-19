@@ -636,11 +636,13 @@ class QuizIntegrityGatesMixin:
     ) -> Tuple[List[int], List[str]]:
         """
         Level 1 Deterministic Code Gate for Authentic Discourse Cloze Quiz.
-        Enforces Alderson (2000) invariants and psychometric integrity:
-        1. Cardinality: Exactly 4 distinct options per blank.
-        2. Answer Index Integrity: Bound [0, 3] and options[correct_answer_index] matches target.
-        3. Option Uniqueness: Zero duplicates among options.
-        4. Verbatim Physical Grounding: Target word exists in passage_text.
+        Supports Pure Open Cloze (mode='open_cloze', Acceptable-Word Scoring) and legacy MCQ fallback.
+        Enforces psychometric invariants:
+        1. Non-empty target word & zero duplicate target words within a passage.
+        2. Pure Open Cloze: non-empty accepted_answers containing target_word; no MCQ options.
+        3. Legacy MCQ: exactly 4 distinct options and valid correct_answer_index matching target.
+        4. Verbatim physical grounding: target word exists in passage_text.
+        5. Blank marker integrity: context question contains '[{blank_index}]'.
         """
         if not quiz_obj:
             return [], []
@@ -649,37 +651,70 @@ class QuizIntegrityGatesMixin:
         if not questions or not isinstance(questions, list):
             return [], ["Missing or invalid 'questions' array in Discourse Cloze Quiz."]
 
+        mode = quiz_obj.get("mode") if isinstance(quiz_obj, dict) else getattr(quiz_obj, "mode", None)
+        is_open_cloze = (mode == "open_cloze") or all(
+            not ((q.get("options") if isinstance(q, dict) else getattr(q, "options", None)) or [])
+            for q in questions
+        )
+
         flagged_indices = set()
         defect_messages = []
         passage_lower = passage_text.lower() if passage_text else ""
+        seen_targets = set()
 
         for idx, q in enumerate(questions):
             q_dict = q if isinstance(q, dict) else (dataclasses.asdict(q) if dataclasses.is_dataclass(q) else {})
             target = str(q_dict.get("target_word") or q_dict.get("raw_word") or "").strip()
             options = q_dict.get("options") or []
             correct_idx = q_dict.get("correct_answer_index")
+            accepted = q_dict.get("accepted_answers") or []
+            blank_idx = q_dict.get("blank_index", idx + 1)
+            q_stem = str(q_dict.get("question") or "")
 
             if not target:
                 flagged_indices.add(idx)
                 defect_messages.append(f"Cloze Item #{idx + 1}: Missing target word.")
-
-            if len(options) != 4:
-                flagged_indices.add(idx)
-                defect_messages.append(f"Cloze Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
             else:
-                cleaned_opts = [str(o).strip().lower() for o in options]
-                if len(set(cleaned_opts)) < 4:
+                target_key = target.lower()
+                if target_key in seen_targets:
                     flagged_indices.add(idx)
-                    defect_messages.append(f"Cloze Item #{idx + 1}: Options contain duplicate choices: {options}")
+                    defect_messages.append(
+                        f"Cloze Item #{idx + 1}: Duplicate target_word '{target}' already blanked in this passage."
+                    )
+                seen_targets.add(target_key)
 
-                if correct_idx not in (0, 1, 2, 3):
+            if is_open_cloze:
+                cleaned_accepted = [str(a).strip().lower() for a in accepted if str(a).strip()]
+                if not cleaned_accepted:
                     flagged_indices.add(idx)
-                    defect_messages.append(f"Cloze Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+                    defect_messages.append(f"Cloze Item #{idx + 1}: Missing accepted_answers for Open Cloze.")
+                elif target and target.lower() not in cleaned_accepted:
+                    flagged_indices.add(idx)
+                    defect_messages.append(
+                        f"Cloze Item #{idx + 1}: Target '{target}' missing from accepted_answers {accepted}."
+                    )
+            else:
+                if len(options) != 4:
+                    flagged_indices.add(idx)
+                    defect_messages.append(f"Cloze Item #{idx + 1}: Must contain exactly 4 options (found {len(options)})")
                 else:
-                    correct_opt = str(options[correct_idx]).strip().lower()
-                    if target.lower() != correct_opt:
+                    cleaned_opts = [str(o).strip().lower() for o in options]
+                    if len(set(cleaned_opts)) < 4:
                         flagged_indices.add(idx)
-                        defect_messages.append(f"Cloze Item #{idx + 1}: Target '{target}' does not match options[{correct_idx}] '{correct_opt}'.")
+                        defect_messages.append(f"Cloze Item #{idx + 1}: Options contain duplicate choices: {options}")
+
+                    if correct_idx not in (0, 1, 2, 3):
+                        flagged_indices.add(idx)
+                        defect_messages.append(f"Cloze Item #{idx + 1}: Invalid correct_answer_index ({correct_idx})")
+                    else:
+                        correct_opt = str(options[correct_idx]).strip().lower()
+                        if target.lower() != correct_opt:
+                            flagged_indices.add(idx)
+                            defect_messages.append(f"Cloze Item #{idx + 1}: Target '{target}' does not match options[{correct_idx}] '{correct_opt}'.")
+
+            if q_stem and f"[{blank_idx}]" not in q_stem:
+                flagged_indices.add(idx)
+                defect_messages.append(f"Cloze Item #{idx + 1}: Blank marker '[{blank_idx}]' missing from context sentence.")
 
             if passage_lower and target and target.lower() not in passage_lower:
                 flagged_indices.add(idx)

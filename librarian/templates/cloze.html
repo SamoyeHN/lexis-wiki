@@ -671,10 +671,10 @@
 <body>
     <div class="container">
         <header>
-            <div class="badge-mode">✨ Mode B · Progressive Scaffolding Cloze</div>
+            <div class="badge-mode" id="badge-mode">✨ Pure Open Cloze · Discourse &amp; Grammar</div>
             <h1 id="quiz-title">Discourse Cloze Assessment</h1>
             <p class="subtitle" id="quiz-subtitle">
-                Complete the passage by retrieving the target words. You may use 💡 Hints (-20 pts) or ⚅ 4 Options (-40 pts) if stuck.
+                Complete the passage by retrieving one grammatical, collocational, or discourse word per blank. Use 💡 Clue (-20 pts) if needed.
             </p>
         </header>
 
@@ -881,12 +881,16 @@
 
                     // Match `[i] _____` or `[i] ____` or `[i] ...`
                     const pattern = new RegExp(`\\[${i}\\]\\s*_{2,}`, "g");
+                    const hasOptions = Array.isArray(blank.options) && blank.options.length > 0;
+                    const optionsBtnHtml = hasOptions
+                        ? `<button class="slot-btn btn-options" data-id="${i}" title="Options (-40 pts)">⚅</button>`
+                        : "";
                     const slotHtml = `
                         <span class="cloze-slot" id="slot-${i}" data-id="${i}">
                             <span class="slot-index">[${i}]</span>
                             <input type="text" class="cloze-input" id="input-${i}" data-id="${i}" autocomplete="off" spellcheck="false" placeholder="...">
                             <button class="slot-btn btn-hint" data-id="${i}" title="Hint (-20 pts)">💡</button>
-                            <button class="slot-btn btn-options" data-id="${i}" title="Options (-40 pts)">⚅</button>
+                            ${optionsBtnHtml}
                             <span class="slot-status-icon" id="status-${i}"></span>
                         </span>
                     `;
@@ -990,10 +994,11 @@
                 hintCard.classList.remove("active");
             }
 
-            // Options Card
+            // Options Card (only shown when legacy 4-option fallback exists)
             const optionsCard = document.getElementById("inspector-options-card");
             const optionsGrid = document.getElementById("inspector-options-grid");
-            if (userAnswers[id].stage >= 2) {
+            const hasOptions = Array.isArray(blank.options) && blank.options.length > 0;
+            if (hasOptions && userAnswers[id].stage >= 2) {
                 optionsCard.classList.add("active");
                 optionsGrid.innerHTML = "";
                 (blank.options || []).forEach((opt, optIdx) => {
@@ -1065,9 +1070,12 @@
             if (!blank) return;
 
             const uVal = normalizeWord(userAnswers[id].value);
-            const targetVal = normalizeWord(blank.target_word || blank.raw_word);
+            const acceptedRaw = (Array.isArray(blank.accepted_answers) && blank.accepted_answers.length > 0)
+                ? blank.accepted_answers
+                : [blank.raw_word || blank.target_word].filter(Boolean);
+            const acceptedNorm = acceptedRaw.map(normalizeWord);
 
-            const isMatch = (uVal === targetVal);
+            const isMatch = uVal.length > 0 && acceptedNorm.includes(uVal);
             userAnswers[id].checked = true;
             userAnswers[id].isCorrect = isMatch;
 
@@ -1096,7 +1104,8 @@
             } else {
                 userAnswers[id].points = 0;
                 slot.classList.add("incorrect");
-                statusIcon.innerText = `✗ (${blank.raw_word || blank.target_word})`;
+                const displayKey = acceptedRaw.join(" / ");
+                statusIcon.innerText = `✗ (${displayKey})`;
                 statusIcon.style.color = "#DC2626";
             }
 

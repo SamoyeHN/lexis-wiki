@@ -5577,33 +5577,59 @@ class TestDiscourseClozeEngine:
         assert span_data["token_count"] > 50
 
     def test_discourse_cloze_assessment_invariants(self):
+        from librarian.processor_core.quiz_integrity_gates import QuizIntegrityGatesMixin
+
         quiz = LinguisticEngine.build_discourse_cloze_assessment(self._SAMPLE_PASSAGE, target_count=10)
+        assert quiz["mode"] == "open_cloze"
         assert "passage" in quiz
         assert "masked_passage" in quiz
         assert "blanks" in quiz
         blanks = quiz["blanks"]
         assert len(blanks) >= 5
 
-        # Verify Alderson (2000) lead-in and lead-out invariants
+        # Verify Alderson (2000) lead-in invariant
         first_sent = self._SAMPLE_PASSAGE.split(".")[0].strip()
-        last_sent = [s.strip() for s in self._SAMPLE_PASSAGE.split(".") if s.strip()][-1]
         assert first_sent not in [b["question"] for b in blanks]
 
+        # Zero duplicate target words across the passage
+        seen_targets = set()
         for b in blanks:
-            # 4 options, valid index, single fit
-            assert len(b["options"]) == 4
-            assert 0 <= b["correct_answer_index"] < 4
-            assert b["options"][b["correct_answer_index"]].lower() == b["target_word"].lower()
+            t_low = b["target_word"].lower()
+            assert t_low not in seen_targets, f"Duplicate target_word '{t_low}' in cloze blanks"
+            seen_targets.add(t_low)
+
+            # Pure Open Cloze invariants: no MCQ distractors, valid accepted_answers whitelist
+            assert b["options"] == []
+            assert b["correct_answer_index"] is None
+            assert isinstance(b["accepted_answers"], list) and len(b["accepted_answers"]) >= 1
+            assert t_low in [a.lower() for a in b["accepted_answers"]]
             assert b["clue"].startswith("💡 Clue:")
             assert len(b["explanation"]) > 10
             assert b["pillar"] in (1, 2, 3)
+            assert f"[{b['blank_index']}]" in b["question"]
+            assert f"[{b['blank_index']}]" in quiz["masked_passage"]
 
-            # Strict Relative Pronoun Double-Key Exclusion Guard:
-            # 'which' and 'that' must NEVER co-exist in the same option set!
-            lower_opts = [opt.lower() for opt in b["options"]]
-            if "which" in lower_opts:
-                assert "that" not in lower_opts, f"Double-key collision found: 'which' and 'that' both in options for {b}"
-            if "that" in lower_opts:
-                assert "which" not in lower_opts, f"Double-key collision found: 'that' and 'which' both in options for {b}"
+        # Level 1 code gate must report zero defects
+        flagged, defects = QuizIntegrityGatesMixin.audit_cloze_integrity(
+            quiz, passage_text=quiz["passage"]
+        )
+        assert flagged == [], f"Unexpected L1 cloze defects: {defects}"
+
+    def test_open_cloze_non_restrictive_which_and_exact_offset_masking(self):
+        passage = (
+            "The opening sentence introduces the broader theme of urban renewal in modern cities. "
+            "The council approved the plan, which required funds of great scale and careful review of budgets. "
+            "Although the schedule was tight, the engineers completed the bridge ahead of time. "
+            "The closing sentence summarizes the lasting benefits for all residents."
+        )
+        quiz = LinguisticEngine.build_discourse_cloze_assessment(passage, target_count=6)
+        for b in quiz["blanks"]:
+            # Non-restrictive ', which' must NOT accept 'that'
+            if b["target_word"] == "which" and ", [" in b["question"]:
+                assert [a.lower() for a in b["accepted_answers"]] == ["which"]
+            # Exact offset check: replacing blank marker with raw_word must reconstruct the original sentence
+            restored = b["question"].replace(f"[{b['blank_index']}] ____", b["raw_word"])
+            assert restored in passage, f"Offset mismatch: '{restored}' not found in passage"
+
 
 

@@ -136,3 +136,4 @@ wiki/<UnitName>/
 - [ ] **Paired Listening–Speaking Workbench**: Two-act receptive-to-productive pairing (`Act I: Listening` $\rightarrow$ `Act II: Speaking`) with 3-level progressive fading scaffolding (Cue Card $\rightarrow$ Acoustic Cloze $\rightarrow$ Blind Production) and cross-scenario transfer.
 - [x] **Prerequisite Extraction Gate**: Gate quiz generation on verified `extractions/` artifacts to prevent topic drifts and eliminate side-effect overwrites.
 - [ ] **ESP Specialized Domain Extension**: Multi-source trade/logistics corpus collection, Incoterms/UCP600 legal consistency gates, and domain-gated WSD (`pedlex_esp.db`).
+- [ ] **Blueprint `SlotFrame` & Distractor Engine Gradual Refactoring**: Deferred until automated L1 syntactic slot validation or large-file decomposition (`distractor_engine.py` / `quiz_vocab.py`) is needed; see [docs/pending-blueprint-and-distractor-refactoring.md](docs/pending-blueprint-and-distractor-refactoring.md).

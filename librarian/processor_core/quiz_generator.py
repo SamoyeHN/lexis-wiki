@@ -1835,6 +1835,7 @@ class QuizGeneratorMixin:
                 )
                 quiz_obj = {
                     "title": f"{display_title} Discourse Cloze Assessment",
+                    "mode": cloze_res.get("mode", "open_cloze"),
                     "passage": cloze_res["passage"],
                     "masked_passage": cloze_res["masked_passage"],
                     "paragraphs": cloze_res["paragraphs"],
