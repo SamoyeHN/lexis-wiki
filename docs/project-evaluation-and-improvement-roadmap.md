@@ -76,3 +76,11 @@
   - **Context**: Inbound interest (e.g., Agensi.io marketplace, Claude Code, Cursor/Windsurf tool calling) to package `lexis-wiki`'s neuro-symbolic quiz/wiki generator and psychometric gates as callable remote skills.
   - **Bottleneck & Cost Constraint**: Hosting cloud-accessible endpoints requires dedicated VPS/container servers with Python runtime, `spaCy` transformer models, and ~400MB `pedlex.db` SQLite memory mapping, entailing non-trivial ongoing server rental/maintenance expenses.
   - **Resolution**: Kept as a **Pending Exploration Track**. Prioritize local CLI, Docker self-hosting, and zero-cost local desktop execution first. Cloud marketplace deployment deferred until commercial viability, sponsorship, or subsidized server infrastructure is established.
+- [ ] **Exam Reading Reverse Deconstruction Skill & Big-Tech Model Interface (Pending / Market Validation)**:
+  - **Market Demand**: High willingness-to-pay among domestic K-12 parents and test-takers for high-stakes exam reading explanations (Cambridge MSE KET/PET/FCE and IELTS). Off-the-shelf LLM explanations hallucinate or offer generic restatements ("answer is C because line 4"), failing to explain distractors.
+  - **Asymmetric Feasibility**: Forward question generation is an unconstrained search problem with strict zero-collision invariants; reverse-engineering is an inverse problem where text, stem, key, and options are given facts, making symbolic alignment and trap classification vastly more deterministic and lightweight.
+  - **Architecture ("Intel Inside" Division of Labor)**:
+    - **Symbolic Core (Lexis Wiki)**: Runs on lightweight CPU (2-core 2GB RAM, ~20–30 RMB/month or WeChat Cloud Base Serverless) with `pedlex.db` (400MB) + `spaCy`. Outputs deterministic paraphrase alignment, distractor fallacy labels (`causal_reversal`, `modality_overgeneralization`, `cross_paragraph_bait`, etc.), and discourse logic trees in <50ms.
+    - **Big-Tech LLM API**: Commodity token APIs (DeepSeek, Qwen) format the symbolic diagnosis into a high-empathy, pedagogical masterclass card (~0.01–0.02 RMB per query).
+    - **Delivery via Ecosystem Skill Interfaces**: Expose standard OpenAPI / Coze (扣子) / WeChat AI / MCP Skill endpoints so mobile users interact natively without local client or database installations.
+
