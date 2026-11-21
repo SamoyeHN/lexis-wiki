@@ -1448,8 +1448,6 @@ class QuizGeneratorMixin:
         banned_quiz_sentences: List[str] = []
         vocab_sense_map: Dict[str, str] = {}
         has_prescribed_options: bool = False
-        enable_cloze: bool = False
-        cloze_questions: List[Dict[str, Any]] = []
         blueprint_specs: List[Dict[str, Any]] = []
 
         if template_name == "vocabulary":
@@ -1848,20 +1846,6 @@ class QuizGeneratorMixin:
                     f"⚡ [0-TOKEN CODE GENERATION] Successfully synthesized {len(cloze_res['blanks'])} "
                     f"authentic discourse cloze blanks via 100% pure symbolic pipeline."
                 )
-            elif (template_name == "vocabulary") and enable_cloze:
-                display_title = (
-                    data.get("display_title")
-                    or data.get("title")
-                    or core_name.replace("_", " ").title()
-                )
-                quiz_obj = {
-                    "title": f"{display_title} Vocabulary Assessment",
-                    "questions": cloze_questions,
-                }
-                logger.info(
-                    f"⚡ [0-TOKEN CODE GENERATION] Successfully synthesized {len(cloze_questions)} "
-                    f"authentic vocabulary cloze questions via 100% pure symbolic pipeline."
-                )
             else:
                 prompt = prompt_template.format(**kwargs)
                 interpolated_schema = self._interpolate_schema(schema_cls, kwargs)
@@ -1948,7 +1932,27 @@ class QuizGeneratorMixin:
                     quiz_obj.vocabulary = video_vocab
 
             # 4.6. Two-Level Auditing: Pre-Audit L1 Code Gate & L2 Expert In-Place Surgical Cure
-            if self.config.get("enable_expert_audit", False):
+            is_open_cloze = (
+                template_name == "cloze"
+                and (
+                    (isinstance(quiz_obj, dict) and quiz_obj.get("mode") == "open_cloze")
+                    or not any(
+                        isinstance(q, dict) and q.get("options")
+                        for q in (quiz_obj.get("questions", []) if isinstance(quiz_obj, dict) else getattr(quiz_obj, "questions", []))
+                    )
+                )
+            )
+            if is_open_cloze:
+                l1_defective, l1_defects = self.audit_cloze_integrity(
+                    quiz_obj if isinstance(quiz_obj, dict) else dataclasses.asdict(quiz_obj),
+                    passage_text=data.get("passage", ""),
+                    cefr_level=kwargs.get("cefr_level", "B2"),
+                )
+                if l1_defects:
+                    logger.warning(
+                        f"Pure Open Cloze L1 Code Gate flagged {len(l1_defects)} issue(s): {l1_defects}"
+                    )
+            elif self.config.get("enable_expert_audit", False):
                 try:
                     from ..expert_auditor import ExpertAuditor
                     source_context = ""
@@ -2029,16 +2033,11 @@ class QuizGeneratorMixin:
                             passage_text=source_context,
                         )
                     else:
-                        is_cloze_mode = (
-                            template_name == "cloze"
-                            or enable_cloze
-                            or (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
-                        )
                         l1_defective, l1_defects = self.audit_quiz_integrity(
                             quiz_dict_eval,
                             banned_sentences=banned_quiz_sentences,
                             unit_headwords=unit_headwords,
-                            allow_authentic_cloze=is_cloze_mode,
+                            allow_authentic_cloze=False,
                             strict_distractor_recycling=not has_prescribed_options,
                         )
 
@@ -2292,16 +2291,12 @@ class QuizGeneratorMixin:
                                 else:
                                     candidate_batch = list(cured_questions)
                                     candidate_batch[item_slot] = healed_item
-                                    is_cloze_mode = (
-                                        enable_cloze
-                                        or (template_name == "vocabulary" and self.config.get_quiz_config("vocabulary", "mode", "cloze") == "cloze")
-                                    )
                                     cure_l1_flagged, cure_l1_defects = self.audit_quiz_integrity(
                                         {"questions": candidate_batch},
                                         banned_sentences=banned_quiz_sentences,
                                         unit_headwords=unit_headwords,
                                         strict_distractor_recycling=True,
-                                        allow_authentic_cloze=is_cloze_mode
+                                        allow_authentic_cloze=False
                                     )
                                     cure_item_failed = item_slot in cure_l1_flagged
 
@@ -2650,7 +2645,7 @@ class QuizGeneratorMixin:
             language = self.config.get("target_language") or "Chinese"
             html_content = self._render_handout(quiz_obj, template_name, audio_url, language=language)
             asset_stem = data.get("source_stem", core_name) if isinstance(data, dict) else core_name
-            output_type = "cloze" if (template_name == "cloze" or enable_cloze) else template_name
+            output_type = template_name
             handout_filename = f"{asset_stem}_{output_type}_quiz.html"
             handout_dir = self.config.wiki_content_path / core_name / "handouts"
             handout_dir.mkdir(parents=True, exist_ok=True)

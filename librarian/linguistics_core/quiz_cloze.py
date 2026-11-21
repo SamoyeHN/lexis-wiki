@@ -376,23 +376,23 @@ class QuizClozeMixin:
         if not tok.is_alpha or len(tok.text) < 2 or tok.text.startswith("'"):
             return None
 
-        # --- Pillar 1: Discourse Cohesion & Rhetorical Linkers (~30%) ---
+        # --- Pillar 1: Sentence Linking (~30%) ---
         # 1a. Subordinating Conjunctions
         if (tok.dep_ == "mark" or tok.pos_ in ("SCONJ", "CCONJ")) and text_lower in _DISCOURSE_CONJUNCTIONS:
             if text_lower in ("although", "whereas", "while", "whilst", "though"):
                 pool_key = "conj_contrast"
-                clue = "💡 Clue: Subordinating conjunction introducing a clause of contrast or concession"
+                clue = "Linking word showing contrast (e.g., although / while)."
             elif text_lower in ("unless", "if", "whether"):
                 pool_key = "conj_condition"
-                clue = "💡 Clue: Subordinating conjunction introducing a conditional or alternative clause"
+                clue = "Linking word introducing a condition (e.g., if / unless / whether)."
             elif text_lower in ("until", "till", "before", "after", "when", "whenever"):
                 pool_key = "conj_cause"
-                clue = "💡 Clue: Subordinating conjunction establishing a temporal relation"
+                clue = "Time linking word (e.g., when / until / before / after)."
             else:
                 pool_key = "conj_cause"
-                clue = "💡 Clue: Subordinating conjunction expressing cause, reason, or manner"
+                clue = "Linking word showing reason or manner (e.g., because / since / as)."
             return cls._make_candidate(
-                tok, sent_idx, 1, "Discourse Cohesion", "subordinating_conjunction",
+                tok, sent_idx, 1, "Sentence Linking", "subordinating_conjunction",
                 clue, pool_key, 3.5,
             )
 
@@ -410,10 +410,10 @@ class QuizClozeMixin:
                 )
             )
             if text_lower in _RELATIVE_PRONOUNS:
-                antecedent = tok.head.text if tok.head else "preceding noun"
+                antecedent = tok.head.text if tok.head else "the noun before it"
                 return cls._make_candidate(
-                    tok, sent_idx, 1, "Discourse Cohesion", "relative_pronoun",
-                    f"💡 Clue: Relative pronoun referring back to '{antecedent}'",
+                    tok, sent_idx, 1, "Sentence Linking", "relative_pronoun",
+                    f"Relative word referring back to '{antecedent}'.",
                     pool_key, 3.6, head_context=antecedent,
                 )
 
@@ -423,18 +423,18 @@ class QuizClozeMixin:
                 "trans_addition" if text_lower in ("furthermore", "moreover", "besides") else "trans_contrast"
             )
             return cls._make_candidate(
-                tok, sent_idx, 1, "Discourse Cohesion", "discourse_transition",
-                "💡 Clue: Transition adverb expressing logical flow between sentences",
+                tok, sent_idx, 1, "Sentence Linking", "discourse_transition",
+                "Transition word connecting ideas between sentences (e.g., however / therefore).",
                 pool_key, 3.4,
             )
 
-        # --- Pillar 2: Multi-Word Unit Valency & Preposition Slicing (~40%) ---
+        # --- Pillar 2: Collocations (~40%) ---
         # 2a. Phrasal Verb Particles (dep_ == 'prt')
         if tok.dep_ == "prt" and text_lower in _PHRASAL_PARTICLES:
             verb_head = tok.head.lemma_ if tok.head else "verb"
             return cls._make_candidate(
-                tok, sent_idx, 2, "MWU & Preposition Valency", "phrasal_particle",
-                f"💡 Clue: Directional or aspectual particle completing '{verb_head}'",
+                tok, sent_idx, 2, "Collocations", "phrasal_particle",
+                f"Small word (particle) that completes the phrasal verb '{verb_head}'.",
                 "phrasal_particles", 3.2, head_context=verb_head,
             )
 
@@ -444,8 +444,8 @@ class QuizClozeMixin:
             if head_tok and head_tok.pos_ in ("VERB", "ADJ", "NOUN"):
                 head_lemma = head_tok.lemma_
                 return cls._make_candidate(
-                    tok, sent_idx, 2, "MWU & Preposition Valency", "bound_preposition",
-                    f"💡 Clue: Preposition required by the preceding word '{head_lemma}'",
+                    tok, sent_idx, 2, "Collocations", "bound_preposition",
+                    f"Preposition that goes with '{head_lemma}'.",
                     "prep_governed", 3.0, head_context=head_lemma,
                 )
 
@@ -458,12 +458,12 @@ class QuizClozeMixin:
                     break
             if obj_noun:
                 return cls._make_candidate(
-                    tok, sent_idx, 2, "MWU & Preposition Valency", "light_verb",
-                    f"💡 Clue: Collocational support verb paired with '{obj_noun}'",
+                    tok, sent_idx, 2, "Collocations", "light_verb",
+                    f"Common verb that pairs naturally with '{obj_noun}'.",
                     "light_verbs", 3.1, head_context=obj_noun,
                 )
 
-        # --- Pillar 3: Lexico-Grammar & Inflectional Aspect (~30%) ---
+        # --- Pillar 3: Grammar & Usage (~30%) ---
         # 3a. Quantifiers & Determiners
         if text_lower in _CLOSED_QUANTIFIERS:
             pool_key = "quantifier_distributive" if text_lower in ("each", "every", "all", "both") else (
@@ -472,8 +472,8 @@ class QuizClozeMixin:
                 )
             )
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "quantifier",
-                "💡 Clue: Determiner/quantifier indicating countability, distribution, or scope",
+                tok, sent_idx, 3, "Grammar & Usage", "quantifier",
+                "Quantity or determiner word (e.g., each / many / another / other).",
                 pool_key, 2.9,
             )
 
@@ -481,15 +481,15 @@ class QuizClozeMixin:
         if tok.pos_ == "AUX" and tok.dep_ in ("aux", "auxpass") and text_lower in _ASPECT_AUXILIARIES:
             head_verb = tok.head.text if tok.head else ""
             if tok.dep_ == "auxpass":
-                clue = f"💡 Clue: Auxiliary 'be' form completing the passive voice with '{head_verb}'"
+                clue = f"Form of 'be' used in the passive voice with '{head_verb}'."
             elif text_lower in ("has", "have", "had", "having"):
-                clue = f"💡 Clue: Perfect aspect auxiliary matching subject agreement and tense before '{head_verb}'"
+                clue = f"Form of 'have' matching the subject and tense before '{head_verb}'."
             elif text_lower in ("do", "does", "did"):
-                clue = "💡 Clue: Periphrastic 'do' auxiliary required by negation, emphasis, or question syntax"
+                clue = "Helper verb ('do' / 'does' / 'did') used here for negation, emphasis, or a question."
             else:
-                clue = f"💡 Clue: Grammatical auxiliary required by the aspect or voice of '{head_verb}'"
+                clue = f"Helper verb needed before '{head_verb}'."
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "aspectual_auxiliary",
+                tok, sent_idx, 3, "Grammar & Usage", "aspectual_auxiliary",
                 clue, "aux_aspect", 2.85, head_context=head_verb,
             )
 
@@ -497,44 +497,44 @@ class QuizClozeMixin:
         next_tok = tok.doc[tok.i + 1] if tok.i + 1 < len(tok.doc) else None
         if text_lower in ("used", "ought", "able") and next_tok is not None and next_tok.text.lower() == "to":
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "modal_structure",
-                "💡 Clue: Core lexical word completing the semi-modal structure with 'to'",
+                tok, sent_idx, 3, "Grammar & Usage", "modal_structure",
+                "Word that forms a common verb phrase with 'to' (e.g., used to / able to).",
                 "light_verbs", 2.8,
             )
         if tok.pos_ == "AUX" and tok.dep_ == "aux" and text_lower in _MODAL_AUXILIARIES:
             head_verb = tok.head.text if tok.head else ""
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "modal_auxiliary",
-                f"💡 Clue: Modal auxiliary expressing obligation, possibility, or tentativeness before '{head_verb}'",
+                tok, sent_idx, 3, "Grammar & Usage", "modal_auxiliary",
+                f"Modal verb (e.g., can / could / would / should) before '{head_verb}'.",
                 "aux_aspect", 2.7, head_context=head_verb,
             )
 
         # 3d. Reflexive & Anaphoric Reference
         if text_lower in _REFLEXIVE_PRONOUNS:
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "reflexive_pronoun",
-                "💡 Clue: Reflexive pronoun referring back to the subject of the clause",
+                tok, sent_idx, 3, "Grammar & Usage", "reflexive_pronoun",
+                "Reflexive pronoun (-self / -selves) referring back to the subject.",
                 "quantifier_distributive", 2.85,
             )
         if text_lower in ("its", "their", "such") and tok.dep_ in ("poss", "predet", "det"):
             head_noun = tok.head.text if tok.head else ""
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "anaphoric_determiner",
-                f"💡 Clue: Anaphoric determiner/possessive before '{head_noun}' referring back to an earlier referent",
+                tok, sent_idx, 3, "Grammar & Usage", "anaphoric_determiner",
+                f"Reference word before '{head_noun}' pointing back to something mentioned earlier.",
                 "quantifier_distributive", 2.65, head_context=head_noun,
             )
 
         # 3e. Comparative & Degree Operators (than, too, so)
         if text_lower == "than" and tok.dep_ in ("prep", "mark"):
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "comparative_operator",
-                "💡 Clue: Comparative function word linking the two terms of a comparison",
+                tok, sent_idx, 3, "Grammar & Usage", "comparative_operator",
+                "Word used to compare two things.",
                 "conj_contrast", 2.8,
             )
         if text_lower in ("too", "so") and tok.dep_ == "advmod" and tok.head and tok.head.pos_ in ("ADJ", "ADV"):
             return cls._make_candidate(
-                tok, sent_idx, 3, "Lexico-Grammar", "degree_operator",
-                f"💡 Clue: Degree adverb modifying '{tok.head.text}' in a result or excess construction",
+                tok, sent_idx, 3, "Grammar & Usage", "degree_operator",
+                f"Degree word modifying '{tok.head.text}'.",
                 "quantifier_amount", 2.65, head_context=tok.head.text,
             )
 
@@ -543,26 +543,22 @@ class QuizClozeMixin:
     @classmethod
     def _build_open_cloze_explanation(cls, candidate: ClozeCandidate) -> str:
         """
-        Generates a concise, linguistically grounded explanation for a Pure Open Cloze slot,
-        including any accepted structural equivalents.
+        Generates a concise, teacher- and student-friendly explanation for an Open Cloze slot,
+        including any accepted alternatives.
         """
         target_display = candidate.raw_text
-        cat_label = candidate.category.replace("_", " ")
         head_clause = (
-            f" paired with '{candidate.head_context}'"
+            f" with '{candidate.head_context}'"
             if candidate.head_context
             else ""
         )
         alts = [a for a in candidate.accepted_answers if a.lower() != target_display.lower()]
         alt_note = (
-            f" Acceptable equivalents in this slot: {', '.join(repr(a) for a in alts)}."
+            f" Also accepted: {', '.join(repr(a) for a in alts)}."
             if alts
             else ""
         )
-        return (
-            f"The target word is '{target_display}' ({candidate.pillar_label}: {cat_label}{head_clause}). "
-            f"It satisfies the grammatical and discourse constraints of the surrounding clause.{alt_note}"
-        )
+        return f"Answer: '{target_display}' ({candidate.pillar_label}{head_clause}).{alt_note}"
 
     @classmethod
     def _synthesize_distractor_set(
@@ -797,11 +793,13 @@ class QuizClozeMixin:
         for c_start, c_end, repl in char_replacements:
             masked_passage = masked_passage[:c_start] + repl + masked_passage[c_end:]
 
+        masked_paragraphs = [p.strip() for p in masked_passage.split("\n\n") if p.strip()]
+
         return {
             "mode": "open_cloze",
             "passage": span_text,
             "masked_passage": masked_passage,
-            "paragraphs": span_info["paragraphs"],
+            "paragraphs": masked_paragraphs,
             "blanks": blanks_data,
             "questions": questions_data,
             "token_count": span_info["token_count"],

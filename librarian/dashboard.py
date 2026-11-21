@@ -218,7 +218,7 @@ def background_all_quizzes_worker(job_id, filename):
         media_dir = unit_dir / "sources" / "media"
         has_video = media_dir.exists() and any(media_dir.glob("*.md"))
 
-        templates = ["vocabulary", "reading", "translation", "listening"]
+        templates = ["vocabulary", "cloze", "reading", "translation", "listening"]
         if has_video:
             templates.append("video")
 

@@ -13,6 +13,9 @@ DEFAULT_CONFIG = {
             "count": 10,
             "mode": "cloze"
         },
+        "cloze": {
+            "count": 10
+        },
         "reading": {
             "count": 5
         },

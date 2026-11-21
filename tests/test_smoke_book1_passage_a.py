@@ -99,6 +99,8 @@ def test_smoke_book1_passage_a_unit(unit_num: int):
             v_md_file = u_dir / "sources" / "media" / v_md_name
             v_text = v_md_file.read_text(encoding="utf-8") if v_md_file.exists() else text
             flagged, defects = WP.audit_video_integrity(q_data, transcript_text=v_text)
+        elif "cloze" in h_name:
+            flagged, defects = WP.audit_cloze_integrity(q_data, passage_text=text)
         else:
             flagged, defects = WP.audit_quiz_integrity(q_data, allow_authentic_cloze=True)
 

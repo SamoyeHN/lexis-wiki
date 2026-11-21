@@ -753,7 +753,8 @@
             }
             if (previewFrame) {
                 previewFrame.classList.remove('d-none');
-                previewFrame.src = cleanPath;
+                const sep = cleanPath.includes('?') ? '&' : '?';
+                previewFrame.src = cleanPath.endsWith('.html') ? `${cleanPath}${sep}v=${Date.now()}` : cleanPath;
             }
         }
 
@@ -765,6 +766,7 @@
             else if (lower.includes('reading')) iconClass = 'bi-book';
             else if (lower.includes('video')) iconClass = 'bi-film';
             else if (lower.includes('translation')) iconClass = 'bi-translate';
+            else if (lower.includes('cloze')) iconClass = 'bi-input-cursor-text';
             else if (lower.includes('vocabulary')) iconClass = 'bi-spellcheck';
             else if (lower.endsWith('.md')) iconClass = 'bi-file-earmark-markdown';
             
@@ -2179,7 +2181,7 @@
         const totalEl = document.getElementById('config-quiz-total-val');
         if (!totalEl) return;
         let total = 0;
-        ['vocabulary', 'reading', 'translation', 'listening', 'video'].forEach(function (key) {
+        ['vocabulary', 'cloze', 'reading', 'translation', 'listening', 'video'].forEach(function (key) {
             const el = document.getElementById('config-quiz-' + key);
             if (el) total += parseInt(el.value, 10) || 0;
         });
@@ -2188,7 +2190,7 @@
 
     document.addEventListener('input', function (e) {
         const id = (e.target && e.target.id) || '';
-        if (id.indexOf('config-quiz-') === 0 && id !== 'config-quiz-vocab-mode') {
+        if (id.indexOf('config-quiz-') === 0) {
             refreshQuizTotal();
         }
     });
@@ -2208,11 +2210,12 @@
             max_parallel: parseInt(document.getElementById('config-max-p').value)
         };
 
-        const vocab_mode = document.getElementById('config-quiz-vocab-mode')?.value || 'generative';
         const quiz_defaults = {
             vocabulary: {
-                count: parseInt(document.getElementById('config-quiz-vocabulary').value) || 0,
-                mode: vocab_mode
+                count: parseInt(document.getElementById('config-quiz-vocabulary').value) || 0
+            },
+            cloze: {
+                count: parseInt(document.getElementById('config-quiz-cloze').value) || 0
             },
             reading: {
                 count: parseInt(document.getElementById('config-quiz-reading').value) || 0
@@ -2298,20 +2301,16 @@
                 };
 
                 const qVocab = parseQCount(qDefaults.vocabulary, 10);
+                const qCloze = parseQCount(qDefaults.cloze, 10);
                 const qReading = parseQCount(qDefaults.reading, 5);
                 const qTranslation = parseQCount(qDefaults.translation, 5);
                 const qListening = parseQCount(qDefaults.listening, 5);
                 const qVideo = parseQCount(qDefaults.video, 5);
 
-                const vocabMode = (qDefaults.vocabulary && typeof qDefaults.vocabulary === 'object' && qDefaults.vocabulary.mode) 
-                    ? qDefaults.vocabulary.mode 
-                    : (appConfig.enable_authentic_cloze === false ? 'generative' : 'cloze');
-
-                const modeSelect = document.getElementById('config-quiz-vocab-mode');
-                if (modeSelect) modeSelect.value = vocabMode;
-
                 document.getElementById('config-quiz-vocabulary').value = qVocab;
                 document.getElementById('config-quiz-vocabulary-val').innerText = qVocab;
+                document.getElementById('config-quiz-cloze').value = qCloze;
+                document.getElementById('config-quiz-cloze-val').innerText = qCloze;
                 document.getElementById('config-quiz-reading').value = qReading;
                 document.getElementById('config-quiz-reading-val').innerText = qReading;
                 document.getElementById('config-quiz-translation').value = qTranslation;
@@ -2841,7 +2840,7 @@
                         const parts = cleanPath.split('/');
                         if (parts.length > 1) return parts[0];
                         const file = parts[0];
-                        return file.replace(/(_vocabulary|_grammar|_expressions|_summary|_mindmap|_listening_quiz|_reading_quiz|_video_learning|_translation_quiz)?\.(md|html|txt)$/i, '');
+                        return file.replace(/(_vocabulary|_grammar|_expressions|_summary|_mindmap|_listening_quiz|_reading_quiz|_cloze_quiz|_video_learning|_translation_quiz)?\.(md|html|txt)$/i, '');
                     }
 
                     // Map raw textbook/source files
@@ -3243,7 +3242,7 @@
             });
     }
 
-    function pollJobStatus(jobId, service) {
+    function pollJobStatus(jobId, service, attempt = 0) {
         if (activePollTimers[jobId]) clearTimeout(activePollTimers[jobId]);
 
         fetch('/api/job-status', {
@@ -3352,7 +3351,8 @@
                         showToast(`Successfully generated ${count} quizzes for ${job.name || 'unit'}!`, 'success');
                     }
                 } else {
-                    activePollTimers[jobId] = setTimeout(() => pollJobStatus(jobId, service), 1500);
+                    const delay = (service === 'quiz' && attempt < 6) ? 250 : 1500;
+                    activePollTimers[jobId] = setTimeout(() => pollJobStatus(jobId, service, attempt + 1), delay);
                 }
             }
         });
@@ -3704,7 +3704,7 @@
 
     function selectQuizArch(val) {
         document.getElementById('quiz-template-select').value = val;
-        ['vocabulary', 'reading', 'translation', 'listening', 'video'].forEach(arch => {
+        ['vocabulary', 'cloze', 'reading', 'translation', 'listening', 'video'].forEach(arch => {
             const btn = document.getElementById('btn-arch-' + arch);
             if (btn) {
                 if (arch === val) btn.classList.add('active');

@@ -164,9 +164,12 @@ def test_phrase_distractors_and_authentic_cloze():
     items = LinguisticEngine.build_authentic_cloze_items(vocab_text, target_count=5)
     assert len(items) == 2
     
+    base_headwords = [it["base_headword"] for it in items]
     t_words = [it["target_word"] for it in items]
-    assert "keep in touch with" in t_words
-    assert "aware of" in t_words
+    assert "keep in touch with" in base_headwords
+    assert "aware of" in base_headwords
+    assert "touch" in t_words
+    assert "aware" in t_words
 
     for it in items:
         assert it["question"].count("____") == 1

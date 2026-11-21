@@ -6,7 +6,7 @@
     <title>Discourse Cloze Assessment</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <style>
         :root {
             --color-bg-page: linear-gradient(135deg, #EEF2FF 0%, #FAF5FF 50%, #FCE7F3 100%);
@@ -218,35 +218,31 @@
             margin-bottom: 0;
         }
 
-        /* Interactive Cloze Slot Widget */
+        /* Interactive Cloze Slot Widget (Clean Underline Style) */
         .cloze-slot {
             display: inline-flex;
-            align-items: center;
-            vertical-align: middle;
-            background: #FFFFFF;
-            border: 1.5px solid #CBD5E1;
-            border-radius: 10px;
-            padding: 2px 6px;
-            margin: 0 4px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+            align-items: baseline;
+            background: transparent;
+            border: none;
+            border-bottom: 1.5px solid #94A3B8;
+            border-radius: 0;
+            padding: 0 3px 1px;
+            margin: 0 3px;
             transition: all 0.2s ease;
             position: relative;
         }
 
         .cloze-slot:focus-within, .cloze-slot.active {
-            border-color: var(--color-primary);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+            border-bottom-color: var(--color-primary);
+            background: rgba(99, 102, 241, 0.06);
         }
 
         .slot-index {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 700;
-            color: #6366F1;
-            background: #EEF2FF;
-            padding: 1px 5px;
-            border-radius: 5px;
-            margin-right: 6px;
+            color: #64748B;
+            margin-right: 4px;
             user-select: none;
         }
 
@@ -254,72 +250,48 @@
             border: none;
             outline: none;
             font-family: 'Plus Jakarta Sans', sans-serif;
-            font-size: 15px;
+            font-size: 15.5px;
             font-weight: 600;
             color: var(--color-text-main);
-            width: 84px;
+            width: 82px;
             background: transparent;
-            padding: 2px 4px;
+            padding: 0 2px;
             text-align: center;
             transition: width 0.15s ease;
         }
 
         .cloze-input::placeholder {
-            color: #94A3B8;
-            font-weight: 400;
-        }
-
-        .slot-btn {
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            font-size: 14px;
-            padding: 2px 4px;
-            border-radius: 4px;
-            opacity: 0.65;
-            transition: all 0.15s ease;
-            line-height: 1;
-        }
-
-        .slot-btn:hover {
-            opacity: 1;
-            background: #F1F5F9;
-            transform: scale(1.1);
-        }
-
-        .slot-btn.active {
-            opacity: 1;
-            background: #E0E7FF;
+            color: transparent;
         }
 
         .slot-status-icon {
             margin-left: 4px;
             font-size: 13px;
+            font-weight: 700;
             display: none;
         }
 
         /* Slot Answer States */
-        .cloze-slot.correct-100 {
-            border-color: #10B981;
-            background: #ECFDF5;
-        }
-        .cloze-slot.correct-80 {
-            border-color: #06B6D4;
-            background: #ECFEFF;
-        }
+        .cloze-slot.correct-100,
+        .cloze-slot.correct-80,
         .cloze-slot.correct-60 {
-            border-color: #3B82F6;
-            background: #EFF6FF;
+            border-bottom-color: #10B981;
+            background: rgba(16, 185, 129, 0.08);
         }
         .cloze-slot.incorrect {
-            border-color: #EF4444;
-            background: #FEF2F2;
+            border-bottom-color: #EF4444;
+            background: rgba(239, 68, 68, 0.08);
+        }
+        .cloze-slot.revealed {
+            border-bottom-color: #6366F1;
+            background: rgba(99, 102, 241, 0.06);
         }
 
         .cloze-slot.correct-100 .slot-status-icon,
         .cloze-slot.correct-80 .slot-status-icon,
         .cloze-slot.correct-60 .slot-status-icon,
-        .cloze-slot.incorrect .slot-status-icon {
+        .cloze-slot.incorrect .slot-status-icon,
+        .cloze-slot.revealed .slot-status-icon {
             display: inline-block;
         }
 
@@ -364,9 +336,9 @@
         }
 
         .pillar-1 {
-            background: #FDF2F8;
-            color: #DB2777;
-            border: 1px solid #FBCFE8;
+            background: #E0F2FE;
+            color: #0369A1;
+            border: 1px solid #BAE6FD;
         }
 
         .pillar-2 {
@@ -666,15 +638,24 @@
             from { opacity: 0; transform: scale(0.92); }
             to { opacity: 1; transform: scale(1); }
         }
+
+        @media print {
+            body { background: #FFFFFF; padding: 0; }
+            .score-banner, .action-bar, .grid-layout > .panel:last-child, .results-modal-overlay { display: none !important; }
+            .grid-layout { grid-template-columns: 1fr; }
+            .panel { box-shadow: none; border: none; padding: 0; }
+            .cloze-slot { background: transparent !important; border-bottom: 1.5px solid #000000 !important; }
+            .slot-status-icon { display: none !important; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <div class="badge-mode" id="badge-mode">✨ Pure Open Cloze · Discourse &amp; Grammar</div>
-            <h1 id="quiz-title">Discourse Cloze Assessment</h1>
+            <div class="badge-mode" id="badge-mode">✨ Passage Cloze</div>
+            <h1 id="quiz-title">Passage Cloze Practice</h1>
             <p class="subtitle" id="quiz-subtitle">
-                Complete the passage by retrieving one grammatical, collocational, or discourse word per blank. Use 💡 Clue (-20 pts) if needed.
+                Complete each blank with one suitable word. Click any blank to see a hint on the right.
             </p>
         </header>
 
@@ -682,15 +663,15 @@
         <div class="score-banner">
             <div class="score-stats">
                 <div class="stat-item">
-                    <span class="stat-label">Total Score</span>
-                    <span class="stat-val" id="stat-total-score">0</span>
+                    <span class="stat-label">Score</span>
+                    <span class="stat-val" id="stat-total-score">0 / 100</span>
                 </div>
                 <div class="stat-item">
                     <span class="stat-label">Answered</span>
                     <span class="stat-val" id="stat-answered">0 / 10</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Active Recall</span>
+                    <span class="stat-label">Accuracy</span>
                     <span class="stat-val" id="stat-active-recall">0%</span>
                 </div>
             </div>
@@ -722,61 +703,60 @@
                 <div class="action-bar">
                     <button class="btn btn-outline" id="btn-reset">Reset</button>
                     <button class="btn btn-outline" id="btn-toggle-explanations">Reveal All</button>
-                    <button class="btn btn-primary" id="btn-submit-all">Submit &amp; Check Exam</button>
+                    <button class="btn btn-primary" id="btn-submit-all">Check Answers</button>
                 </div>
             </div>
 
-            <!-- Right: Dynamic Inspection & Scaffolding Panel -->
+            <!-- Right: Dynamic Word Guide Panel -->
             <div class="panel">
                 <div class="panel-header">
                     <div class="panel-title">
                         <span>🎯</span>
-                        <span>Scaffolding Microscope</span>
+                        <span>Word Guide</span>
                     </div>
                     <span id="active-blank-badge" style="font-size: 13px; font-weight: 600; color: #6366F1;">Select a blank</span>
                 </div>
 
                 <div class="inspector-placeholder" id="inspector-placeholder">
                     <div style="font-size: 40px; margin-bottom: 12px;">👆</div>
-                    <p style="font-weight: 600; margin-bottom: 4px;">Click any input slot in the passage</p>
-                    <p style="font-size: 13.5px;">Type your answer for maximum score, or use progressive scaffolding if needed.</p>
+                    <p style="font-weight: 600; margin-bottom: 4px;">Click any blank in the passage</p>
+                    <p style="font-size: 13.5px;">A helpful hint will appear here as you type.</p>
                 </div>
 
                 <div class="inspector-content" id="inspector-content">
                     <div class="blank-meta-row">
                         <div class="blank-title" id="inspector-blank-title">Blank #1</div>
-                        <span class="pillar-tag pillar-1" id="inspector-pillar-tag">Discourse Cohesion</span>
+                        <span class="pillar-tag pillar-1" id="inspector-pillar-tag">Sentence Linking</span>
                     </div>
 
                     <div class="sentence-box" id="inspector-sentence-box">
                         Context sentence loading...
                     </div>
 
-                    <!-- Stage 1 Hint Card -->
+                    <!-- Hint Card (shown automatically on focus) -->
                     <div class="scaffold-card hint-card" id="inspector-hint-card">
                         <div class="hint-header">
                             <span>💡</span>
-                            <span>Grammatical Clue (-20 pts max)</span>
+                            <span>Hint</span>
                         </div>
                         <div id="inspector-hint-text" style="font-size: 14px; line-height: 1.5;"></div>
                     </div>
 
-                    <!-- Stage 2 Four-Options Card -->
+                    <!-- Options Card (legacy fallback if options exist) -->
                     <div class="scaffold-card options-card" id="inspector-options-card">
                         <div class="options-header">
-                            <span>⚅ 4 Peer Options (-40 pts max)</span>
-                            <span style="font-size: 12px; font-weight: 600; color: #7E22CE;">Single-Fit Discrimination</span>
+                            <span>Options</span>
                         </div>
                         <div class="options-grid" id="inspector-options-grid">
                             <!-- Populated dynamically -->
                         </div>
                     </div>
 
-                    <!-- Explanation Card -->
+                    <!-- Explanation Card (shown after checking or Reveal All) -->
                     <div class="explanation-card" id="inspector-explanation-card">
                         <div class="explanation-title">
                             <span>📋</span>
-                            <span>Pedagogical Analysis</span>
+                            <span>Answer &amp; Note</span>
                         </div>
                         <div class="explanation-text" id="inspector-explanation-text"></div>
                     </div>
@@ -789,21 +769,21 @@
     <div class="results-modal-overlay" id="results-modal">
         <div class="results-card">
             <div class="achievement-icon" id="res-icon">🏆</div>
-            <h2 class="results-title" id="res-title">Distinguished Achievement!</h2>
-            <p id="res-desc" style="color: var(--color-text-muted); font-size: 15px;">Superb syntagmatic retrieval and discourse control.</p>
-            <div class="results-score-badge" id="res-score-badge">940 / 1000</div>
+            <h2 class="results-title" id="res-title">Great Job!</h2>
+            <p id="res-desc" style="color: var(--color-text-muted); font-size: 15px;">Well done completing this passage.</p>
+            <div class="results-score-badge" id="res-score-badge">90 / 100</div>
 
             <div class="pillars-breakdown">
                 <div class="pillar-card">
-                    <div class="pillar-card-title">Discourse Cohesion</div>
+                    <div class="pillar-card-title">Sentence Linking</div>
                     <div class="pillar-card-val" id="res-pillar-1">100%</div>
                 </div>
                 <div class="pillar-card">
-                    <div class="pillar-card-title">MWU &amp; Valency</div>
+                    <div class="pillar-card-title">Collocations</div>
                     <div class="pillar-card-val" id="res-pillar-2">90%</div>
                 </div>
                 <div class="pillar-card">
-                    <div class="pillar-card-title">Lexico-Grammar</div>
+                    <div class="pillar-card-title">Grammar &amp; Usage</div>
                     <div class="pillar-card-val" id="res-pillar-3">92%</div>
                 </div>
             </div>
@@ -842,9 +822,10 @@
             quizData.blanks.forEach(b => {
                 userAnswers[b.blank_index] = {
                     value: "",
-                    stage: 0, // 0 = Active Recall, 1 = Hint Used, 2 = Options Revealed
+                    stage: 0,
                     points: 0,
                     checked: false,
+                    revealed: false,
                     isCorrect: false
                 };
             });
@@ -859,8 +840,10 @@
             const container = document.getElementById("passage-container");
             container.innerHTML = "";
 
-            // Use paragraphs or fallback to split
-            const paras = quizData.paragraphs || (quizData.passage ? quizData.passage.split("\n\n") : []);
+            // Use masked_passage split into paragraphs so [i] ____ placeholders are always present
+            const paras = quizData.masked_passage
+                ? quizData.masked_passage.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+                : (quizData.paragraphs || (quizData.passage ? quizData.passage.split("\n\n") : []));
             
             // Map each blank to its slot regex
             let blankMap = {};
@@ -881,16 +864,10 @@
 
                     // Match `[i] _____` or `[i] ____` or `[i] ...`
                     const pattern = new RegExp(`\\[${i}\\]\\s*_{2,}`, "g");
-                    const hasOptions = Array.isArray(blank.options) && blank.options.length > 0;
-                    const optionsBtnHtml = hasOptions
-                        ? `<button class="slot-btn btn-options" data-id="${i}" title="Options (-40 pts)">⚅</button>`
-                        : "";
                     const slotHtml = `
                         <span class="cloze-slot" id="slot-${i}" data-id="${i}">
                             <span class="slot-index">[${i}]</span>
-                            <input type="text" class="cloze-input" id="input-${i}" data-id="${i}" autocomplete="off" spellcheck="false" placeholder="...">
-                            <button class="slot-btn btn-hint" data-id="${i}" title="Hint (-20 pts)">💡</button>
-                            ${optionsBtnHtml}
+                            <input type="text" class="cloze-input" id="input-${i}" data-id="${i}" autocomplete="off" spellcheck="false" placeholder="">
                             <span class="slot-status-icon" id="status-${i}"></span>
                         </span>
                     `;
@@ -984,15 +961,11 @@
             const maskedSentence = blank.question || blank.sentence_text || "Context sentence";
             sentBox.innerHTML = maskedSentence.replace(new RegExp(`\\[${id}\\]\\s*_{2,}`, "g"), `<strong>[${id}] _____</strong>`);
 
-            // Hint Card
+            // Hint Card: always shown immediately when clicking/focusing a blank (no penalty)
             const hintCard = document.getElementById("inspector-hint-card");
             const hintText = document.getElementById("inspector-hint-text");
-            if (userAnswers[id].stage >= 1) {
-                hintCard.classList.add("active");
-                hintText.innerText = blank.clue || "No specific clue available.";
-            } else {
-                hintCard.classList.remove("active");
-            }
+            hintCard.classList.add("active");
+            hintText.innerText = blank.clue || "Think about the grammar and meaning of this sentence.";
 
             // Options Card (only shown when legacy 4-option fallback exists)
             const optionsCard = document.getElementById("inspector-options-card");
@@ -1024,12 +997,12 @@
                 optionsCard.classList.remove("active");
             }
 
-            // Explanation Card
+            // Explanation Card (shown after checking or Reveal All)
             const expCard = document.getElementById("inspector-explanation-card");
             const expText = document.getElementById("inspector-explanation-text");
-            if (userAnswers[id].checked) {
+            if (userAnswers[id].checked || userAnswers[id].revealed) {
                 expCard.classList.add("active");
-                expText.innerText = blank.explanation || "Correct answer fits the syntagmatic frame.";
+                expText.innerText = blank.explanation || "Fits the grammar and context of the sentence.";
             } else {
                 expCard.classList.remove("active");
             }
@@ -1082,25 +1055,13 @@
             const slot = document.getElementById(`slot-${id}`);
             const statusIcon = document.getElementById(`status-${id}`);
 
-            slot.classList.remove("correct-100", "correct-80", "correct-60", "incorrect");
+            slot.classList.remove("correct-100", "correct-80", "correct-60", "incorrect", "revealed");
 
             if (isMatch) {
-                if (userAnswers[id].stage === 0) {
-                    userAnswers[id].points = 100;
-                    slot.classList.add("correct-100");
-                    statusIcon.innerText = "✓ +100";
-                    statusIcon.style.color = "#059669";
-                } else if (userAnswers[id].stage === 1) {
-                    userAnswers[id].points = 80;
-                    slot.classList.add("correct-80");
-                    statusIcon.innerText = "✓ +80";
-                    statusIcon.style.color = "#0891B2";
-                } else {
-                    userAnswers[id].points = 60;
-                    slot.classList.add("correct-60");
-                    statusIcon.innerText = "✓ +60";
-                    statusIcon.style.color = "#2563EB";
-                }
+                userAnswers[id].points = 100;
+                slot.classList.add("correct-100");
+                statusIcon.innerText = "✓";
+                statusIcon.style.color = "#059669";
             } else {
                 userAnswers[id].points = 0;
                 slot.classList.add("incorrect");
@@ -1116,20 +1077,26 @@
         function updateStats() {
             let totalScore = 0;
             let answeredCount = 0;
-            let directActiveCount = 0;
+            let checkedCount = 0;
+            let correctCount = 0;
 
             quizData.blanks.forEach(b => {
                 const ans = userAnswers[b.blank_index];
-                if (ans.value.length > 0) answeredCount++;
-                if (ans.checked && ans.isCorrect && ans.stage === 0) directActiveCount++;
+                if (ans.value.length > 0 && !ans.revealed) answeredCount++;
+                if (ans.checked) {
+                    checkedCount++;
+                    if (ans.isCorrect) correctCount++;
+                }
                 totalScore += ans.points;
             });
 
-            document.getElementById("stat-total-score").innerText = totalScore;
+            const maxRaw = totalBlanks * 100;
+            const displayScore = maxRaw > 0 ? Math.round((totalScore / maxRaw) * 100) : 0;
+            document.getElementById("stat-total-score").innerText = `${displayScore} / 100`;
             document.getElementById("stat-answered").innerText = `${answeredCount} / ${totalBlanks}`;
-            
-            const activeRecallPct = answeredCount > 0 ? Math.round((directActiveCount / totalBlanks) * 100) : 0;
-            document.getElementById("stat-active-recall").innerText = `${activeRecallPct}%`;
+
+            const accuracyPct = checkedCount > 0 ? Math.round((correctCount / checkedCount) * 100) : 0;
+            document.getElementById("stat-active-recall").innerText = `${accuracyPct}%`;
 
             const progressPct = totalBlanks > 0 ? Math.round((answeredCount / totalBlanks) * 100) : 0;
             document.getElementById("stat-progress-pct").innerText = `${progressPct}%`;
@@ -1138,7 +1105,9 @@
 
         function submitAll() {
             quizData.blanks.forEach(b => {
-                checkBlankAnswer(b.blank_index);
+                if (!userAnswers[b.blank_index].revealed) {
+                    checkBlankAnswer(b.blank_index);
+                }
             });
 
             // Calculate pillar scores
@@ -1163,29 +1132,29 @@
             document.getElementById("res-pillar-2").innerText = `${pct2}%`;
             document.getElementById("res-pillar-3").innerText = `${pct3}%`;
 
-            document.getElementById("res-score-badge").innerText = `${totalScored} / ${totalMax}`;
+            const overallPct = totalMax > 0 ? Math.round((totalScored / totalMax) * 100) : 0;
+            document.getElementById("res-score-badge").innerText = `${overallPct} / 100`;
 
-            const overallPct = Math.round((totalScored / totalMax) * 100);
             const iconElem = document.getElementById("res-icon");
             const titleElem = document.getElementById("res-title");
             const descElem = document.getElementById("res-desc");
 
             if (overallPct >= 90) {
                 iconElem.innerText = "🏆";
-                titleElem.innerText = "Distinguished Achievement!";
-                descElem.innerText = "Outstanding active syntagmatic recall and discourse cohesion mastery!";
+                titleElem.innerText = "Excellent Work!";
+                descElem.innerText = "Outstanding mastery of sentence linking, collocations, and grammar!";
             } else if (overallPct >= 75) {
                 iconElem.innerText = "🎉";
-                titleElem.innerText = "Excellent Proficiency!";
-                descElem.innerText = "Strong command of multi-word units and sentence-linking structures.";
+                titleElem.innerText = "Great Job!";
+                descElem.innerText = "Strong command of collocations and sentence structure.";
             } else if (overallPct >= 60) {
                 iconElem.innerText = "💡";
                 titleElem.innerText = "Good Effort!";
-                descElem.innerText = "Solid understanding. Review the collocations and closed-class linkers.";
+                descElem.innerText = "Solid progress. Review the highlighted notes for the missed blanks.";
             } else {
                 iconElem.innerText = "📚";
                 titleElem.innerText = "Keep Practicing!";
-                descElem.innerText = "Study the pedagogical explanations and practice open-cloze retrieval.";
+                descElem.innerText = "Check the notes for each blank and try another round.";
             }
 
             document.getElementById("results-modal").classList.add("active");
@@ -1197,14 +1166,29 @@
 
         function toggleAllExplanations() {
             quizData.blanks.forEach(b => {
-                useOptions(b.blank_index);
-                const input = document.getElementById(`input-${b.blank_index}`);
-                if (input && !input.value) {
-                    input.value = b.raw_word || b.target_word;
-                    userAnswers[b.blank_index].value = input.value;
+                const id = b.blank_index;
+                const ans = userAnswers[id];
+                if (ans.checked) return;
+                const input = document.getElementById(`input-${id}`);
+                const answerWord = b.raw_word || b.target_word;
+                if (input) {
+                    input.value = answerWord;
+                    input.style.width = Math.max(72, (answerWord.length + 2) * 9.5) + "px";
+                    ans.value = answerWord;
                 }
-                checkBlankAnswer(b.blank_index);
+                ans.revealed = true;
+                ans.points = 0;
+                const slot = document.getElementById(`slot-${id}`);
+                const statusIcon = document.getElementById(`status-${id}`);
+                if (slot) {
+                    slot.classList.remove("correct-100", "correct-80", "correct-60", "incorrect");
+                    slot.classList.add("revealed");
+                }
+                if (statusIcon) {
+                    statusIcon.innerText = "";
+                }
             });
+            updateStats();
             selectBlank(activeBlankId);
         }
 
@@ -1216,21 +1200,18 @@
                     stage: 0,
                     points: 0,
                     checked: false,
+                    revealed: false,
                     isCorrect: false
                 };
                 const input = document.getElementById(`input-${b.blank_index}`);
                 if (input) {
                     input.value = "";
-                    input.style.width = "84px";
+                    input.style.width = "82px";
                 }
                 const slot = document.getElementById(`slot-${b.blank_index}`);
                 if (slot) slot.className = "cloze-slot";
                 const status = document.getElementById(`status-${b.blank_index}`);
                 if (status) status.innerText = "";
-                const btnH = slot.querySelector(".btn-hint");
-                if (btnH) btnH.classList.remove("active");
-                const btnO = slot.querySelector(".btn-options");
-                if (btnO) btnO.classList.remove("active");
             });
             updateStats();
             selectBlank(1);

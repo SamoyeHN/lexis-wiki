@@ -3323,10 +3323,15 @@ class DistractorEngineMixin:
                     and inv_peer not in safe_distractors
                     and inv_peer not in forbidden_words
                     and inv_peer not in exclude_words
-                    and not cls.evaluate_syntactic_slot_clash(
+                    and not cls.double_key_collision(
                         clean_target, inv_peer, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
                     )[0]
                 ):
+                    clash, clash_reason = cls.evaluate_syntactic_slot_clash(
+                        clean_target, inv_peer, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                    )
+                    if clash and clash_reason == "non_inverting_candidate_in_fronted_inversion_slot":
+                        continue
                     safe_distractors.append(inv_peer)
                     distractor_metadata[inv_peer] = "fronted_inv_peer"
                     if len(safe_distractors) >= target_count:

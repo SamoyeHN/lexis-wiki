@@ -86,21 +86,19 @@ Tests syntactic parsing, agreement, and closed-class grammatical competence:
 
 ## 4. Pure Open Cloze Interaction & Acceptable-Word Scoring
 
-Rather than forcing brittle 4-option distractors onto open discourse slots (which frequently introduces artificial double-key ambiguity), Pure Open Cloze uses **2-tier cognitive scaffolding** paired with **Acceptable-Word Scoring**:
+Rather than forcing brittle 4-option distractors onto open discourse slots (which frequently introduces artificial double-key ambiguity), Pure Open Cloze uses a **clean classroom-first underline interface** paired with **Acceptable-Word Scoring** and **100-point normalized reporting**:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ActiveRetrieval: Student encounters numbered blank in continuous passage
-    ActiveRetrieval --> DirectSolve: Types any answer in accepted_answers
-    DirectSolve --> Graded100: Score +100 / Green Feedback
-
-    ActiveRetrieval --> LinguisticClue: Clicks [💡 Clue] (grammatical / discourse hint)
-    LinguisticClue --> ClueSolve: Types any answer in accepted_answers
-    ClueSolve --> Graded80: Score +80 / Cyan Feedback
+    [*] --> ActiveRetrieval: Focuses underline blank (auto-shows Hint in Word Guide, no penalty)
+    ActiveRetrieval --> Correct: Types any answer in accepted_answers
+    Correct --> Graded100: Passage shows ✓ (100/100 scale) + Answer & Note
 
     ActiveRetrieval --> Incorrect: Types non-accepted word
-    LinguisticClue --> Incorrect
-    Incorrect --> Graded0: Score 0 / Displays all accepted_answers + Linguistic Explanation
+    Incorrect --> Graded0: Passage shows ✗ (accepted_answers) + Answer & Note
+
+    ActiveRetrieval --> Revealed: Clicks Reveal All
+    Revealed --> ReviewOnly: Fills answer (0 pts) + shows Answer & Note on click
 ```
 
 ### 4.1 Acceptable-Word Scoring (`_build_accepted_answers`)
@@ -110,18 +108,24 @@ stateDiagram-v2
   - `accepted_answers`: list of valid, contextually licensed words (e.g., restrictive `that`/`which`, discourse near-equivalents such as `although`/`though`, while strictly blocking `that` in comma-preceded non-restrictive `, which` clauses).
   - `options: []` and `correct_answer_index: None` (`mode: "open_cloze"`).
 - Client-side grading in `librarian/templates/cloze.html` normalizes whitespace/case and checks membership in `accepted_answers`, showing all accepted alternatives when the learner's response does not match.
+- **Pedagogical UI Principles**:
+  - Underline blanks (`[i] ______`) with minimal status markers (`✓` / `✗ (answer)`) and zero inline point badges in the passage;
+  - Plain, non-jargon category labels (`Sentence Linking` in sky blue, `Collocations` in indigo, `Grammar & Usage` in emerald — avoiding red/warning hues) and student-friendly hints/explanations;
+  - Print-ready `@media print` worksheet layout and non-blocking async font loading.
 
 ---
 
-## 5. Level-1 Code Gate & Verified Corpus Metrics
+## 5. Level-1 Code Gate, Dashboard Integration & Verified Corpus Metrics
 
-### 5.1 Deterministic Level-1 Gate (`audit_cloze_integrity`)
-Located in `librarian/processor_core/quiz_integrity_gates.py`, `audit_cloze_integrity` verifies in `<5ms` (0 tokens):
-- Verbatim grounding of masked sentences against the selected discourse span;
-- Exact `[idx]` blank marker alignment;
-- Non-empty `accepted_answers` containing the normalized target word;
-- Zero duplicate `target_word` across blanks within the unit;
-- Backward-compatible MCQ branch for legacy Mode B JSON payloads if `options` is non-empty.
+### 5.1 Deterministic Level-1 Gate (`audit_cloze_integrity`) & L2 Bypass
+- Located in `librarian/processor_core/quiz_integrity_gates.py`, `audit_cloze_integrity` verifies in `<5ms` (0 tokens):
+  - Verbatim grounding of masked sentences against the selected discourse span;
+  - Exact `[idx]` blank marker alignment;
+  - Non-empty `accepted_answers` containing the normalized target word;
+  - Zero duplicate `target_word` across blanks within the unit;
+  - Backward-compatible MCQ branch for legacy Mode B JSON payloads if `options` is non-empty.
+- In `QuizGenerator.generate_quiz`, `mode == "open_cloze"` runs `audit_cloze_integrity` directly and bypasses `ExpertAuditor.audit_quiz` (preventing misrouting to the 4-option `expert_audit_vocabulary` judge template).
+- In the Dashboard (`dashboard.html` / `dashboard.js` / `dashboard.py` / `config.py`), **Cloze** is a standalone first-class quiz modality in the 2×3 Quiz Generator grid, Config Defaults (`quiz_defaults.cloze.count`), and batch generation pipeline (with legacy `Achievement MCQ` / `vocabulary.mode == "cloze"` removed).
 
 ### 5.2 Full-Corpus Audit Baseline (`tests/audit_cloze.py`)
 Verified across **30 textbook units (`295 blanks`)**:
@@ -135,5 +139,5 @@ Verified across **30 textbook units (`295 blanks`)**:
 
 ## 6. Delivery Standard
 
-- **Deliverable**: `wiki/<UnitName>/handouts/<UnitName>_cloze_quiz.html` (standalone single-file interactive HTML handout; omits `[⚅]` 4-option fallback button when `options` is empty).
-- **Keyboard Automaticity**: `Tab` advances across inline blanks; `Enter` submits and grades immediately against `accepted_answers`.
+- **Deliverable**: `wiki/<UnitName>/handouts/<UnitName>_cloze_quiz.html` (standalone single-file interactive HTML handout + print-friendly worksheet).
+- **Keyboard Automaticity**: `Tab` advances across inline underline blanks; `Enter` submits and grades immediately against `accepted_answers`.
