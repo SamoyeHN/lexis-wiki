@@ -35,6 +35,121 @@
     let librarySortOption = 'recent';
     let libraryViewMode = 'grid';
     let librarySearchQuery = '';
+    let selectedSeries = 'all';
+    let selectedBook = 'all';
+
+    function getSeriesDisplayName(s) {
+        if (!s || s === 'all') return 'All Series';
+        if (s === 'standalone') return 'Standalone';
+        if (Array.isArray(rawFiles)) {
+            const match = rawFiles.find(f => f.series === s);
+            if (match && match.series_display) return match.series_display;
+        }
+        if (s.includes('New Horizon College English')) return 'New Horizon · 4e';
+        if (s.includes('New Practical English')) return 'Practical English';
+        return s;
+    }
+
+    function setSeriesFilter(series) {
+        selectedSeries = series;
+        selectedBook = 'all';
+        renderSeriesPillsBar();
+        fetchRawFiles();
+    }
+
+    function setBookFilter(book) {
+        selectedBook = book;
+        renderSeriesPillsBar();
+        fetchRawFiles();
+    }
+
+    function renderSeriesPillsBar() {
+        const bar = document.getElementById('series-pills-bar');
+        if (!bar) return;
+
+        const seriesCatalog = {};
+        let standaloneCount = 0;
+        if (Array.isArray(rawFiles)) {
+            rawFiles.forEach(f => {
+                if (f.series) {
+                    if (!seriesCatalog[f.series]) {
+                        seriesCatalog[f.series] = {
+                            books: new Set(),
+                            display: f.series_display || f.series,
+                            clean: f.series_clean || f.series,
+                            edition: f.edition || null,
+                            count: 0
+                        };
+                    }
+                    seriesCatalog[f.series].count++;
+                    if (f.book !== undefined && f.book !== null) {
+                        seriesCatalog[f.series].books.add(f.book);
+                    }
+                } else {
+                    standaloneCount++;
+                }
+            });
+        }
+
+        const seriesList = Object.keys(seriesCatalog).sort();
+
+        let html = `
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary rounded-pill dropdown-toggle px-2.5 py-1 d-flex align-items-center" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem; background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface);">
+                    <i class="bi bi-journal-bookmark-fill text-info me-2"></i>
+                    <span class="fw-semibold text-truncate" style="max-width: 170px;">${esc(getSeriesDisplayName(selectedSeries))}</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size: 0.78rem; min-width: 210px;">
+                    <li><a class="dropdown-item py-1.5 d-flex align-items-center ${selectedSeries === 'all' ? 'active' : ''}" href="#" onclick="setSeriesFilter('all'); return false;"><i class="bi bi-journals me-2 text-info" style="width: 16px; text-align: center;"></i><span>All Series</span></a></li>
+        `;
+
+        seriesList.forEach(s => {
+            const meta = seriesCatalog[s] || {};
+            const dispName = meta.display || getSeriesDisplayName(s);
+            const edBadge = meta.edition ? `<span class="badge bg-info-subtle text-info border border-info-subtle px-1.5 py-0 rounded ms-auto" style="font-size: 0.65rem; font-weight: 600;">${esc(meta.edition)}</span>` : '';
+            html += `<li><a class="dropdown-item py-1.5 d-flex align-items-center justify-content-between text-truncate ${selectedSeries === s ? 'active' : ''}" href="#" onclick="setSeriesFilter('${esc(s).replace(/'/g, "\\'")}'); return false;" title="${esc(s)}"><span class="text-truncate d-flex align-items-center me-2"><i class="bi bi-journal-bookmark-fill me-2 text-info" style="width: 16px; text-align: center;"></i>${esc(dispName)}</span>${edBadge}</a></li>`;
+        });
+
+        if (standaloneCount > 0) {
+            html += `<li><hr class="dropdown-divider my-1"></li>`;
+            html += `<li><a class="dropdown-item py-1.5 d-flex align-items-center ${selectedSeries === 'standalone' ? 'active' : ''}" href="#" onclick="setSeriesFilter('standalone'); return false;"><i class="bi bi-file-earmark-text-fill me-2 text-secondary" style="width: 16px; text-align: center;"></i><span>Standalone (${standaloneCount})</span></a></li>`;
+        }
+
+        html += `
+                </ul>
+            </div>
+        `;
+
+        if (selectedSeries !== 'all' && selectedSeries !== 'standalone' && seriesCatalog[selectedSeries]) {
+            const books = Array.from(seriesCatalog[selectedSeries].books).sort((a, b) => {
+                const na = Number(a), nb = Number(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
+
+            html += `
+                <div class="d-flex align-items-center gap-1 p-0.5 rounded-pill" style="background: var(--input-bg); border: 1px solid var(--card-border); height: 28px;">
+                    <button class="filter-ribbon-btn ${selectedBook === 'all' ? 'active' : ''}" style="font-size: 0.72rem; padding: 2px 10px;" onclick="setBookFilter('all')">All Books</button>
+            `;
+
+            books.forEach(b => {
+                const isActive = String(selectedBook) === String(b);
+                html += `<button class="filter-ribbon-btn ${isActive ? 'active' : ''}" style="font-size: 0.72rem; padding: 2px 10px;" onclick="setBookFilter('${esc(String(b))}');">Book ${esc(String(b))}</button>`;
+            });
+
+            html += `</div>`;
+
+            const activeBook = (selectedBook !== 'all' ? selectedBook : (books[0] || '1'));
+            html += `
+                <button class="btn btn-sm btn-outline-info rounded-pill px-2.5 py-1 d-inline-flex align-items-center ms-1" onclick="openBookGlossaryModal('${esc(selectedSeries)}', '${esc(String(activeBook))}'); return false;" title="Open Book ${esc(String(activeBook))} Glossary" style="font-size: 0.72rem; height: 28px;">
+                    <i class="bi bi-book-half me-1.5 text-info"></i>
+                    <span class="fw-semibold">Book ${esc(String(activeBook))} Glossary</span>
+                </button>
+            `;
+        }
+
+        bar.innerHTML = html;
+    }
 
     function onLibrarySearchInput(val) {
         librarySearchQuery = (val || '').trim().toLowerCase();
@@ -2572,6 +2687,9 @@
                 rawFiles = data.files;
                 document.getElementById('stat-raw-files-count').innerText = `${rawFiles.length} file${rawFiles.length === 1 ? '' : 's'}`;
 
+                // Update lightweight Series & Book Filter Ribbon
+                renderSeriesPillsBar();
+
                 // Redraw Document Library Grid on Homepage Welcome screen
                 const grid = document.getElementById('document-library-grid');
                 const gridScrollTop = grid ? grid.scrollTop : 0;
@@ -2605,6 +2723,16 @@
                     });
                 }
 
+                // 2.5 Series & Book Hierarchy Filter
+                if (selectedSeries === 'standalone') {
+                    filesToRender = filesToRender.filter(f => !f.series);
+                } else if (selectedSeries !== 'all') {
+                    filesToRender = filesToRender.filter(f => f.series === selectedSeries);
+                    if (selectedBook !== 'all') {
+                        filesToRender = filesToRender.filter(f => String(f.book) === String(selectedBook));
+                    }
+                }
+
                 // Real-time search query filtering
                 if (librarySearchQuery) {
                     const q = librarySearchQuery;
@@ -2630,10 +2758,24 @@
                 // Prepend Dedicated permanent "+ Create New" Card as the first card in the grid
                 const createNewCol = document.createElement('div');
                 createNewCol.className = libraryViewMode === 'grid' ? 'col-sm-6 col-md-4' : 'col-12';
+
+                let addCardTitle = 'Add New Source';
+                let addCardSubtitle = '';
+                if (selectedSeries !== 'all' && selectedSeries !== 'standalone') {
+                    if (selectedBook !== 'all') {
+                        addCardTitle = `Add to Book ${selectedBook}`;
+                        addCardSubtitle = '';
+                    } else {
+                        addCardTitle = `Add to ${getSeriesDisplayName(selectedSeries)}`;
+                        addCardSubtitle = '';
+                    }
+                }
+
                 createNewCol.innerHTML = `
-                    <div class="create-new-card h-100" onclick="triggerFileInput()">
+                    <div class="create-new-card h-100 d-flex flex-column align-items-center justify-content-center" onclick="triggerFileInput()" title="${selectedBook !== 'all' ? 'Upload will auto-bind to Series: ' + selectedSeries + ', Book: ' + selectedBook : 'Add New Source'}">
                         <i class="bi bi-plus-lg fs-3"></i>
-                        <span class="fw-semibold">Add New Source</span>
+                        <span class="fw-semibold">${esc(addCardTitle)}</span>
+                        ${addCardSubtitle}
                     </div>
                 `;
                 grid.appendChild(createNewCol);
@@ -2695,7 +2837,24 @@
                         exportTooltip = 'No quizzes generated yet. Generate quizzes first.';
                     }
 
-                    const cefrBadgeHtml = f.cefr_level ? `<span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill py-0 px-1.5" style="font-size: 0.62rem; font-weight: 600;">${esc(f.cefr_level)}</span>` : '';
+                    const cefrBadgeHtml = f.cefr_level ? `<span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill py-0.5 px-2 ms-1" style="font-size: 0.62rem; font-weight: 600;">${esc(f.cefr_level)}</span>` : '';
+
+                    let seriesBadgeHtml = '';
+                    if (f.series) {
+                        let sLabel = f.series_display || f.series;
+                        if (!f.series_display) {
+                            if (sLabel.includes('New Horizon College English')) {
+                                sLabel = 'New Horizon · 4e';
+                            } else if (sLabel.includes('New Practical English')) {
+                                sLabel = 'Practical English';
+                            } else if (sLabel.length > 14) {
+                                sLabel = sLabel.substring(0, 14) + '…';
+                            }
+                        }
+                        seriesBadgeHtml = `<span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill py-0.5 px-2" style="font-size: 0.62rem; font-weight: 500;" title="${esc(f.series)}${f.book_name ? ' · ' + esc(f.book_name) : ''}">${esc(sLabel)}</span>`;
+                    } else {
+                        seriesBadgeHtml = `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill py-0.5 px-2" style="font-size: 0.62rem; font-weight: 500;">Standalone</span>`;
+                    }
 
                     const card = document.createElement('div');
                     card.className = libraryViewMode === 'grid' ? 'col-sm-6 col-md-4' : 'col-12';
@@ -2743,20 +2902,21 @@
                                 </div>
                                 
                                 <div class="d-flex align-items-center justify-content-between pt-2 border-top" style="border-color: var(--card-border) !important;">
-                                    <div class="d-flex align-items-center gap-1.5">
+                                    <div class="d-flex align-items-center gap-2">
                                         ${f.is_transcribing ? `<span class="text-muted small" style="font-size: 0.65rem;">Processing audio...</span>` : ''}
+                                        ${seriesBadgeHtml}
                                         ${cefrBadgeHtml}
                                     </div>
                                     <div class="d-flex align-items-center gap-2">
                                         <div class="d-flex gap-1">
                                             ${f.is_transcribing ? `
-                                            <span class="spinner-border spinner-border-sm text-info flex-shrink-0" role="status"></span>
-                                            ` : `
-                                            <span class="unit-target-pill ${vocabClass}" title="Vocabulary unit">V</span>
-                                            <span class="unit-target-pill ${grammarClass}" title="Grammar structures">G</span>
-                                            <span class="unit-target-pill ${summaryClass}" title="Unit summary concepts">S</span>
-                                            <span class="unit-target-pill ${mindmapClass}" title="Mind Map">M</span>
-                                            `}
+                                             <span class="spinner-border spinner-border-sm text-info flex-shrink-0" role="status"></span>
+                                             ` : `
+                                             <span class="unit-target-pill ${vocabClass}" title="Vocabulary unit">V</span>
+                                             <span class="unit-target-pill ${grammarClass}" title="Grammar structures">G</span>
+                                             <span class="unit-target-pill ${summaryClass}" title="Unit summary concepts">S</span>
+                                             <span class="unit-target-pill ${mindmapClass}" title="Mind Map">M</span>
+                                             `}
                                         </div>
                                     </div>
                                 </div>
@@ -2781,6 +2941,7 @@
                                     </div>
                                 </div>
                                 <div class="d-flex align-items-center gap-2">
+                                    ${seriesBadgeHtml}
                                     ${cefrBadgeHtml}
                                     ${f.is_transcribing ? `
                                     <span class="badge bg-info-subtle text-info border border-info-subtle py-0.5 px-2 rounded-pill font-monospace" style="font-size: 0.6rem;"><i class="bi bi-cpu animate-pulse me-1"></i>WHISPER</span>
@@ -3976,6 +4137,12 @@
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/upload-file', true);
         xhr.setRequestHeader('X-Filename', encodeURIComponent(filename));
+        if (selectedSeries && selectedSeries !== 'all' && selectedSeries !== 'standalone') {
+            xhr.setRequestHeader('X-Series', encodeURIComponent(selectedSeries));
+        }
+        if (selectedBook && selectedBook !== 'all') {
+            xhr.setRequestHeader('X-Book', encodeURIComponent(selectedBook));
+        }
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
 
         xhr.onload = function() {
@@ -4949,3 +5116,339 @@
             bootstrap.Tooltip.getOrCreateInstance(el);
         });
     }
+
+    // =========================================================================
+    // SECTION 6: BOOK GLOSSARY WORKBENCH CONTROLLER
+    // =========================================================================
+    let activeGlossarySeries = null;
+    let activeGlossaryBook = null;
+    let activeGlossaryEntries = [];
+
+    async function openBookGlossaryModal(series, book) {
+        activeGlossarySeries = series;
+        activeGlossaryBook = String(book || '1');
+
+        const titleEl = document.getElementById('bookGlossaryModalTitle');
+        const searchInput = document.getElementById('glossary-search-input');
+        const unitFilter = document.getElementById('glossary-unit-filter');
+        const cefrFilter = document.getElementById('glossary-cefr-filter');
+        const tierFilter = document.getElementById('glossary-tier-filter');
+
+        const seriesName = getSeriesDisplayName(activeGlossarySeries);
+        if (titleEl) titleEl.textContent = `${seriesName} · Book ${activeGlossaryBook} Glossary`;
+        if (searchInput) searchInput.value = '';
+        if (unitFilter) unitFilter.value = 'all';
+        if (cefrFilter) cefrFilter.value = 'all';
+        if (tierFilter) tierFilter.value = 'all';
+
+        const modalEl = document.getElementById('book-glossary-modal');
+        if (modalEl) {
+            bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        }
+
+        await fetchAndRenderGlossary(activeGlossarySeries, activeGlossaryBook);
+    }
+
+    async function fetchAndRenderGlossary(series, book) {
+        const tbody = document.getElementById('glossary-table-body');
+        const totalBadge = document.getElementById('glossary-total-badge');
+        const cefrBox = document.getElementById('glossary-cefr-breakdown');
+        const tierBox = document.getElementById('glossary-tier-breakdown');
+        const updatedEl = document.getElementById('glossary-last-updated');
+
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Loading Book ${esc(String(book))} Glossary...</td></tr>`;
+        }
+
+        try {
+            const resp = await fetch(`/api/book-glossary?series=${encodeURIComponent(series)}&book=${encodeURIComponent(book)}`);
+            const data = await resp.json();
+            if (!data.success) {
+                if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${esc(data.error || 'Failed to load glossary')}</td></tr>`;
+                return;
+            }
+
+            const summary = data.summary || {};
+            const entriesObj = data.entries || {};
+            activeGlossaryEntries = Object.values(entriesObj).sort((a, b) => a.lemma.localeCompare(b.lemma));
+
+            if (totalBadge) totalBadge.textContent = `${activeGlossaryEntries.length} words`;
+            if (updatedEl && summary.last_updated) {
+                const dt = new Date(summary.last_updated);
+                updatedEl.textContent = `Updated: ${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}`;
+            }
+
+            // Render CEFR breakdown pills
+            if (cefrBox) {
+                const cefrs = summary.cefr_breakdown || {};
+                const cefrOrder = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'Unassigned'];
+                let pillsHtml = `<span class="text-muted small me-1">CEFR:</span>`;
+                cefrOrder.forEach(lvl => {
+                    const cnt = cefrs[lvl];
+                    if (cnt) {
+                        const bgClass = lvl === 'A1' ? 'bg-success-subtle text-success border-success-subtle' :
+                                        lvl === 'A2' ? 'bg-info-subtle text-info border-info-subtle' :
+                                        lvl === 'B1' ? 'bg-primary-subtle text-primary border-primary-subtle' :
+                                        lvl === 'B2' ? 'bg-warning-subtle text-warning border-warning-subtle' :
+                                        lvl === 'C1' ? 'bg-danger-subtle text-danger border-danger-subtle' :
+                                        lvl === 'C2' ? 'bg-danger text-white' : 'bg-secondary-subtle text-secondary';
+                        pillsHtml += `<span class="badge ${bgClass} border px-2 py-0.5 rounded-pill" style="font-size: 0.68rem; font-weight: 600;">${lvl}: ${cnt}</span>`;
+                    }
+                });
+                cefrBox.innerHTML = pillsHtml;
+            }
+
+            // Render SLA Progression breakdown pills
+            if (tierBox) {
+                const tiers = summary.acquisition_tier_breakdown || {};
+                const totalE = activeGlossaryEntries.length || 1;
+                const newCnt = tiers['target_new'] || 0;
+                const shiftCnt = tiers['recycled_sense_shift'] || 0;
+                const reviewCnt = tiers['recycled_spaced_review'] || 0;
+
+                const newPct = Math.round((newCnt / totalE) * 100);
+                const shiftPct = Math.round((shiftCnt / totalE) * 100);
+                const reviewPct = Math.round((reviewCnt / totalE) * 100);
+
+                let tierHtml = `<span class="text-muted small me-1">SLA Tiers:</span>`;
+                tierHtml += `<span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-0.5 rounded-pill" style="font-size: 0.68rem; font-weight: 600;" title="New Target Words (~80-85%)"><i class="bi bi-star-fill me-1" style="font-size: 0.6rem;"></i>New: ${newCnt} (${newPct}%)</span>`;
+                if (shiftCnt > 0) {
+                    tierHtml += `<span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-0.5 rounded-pill" style="font-size: 0.68rem; font-weight: 600;" title="Sense Shifts / Recategorized (~10-15%)"><i class="bi bi-shuffle me-1" style="font-size: 0.6rem;"></i>Shift: ${shiftCnt} (${shiftPct}%)</span>`;
+                }
+                if (reviewCnt > 0) {
+                    tierHtml += `<span class="badge bg-info-subtle text-info border border-info-subtle px-2 py-0.5 rounded-pill" style="font-size: 0.68rem; font-weight: 600;" title="Spaced Retrieval Review (~0-5%)"><i class="bi bi-clock-history me-1" style="font-size: 0.6rem;"></i>Review: ${reviewCnt} (${reviewPct}%)</span>`;
+                }
+                tierBox.innerHTML = tierHtml;
+            }
+
+            // Populate unit filter options
+            const unitFilter = document.getElementById('glossary-unit-filter');
+            if (unitFilter) {
+                const unitDist = summary.unit_distribution || {};
+                let uOpts = `<option value="all">All Units (${activeGlossaryEntries.length})</option>`;
+                Object.keys(unitDist).sort().forEach(u => {
+                    uOpts += `<option value="${esc(u)}">${esc(u.replace(/_/g, ' '))} (${unitDist[u]})</option>`;
+                });
+                unitFilter.innerHTML = uOpts;
+            }
+
+            filterGlossaryEntries();
+
+        } catch (err) {
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">Error: ${esc(err.message)}</td></tr>`;
+            }
+        }
+    }
+
+    function filterGlossaryEntries() {
+        const query = (document.getElementById('glossary-search-input')?.value || '').trim().toLowerCase();
+        const selectedUnit = document.getElementById('glossary-unit-filter')?.value || 'all';
+        const selectedCefr = document.getElementById('glossary-cefr-filter')?.value || 'all';
+        const selectedTier = document.getElementById('glossary-tier-filter')?.value || 'all';
+        const tbody = document.getElementById('glossary-table-body');
+        const countEl = document.getElementById('glossary-visible-count');
+
+        const filtered = activeGlossaryEntries.filter(e => {
+            if (query) {
+                const lemma = (e.lemma || '').toLowerCase();
+                const disp = (e.display_word || '').toLowerCase();
+                const def = (e.definition || '').toLowerCase();
+                if (!lemma.includes(query) && !disp.includes(query) && !def.includes(query)) {
+                    return false;
+                }
+            }
+            if (selectedUnit !== 'all') {
+                const u = e.first_unit || e.unit_code || '';
+                if (u !== selectedUnit) return false;
+            }
+            if (selectedCefr !== 'all') {
+                const lvl = e.cefr || 'Unassigned';
+                if (lvl !== selectedCefr) return false;
+            }
+            if (selectedTier !== 'all') {
+                const tier = e.acquisition_tier || 'target_new';
+                if (tier !== selectedTier) return false;
+            }
+            return true;
+        });
+
+        if (countEl) {
+            countEl.textContent = `${filtered.length} of ${activeGlossaryEntries.length} entries`;
+        }
+
+        if (!tbody) return;
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">No matching vocabulary entries found.</td></tr>`;
+            return;
+        }
+
+        let rowsHtml = '';
+        filtered.slice(0, 300).forEach((e, idx) => {
+            const word = e.display_word || e.lemma;
+            const pos = e.pos || 'noun';
+            const cefr = e.cefr || '';
+            const cefrBadge = cefr ? `<span class="badge bg-secondary-subtle text-secondary border px-1.5 py-0.5 rounded font-monospace" style="font-size: 0.65rem;">${esc(cefr)}</span>` : '<span class="text-muted" style="font-size: 0.7rem;">--</span>';
+            const unitLabel = (e.first_unit || e.unit_code || 'General').replace(/_/g, ' ');
+            const defText = e.definition ? `<div class="text-truncate" title="${esc(e.definition)}" style="max-width: 480px; color: var(--on-surface);">${esc(e.definition)}</div>` : '';
+            const exText = (e.used_examples && e.used_examples[0]) ? `<div class="small text-muted fst-italic text-truncate mt-0.5" title="${esc(e.used_examples[0])}" style="max-width: 480px;"><i class="bi bi-quote me-1"></i>${esc(e.used_examples[0])}</div>` : '';
+
+            // Progression Tier Badge
+            let tierBadge = '';
+            if (e.acquisition_tier === 'recycled_sense_shift') {
+                const bNum = e.prior_exposure?.book ? ` · B${esc(e.prior_exposure.book)}` : '';
+                tierBadge = `<span class="badge bg-warning-subtle text-warning border border-warning-subtle px-1.5 py-0.5 rounded font-monospace ms-1.5" style="font-size: 0.62rem;" title="${esc(e.tier_label || 'Sense Shift')}"><i class="bi bi-shuffle me-0.5"></i>Shift${bNum}</span>`;
+            } else if (e.acquisition_tier === 'recycled_spaced_review') {
+                const bNum = e.prior_exposure?.book ? ` · B${esc(e.prior_exposure.book)}` : '';
+                tierBadge = `<span class="badge bg-info-subtle text-info border border-info-subtle px-1.5 py-0.5 rounded font-monospace ms-1.5" style="font-size: 0.62rem;" title="${esc(e.tier_label || 'Spaced Review')}"><i class="bi bi-clock-history me-0.5"></i>Review${bNum}</span>`;
+            }
+
+            rowsHtml += `
+                <tr>
+                    <td class="ps-3 text-muted font-monospace text-center">${idx + 1}</td>
+                    <td>
+                        <div class="d-flex align-items-center flex-wrap">
+                            <span class="fw-semibold text-info font-monospace" style="font-size: 0.82rem;">${esc(word)}</span>
+                            ${tierBadge}
+                        </div>
+                    </td>
+                    <td class="text-center"><span class="badge bg-dark-subtle text-muted border px-1.5 py-0.5 rounded font-monospace" style="font-size: 0.65rem;">${esc(pos)}</span></td>
+                    <td class="text-center">${cefrBadge}</td>
+                    <td class="text-center">
+                        <span class="badge bg-info-subtle text-info border border-info-subtle px-1.5 py-0.5 rounded text-truncate d-inline-block" style="max-width: 150px; font-size: 0.68rem;" title="${esc(unitLabel)}">
+                            ${esc(unitLabel)}
+                        </span>
+                    </td>
+                    <td>
+                        ${defText || '<span class="text-muted" style="font-size: 0.72rem;">Pending extraction sync</span>'}
+                        ${exText}
+                    </td>
+                </tr>
+            `;
+        });
+
+        if (filtered.length > 300) {
+            rowsHtml += `<tr><td colspan="6" class="text-center py-2 text-muted small">Showing first 300 of ${filtered.length} entries. Use search to narrow down.</td></tr>`;
+        }
+
+        tbody.innerHTML = rowsHtml;
+    }
+
+    async function triggerGlossarySync() {
+        if (!activeGlossarySeries || !activeGlossaryBook) {
+            showToast('No active series or book selected.', 'error');
+            return;
+        }
+
+        const syncBtn = document.getElementById('btn-glossary-sync');
+        if (syncBtn) {
+            syncBtn.disabled = true;
+            syncBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-1.5"></span>Syncing...`;
+        }
+
+        try {
+            const resp = await fetch('/api/sync-book-glossary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ series: activeGlossarySeries, book: activeGlossaryBook })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                const res = data.result || {};
+                showToast(`Synced ${res.harvested_count || 0} entries from ${res.matching_units_scanned || 0} units!`, 'success');
+                await fetchAndRenderGlossary(activeGlossarySeries, activeGlossaryBook);
+            } else {
+                showToast(`Sync failed: ${data.error || 'Unknown error'}`, 'error');
+            }
+        } catch (err) {
+            showToast(`Sync error: ${err.message}`, 'error');
+        } finally {
+            if (syncBtn) {
+                syncBtn.disabled = false;
+                syncBtn.innerHTML = `<i class="bi bi-arrow-repeat me-1.5"></i>Sync from Units`;
+            }
+        }
+    }
+
+    function triggerGlossaryPdfInput() {
+        const input = document.getElementById('glossary-pdf-input');
+        if (input) {
+            input.value = "";
+            input.click();
+        }
+    }
+
+    function handleGlossaryPdfSelect(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        uploadAndImportGlossaryPdf(file);
+    }
+
+    function uploadAndImportGlossaryPdf(file) {
+        const filename = file.name;
+        if (!filename.toLowerCase().endsWith('.pdf')) {
+            showToast('Please select a valid PDF file.', 'error');
+            return;
+        }
+
+        const importBtn = document.getElementById('btn-glossary-import');
+        if (importBtn) {
+            importBtn.disabled = true;
+            importBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1.5" role="status" aria-hidden="true"></span>Importing...';
+        }
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/import-pdf-glossary', true);
+        xhr.setRequestHeader('X-Filename', encodeURIComponent(filename));
+        if (activeGlossarySeries) {
+            xhr.setRequestHeader('X-Series', encodeURIComponent(activeGlossarySeries));
+        }
+        if (activeGlossaryBook) {
+            xhr.setRequestHeader('X-Book', encodeURIComponent(activeGlossaryBook));
+        }
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+        xhr.onload = async function() {
+            if (importBtn) {
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-1.5"></i>Import PDF';
+            }
+            if (xhr.status === 200) {
+                try {
+                    const data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        const r = data.result || {};
+                        showToast(`Successfully imported ${r.entries_added || 0} new words and updated ${r.entries_updated || 0}! Total: ${r.total_entries || 0}`, 'success');
+                        await fetchAndRenderGlossary(activeGlossarySeries, activeGlossaryBook);
+                    } else {
+                        showToast(`Import failed: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                } catch (err) {
+                    showToast(`Response parse error: ${err.message}`, 'error');
+                }
+            } else {
+                showToast(`Upload failed with HTTP status ${xhr.status}`, 'error');
+            }
+        };
+
+        xhr.onerror = function() {
+            if (importBtn) {
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-1.5"></i>Import PDF';
+            }
+            showToast('Network error during PDF upload.', 'error');
+        };
+
+        xhr.send(file);
+    }
+
+    // Expose functions globally for HTML onclick handlers
+    window.openBookGlossaryModal = openBookGlossaryModal;
+    window.filterGlossaryEntries = filterGlossaryEntries;
+    window.triggerGlossarySync = triggerGlossarySync;
+    window.triggerGlossaryPdfInput = triggerGlossaryPdfInput;
+    window.handleGlossaryPdfSelect = handleGlossaryPdfSelect;
+    window.uploadAndImportGlossaryPdf = uploadAndImportGlossaryPdf;
+    // Backward compatibility aliases
+    window.openImportPdfModal = triggerGlossaryPdfInput;

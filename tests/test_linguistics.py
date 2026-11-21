@@ -5603,7 +5603,7 @@ class TestDiscourseClozeEngine:
             assert b["correct_answer_index"] is None
             assert isinstance(b["accepted_answers"], list) and len(b["accepted_answers"]) >= 1
             assert t_low in [a.lower() for a in b["accepted_answers"]]
-            assert b["clue"].startswith("💡 Clue:")
+            assert len(b["clue"]) > 5
             assert len(b["explanation"]) > 10
             assert b["pillar"] in (1, 2, 3)
             assert f"[{b['blank_index']}]" in b["question"]

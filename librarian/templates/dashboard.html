@@ -93,21 +93,6 @@
         
         <!-- SECTION 1: LIBRARY VIEW (Default homepage) -->
         <section id="view-library" class="fade-in">
-            <!-- Hero banner with global stats capsules -->
-            <div class="row mb-4">
-                <div class="col-12">
-                    <div class="bento-card" style="background: linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(30, 41, 59, 0.4) 100%);">
-                        <div class="row align-items-center">
-                            <div class="col-12">
-                                <h2 class="fw-bold mb-2">Welcome to your Pedagogical Workspace</h2>
-                                <p class="text-muted small mb-0">Select any source file below to dive into its focus workspace. Direct compiling, RAG assistance, and interactive handout generators are integrated into each file.</p>
-                            </div>
-                        </div>
-
-                    </div>
-                </div>
-            </div>
-
             <!-- Header Filter & Sort Ribbon -->
             <div class="d-flex align-items-center justify-content-between gap-3 mb-4 p-3 rounded-3" style="background: var(--card-bg); border: 1px solid var(--card-border);">
                 <!-- Left: Filter Toggles -->
@@ -146,9 +131,13 @@
             <div class="row g-4 mb-4">
                 <div class="col-12">
                     <div class="bento-card d-flex flex-column">
-                        <div class="d-flex align-items-center justify-content-between mb-3">
-                            <h5 class="fw-bold mb-0"><i class="bi bi-collection-play text-info me-2"></i>Unit Document Library</h5>
-                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-0.5 rounded-pill" id="stat-raw-files-count" style="font-size: 0.65rem;">0 files</span>
+                        <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+                            <div class="d-flex align-items-center gap-2">
+                                <h5 class="fw-bold mb-0"><i class="bi bi-collection-play text-info me-2"></i>Unit Document Library</h5>
+                                <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-0.5 rounded-pill" id="stat-raw-files-count" style="font-size: 0.65rem;">0 files</span>
+                            </div>
+                            <!-- Series & Book Filter Pills Ribbon -->
+                            <div class="d-flex align-items-center gap-2 flex-wrap" id="series-pills-bar"></div>
                         </div>
                         
                         <div class="row g-3 overflow-y-auto pe-1" style="max-height: 600px;" id="document-library-grid">
@@ -1121,6 +1110,115 @@
     </div>
 </div>
 
+
+
+<!-- SECTION 6: BOOK GLOSSARY WORKBENCH MODAL -->
+<div class="modal fade" id="book-glossary-modal" tabindex="-1" aria-labelledby="bookGlossaryModalLabel" aria-hidden="true" style="z-index: 1056;">
+    <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg" style="background: var(--surface); border: 1px solid var(--card-border) !important; border-radius: var(--radius-lg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); max-height: 90vh;">
+            <div class="modal-header border-bottom px-4 py-3 d-flex align-items-center justify-content-between" style="border-color: var(--card-border) !important;">
+                <div class="d-flex align-items-center gap-2.5">
+                    <span class="d-flex align-items-center justify-content-center rounded-circle" style="width: 36px; height: 36px; background: rgba(14, 165, 233, 0.15);">
+                        <i class="bi bi-book-half text-info fs-5"></i>
+                    </span>
+                    <div class="d-flex align-items-center gap-2">
+                        <h5 class="modal-title fw-bold text-on-surface mb-0" id="bookGlossaryModalTitle">Book 1 Glossary</h5>
+                        <span class="badge bg-info-subtle text-info border border-info-subtle px-2 py-0.5 rounded-pill" id="glossary-total-badge" style="font-size: 0.68rem; font-weight: 600;">0 words</span>
+                    </div>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-info rounded-pill px-3 d-inline-flex align-items-center" id="btn-glossary-sync" onclick="triggerGlossarySync()" title="Aggregate & sync vocabulary from extraction files">
+                        <i class="bi bi-arrow-repeat me-1.5"></i>Sync from Units
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill px-3 d-inline-flex align-items-center ms-1" id="btn-glossary-import" onclick="triggerGlossaryPdfInput()" title="Import official appendix glossary PDF">
+                        <i class="bi bi-file-earmark-pdf me-1.5"></i>Import PDF
+                    </button>
+                    <input type="file" id="glossary-pdf-input" accept=".pdf" style="display: none !important;" onchange="handleGlossaryPdfSelect(event)">
+                    <button type="button" class="btn-close ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+            </div>
+            
+            <div class="modal-body p-4" style="overflow-y: auto;">
+                <!-- Summary / Stats Bar -->
+                <div class="p-3 mb-3 rounded-3 d-flex align-items-center justify-content-between flex-wrap gap-2" style="background: var(--input-bg); border: 1px solid var(--card-border);">
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <div class="d-flex align-items-center gap-1.5 flex-wrap" id="glossary-cefr-breakdown">
+                            <span class="text-muted small">CEFR:</span>
+                            <!-- dynamic CEFR pills -->
+                        </div>
+                        <div class="vr opacity-25 d-none d-md-block" style="height: 18px;"></div>
+                        <div class="d-flex align-items-center gap-1.5 flex-wrap" id="glossary-tier-breakdown">
+                            <span class="text-muted small">Progression:</span>
+                            <!-- dynamic Tier pills -->
+                        </div>
+                    </div>
+                    <div class="text-muted small font-monospace" id="glossary-last-updated" style="font-size: 0.72rem;">
+                        Updated: --
+                    </div>
+                </div>
+
+                <!-- Filter & Search Controls -->
+                <div class="row g-2 mb-3 align-items-center">
+                    <div class="col-md-4">
+                        <div class="position-relative">
+                            <i class="bi bi-search position-absolute text-muted" style="left: 14px; top: 50%; transform: translateY(-50%); font-size: 0.8rem; pointer-events: none; z-index: 2;"></i>
+                            <input type="text" id="glossary-search-input" class="form-control form-control-sm rounded-pill" placeholder="Search word, lemma, or definition..." style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.8rem; height: 32px; padding-left: 36px !important; padding-right: 16px !important;" oninput="filterGlossaryEntries()">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <select id="glossary-unit-filter" class="form-select form-select-sm rounded-pill text-center" style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.78rem; height: 32px; text-align-last: center;" onchange="filterGlossaryEntries()">
+                            <option value="all">All Units</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select id="glossary-cefr-filter" class="form-select form-select-sm rounded-pill text-center" style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.78rem; height: 32px; text-align-last: center;" onchange="filterGlossaryEntries()">
+                            <option value="all">All CEFR</option>
+                            <option value="A1">A1</option>
+                            <option value="A2">A2</option>
+                            <option value="B1">B1</option>
+                            <option value="B2">B2</option>
+                            <option value="C1">C1</option>
+                            <option value="C2">C2</option>
+                            <option value="Unassigned">Unassigned</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select id="glossary-tier-filter" class="form-select form-select-sm rounded-pill text-center" style="background: var(--input-bg); border-color: var(--card-border); color: var(--on-surface); font-size: 0.78rem; height: 32px; text-align-last: center;" onchange="filterGlossaryEntries()">
+                            <option value="all">All Tiers</option>
+                            <option value="target_new">New Words (80%+)</option>
+                            <option value="recycled_sense_shift">Sense Shift (10-15%)</option>
+                            <option value="recycled_spaced_review">Spaced Review (0-5%)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 text-center text-md-end text-muted small" id="glossary-visible-count" style="font-size: 0.72rem; white-space: nowrap;">
+                        0 entries
+                    </div>
+                </div>
+
+                <!-- Glossary Table -->
+                <div class="table-responsive rounded-3" style="border: 1px solid var(--card-border); max-height: 520px;">
+                    <table class="table table-sm table-hover mb-0" style="font-size: 0.78rem; color: var(--on-surface);">
+                        <thead class="sticky-top" style="background: var(--surface-variant); color: var(--on-surface); border-bottom: 2px solid var(--card-border);">
+                            <tr>
+                                <th style="width: 45px;" class="ps-3 text-center">#</th>
+                                <th style="width: 140px;">Word</th>
+                                <th style="width: 70px;" class="text-center">POS</th>
+                                <th style="width: 70px;" class="text-center">CEFR</th>
+                                <th style="width: 160px;" class="text-center">First Exposure</th>
+                                <th>Definition & Authentic Example</th>
+                            </tr>
+                        </thead>
+                        <tbody id="glossary-table-body">
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">No entries loaded.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 
 <!-- Reusable Bootstrap 5 System Message / Info / Confirmation Modal -->

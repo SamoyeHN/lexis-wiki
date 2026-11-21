@@ -44,3 +44,10 @@ include = ["librarian*"]
 
 [tool.setuptools.package-data]
 librarian = ["prompts/*.md", "templates/*.html", "static/css/*.css", "static/js/*.js"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Only enforce fatal syntax/undefined-name/bug checks without noisy style churn
+select = ["E9", "F63", "F7", "F82"]

@@ -24,5 +24,186 @@ def test_background_all_quizzes_worker():
     assert job is not None
     assert job["status"] == "completed"
     assert job["progress"] == 100
-    assert len(job["saved_files"]) >= 4
-    assert mock_gen.call_count >= 4
+    assert len(job["saved_files"]) >= 5
+    called_templates = [call.kwargs.get("template_name") for call in mock_gen.call_args_list]
+    assert "cloze" in called_templates
+    assert "vocabulary" in called_templates
+
+
+def test_cloze_quiz_config_default():
+    from librarian.config import config
+
+    assert config.get_quiz_config("cloze", "count", 10) == 10
+
+
+def test_inject_or_lock_frontmatter_no_existing_frontmatter():
+    from librarian.dashboard import inject_or_lock_frontmatter
+
+    raw_text = "# Passage A\n\nThis is a sample text without frontmatter."
+    res = inject_or_lock_frontmatter(raw_text, target_series="New Horizon College English", target_book="2")
+
+    assert res.startswith("---\n")
+    assert 'series: "New Horizon College English"' in res
+    assert "book: 2" in res
+    assert 'book_name: "Book 2"' in res
+    assert "# Passage A" in res
+
+
+def test_inject_or_lock_frontmatter_existing_frontmatter_missing_series():
+    from librarian.dashboard import inject_or_lock_frontmatter
+
+    existing = "---\nunit: 3\nunit_title: \"Life and learning\"\n---\n\n## Content"
+    res = inject_or_lock_frontmatter(existing, target_series="New Practical English", target_book="1")
+
+    assert 'unit: 3' in res
+    assert 'unit_title: "Life and learning"' in res
+    assert 'series: "New Practical English"' in res
+    assert 'book: 1' in res
+    assert 'book_name: "Book 1"' in res
+    assert "## Content" in res
+
+
+def test_inject_or_lock_frontmatter_locks_existing_series_and_book():
+    from librarian.dashboard import inject_or_lock_frontmatter
+
+    existing = "---\nseries: \"Original Series\"\nbook: 3\n---\n\n## Content"
+    res = inject_or_lock_frontmatter(existing, target_series="Overriding Series", target_book="4")
+
+    # Must preserve existing frontmatter values (Locked!)
+    assert 'series: "Original Series"' in res
+    assert "book: 3" in res
+    assert "Overriding Series" not in res
+    assert "book: 4" not in res
+
+
+def test_inject_or_lock_frontmatter_no_targets():
+    from librarian.dashboard import inject_or_lock_frontmatter
+
+    raw_text = "Just plain text"
+    res = inject_or_lock_frontmatter(raw_text, target_series=None, target_book=None)
+    assert res == raw_text
+
+
+def test_api_raw_files_parses_series_and_book():
+    from unittest.mock import MagicMock
+    from librarian.dashboard import DashboardHTTPRequestHandler
+    import json
+    import io
+
+    # Mock handler and request
+    handler = DashboardHTTPRequestHandler.__new__(DashboardHTTPRequestHandler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+
+    # Call handle_api_get for /api/raw-files
+    handler.handle_api_get("/api/raw-files", "")
+    
+    output = handler.wfile.getvalue().decode("utf-8")
+    data = json.loads(output)
+    assert "files" in data
+    assert len(data["files"]) > 0
+
+    # Verify at least some units have series and book populated
+    units_with_series = [f for f in data["files"] if f.get("series")]
+    assert len(units_with_series) > 0
+
+    first = units_with_series[0]
+    assert "series" in first
+    assert "series_clean" in first
+    assert "series_display" in first
+    assert "book" in first
+    assert "unit" in first
+    assert "section" in first
+
+
+def test_extract_series_edition():
+    from librarian.dashboard import extract_series_edition
+
+    # Test parens edition
+    clean, ed, abbr, disp = extract_series_edition("New Horizon College English (Fourth Edition)")
+    assert clean == "New Horizon College English"
+    assert ed == "4e"
+    assert abbr == "New Horizon"
+    assert disp == "New Horizon · 4e"
+
+    # Test no edition
+    clean, ed, abbr, disp = extract_series_edition("New Practical English")
+    assert clean == "New Practical English"
+    assert ed is None
+    assert abbr == "Practical English"
+    assert disp == "Practical English"
+
+    # Test 2nd Edition unparenthesized
+    clean, ed, abbr, disp = extract_series_edition("Contemporary College English 2nd Ed.")
+    assert clean == "Contemporary College English"
+    assert ed == "2e"
+    assert abbr == "Contemporary"
+    assert disp == "Contemporary · 2e"
+
+    # Test Revised Edition
+    clean, ed, abbr, disp = extract_series_edition("Advanced English (Revised Edition)")
+    assert clean == "Advanced English"
+    assert ed == "Rev"
+    assert disp == "Advanced English · Rev"
+
+    # Test explicit edition override
+    clean, ed, abbr, disp = extract_series_edition("General English", raw_edition="3rd", raw_abbr="GenEng")
+    assert clean == "General English"
+    assert ed == "3e"
+    assert abbr == "GenEng"
+    assert disp == "GenEng · 3e"
+
+    # Test None
+    assert extract_series_edition(None) == (None, None, None, None)
+
+
+def test_book_glossary_api_and_ledger():
+    from librarian.glossary_ledger import get_or_create_ledger
+    ledger = get_or_create_ledger("New Practical English", 1)
+    summary = ledger.summary()
+    assert summary["series"] == "New Practical English"
+    assert summary["book"] == "1"
+    assert "total_entries" in summary
+    assert "cefr_breakdown" in summary
+
+
+def test_api_import_pdf_glossary_binary_upload():
+    from unittest.mock import MagicMock, patch
+    from librarian.dashboard import DashboardHTTPRequestHandler
+    import json
+    import io
+    import urllib.parse
+
+    handler = DashboardHTTPRequestHandler.__new__(DashboardHTTPRequestHandler)
+    pdf_bytes = b"%PDF-1.4 test mock stream"
+    handler.rfile = io.BytesIO(pdf_bytes)
+    handler.wfile = io.BytesIO()
+    handler.path = "/api/import-pdf-glossary"
+    handler.headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(pdf_bytes)),
+        "X-Filename": urllib.parse.quote("【Glossary】Sample.pdf"),
+        "X-Series": urllib.parse.quote("New Practical English"),
+        "X-Book": "1",
+    }
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+
+    with patch("librarian.glossary_ledger.GlossaryLedger.import_pdf_glossary") as mock_import:
+        mock_import.return_value = {
+            "entries_added": 12,
+            "entries_updated": 3,
+            "total_entries": 15,
+        }
+        handler.do_POST()
+
+    output = handler.wfile.getvalue().decode("utf-8")
+    data = json.loads(output)
+    assert data["success"] is True
+    assert data["result"]["entries_added"] == 12
+    assert data["result"]["total_entries"] == 15
+    mock_import.assert_called_once()
+

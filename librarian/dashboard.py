@@ -18,6 +18,144 @@ def get_raw_file_stem(filepath: Path) -> str:
     return filepath.stem
 
 
+_ORDINAL_EDITION_MAP = {
+    "first": "1e", "1st": "1e", "1": "1e", "one": "1e",
+    "second": "2e", "2nd": "2e", "2": "2e", "two": "2e",
+    "third": "3e", "3rd": "3e", "3": "3e", "three": "3e",
+    "fourth": "4e", "4th": "4e", "4": "4e", "four": "4e",
+    "fifth": "5e", "5th": "5e", "5": "5e", "five": "5e",
+    "sixth": "6e", "6th": "6e", "6": "6e", "six": "6e",
+    "seventh": "7e", "7th": "7e", "7": "7e", "seven": "7e",
+    "eighth": "8e", "8th": "8e", "8": "8e", "eight": "8e",
+    "ninth": "9e", "9th": "9e", "9": "9e", "nine": "9e",
+    "tenth": "10e", "10th": "10e", "10": "10e", "ten": "10e",
+    "revised": "Rev", "rev": "Rev", "updated": "Upd",
+}
+
+
+def extract_series_edition(raw_series: str | None, raw_edition: str | None = None, raw_abbr: str | None = None) -> tuple[str | None, str | None, str | None, str | None]:
+    """
+    Cleans series title, extracts normalized edition tag (e.g. '4e', '2e', 'Rev'),
+    and derives a friendly short name and combined display tag.
+    Returns: (clean_series, edition_tag, series_abbr, series_display)
+    """
+    if not raw_series:
+        return None, None, None, None
+
+    clean_series = raw_series.strip()
+    edition_tag = None
+
+    if raw_edition is not None:
+        ed_str = str(raw_edition).strip().lower()
+        m = re.search(r"\b(\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|revised|rev)\b", ed_str)
+        if m:
+            edition_tag = _ORDINAL_EDITION_MAP.get(m.group(1), f"{m.group(1)}e")
+        else:
+            edition_tag = ed_str
+
+    # Pattern 1: Parens containing Edition, e.g. "(Fourth Edition)", "(4th Ed.)", "(Revised Edition)"
+    m_paren = re.search(r"\s*\(\s*(?:the\s+)?([A-Za-z0-9]+)\s+(?:edition|ed\.?|version)\s*\)", clean_series, re.IGNORECASE)
+    if m_paren:
+        if not edition_tag:
+            key = m_paren.group(1).lower()
+            edition_tag = _ORDINAL_EDITION_MAP.get(key, f"{key}e")
+        clean_series = re.sub(r"\s*\(\s*(?:the\s+)?([A-Za-z0-9]+)\s+(?:edition|ed\.?|version)\s*\)", "", clean_series, flags=re.IGNORECASE).strip()
+
+    # Pattern 2: Trailing unparenthesized e.g. "4th Edition", "4th Ed.", "Fourth Edition"
+    m_trail = re.search(r"\b(?:the\s+)?([A-Za-z0-9]+)\s+(?:edition|ed\.?)\b\.?", clean_series, re.IGNORECASE)
+    if m_trail:
+        if not edition_tag:
+            key = m_trail.group(1).lower()
+            edition_tag = _ORDINAL_EDITION_MAP.get(key, f"{key}e")
+        clean_series = re.sub(r"\b(?:the\s+)?([A-Za-z0-9]+)\s+(?:edition|ed\.?)\b\.?", "", clean_series, flags=re.IGNORECASE).strip()
+
+    # Pattern 3: e.g. "(Rev.)" or "(Revised)"
+    m_rev = re.search(r"\s*\(\s*(revised|rev\.?|updated)\s*\)", clean_series, re.IGNORECASE)
+    if m_rev:
+        if not edition_tag:
+            edition_tag = _ORDINAL_EDITION_MAP.get(m_rev.group(1).lower().rstrip("."), "Rev")
+        clean_series = re.sub(r"\s*\(\s*(revised|rev\.?|updated)\s*\)", "", clean_series, flags=re.IGNORECASE).strip()
+
+    clean_series = re.sub(r"[,\.\-\s]+$", "", clean_series)
+    clean_series = re.sub(r"\s+", " ", clean_series).strip()
+
+    # Derive short abbreviation name
+    series_abbr = raw_abbr.strip() if raw_abbr else None
+    if not series_abbr:
+        if "New Horizon College English" in clean_series:
+            series_abbr = "New Horizon"
+        elif "New Practical English" in clean_series:
+            series_abbr = "Practical English"
+        elif "Contemporary College English" in clean_series:
+            series_abbr = "Contemporary"
+        elif "An Integrated Skills Course" in clean_series:
+            series_abbr = "Integrated Skills"
+        elif len(clean_series) <= 16:
+            series_abbr = clean_series
+        else:
+            series_abbr = clean_series[:14] + "…"
+
+    # Compose series_display
+    if edition_tag:
+        series_display = f"{series_abbr} · {edition_tag}"
+    else:
+        series_display = series_abbr
+
+    return clean_series, edition_tag, series_abbr, series_display
+
+
+def inject_or_lock_frontmatter(text: str, target_series: str = None, target_book: str = None) -> str:
+    """
+    Smart Frontmatter Infill & Lock:
+    - If frontmatter exists, locks/preserves any existing `series` or `book` fields.
+      Only appends missing `series` or `book` fields if provided by upload context.
+    - If frontmatter does not exist, synthesizes and prepends a clean YAML frontmatter
+      block if target_series or target_book is specified.
+    """
+    if not target_series and not target_book:
+        return text
+
+    # Check for existing YAML frontmatter: ^---\s*\r?\n(.*?)\r?\n---\s*\r?\n
+    fm_pattern = re.compile(r'^---\s*\r?\n(.*?)\r?\n---\s*\r?\n', re.DOTALL)
+    m = fm_pattern.match(text)
+
+    if m:
+        fm_block = m.group(1)
+        injected = []
+        if target_series and not re.search(r'^\s*series:\s*', fm_block, re.MULTILINE):
+            injected.append(f'series: "{target_series}"')
+        if target_book and not re.search(r'^\s*book:\s*', fm_block, re.MULTILINE):
+            try:
+                b_num = int(target_book)
+                injected.append(f'book: {b_num}')
+            except ValueError:
+                injected.append(f'book: "{target_book}"')
+            if not re.search(r'^\s*book_name:\s*', fm_block, re.MULTILINE):
+                injected.append(f'book_name: "Book {target_book}"')
+
+        if injected:
+            new_fm = fm_block.rstrip() + "\n" + "\n".join(injected) + "\n"
+            return f"---\n{new_fm}---\n" + text[m.end():]
+        return text
+    else:
+        # No frontmatter, synthesize new block
+        injected = []
+        if target_series:
+            injected.append(f'series: "{target_series}"')
+        if target_book:
+            try:
+                b_num = int(target_book)
+                injected.append(f'book: {b_num}')
+            except ValueError:
+                injected.append(f'book: "{target_book}"')
+            injected.append(f'book_name: "Book {target_book}"')
+
+        if injected:
+            header = "---\n" + "\n".join(injected) + "\n---\n\n"
+            return header + text.lstrip()
+        return text
+
+
 # Global state to keep track of active background jobs and logging
 class DashboardState:
     jobs = {}
@@ -685,6 +823,60 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                         display_title = text_title_match.group(1).strip()
                                     elif unit_title_match and unit_title_match.group(1).strip():
                                         display_title = unit_title_match.group(1).strip()
+
+                                # Extract series, book, and unit hierarchy metadata
+                                series_val = None
+                                book_val = None
+                                book_name_val = None
+                                unit_val = None
+                                unit_name_val = None
+                                section_val = None
+
+                                m_series = re.search(r'^series:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_series and m_series.group(1).strip():
+                                    series_val = m_series.group(1).strip()
+
+                                m_edition = re.search(r'^edition:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                edition_val = m_edition.group(1).strip() if m_edition and m_edition.group(1).strip() else None
+
+                                m_series_abbr = re.search(r'^series_abbr:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                series_abbr_val = m_series_abbr.group(1).strip() if m_series_abbr and m_series_abbr.group(1).strip() else None
+
+                                clean_series, edition_tag, series_abbr, series_display = extract_series_edition(
+                                    series_val, raw_edition=edition_val, raw_abbr=series_abbr_val
+                                )
+
+                                m_book = re.search(r'^book:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_book and m_book.group(1).strip():
+                                    raw_b = m_book.group(1).strip()
+                                    try:
+                                        book_val = int(raw_b)
+                                    except ValueError:
+                                        book_val = raw_b
+
+                                m_book_name = re.search(r'^book_name:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_book_name and m_book_name.group(1).strip():
+                                    book_name_val = m_book_name.group(1).strip()
+                                elif book_val is not None:
+                                    book_name_val = f"Book {book_val}"
+
+                                m_unit = re.search(r'^unit:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_unit and m_unit.group(1).strip():
+                                    raw_u = m_unit.group(1).strip()
+                                    try:
+                                        unit_val = int(raw_u)
+                                    except ValueError:
+                                        unit_val = raw_u
+
+                                m_unit_name = re.search(r'^unit_name:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_unit_name and m_unit_name.group(1).strip():
+                                    unit_name_val = m_unit_name.group(1).strip()
+                                elif unit_val is not None:
+                                    unit_name_val = f"Unit {unit_val}"
+
+                                m_section = re.search(r'^section:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
+                                if m_section and m_section.group(1).strip():
+                                    section_val = m_section.group(1).strip()
                             except Exception:
                                 pass
                                 
@@ -724,6 +916,16 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 "name": primary_file.name,
                                 "stem": stem,
                                 "title": display_title,
+                                "series": series_val,
+                                "series_clean": clean_series,
+                                "series_abbr": series_abbr,
+                                "edition": edition_tag,
+                                "series_display": series_display,
+                                "book": book_val,
+                                "book_name": book_name_val,
+                                "unit": unit_val,
+                                "unit_name": unit_name_val,
+                                "section": section_val,
                                 "size": primary_file.stat().st_size,
                                 "compiled": compiled,
                                 "cefr_level": cefr_level,
@@ -1058,6 +1260,18 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
             response_data = {"nodes": nodes, "links": links}
 
+        elif path == "/api/book-glossary":
+            from .glossary_ledger import get_or_create_ledger
+            q = urllib.parse.parse_qs(query_str or "")
+            series = q.get("series", ["New Practical English"])[0]
+            book = q.get("book", ["1"])[0]
+            ledger = get_or_create_ledger(series, book)
+            response_data = {
+                "success": True,
+                "summary": ledger.get_summary(),
+                "entries": ledger.data.get("entries", {}),
+            }
+
         self.wfile.write(json.dumps(response_data).encode("utf-8"))
 
     def handle_api_post(self, path):
@@ -1134,6 +1348,65 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         "success": False,
                         "error": f"Failed to synthesize preview for voice '{voice}' ({engine}).",
                     }
+
+            elif path == "/api/sync-book-glossary":
+                from .glossary_ledger import get_or_create_ledger
+                data = json.loads(body) if body else {}
+                series = data.get("series", "New Practical English")
+                book = data.get("book", "1")
+                ledger = get_or_create_ledger(series, book)
+                res = ledger.sync_bottom_up()
+                response_data = {
+                    "success": True,
+                    "result": res,
+                    "summary": ledger.get_summary(),
+                }
+
+            elif path == "/api/import-pdf-glossary":
+                from .glossary_ledger import get_or_create_ledger
+                import urllib.parse
+                raw_filename = self.headers.get('X-Filename', '')
+                raw_series = self.headers.get('X-Series', '')
+                raw_book = self.headers.get('X-Book', '')
+
+                target_series = urllib.parse.unquote(raw_series).strip() if raw_series else None
+                target_book = urllib.parse.unquote(raw_book).strip() if raw_book else None
+
+                if is_binary and body_bytes:
+                    series = target_series or "New Practical English"
+                    book = target_book or "1"
+                    filename = urllib.parse.unquote(raw_filename) if raw_filename else f"Book_{book}_glossary.pdf"
+
+                    # Persist uploaded PDF source to wiki/_glossary/<series>/
+                    glossary_dir = Path(config.project_root) / "wiki" / "_glossary" / series.replace(" ", "_")
+                    glossary_dir.mkdir(parents=True, exist_ok=True)
+                    target_pdf = glossary_dir / f"Book_{book}_appendix_source.pdf"
+                    target_pdf.write_bytes(body_bytes)
+
+                    ledger = get_or_create_ledger(series, book)
+                    res = ledger.import_pdf_glossary(str(target_pdf))
+                    ledger.sync_bottom_up()
+                    response_data = {
+                        "success": True,
+                        "result": res,
+                        "summary": ledger.get_summary(),
+                    }
+                else:
+                    data = json.loads(body) if body else {}
+                    pdf_path = data.get("pdf_path")
+                    series = data.get("series") or target_series or "New Practical English"
+                    book = data.get("book") or target_book or "1"
+                    if not pdf_path:
+                        response_data = {"success": False, "error": "pdf_path or uploaded PDF file is required"}
+                    else:
+                        ledger = get_or_create_ledger(series, book)
+                        res = ledger.import_pdf_glossary(pdf_path)
+                        ledger.sync_bottom_up()
+                        response_data = {
+                            "success": True,
+                            "result": res,
+                            "summary": ledger.get_summary(),
+                        }
 
             elif path == "/api/compile":
                 data = json.loads(body)
@@ -1507,6 +1780,10 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 # Handle file upload (ingest only, compile manually)
                 import urllib.parse
                 raw_filename = self.headers.get('X-Filename', '')
+                raw_series = self.headers.get('X-Series', '')
+                raw_book = self.headers.get('X-Book', '')
+                target_series = urllib.parse.unquote(raw_series).strip() if raw_series else None
+                target_book = urllib.parse.unquote(raw_book).strip() if raw_book else None
                 if raw_filename:
                     filename = urllib.parse.unquote(raw_filename)
                     if is_binary:
@@ -1518,6 +1795,10 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         data = json.loads(body)
                         filename = data.get("filename")
                         content = data.get("content")
+                        if not target_series and data.get("series"):
+                            target_series = str(data.get("series")).strip()
+                        if not target_book and data.get("book"):
+                            target_book = str(data.get("book")).strip()
                         if isinstance(content, str):
                             file_bytes = content.encode("utf-8")
                         elif isinstance(content, bytes):
@@ -1589,6 +1870,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             from .linguistics import LinguisticEngine
                             raw_text = file_bytes.decode("utf-8-sig", errors="replace")
                             cleaned_text = LinguisticEngine.sanitize_source_markdown(raw_text)
+                            cleaned_text = inject_or_lock_frontmatter(cleaned_text, target_series=target_series, target_book=target_book)
                             target_file.write_text(cleaned_text, encoding="utf-8")
                         except Exception:
                             with open(target_file, "wb") as f:

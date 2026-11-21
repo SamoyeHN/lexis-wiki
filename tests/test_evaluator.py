@@ -819,7 +819,7 @@ class TestBlueprintConcordanceGates(unittest.TestCase):
     def test_stem_that_contradicts_the_declared_form_is_no_longer_guessed(self):
         quiz = [{
             "target_word": "annoyed",
-            "question": "What will ____ his colleagues most when the report arrives a day late?",
+            "question": "What often ____ his colleagues most when the report arrived a day late was the tone.",
             "options": ["annoyed", "bothered", "disturbed", "irritated"],
             "correct_answer_index": 0,
             "explanation": "'annoyed' fits the context of a repeated irritation.",
