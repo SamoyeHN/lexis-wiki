@@ -27,9 +27,9 @@ _SQLITE_MAGIC = b"SQLite format 3\x00"
 _DEFAULT_EXPECTED_SHA256 = "fde4642da3d3a6d80eda97b19021e76550e6d6a56e0e1574baa4e53d14c926d1"
 _SEED_XOR_KEY = b"lexis-wiki-pedlex-seed-v2"
 _PEDLEX_ENDPOINT_BLOB = (
-    "6u;%ALL;?VXY9<|#j3dT;D;?>RQ&5ZA6XL|ZYNv~TiV!JjgYz<dd~Y9sqGprWQC@0"
-    "o^V)->SiM*6;7s+p8ger?;w^gCbdxX%_$l9^FAQVVAeYaz=Uw+?uAkYMf{1-R&xnn"
-    "oO4cORo8*pEN%"
+    "6#3<)GAFc2dnx?e@yN$^U8&MCOgW)U6fOt)3Ngi=g2B>5%9xb1*5gL5fMnD%I1|r8"
+    "L(2v;a2xFzB~fd&;@C;`G&sp>QMCLGgfni`f&d=W6rhRy!uY~4v&OnbGzga%!8YFId"
+    "%!)*BQvP7*GWsJG6als#y);uX$8B2UW?avL9sbm"
 )
 
 
