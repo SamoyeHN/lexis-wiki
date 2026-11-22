@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _BOOTSTRAP_LOCK = threading.Lock()
 _BOOTSTRAP_ATTEMPTED = False
 _SQLITE_MAGIC = b"SQLite format 3\x00"
-_DEFAULT_EXPECTED_SHA256 = "1493b8c6dc997133475ee8d7d7f74faa8830030bb7769f511d8bb1b20e7ab81e"
+_DEFAULT_EXPECTED_SHA256 = "fde4642da3d3a6d80eda97b19021e76550e6d6a56e0e1574baa4e53d14c926d1"
 _SEED_XOR_KEY = b"lexis-wiki-pedlex-seed-v2"
 _PEDLEX_ENDPOINT_BLOB = (
     "6u;%ALL;?VXY9<|#j3dT;D;?>RQ&5ZA6XL|ZYNv~TiV!JjgYz<dd~Y9sqGprWQC@0"
