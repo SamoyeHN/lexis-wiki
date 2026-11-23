@@ -65,7 +65,8 @@
   - `[x]` Introduce lightweight `@dataclass` contracts (`SlotFrame` per [pending-blueprint-and-distractor-refactoring.md](pending-blueprint-and-distractor-refactoring.md)).
   - `[x]` Decompose `generate_quiz` (shrunk from 1,349 lines to 291 lines) into modular services (`quiz_prompt_context.py`, `quiz_audio.py`, `quiz_expert_audit.py`).
   - `[x]` Decompose `distractor_engine.py` (shrunk from 8,825 lines) into 6 focused domain mixins (`distractor_guards`, `distractor_paronyms`, `distractor_phrases`, `distractor_inflections`, `distractor_fallbacks`, `distractor_vocab`).
-  - `[ ]` Decompose `build_precomputed_target_skeletons` and `_lock_sense` into composable service helpers while keeping `LinguisticEngine` as a thin backward-compatible facade.
+  - `[x]` Decompose `wsd_engine.py` (shrunk from 5,041 lines to 47 lines) into 7 focused domain mixins (`wsd_gates`, `wsd_wordnet`, `wsd_scoring`, `wsd_lock`, `wsd_definitions`, `wsd_expressions`, `wsd_arbitration`) and `WsdContext` contract.
+  - `[ ]` Decompose `build_precomputed_target_skeletons()` in `quiz_vocab.py` (3,473 lines) into composable slot/skeleton builder helpers while keeping `QuizVocabMixin` as a thin backward-compatible facade.
 - [x] **Decouple Dashboard & Shared Quiz Assets**:
   - `[x]` Split `dashboard.py`'s `handle_api_post` into resource-based route handlers (`librarian/dashboard_routes.py`).
   - `[x]` Split `dashboard.js` (4,951 lines) into native browser ES Modules (`state.js`, `api.js`, `views/*.js`) without heavy build tooling.
