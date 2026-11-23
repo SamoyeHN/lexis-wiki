@@ -25,6 +25,9 @@ from .linguistics_core.collocations_and_cards import CollocationsAndCardsMixin
 from .linguistics_core.distractor_engine import DistractorEngineMixin
 from .linguistics_core.extraction_pipeline import ExtractionPipelineMixin
 from .linguistics_core.quiz_skeletons import QuizSkeletonsMixin
+from .linguistics_core.slot_frame import SlotFrame
+
+__all__ = ["LinguisticEngine", "SlotFrame"]
 
 
 class LinguisticEngine(

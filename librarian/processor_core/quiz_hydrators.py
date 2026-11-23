@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..linguistics import LinguisticEngine
+from ..linguistics import LinguisticEngine, SlotFrame
 
 logger = logging.getLogger("librarian.processor.hydrators")
 
@@ -514,91 +514,19 @@ class QuizHydratorMixin:
         return quiz_obj
 
     @staticmethod
-    def _render_llm_surface_frame(frame_str: str, skeleton: Dict[str, Any]) -> Tuple[str, List[str]]:
+    def _render_llm_surface_frame(frame_str: Any, skeleton: Dict[str, Any]) -> Tuple[str, List[str]]:
         """
         De-metasyntaxify a symbolic `cloze_slot_frame` into a natural-English surface frame
         plus concise human-readable rules for small local LLMs, without mutating internal
         symbolic skeleton fields.
+        Delegates to SlotFrame for structured, deterministic surface rendering.
         """
         if not frame_str:
             return "... ____ ...", []
-        surface = str(frame_str).strip()
-        notes: List[str] = []
         example_txt = str(skeleton.get("example_sentence") or skeleton.get("authentic_example") or "")
-
-        # 1. Expand ontology hints `[category, e.g. sample1 / sample2]` -> concrete sample1 + separate rule
-        def _repl_ontology(m: re.Match) -> str:
-            cat = m.group(1).strip()
-            examples_raw = m.group(2).strip()
-            first_ex = re.split(r"\s*/\s*", examples_raw)[0].strip()
-            if first_ex:
-                notes.append(f"Use a concrete {cat} noun (e.g. '{first_ex}' or similar).")
-                return first_ex
-            return "the issue"
-
-        surface = re.sub(
-            r"\[([^,\]]+),\s*e\.g\.\s*([^\]]+)\]",
-            _repl_ontology,
-            surface,
-            flags=re.IGNORECASE,
-        )
-
-        # 2. Replace `to do [sth]` / `to do something` / `to [verb]` with a concrete infinitive or rule
-        if re.search(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", surface, flags=re.IGNORECASE):
-            m_inf = re.search(r"\bto\s+([a-z]{3,})\b", example_txt.lower())
-            inf_v = m_inf.group(1) if (m_inf and m_inf.group(1) not in ("do", "be", "have", "get", "the", "a")) else ""
-            if inf_v:
-                surface = re.sub(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", f"to {inf_v}", surface, flags=re.IGNORECASE)
-            else:
-                surface = re.sub(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", "to", surface, flags=re.IGNORECASE)
-                notes.append("Follow 'to' with a specific action verb (never write the literal phrase 'to do something').")
-
-        # 3. Replace mandative subjunctive `that [sb] (should) [V-base]` with a natural model
-        if re.search(r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]", surface, flags=re.IGNORECASE):
-            surface = re.sub(
-                r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]",
-                "that the committee review",
-                surface,
-                flags=re.IGNORECASE,
-            )
-            notes.append("Use a subjunctive base-form verb after 'that' (never write '(should)' or brackets).")
-
-        # 4. Resolve remaining metasyntax brackets and number-neutral slash copulas
-        surface = re.sub(r"\[sb\]", "someone", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[sth\]", "the project", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", "the issue", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[V-base\]", "act", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[noun\]", "system", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[doing\s+sth\]|\bdoing\s+something\b", "working", surface, flags=re.IGNORECASE)
-        surface = re.sub(
-            r"\b([a-zA-Z]+)\s+is/are\b",
-            lambda m: f"{m.group(1)} {'are' if (m.group(1).lower().endswith('s') and not m.group(1).lower().endswith(('ss', 'us', 'is'))) else 'is'}",
-            surface,
-            flags=re.IGNORECASE,
-        )
-        surface = re.sub(
-            r"\b([a-zA-Z]+)\s+was/were\b",
-            lambda m: f"{m.group(1)} {'were' if (m.group(1).lower().endswith('s') and not m.group(1).lower().endswith(('ss', 'us', 'is'))) else 'was'}",
-            surface,
-            flags=re.IGNORECASE,
-        )
-        surface = re.sub(r"\bis/are\b", "is", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\bwas/were\b", "was", surface, flags=re.IGNORECASE)
-
-        # 5. Lock passive auxiliary for VBN targets when example uses passive `be + VBN`
-        v_tag = str(skeleton.get("verb_form_tag") or "").upper()
-        tw_low = str(skeleton.get("target_word") or "").strip().lower()
-        if (
-            v_tag == "VBN"
-            and tw_low
-            and not re.search(r"\b(?:is|are|was|were|be|been|being|has|have|had|get|got)\s+_{2,}", surface, flags=re.IGNORECASE)
-            and re.search(rf"\b(?:is|are|was|were|be|been|get|got)\s+(?:\w+\s+)?{re.escape(tw_low)}\b", example_txt, flags=re.IGNORECASE)
-        ):
-            surface = re.sub(r"____", "was ____", surface, count=1)
-            notes.append("Keep a passive auxiliary ('was/were/is/are') directly before '____'.")
-
-        surface = re.sub(r"\s+", " ", surface).strip()
-        return surface, notes
+        if isinstance(frame_str, SlotFrame):
+            return frame_str.to_llm_surface(example_txt=example_txt, skeleton=skeleton)
+        return SlotFrame.from_symbolic_str(str(frame_str)).to_llm_surface(example_txt=example_txt, skeleton=skeleton)
 
     @classmethod
     def hydrate_video_blueprint_items(
