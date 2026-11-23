@@ -26,6 +26,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff pytest anyio
           pip install -e .
+          python -m spacy download en_core_web_sm
+          python -m wn download "oewn:2025+" || true
 
       - name: Run Ruff Lint Check
         run: |

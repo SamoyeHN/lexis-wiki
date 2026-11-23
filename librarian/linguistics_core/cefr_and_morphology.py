@@ -1580,6 +1580,17 @@ class CefrAndMorphologyMixin:
                 ):
                     return False
                 return True
+        # Fallback when PedLex and WordNet are not available:
+        # Check via spaCy POS tagging
+        if cls.get_wordnet() is None and (cls._is_pedlex_disabled() or not cls._ensure_ldoce_conn()):
+            nlp = cls.get_spacy()
+            if nlp:
+                try:
+                    doc = nlp(f"They {w} it.")
+                    if doc and len(doc) >= 2 and doc[1].pos_ == "VERB" and doc[1].tag_ in ("VB", "VBP"):
+                        return True
+                except Exception:
+                    pass
         return False
 
     @classmethod
@@ -1602,9 +1613,10 @@ class CefrAndMorphologyMixin:
         except Exception:
             pass
         if bare_lemma != w:
+            dict_available = bool(cls.get_wordnet()) or (not cls._is_pedlex_disabled() and cls._ensure_ldoce_conn())
             if (
                 bare_lemma in cls._INVARIANT_PLURAL_NOUNS
-                or (not cls._wordnet_pos(bare_lemma) and not cls.is_exact_pedlex_headword(bare_lemma))
+                or (dict_available and not cls._wordnet_pos(bare_lemma) and not cls.is_exact_pedlex_headword(bare_lemma))
             ):
                 bare_lemma = w
                 bare_tag = None
@@ -3976,9 +3988,13 @@ class CefrAndMorphologyMixin:
                     poses = [str(p).lower() for p in (entry.get("all_poses") or [])]
                     poses += [str(s.get("pos", "")).lower() for s in (entry.get("senses") or []) if isinstance(s, dict)]
                     head_is_verb = any("verb" in p for p in poses)
+                if not head_is_verb:
+                    head_is_verb = cls._is_base_verb_lemma(head) or bool(cls._wordnet_pos(head) & {"v"})
             if head_is_verb:
                 has_pv_blocks = bool(cls._unit_blocks(clean))
                 if has_pv_blocks or clean == "worry about":
+                    return "phrasal verb"
+                if cls._is_pedlex_disabled() or not cls._ensure_ldoce_conn():
                     return "phrasal verb"
 
         # Attested in PedLex's collocation / pattern tiers, or simply a verb-noun

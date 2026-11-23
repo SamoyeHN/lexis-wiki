@@ -17,7 +17,9 @@ def test_wiki_processor_normalize_name():
 def test_background_all_quizzes_worker():
     job_id = DashboardState.create_job("quiz", "Test_Unit (All Quizzes)")
 
-    with patch.object(WikiProcessor, "generate_quiz", return_value="/path/to/Book_1_Unit_1_Passage_A_quiz.html") as mock_gen:
+    with patch.object(Path, "exists", return_value=True), patch.object(
+        WikiProcessor, "generate_quiz", return_value="/path/to/Book_1_Unit_1_Passage_A_quiz.html"
+    ) as mock_gen:
         background_all_quizzes_worker(job_id, "Book_1_Unit_1_Passage_A")
 
     job = DashboardState.get_job(job_id)
@@ -84,11 +86,24 @@ def test_inject_or_lock_frontmatter_no_targets():
     assert res == raw_text
 
 
-def test_api_raw_files_parses_series_and_book():
+def test_api_raw_files_parses_series_and_book(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     from librarian.dashboard import DashboardHTTPRequestHandler
+    from librarian.config import config
     import json
     import io
+
+    # Create hermetic dummy wiki directory with frontmatter
+    test_wiki = tmp_path / "wiki"
+    unit_dir = test_wiki / "Test_Unit_1"
+    sources_dir = unit_dir / "sources"
+    sources_dir.mkdir(parents=True)
+    source_file = sources_dir / "Test_Unit_1.md"
+    source_file.write_text(
+        "---\nseries: \"Test Series\"\nbook: 1\nunit: 1\nsection: \"A\"\n---\n# Test Unit\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "project_root", str(tmp_path))
 
     # Mock handler and request
     handler = DashboardHTTPRequestHandler.__new__(DashboardHTTPRequestHandler)
