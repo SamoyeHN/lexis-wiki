@@ -30,9 +30,13 @@ def test_shared_template_assets_exist():
     css_content = css_path.read_text(encoding="utf-8")
     assert ":root" in css_content
     assert "--color-bg-page" in css_content
-    assert ".card" in css_content
+    assert ".btn" in css_content
     assert ".l2-qa-badge" in css_content
     assert "@media print" in css_content
+
+    # Invariant: quiz-base.css must NOT contain structural layout rules (.container, .card)
+    # to prevent cross-modality CSS collisions (e.g. cloze 3-column blowout or translation vertical voids).
+    assert ".container {" not in css_content, "quiz-base.css must not enforce layout container rules"
 
     js_content = js_path.read_text(encoding="utf-8")
     assert "function cleanMarkdownText" in js_content
