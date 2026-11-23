@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer-when-downgrade">
     <title>Interactive Video Handout</title>
+    <!-- INJECT:QUIZ_BASE_CSS -->
+    <link rel="stylesheet" href="assets/quiz-base.css">
     <style>
         :root {
             --color-bg-page: linear-gradient(135deg, #F0FDFA 0%, #F5F3FF 100%);
@@ -316,64 +318,6 @@
             color: var(--color-text-body-alt);
         }
 
-        /* ===== Level 2 Quality Audit Badge & Psychometrics ===== */
-        .l2-qa-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-size: 12px;
-            font-weight: 700;
-            background: rgba(16, 185, 129, 0.12);
-            color: #059669;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            margin-top: 8px;
-            position: relative;
-            cursor: help;
-        }
-
-        .l2-qa-tooltip {
-            position: absolute;
-            top: calc(100% + 10px);
-            left: 50%;
-            transform: translateX(-50%) translateY(-4px);
-            width: max-content;
-            max-width: 320px;
-            background: #1e293b;
-            color: #f1f5f9;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 12px;
-            font-weight: 500;
-            line-height: 1.5;
-            text-align: left;
-            white-space: normal;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
-            z-index: 60;
-            pointer-events: none;
-        }
-
-        .l2-qa-tooltip::after {
-            content: '';
-            position: absolute;
-            bottom: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 6px solid transparent;
-            border-bottom-color: #1e293b;
-        }
-
-        .l2-qa-badge:hover .l2-qa-tooltip,
-        .l2-qa-badge:focus-within .l2-qa-tooltip {
-            opacity: 1;
-            visibility: visible;
-            transform: translateX(-50%) translateY(0);
-        }
-
         .audit-point-subcard {
             background: rgba(248, 250, 252, 0.95);
             border: 1px solid rgba(226, 232, 240, 0.9);
@@ -651,6 +595,8 @@
         </div>
     </div>
 
+    <!-- INJECT:QUIZ_CORE_JS -->
+    <script src="assets/quiz-core.js"></script>
     <script>
         // Injected data placeholder - do NOT replace with hardcoded data
         const quizData = { "title": "Sample", "video_url": "", "video_type": "youtube", "questions": [], "transcript": "" };
@@ -722,54 +668,7 @@
         function renderAuditBadge() {
             const container = document.getElementById('l2-qa-badge-container');
             if (!container || !quizData._expert_audit) return;
-            const audit = quizData._expert_audit;
-            const score = audit.overall_quality_score ?? 100;
-            const accuracy = Math.round((audit.blind_solve_accuracy ?? 1.0) * 100);
-            const passed = audit.pass_audit !== false;
-            const isHighQuality = passed && accuracy >= 80;
-
-            const cStats = audit.cure_stats || null;
-            let text = `L2 Expert Audit: ${score}% (${accuracy}% Blind Accuracy)`;
-            if (cStats && (cStats.repair > 0 || cStats.rewrite > 0)) {
-                text = `L2 Expert Audit: ${score}% (Surgically Cured: +${cStats.repair + cStats.rewrite})`;
-            }
-            if (!isHighQuality) {
-                text = `⚠️ L2 Review Needed: ${score}% (${accuracy}% Blind Accuracy)`;
-            }
-            const tooltip = audit.summary_verdict || '';
-
-            const bg = isHighQuality ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)';
-            const color = isHighQuality ? '#059669' : '#d97706';
-            const border = isHighQuality ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
-
-            const iconSvg = isHighQuality ? `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                    <polyline points="9 12 11 14 15 10"></polyline>
-                </svg>
-            ` : `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="8" x2="12" y2="12"></line>
-                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-            `;
-
-            container.innerHTML = `
-                <div class="l2-qa-badge" style="background: ${bg}; color: ${color}; border-color: ${border};">
-                    ${iconSvg}
-                    <span>${text}</span>
-                    <span class="l2-qa-tooltip">${tooltip.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
-                </div>
-            `;
-        }
-
-        function escapeHtml(str) {
-            return String(str || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
+            container.innerHTML = renderL2AuditBadgeHTML(quizData._expert_audit);
         }
 
         function escapeRegExp(str) {

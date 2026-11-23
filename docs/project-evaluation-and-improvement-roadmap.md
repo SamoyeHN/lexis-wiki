@@ -67,7 +67,7 @@
 - [ ] **Decouple Dashboard & Shared Quiz Assets**:
   - Split `dashboard.py`'s `handle_api_post` into resource-based route handlers (or migrate to a lightweight ASGI framework if API surface grows).
   - Split `dashboard.js` (4,951 lines) into native browser ES Modules (`api.js`, `state.js`, `views/*.js`) without heavy build tooling.
-  - Extract shared `quiz-base.css` and `quiz-core.js` across HTML quiz templates, and auto-inline at render/export time to preserve standalone offline HTML handouts (`[x]` Pilot completed on `vocabulary.html` with unit tests in `tests/test_template_assets.py`; remaining templates queued).
+  - Extract shared `quiz-base.css` and `quiz-core.js` across HTML quiz templates, and auto-inline at render/export time to preserve standalone offline HTML handouts (`[x]` Completed across all 6 quiz templates: `vocabulary`, `listening`, `reading`, `translation`, `video`, `cloze`, with comprehensive unit tests in `tests/test_template_assets.py`).
 
 ### Phase 3: Long-Term (Scalability & Quality Loop)
 - [ ] **Data-Driven Linguistic Rules**: Externalize static lexical tables and syntactic constraint maps from `distractor_engine.py`, `wsd_engine.py`, and `cefr_and_morphology.py` into declarative JSON/YAML or `pedlex.db` tables to curb code bloat.

@@ -7,6 +7,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- INJECT:QUIZ_BASE_CSS -->
+    <link rel="stylesheet" href="assets/quiz-base.css">
     <style>
         :root {
             --color-bg-page: linear-gradient(135deg, #EEF2FF 0%, #FAF5FF 50%, #F5F3FF 100%);
@@ -508,61 +510,13 @@
             70% { box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
             100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
         }
-
-
-        /* ===== L2 QA Badge Custom Tooltip (unified with translation.html) ===== */
-        .l2-qa-badge {
-            position: relative;
-            cursor: help;
-        }
-        .l2-qa-tooltip {
-            position: absolute;
-            top: calc(100% + 12px);
-            left: 50%;
-            transform: translateX(-50%) translateY(-4px);
-            width: max-content;
-            max-width: 320px;
-            background: #1e293b;
-            color: #f1f5f9;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 12.5px;
-            font-weight: 500;
-            line-height: 1.55;
-            text-align: left;
-            white-space: normal;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
-            z-index: 60;
-            pointer-events: none;
-        }
-        .l2-qa-tooltip::after {
-            content: '';
-            position: absolute;
-            bottom: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 6px solid transparent;
-            border-bottom-color: #1e293b;
-        }
-        .l2-qa-badge:hover .l2-qa-tooltip,
-        .l2-qa-badge:focus-within .l2-qa-tooltip {
-            opacity: 1;
-            visibility: visible;
-            transform: translateX(-50%) translateY(0);
-        }
 </style>
 </head>
-<body><header>
+<body>
+    <header>
         <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px;">
             <h1 id="quiz-main-title" style="margin-bottom: 0;">Reading Comprehension</h1>
-            <div id="l2-qa-badge" class="l2-qa-badge" style="display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; background: rgba(16, 185, 129, 0.12); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); position: relative;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>
-                <span id="l2-qa-badge-text">QA Verified 100%</span>
-                <span class="l2-qa-tooltip" id="l2-qa-tooltip"></span>
-            </div>
+            <div id="l2-qa-badge-container"></div>
         </div>
         <div class="subtitle">Read the text on the left and hover over highlighted vocabulary words for definitions. Answer the questions on the right.</div>
     </header>
@@ -674,6 +628,8 @@
         <div class="tooltip-ex" id="tooltip-word-ex">Example sentence here.</div>
     </div>
 
+    <!-- INJECT:QUIZ_CORE_JS -->
+    <script src="assets/quiz-core.js"></script>
     <script>
         // Quiz Data injection target
         const quizData = { /* QUIZ_DATA */ };
@@ -713,40 +669,9 @@
             answersState = new Array(quizData.questions.length).fill(null);
 
             // Display Level 2 Quality Audit Badge if available
-            if (quizData._expert_audit) {
-                const audit = quizData._expert_audit;
-                const badge = document.getElementById("l2-qa-badge");
-                const badgeText = document.getElementById("l2-qa-badge-text");
-                if (badge && badgeText) {
-                    const acc = Math.round((audit.blind_solve_accuracy || 1.0) * 100);
-                    const score = audit.overall_quality_score || 100;
-                    const divergences = audit.blind_solve_confident_divergences || 0;
-                    const isPassed = (audit.pass_audit !== false) && acc >= 80;
-
-                    const cStats = audit.cure_stats || null;
-                    let label = `L2 Expert Audit: ${score}% (${acc}% Blind Accuracy)`;
-                    if (cStats && (cStats.repair > 0 || cStats.rewrite > 0)) {
-                        label = `L2 Expert Audit: ${score}% (Surgically Cured: +${cStats.repair + cStats.rewrite})`;
-                    }
-                    if (!isPassed) {
-                        label = `⚠️ L2 Review Needed: ${score}% (${acc}% Blind Accuracy)`;
-                    }
-
-                    badgeText.innerText = label;
-                    badge.style.display = "inline-flex";
-                    badge.style.cursor = "help";
-                    const tip = document.getElementById("l2-qa-tooltip");
-                    if (tip) tip.textContent = audit.summary_verdict || '';
-                    if (!isPassed) {
-                        badge.style.background = "rgba(245, 158, 11, 0.12)";
-                        badge.style.color = "#d97706";
-                        badge.style.borderColor = "rgba(245, 158, 11, 0.3)";
-                    } else {
-                        badge.style.background = "rgba(16, 185, 129, 0.12)";
-                        badge.style.color = "#059669";
-                        badge.style.borderColor = "rgba(16, 185, 129, 0.3)";
-                    }
-                }
+            const badgeContainer = document.getElementById("l2-qa-badge-container");
+            if (badgeContainer && quizData._expert_audit) {
+                badgeContainer.innerHTML = renderL2AuditBadgeHTML(quizData._expert_audit);
             }
         }
 

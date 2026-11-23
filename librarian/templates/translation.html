@@ -7,6 +7,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- INJECT:QUIZ_BASE_CSS -->
+    <link rel="stylesheet" href="assets/quiz-base.css">
     <style>
         :root {
             --color-bg-page: linear-gradient(135deg, #FAF5FF 0%, #EEF2FF 50%, #FCE7F3 100%);
@@ -437,62 +439,6 @@
             font-weight: 500;
         }
 
-        /* Level 2 Quality Audit Badge */
-        .l2-qa-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 5px 14px;
-            border-radius: 9999px;
-            font-size: 12px;
-            font-weight: 700;
-            background: rgba(16, 185, 129, 0.12);
-            color: #059669;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            margin-top: 10px;
-            position: relative;
-            cursor: help;
-        }
-
-        .l2-qa-tooltip {
-            position: absolute;
-            top: calc(100% + 12px);
-            left: 50%;
-            transform: translateX(-50%) translateY(-4px);
-            width: max-content;
-            max-width: 320px;
-            background: #1e293b;
-            color: #f1f5f9;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 12.5px;
-            font-weight: 500;
-            line-height: 1.55;
-            text-align: left;
-            white-space: normal;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
-            z-index: 60;
-            pointer-events: none;
-        }
-        .l2-qa-tooltip::after {
-            content: '';
-            position: absolute;
-            bottom: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 6px solid transparent;
-            border-bottom-color: #1e293b;
-        }
-        .l2-qa-badge:hover .l2-qa-tooltip,
-        .l2-qa-badge:focus-within .l2-qa-tooltip {
-            opacity: 1;
-            visibility: visible;
-            transform: translateX(-50%) translateY(0);
-        }
-
         /* Animations */
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes fadeInDown {
@@ -520,11 +466,7 @@
                 <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             </div>
             <h2 style="font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 800; color: var(--color-text-main); margin-bottom: 8px;">Comparative Translation Appraisal</h2>
-            <div id="l2-qa-badge-start" class="l2-qa-badge" style="display: none; margin-bottom: 16px;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>
-                <span id="l2-qa-badge-start-text">L2 QA Verified</span>
-                <span class="l2-qa-tooltip" id="l2-qa-badge-start-tooltip"></span>
-            </div>
+            <div id="l2-qa-badge-start" style="margin-bottom: 16px;"></div>
             <p id="start-screen-desc" style="font-size: 15px; color: var(--color-text-muted); max-width: 480px; line-height: 1.6; margin-bottom: 32px;">
                 Compare candidate translations against authentic academic criteria. Identify the idiomatic English version and spot lexical or syntactic traps.
             </p>
@@ -584,11 +526,7 @@
                 <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
             </div>
             <h2 style="font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 800; color: var(--color-text-main); margin-bottom: 8px;">Practice Finished!</h2>
-            <div id="l2-qa-badge-results" class="l2-qa-badge" style="display: none; margin-bottom: 16px;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>
-                <span id="l2-qa-badge-results-text">L2 QA Verified</span>
-                <span class="l2-qa-tooltip" id="l2-qa-badge-results-tooltip"></span>
-            </div>
+            <div id="l2-qa-badge-results" style="margin-bottom: 16px;"></div>
             <p style="font-size: 15px; color: var(--color-text-muted); margin-bottom: 24px;">Excellent vocabulary and grammar reinforcement exercise completed.</p>
             
             <div class="results-score-box">
@@ -605,6 +543,8 @@
         </div>
     </div>
 
+    <!-- INJECT:QUIZ_CORE_JS -->
+    <script src="assets/quiz-core.js"></script>
     <script>
         // Target JSON data injection
         const quizData = { /* QUIZ_DATA */ };
@@ -641,50 +581,12 @@
         }
 
         function renderL2QABadges() {
-            const audit = quizData._expert_audit;
-            if (!audit) return;
-
-            const auditScore = audit.overall_quality_score ?? 100;
-            const accuracy = Math.round((audit.blind_solve_accuracy ?? 1.0) * 100);
-            const passed = audit.pass_audit !== false;
-            const isHighQuality = passed && accuracy >= 80;
-
-            const cStats = audit.cure_stats || null;
-            let text = `L2 Expert Audit: ${auditScore}% (${accuracy}% Blind Accuracy)`;
-            if (cStats && (cStats.repair > 0 || cStats.rewrite > 0)) {
-                text = `L2 Expert Audit: ${auditScore}% (Surgically Cured: +${cStats.repair + cStats.rewrite})`;
-            }
-            if (!isHighQuality) {
-                text = `⚠️ L2 Review Needed: ${auditScore}% (${accuracy}% Blind Accuracy)`;
-            }
-            const tooltip = audit.summary_verdict || '';
-
+            if (!quizData._expert_audit) return;
+            const html = renderL2AuditBadgeHTML(quizData._expert_audit);
             const badgeStart = document.getElementById("l2-qa-badge-start");
             const badgeResults = document.getElementById("l2-qa-badge-results");
-
-            [badgeStart, badgeResults].forEach(el => {
-                if (!el) return;
-                el.style.display = "inline-flex";
-                if (!isHighQuality) {
-                    el.style.background = "rgba(245, 158, 11, 0.12)";
-                    el.style.color = "#d97706";
-                    el.style.borderColor = "rgba(245, 158, 11, 0.3)";
-                } else {
-                    el.style.background = "rgba(16, 185, 129, 0.12)";
-                    el.style.color = "#059669";
-                    el.style.borderColor = "rgba(16, 185, 129, 0.3)";
-                }
-            });
-
-            const textStart = document.getElementById("l2-qa-badge-start-text");
-            const textResults = document.getElementById("l2-qa-badge-results-text");
-            if (textStart) textStart.innerText = text;
-            if (textResults) textResults.innerText = text;
-
-            const tooltipStart = document.getElementById("l2-qa-badge-start-tooltip");
-            const tooltipResults = document.getElementById("l2-qa-badge-results-tooltip");
-            if (tooltipStart) tooltipStart.textContent = tooltip;
-            if (tooltipResults) tooltipResults.textContent = tooltip;
+            if (badgeStart) badgeStart.innerHTML = html;
+            if (badgeResults) badgeResults.innerHTML = html;
         }
 
         function setupEvents() {
