@@ -2682,6 +2682,19 @@ class QuizGeneratorMixin:
         except Exception as e:
             return f"Quiz Generation Error: {e}"
 
+    def _get_shared_template_asset(self, asset_name: str) -> str:
+        """Loads and caches shared template assets (CSS/JS) for inline embedding."""
+        if not hasattr(self, "_template_asset_cache"):
+            self._template_asset_cache = {}
+        if asset_name in self._template_asset_cache:
+            return self._template_asset_cache[asset_name]
+        asset_file = Path(__file__).resolve().parent.parent / "templates" / "assets" / asset_name
+        if asset_file.exists():
+            content = asset_file.read_text(encoding="utf-8")
+            self._template_asset_cache[asset_name] = content
+            return content
+        return ""
+
     def _render_handout(self, quiz_obj, template_name, audio_url=None, language=None):
         """Renders HTML templates with injected data."""
         tmpl_file = f"{template_name}.html"
@@ -2699,7 +2712,29 @@ class QuizGeneratorMixin:
         if not template_path.exists():
             return f"<html><body><pre>{json.dumps(data_dict, indent=2)}</pre></body></html>"
 
-        with open(template_path, "r", encoding="utf-8") as f: html = f.read()
+        with open(template_path, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        # Inlining shared template assets for self-contained zero-dependency offline delivery
+        if "<!-- INJECT:QUIZ_BASE_CSS -->" in html:
+            base_css = self._get_shared_template_asset("quiz-base.css")
+            if base_css:
+                html = html.replace("<!-- INJECT:QUIZ_BASE_CSS -->", f"<style>\n{base_css}\n</style>")
+            html = html.replace('<link rel="stylesheet" href="assets/quiz-base.css">', "")
+        elif '<link rel="stylesheet" href="assets/quiz-base.css">' in html:
+            base_css = self._get_shared_template_asset("quiz-base.css")
+            if base_css:
+                html = html.replace('<link rel="stylesheet" href="assets/quiz-base.css">', f"<style>\n{base_css}\n</style>")
+
+        if "<!-- INJECT:QUIZ_CORE_JS -->" in html:
+            core_js = self._get_shared_template_asset("quiz-core.js")
+            if core_js:
+                html = html.replace("<!-- INJECT:QUIZ_CORE_JS -->", f"<script>\n{core_js}\n</script>")
+            html = html.replace('<script src="assets/quiz-core.js"></script>', "")
+        elif '<script src="assets/quiz-core.js"></script>' in html:
+            core_js = self._get_shared_template_asset("quiz-core.js")
+            if core_js:
+                html = html.replace('<script src="assets/quiz-core.js"></script>', f"<script>\n{core_js}\n</script>")
         
         if audio_url: data_dict["audio_url"] = audio_url
         if language: data_dict["target_language"] = language
