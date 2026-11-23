@@ -180,7 +180,7 @@ class ModelLifecycleMixin:
 
         if task_name:
             try:
-                from .logger import log_task
+                from ..logger import log_task
                 log_task(
                     task_name=task_name,
                     system_prompt="",
