@@ -7,7 +7,12 @@ from .distractor_paronyms import DistractorParonymsMixin
 from .distractor_phrases import DistractorPhrasesMixin
 from .distractor_inflections import DistractorInflectionsMixin
 from .distractor_fallbacks import DistractorFallbacksMixin
-from .distractor_vocab import DistractorVocabMixin
+from .distractor_vocab import (
+    DistractorVocabAssemblyMixin,
+    DistractorVocabHarvestMixin,
+    DistractorVocabMixin,
+    DistractorVocabWsdMixin,
+)
 
 
 class DistractorEngineMixin(
@@ -38,5 +43,8 @@ __all__ = [
     "DistractorPhrasesMixin",
     "DistractorInflectionsMixin",
     "DistractorFallbacksMixin",
+    "DistractorVocabAssemblyMixin",
+    "DistractorVocabHarvestMixin",
     "DistractorVocabMixin",
+    "DistractorVocabWsdMixin",
 ]

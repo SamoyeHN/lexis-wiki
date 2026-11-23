@@ -7,7 +7,10 @@ from .distractor_engine import (
     DistractorInflectionsMixin,
     DistractorParonymsMixin,
     DistractorPhrasesMixin,
+    DistractorVocabAssemblyMixin,
+    DistractorVocabHarvestMixin,
     DistractorVocabMixin,
+    DistractorVocabWsdMixin,
 )
 from .slot_frame import SlotFrame
 from .quiz_skeleton_anchors import QuizSkeletonAnchorsMixin
@@ -35,7 +38,10 @@ __all__ = [
     "DistractorInflectionsMixin",
     "DistractorParonymsMixin",
     "DistractorPhrasesMixin",
+    "DistractorVocabAssemblyMixin",
+    "DistractorVocabHarvestMixin",
     "DistractorVocabMixin",
+    "DistractorVocabWsdMixin",
     "QuizSkeletonAnchorsMixin",
     "QuizSkeletonBuilderMixin",
     "QuizSkeletonDistractorsMixin",
