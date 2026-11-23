@@ -27,13 +27,14 @@ jobs:
           pip install ruff pytest anyio
           pip install -e .
           python -m spacy download en_core_web_sm
-          python -m wn download "oewn:2025+" || true
 
       - name: Run Ruff Lint Check
         run: |
           ruff check .
 
       - name: Run Fast Unit Tests (Zero-Heavy-Corpus Core Suite)
+        env:
+          DISABLE_PEDLEX: "1"
         run: |
           pytest \
             tests/test_dashboard_api.py \

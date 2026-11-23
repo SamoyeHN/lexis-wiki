@@ -910,18 +910,28 @@ class CefrAndMorphologyMixin:
     def get_wordnet(cls):
         """Lazy-loads the Open English WordNet ('oewn:2025+') client with multithreading enabled."""
         if cls._wn is None:
-            import wn
-            # Web dashboard / background worker threads share WordNet SQLite connection.
-            # SQLite check_same_thread must be disabled for read-only multi-threaded queries.
-            wn.config.allow_multithreading = True
             try:
-                cls._wn = wn.Wordnet("oewn:2025+")
-            except Exception:
+                import wn
+                # Web dashboard / background worker threads share WordNet SQLite connection.
+                # SQLite check_same_thread must be disabled for read-only multi-threaded queries.
+                wn.config.allow_multithreading = True
                 try:
-                    wn.download("oewn:2025+")
                     cls._wn = wn.Wordnet("oewn:2025+")
                 except Exception:
-                    cls._wn = wn
+                    try:
+                        wn.download("oewn:2025+")
+                        cls._wn = wn.Wordnet("oewn:2025+")
+                    except Exception:
+                        cls._wn = None
+            except Exception:
+                cls._wn = None
+        if cls._wn is not None:
+            try:
+                import wn
+                if not isinstance(cls._wn, wn.Wordnet) or not wn.lexicons():
+                    cls._wn = None
+            except Exception:
+                cls._wn = None
         return cls._wn
 
     @staticmethod
@@ -2870,15 +2880,17 @@ class CefrAndMorphologyMixin:
                             and doc[tok.i - 1].lower_ in ("that", "whether", "if", "although", "though", "because", "while", "since", "as")
                         ):
                             return "noun"
-                    has_v = ("verb" in dict_poses) if dict_poses else bool(wn and (wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v")))
-                    if not has_v:
-                        if dict_poses:
-                            if tok.dep_ in ("amod", "acomp", "oprd") and "adjective" in dict_poses:
-                                return "adjective"
-                            for pref in ("noun", "adjective", "adverb"):
-                                if pref in dict_poses:
-                                    return pref
-                        return "noun"
+                    dict_available = bool(dict_poses) or bool(wn and getattr(wn, "synsets", None))
+                    if dict_available:
+                        has_v = ("verb" in dict_poses) if dict_poses else bool(wn.synsets(clean_w, pos="v") or wn.synsets(tok_lem, pos="v"))
+                        if not has_v:
+                            if dict_poses:
+                                if tok.dep_ in ("amod", "acomp", "oprd") and "adjective" in dict_poses:
+                                    return "adjective"
+                                for pref in ("noun", "adjective", "adverb"):
+                                    if pref in dict_poses:
+                                        return pref
+                            return "noun"
 
                 # 0c. Cross-POS Syntactic Gates for ADV / ADJ / PREP / CONJ / VERB / NOUN Chameleons:
                 # 1) Nominal Slot Invariant for Mistagged ADV/ADP/SCONJ ('from the deep well', 'his own good'):
