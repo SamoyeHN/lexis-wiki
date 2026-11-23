@@ -321,11 +321,11 @@ class TestAnchoredTranslation(unittest.TestCase):
                 "example_usage": "My car engine packed up on the motorway.",
             },
             {
-                "word": "originate",
+                "word": "accuse",
                 "part_of_speech": "verb",
-                "definition": "[formal] to come from a particular place or start in a particular situation",
-                "quote": "Many academic traditions originated in medieval universities.",
-                "example_usage": "Many Christmas traditions originated in Germany.",
+                "definition": "[formal] to say that someone has done something wrong or illegal",
+                "quote": "They accused him of cheating.",
+                "example_usage": "They accused him of cheating.",
             },
         ]
         grammar_items = [
@@ -359,7 +359,7 @@ class TestAnchoredTranslation(unittest.TestCase):
         self.assertEqual(bp_syn["target_keyword"], "")
         self.assertEqual(bp_syn["flaw_category"], "syntactic")
 
-        self.assertEqual(bp_lex["target_keyword"], "originate")
+        self.assertEqual(bp_lex["target_keyword"], "accuse")
         self.assertEqual(bp_lex["target_grammar"], "")
         self.assertEqual(bp_lex["flaw_category"], "lexical")
         self.assertTrue(any(t in bp_lex["flaw_type"] for t in ("Preposition Trap", "Usage Trap", "Collocation")))
@@ -369,6 +369,67 @@ class TestAnchoredTranslation(unittest.TestCase):
             self.assertIn("### Item", bp["micro_task_block"])
             self.assertIn("🎯 Micro-Task for LLM:", bp["micro_task_block"])
             self.assertIn("Minimal Pair", bp["micro_task_block"])
+
+    def test_translation_fallback_to_syntax_when_no_authentic_traps(self):
+        """
+        Verify that when a unit's vocabulary items lack authentic error traps in pedlex_error_traps
+        or L1_FALSE_COLLOCATION_CATALOG for their locked sense and CEFR level:
+        1. Words without authentic traps are skipped (zero synthetic fake prepositions).
+        2. External catalog words are NOT injected.
+        3. All blueprint items fall back 100% smoothly to Unit Grammar Structure patterns.
+        """
+        from librarian.linguistics import LinguisticEngine
+
+        vocab_items = [
+            {
+                "word": "carpet",
+                "part_of_speech": "noun",
+                "definition": "heavy woven material for covering floors",
+                "quote": "A red carpet was laid out.",
+                "example_usage": "My bedroom has a blue carpet.",
+            },
+            {
+                "word": "wheel",
+                "part_of_speech": "noun",
+                "definition": "one of the round things under a car, bicycle, etc.",
+                "quote": "The car has four wheels.",
+                "example_usage": "He turned the steering wheel.",
+            },
+        ]
+        grammar_items = [
+            {
+                "name": "Concessive Clause",
+                "formula": "Although / Even though + Subject + Verb, Main Clause",
+                "pedagogical_function": "Frames an everyday contrast between an obstacle and an outcome.",
+                "common_mistakes": "Grammar Warning (CONCESSIVE CONNECTIVES): Never pair 'Although / Even though' with 'but' in the same sentence.",
+            },
+            {
+                "name": "Inanimate Causation and Enablement",
+                "formula": "[Inanimate Subject] + enable/allow/permit + [Object] + to + [VP]",
+                "pedagogical_function": "Expresses causal enablement with an inanimate instrument as grammatical subject.",
+                "common_mistakes": "Grammar Warning (Instrumental Fronting vs. Inanimate Causation): Do NOT use 'With [Tool], people can...'.",
+            },
+        ]
+
+        blueprints = LinguisticEngine.build_translation_micro_task_blueprints(
+            vocab_content=vocab_items,
+            grammar_content=grammar_items,
+            target_count=4,
+            target_language="Chinese",
+            cefr_level="B2",
+        )
+        self.assertEqual(len(blueprints), 4)
+
+        # 100% of items must be syntactic items
+        for bp in blueprints:
+            self.assertEqual(bp["focus_type"], "syntactic")
+            self.assertEqual(bp["flaw_category"], "syntactic")
+            self.assertIn(bp["target_grammar_name"], ["Concessive Clause", "Inanimate Causation and Enablement"])
+            self.assertEqual(bp["target_keyword"], "")
+
+        # External catalog items (knowledge, suggestion, within, etc.) must NEVER be injected
+        all_keywords = [bp.get("target_keyword") for bp in blueprints if bp.get("target_keyword")]
+        self.assertEqual(all_keywords, [])
 
     def test_step3_zero_redundancy_schema_and_hydration(self):
         """

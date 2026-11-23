@@ -20,13 +20,15 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 # High-Yield L1 False Collocation & Delexical Calque Catalog (Chinese -> English)
 # Grounded in Contrastive SLA Error Taxonomies & PedLex Collocations
 # -----------------------------------------------------------------------------
-L1_FALSE_COLLOCATION_CATALOG: Dict[str, Dict[str, str]] = {
+L1_FALSE_COLLOCATION_CATALOG: Dict[str, Dict[str, Any]] = {
     "within": {
         "correct_frame": "within [time limit]",
         "wrong_frame": "*during / inside [time limit]*",
-        "pedagogical_note": "In English, use 'within' to denote a time limit (e.g. 'within 24 hours'); avoid Chinglish calques '*during 24 hours*' or '*inside 24 hours*' for Chinese '在……之内'.",
+        "pedagogical_note": "In English, use 'within' to denote a time limit (e.g. 'within 24 hours'); avoid Chinglish calques '*during / inside*' for Chinese '在……之内'.",
         "model_example": "We should have the test results back within 24 hours.",
         "zh_cue": "在……之内 / 在……内",
+        "valid_sense_keywords": ["time", "period", "pass", "hour", "day", "duration", "limit"],
+        "cefr_levels": ["A1", "A2", "B1"],
     },
     "knowledge": {
         "correct_frame": "acquire / gain knowledge",
@@ -266,12 +268,13 @@ class QuizTranslationMixin:
         definition: str = "",
         quote: str = "",
         example_usage: str = "",
+        cefr_level: str = "B2",
     ) -> Dict[str, Any]:
         """
         Resolves the target keyword's Required Lexical Frame, Model Example, and
         optional single-point Lexical Error Trap from `pedlex_error_traps` (with
         deterministic symbolic fallback when pedlex.db is absent or unindexed).
-        Enforces strict POS and `sense_idx` isolation.
+        Enforces strict POS, `sense_idx`, and CEFR isolation.
         """
         w_clean = re.sub(r"\[.*?\]|\(.*?\)", "", str(word or "")).strip()
         w_clean = re.sub(r"\s+", " ", w_clean)
@@ -326,26 +329,23 @@ class QuizTranslationMixin:
         ):
             bundle_pat = ""
 
-        # Ensure model_example actually contains the target word stem and is not a dialogic greeting/thanks formula
+        # Dynamically harvest authentic model examples anchored to the locked sense & passage
         first_tok = w_clean.split()[0].lower() if w_clean.split() else w_clean.lower()
         w_stem = first_tok[: max(3, min(len(first_tok), 5))]
-        candidate_examples = [bundle_ex, example_usage, quote]
+        candidate_examples: List[str] = []
+        if quote and w_stem in quote.lower() and not _dialogic_deictic_re.search(quote):
+            candidate_examples.append(quote.strip())
+        if example_usage and w_stem in example_usage.lower() and not _dialogic_deictic_re.search(example_usage):
+            candidate_examples.append(example_usage.strip())
+        if bundle_ex and w_stem in bundle_ex.lower() and not _dialogic_deictic_re.search(bundle_ex):
+            candidate_examples.append(bundle_ex.strip())
         if isinstance(locked_sense, dict):
-            candidate_examples.extend(str(ex) for ex in (locked_sense.get("examples") or []) if str(ex).strip())
-        model_example = ""
-        for cand_ex in candidate_examples:
-            cand_s = str(cand_ex or "").strip()
-            if not cand_s:
-                continue
-            if w_stem in cand_s.lower() and not _dialogic_deictic_re.search(cand_s):
-                model_example = cand_s
-                break
-        if not model_example:
-            for cand_ex in candidate_examples:
-                cand_s = str(cand_ex or "").strip()
-                if cand_s and not _dialogic_deictic_re.search(cand_s):
-                    model_example = cand_s
-                    break
+            for ex in (locked_sense.get("examples") or []):
+                ex_s = str(ex).strip()
+                if ex_s and w_stem in ex_s.lower() and not _dialogic_deictic_re.search(ex_s):
+                    candidate_examples.append(ex_s)
+
+        model_example = candidate_examples[0] if candidate_examples else ""
 
         # For nouns, do not force a bare generic genitive 'Noun + of' frame (e.g. 'emblem of', 'population of')
         # as Required Lexical Frame, since standalone modified nouns ('its official emblem', 'the growing population')
@@ -381,17 +381,24 @@ class QuizTranslationMixin:
 
         if cat_key:
             cat_entry = L1_FALSE_COLLOCATION_CATALOG[cat_key]
-            best_trap = {
-                "trap_type": "L1_COLLOC_FALSE_FRIEND",
-                "correct_frame": cat_entry["correct_frame"],
-                "wrong_frame": cat_entry["wrong_frame"],
-                "pedagogical_note": cat_entry["pedagogical_note"],
-                "model_example": cat_entry["model_example"],
-                "zh_cue": cat_entry.get("zh_cue", ""),
-            }
-            required_frame = cat_entry["correct_frame"]
-            if not model_example or not re.search(r"[a-z]", model_example):
-                model_example = cat_entry["model_example"]
+            allowed_cefr = cat_entry.get("cefr_levels")
+            allowed_kw = cat_entry.get("valid_sense_keywords")
+            sense_def_low = (def_str or (locked_sense.get("definition") if isinstance(locked_sense, dict) else "") or "").lower()
+            cefr_ok = not allowed_cefr or cefr_level.upper() in [c.upper() for c in allowed_cefr]
+            sense_ok = not allowed_kw or any(kw in sense_def_low for kw in allowed_kw)
+
+            if cefr_ok and sense_ok:
+                best_trap = {
+                    "trap_type": "L1_COLLOC_FALSE_FRIEND",
+                    "correct_frame": cat_entry["correct_frame"],
+                    "wrong_frame": cat_entry["wrong_frame"],
+                    "pedagogical_note": cat_entry["pedagogical_note"],
+                    "model_example": model_example or cat_entry.get("model_example", ""),
+                    "zh_cue": cat_entry.get("zh_cue", ""),
+                }
+                required_frame = cat_entry["correct_frame"]
+                if not model_example or not re.search(r"[a-z]", model_example):
+                    model_example = cat_entry.get("model_example", "")
 
         # 2. Query pedlex_error_traps with strict POS and sense_idx isolation
         # Focus strictly on high-diagnostic collocation, dependent preposition, and authentic usage traps
@@ -471,6 +478,8 @@ class QuizTranslationMixin:
                         model_example = trap_mod_ex
 
         # 3. Deterministic fallback for common bound-preposition collocation frames
+        # Only use pre-compiled high-certainty bound prepositions (e.g. rely on, depend on);
+        # NEVER mechanically synthesize fake preposition distractors for arbitrary words!
         if not best_trap:
             prep_fallbacks = {
                 "comply": ("comply with [rule/law]", "*comply to / comply by*", "All companies must comply with the new safety regulations."),
@@ -497,28 +506,6 @@ class QuizTranslationMixin:
                     "wrong_frame": w_frame,
                     "pedagogical_note": f"Use the collocation '{c_frame}', not {w_frame}.",
                 }
-            elif bundle_pat and " " in bundle_pat:
-                m_prep = re.search(rf"\b{re.escape(w_low)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\b", bundle_pat.lower())
-                if m_prep:
-                    prep_tok = m_prep.group(1)
-                    bp_low = bundle_pat.strip().lower()
-                    is_inf_to = (
-                        prep_tok == "to"
-                        and (
-                            bp_low.endswith(" to")
-                            or bool(re.search(r"\bto\s+(?:do|be|have|get|make|take|go|see|find|say|know)\b", bp_low))
-                            or (pos_str.lower() in ("adjective", "adj") and not re.search(r"\bto\s+(?:somebody|something|sb|sth|\[)", bp_low))
-                        )
-                    )
-                    is_generic_noun_of = pos_str.lower() in ("noun", "n") and prep_tok == "of"
-                    if not is_inf_to and not is_generic_noun_of:
-                        alt_prep = {"in": "from/at", "into": "at/on", "with": "to", "on": "of", "to": "for/with", "of": "from", "from": "of", "for": "to"}.get(prep_tok, "to")
-                        best_trap = {
-                            "trap_type": "PREP_COLLOC_TRAP",
-                            "correct_frame": bundle_pat,
-                            "wrong_frame": f"*{w_clean} {alt_prep}*",
-                            "pedagogical_note": f"Use '{bundle_pat}' rather than substituting '*{w_clean} {alt_prep}*'.",
-                        }
 
         # Format human-readable lexical flaw label and corruption instruction
         lex_flaw_label = ""
@@ -1080,7 +1067,7 @@ class QuizTranslationMixin:
             d = v_it["definition"]
             v_it["register"] = cls._classify_vocab_register(w, p, d)
             lex_info = cls._resolve_translation_lexical_trap(
-                w, pos=p, definition=d, quote=v_it.get("quote", ""), example_usage=v_it.get("example_usage", "")
+                w, pos=p, definition=d, quote=v_it.get("quote", ""), example_usage=v_it.get("example_usage", ""), cefr_level=cefr_level
             )
             trap = lex_info.get("trap")
             trap_type = str(trap.get("trap_type") or "") if isinstance(trap, dict) else ""
@@ -1098,27 +1085,6 @@ class QuizTranslationMixin:
                 v_copy["lex_info"] = lex_info
                 valid_lex_items.append(v_copy)
 
-        # Supplement high-yield L1 collocation items from catalog if unit vocabulary lacks sufficient traps
-        desired_lex_quota = max(1, target_count // 2)
-        if len(valid_lex_items) < desired_lex_quota:
-            existing_words = {v["word"].lower() for v in valid_lex_items}
-            for cat_k, cat_val in L1_FALSE_COLLOCATION_CATALOG.items():
-                if len(valid_lex_items) >= desired_lex_quota:
-                    break
-                if cat_k not in existing_words:
-                    sup_lex_info = cls._resolve_translation_lexical_trap(cat_k)
-                    if sup_lex_info.get("trap"):
-                        valid_lex_items.append({
-                            "word": cat_k,
-                            "pos": "phrase" if " " in cat_val["correct_frame"] else "noun",
-                            "definition": cat_val["correct_frame"],
-                            "quote": cat_val["model_example"],
-                            "example_usage": cat_val["model_example"],
-                            "register": "neutral",
-                            "lex_info": sup_lex_info,
-                        })
-                        existing_words.add(cat_k)
-
         valid_syn_items: List[Dict[str, Any]] = []
         for g_it in grammar_items:
             g_it["register"] = cls._classify_grammar_register(g_it["name"], g_it["formula"], g_it["pedagogical_function"])
@@ -1127,14 +1093,12 @@ class QuizTranslationMixin:
             g_copy["syn_info"] = syn_info
             valid_syn_items.append(g_copy)
 
-        # 4. Decouple Word & Syntax: Balance Syntactic L1 items (~60%) and Lexical Collocation items (~40%)
+        # 4. Decouple Word & Syntax: Balance Syntactic L1 items and Lexical Collocation items
+        # Dynamic Quota Allocation: If unit lacks sufficient authentic lexical traps for its CEFR level,
+        # backfill 100% of remaining quota smoothly to Unit Grammar Structure items (zero forced catalog supplements).
         effective_count = max(1, target_count)
-        if valid_lex_items:
-            target_lex_count = min(len(valid_lex_items), max(1, effective_count // 2))
-            target_syn_count = effective_count - target_lex_count
-        else:
-            target_lex_count = 0
-            target_syn_count = effective_count
+        target_lex_count = min(len(valid_lex_items), max(0, effective_count // 2))
+        target_syn_count = effective_count - target_lex_count
 
         final_items: List[Dict[str, Any]] = []
         s_i = 0
