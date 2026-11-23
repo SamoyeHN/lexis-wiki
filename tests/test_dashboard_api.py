@@ -207,3 +207,31 @@ def test_api_import_pdf_glossary_binary_upload():
     assert data["result"]["total_entries"] == 15
     mock_import.assert_called_once()
 
+
+def test_routes_mixin_direct_dispatch():
+    import io
+    import json
+    from unittest.mock import MagicMock
+    from librarian.dashboard import DashboardHTTPRequestHandler
+
+    handler = DashboardHTTPRequestHandler.__new__(DashboardHTTPRequestHandler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+
+    # Test GET /api/recent-jobs
+    handler.wfile.seek(0)
+    handler.wfile.truncate(0)
+    handler.handle_api_get('/api/recent-jobs', '')
+    res_get = json.loads(handler.wfile.getvalue().decode('utf-8'))
+    assert 'jobs' in res_get
+
+    # Test POST /api/test-endpoint
+    handler.wfile.seek(0)
+    handler.wfile.truncate(0)
+    handler.headers = {'Content-Length': '0'}
+    handler.rfile = io.BytesIO(b'')
+    handler.handle_api_post('/api/test-endpoint')
+    res_post = json.loads(handler.wfile.getvalue().decode('utf-8'))
+    assert res_post.get('test') == 'working'
