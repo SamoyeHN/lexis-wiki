@@ -3,9 +3,9 @@ Index portal HTML page generation with modern glassmorphism UI for browsing unit
 """
 
 import html
-import urllib.parse
-from typing import Dict, List, Optional
+from typing import Dict, List
 
+from .template_loader import get_template, inline_asset_css
 
 _BI_ICONS_SVG: Dict[str, str] = {
     "file-earmark-text": """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 7a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zM5 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0 2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5"/><path d="M9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.5zm0 1v2A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"/></svg>""",
@@ -98,310 +98,25 @@ def render_index_portal_html(
             """
         )
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{unit_title_clean} — Study Suite</title>
-    <style>
-        :root {{
-            --bg-page: #f8fafc;
-            --bg-card: #ffffff;
-            --bg-card-hover: #f1f5f9;
-            --text-main: #0f172a;
-            --text-secondary: #475569;
-            --text-muted: #64748b;
-            --border-card: #e2e8f0;
-            --border-card-hover: #cbd5e1;
-            --accent-primary: #2563eb;
-            --accent-green: #059669;
-            --accent-green-bg: #ecfdf5;
+    template = get_template("portal.html")
+    # Inline portal.css to preserve the 100% self-contained offline delivery invariant
+    html_content = inline_asset_css(
+        template,
+        injection_marker="<!-- INJECT:PORTAL_CSS -->",
+        link_tag='<link rel="stylesheet" href="assets/portal.css">',
+        css_name="portal.css",
+    )
 
-            /* Scheme A: Knowledge Nodes (Indigo / Deep Blue) */
-            --accent-node: #1d4ed8;
-            --accent-node-dark: #1e3a8a;
-            --accent-node-bg: #eff6ff;
-            --accent-node-border: #bfdbfe;
+    replacements = {
+        "{{ UNIT_TITLE }}": unit_title_clean,
+        "{{ UNIT_NAME }}": html.escape(unit_name),
+        "{{ CEFR_BADGE }}": cefr_badge,
+        "{{ EXTRACTIONS_COUNT }}": str(len(extractions)),
+        "{{ QUIZZES_COUNT }}": str(len(quizzes)),
+        "{{ EXTRACTION_CARDS }}": "".join(extraction_cards_html),
+        "{{ QUIZ_CARDS }}": "".join(quiz_cards_html),
+    }
+    for placeholder, val in replacements.items():
+        html_content = html_content.replace(placeholder, val)
 
-            /* Scheme A: Interactive Assessments (Royal Violet / Purple) */
-            --accent-quiz: #7c3aed;
-            --accent-quiz-dark: #581c87;
-            --accent-quiz-bg: #faf5ff;
-            --accent-quiz-border: #e9d5ff;
-
-            --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
-            --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{
-            margin: 0;
-            padding: 2.25rem 1.5rem 3.5rem;
-            background-color: var(--bg-page);
-            color: var(--text-main);
-            font-family: var(--font-sans);
-            line-height: 1.6;
-            -webkit-font-smoothing: antialiased;
-        }}
-        .portal-container {{
-            max-width: 960px;
-            margin: 0 auto;
-        }}
-        .hero-banner {{
-            background: #ffffff;
-            border: 1px solid var(--border-card);
-            border-left: 5px solid var(--accent-primary);
-            border-radius: 12px;
-            padding: 1.5rem 1.75rem;
-            margin-bottom: 2rem;
-            box-shadow: var(--shadow-sm);
-        }}
-        .hero-top {{
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-            margin-bottom: 0.5rem;
-        }}
-        .hero-badges {{
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }}
-        .portal-badge {{
-            display: inline-flex;
-            align-items: center;
-            padding: 0.2rem 0.6rem;
-            border-radius: 999px;
-            font-size: 0.72rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-        }}
-        .badge-unit {{
-            background: #f1f5f9;
-            color: #334155;
-            border: 1px solid #cbd5e1;
-            font-family: var(--font-mono);
-        }}
-        .badge-cefr {{
-            background: var(--accent-green-bg);
-            color: var(--accent-green);
-            border: 1px solid rgba(5, 150, 105, 0.25);
-            font-family: var(--font-mono);
-        }}
-        .hero-title {{
-            margin: 0 0 0.5rem 0;
-            font-size: 1.6rem;
-            font-weight: 800;
-            color: var(--text-main);
-            letter-spacing: -0.02em;
-        }}
-        .hero-stats {{
-            display: flex;
-            align-items: center;
-            gap: 0.6rem;
-            font-size: 0.82rem;
-            color: var(--text-muted);
-        }}
-        .hero-stat-pill strong {{
-            font-weight: 700;
-        }}
-        .hero-stat-pill strong.stat-node {{
-            color: var(--accent-node-dark);
-        }}
-        .hero-stat-pill strong.stat-quiz {{
-            color: var(--accent-quiz-dark);
-        }}
-        .hero-stat-divider {{
-            color: var(--border-card);
-        }}
-        .section-header {{
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin: 0 0 0.85rem 0;
-            padding-bottom: 0.4rem;
-            border-bottom: 1px solid var(--border-card);
-        }}
-        .section-title {{
-            font-size: 1.05rem;
-            font-weight: 700;
-            margin: 0;
-            letter-spacing: -0.01em;
-        }}
-        .section-nodes .section-title {{
-            color: var(--accent-node-dark);
-        }}
-        .section-nodes .section-count {{
-            color: var(--accent-node);
-            background: var(--accent-node-bg);
-            border: 1px solid var(--accent-node-border);
-        }}
-        .section-quizzes .section-title {{
-            color: var(--accent-quiz-dark);
-        }}
-        .section-quizzes .section-count {{
-            color: var(--accent-quiz);
-            background: var(--accent-quiz-bg);
-            border: 1px solid var(--accent-quiz-border);
-        }}
-        .section-count {{
-            font-size: 0.72rem;
-            font-weight: 600;
-            padding: 0.12rem 0.55rem;
-            border-radius: 999px;
-            font-family: var(--font-mono);
-        }}
-        .portal-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 0.85rem;
-        }}
-        .portal-card {{
-            display: flex;
-            align-items: center;
-            gap: 0.85rem;
-            background: var(--bg-card);
-            border: 1px solid var(--border-card);
-            border-radius: 10px;
-            padding: 0.95rem 1.15rem;
-            text-decoration: none;
-            color: inherit;
-            transition: all 0.15s ease;
-            box-shadow: var(--shadow-sm);
-        }}
-        .portal-card:hover {{
-            background: #ffffff;
-            transform: translateY(-1px);
-            box-shadow: var(--shadow-md);
-            text-decoration: none;
-        }}
-        .card-node:hover {{
-            border-color: var(--accent-node-border);
-        }}
-        .card-quiz:hover {{
-            border-color: var(--accent-quiz-border);
-        }}
-        .portal-card-icon {{
-            flex-shrink: 0;
-            width: 2.25rem;
-            height: 2.25rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 8px;
-            background: #f1f5f9;
-            border: 1px solid var(--border-card);
-            transition: all 0.15s ease;
-        }}
-        .card-node .portal-card-icon {{
-            color: var(--accent-node);
-        }}
-        .card-node:hover .portal-card-icon {{
-            background: var(--accent-node-bg);
-            border-color: var(--accent-node-border);
-            color: var(--accent-node-dark);
-        }}
-        .card-quiz .portal-card-icon {{
-            color: var(--accent-quiz);
-        }}
-        .card-quiz:hover .portal-card-icon {{
-            background: var(--accent-quiz-bg);
-            border-color: var(--accent-quiz-border);
-            color: var(--accent-quiz-dark);
-        }}
-        .portal-card-content {{
-            flex: 1;
-            min-width: 0;
-        }}
-        .portal-card-title {{
-            display: block;
-            font-size: 0.92rem;
-            font-weight: 700;
-            margin-bottom: 0.2rem;
-        }}
-        .card-node .portal-card-title {{
-            color: var(--accent-node-dark);
-        }}
-        .card-quiz .portal-card-title {{
-            color: var(--accent-quiz-dark);
-        }}
-        .portal-card-desc {{
-            margin: 0;
-            font-size: 0.76rem;
-            color: var(--text-secondary);
-            line-height: 1.35;
-        }}
-        .portal-card-arrow {{
-            color: var(--text-muted);
-            font-size: 1rem;
-            transition: transform 0.15s ease, color 0.15s ease;
-            flex-shrink: 0;
-        }}
-        .card-node:hover .portal-card-arrow {{
-            color: var(--accent-node);
-            transform: translateX(3px);
-        }}
-        .card-quiz:hover .portal-card-arrow {{
-            color: var(--accent-quiz);
-            transform: translateX(3px);
-        }}
-        .portal-footer {{
-            margin-top: 3rem;
-            text-align: center;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            border-top: 1px solid var(--border-card);
-            padding-top: 1.25rem;
-        }}
-    </style>
-</head>
-<body>
-    <div class="portal-container">
-        <header class="hero-banner">
-            <div class="hero-top">
-                <div class="hero-badges">
-                    <span class="portal-badge badge-unit">{html.escape(unit_name)}</span>
-                    {cefr_badge}
-                </div>
-            </div>
-            <h1 class="hero-title">{unit_title_clean}</h1>
-            <div class="hero-stats">
-                <span class="hero-stat-pill"><strong class="stat-node">{len(extractions)}</strong> Knowledge Nodes</span>
-                <span class="hero-stat-divider">&bull;</span>
-                <span class="hero-stat-pill"><strong class="stat-quiz">{len(quizzes)}</strong> Interactive Assessments</span>
-            </div>
-        </header>
-
-        <section class="section-nodes">
-            <div class="section-header">
-                <h2 class="section-title">Knowledge Nodes</h2>
-                <span class="section-count">{len(extractions)} items</span>
-            </div>
-            <div class="portal-grid">
-                {"".join(extraction_cards_html)}
-            </div>
-        </section>
-
-        <section class="section-quizzes" style="margin-top: 1.75rem;">
-            <div class="section-header">
-                <h2 class="section-title">Interactive Assessments</h2>
-                <span class="section-count">{len(quizzes)} assessments</span>
-            </div>
-            <div class="portal-grid">
-                {"".join(quiz_cards_html)}
-            </div>
-        </section>
-
-        <footer class="portal-footer">
-            Generated by <strong>Lexis Wiki</strong> &bull; Neuro-Symbolic Educational Knowledge Base
-        </footer>
-    </div>
-</body>
-</html>
-"""
-
+    return html_content

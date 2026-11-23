@@ -8,12 +8,16 @@ import logging
 from .config import config
 from .exporter_core import (
     _BI_ICONS_SVG,
+    clear_template_cache,
     detect_video_path_from_html,
     export_portable_bundle,
     export_standalone_exe,
     export_unit_to_directory,
     export_unit_to_zip,
     format_inline_lexis_markdown,
+    get_asset,
+    get_template,
+    inline_asset_css,
     make_portable_html_content,
     normalize_export_target_dir,
     open_directory_in_explorer,
@@ -40,4 +44,8 @@ __all__ = [
     "export_unit_to_directory",
     "export_unit_to_zip",
     "open_directory_in_explorer",
+    "get_template",
+    "get_asset",
+    "inline_asset_css",
+    "clear_template_cache",
 ]

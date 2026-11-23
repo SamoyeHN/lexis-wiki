@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from ..config import config
+from .template_loader import get_template, inline_asset_css
 
 
 def format_inline_lexis_markdown(text: str) -> str:
@@ -190,282 +191,23 @@ def render_markdown_to_standalone_html(
 
     body_sections_html = "\n".join(sections)
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{html.escape(display_heading)}</title>
-    <style>
-        :root {{
-            --bg-page: #f8fafc;
-            --bg-card: #ffffff;
-            --text-main: #0f172a;
-            --text-secondary: #334155;
-            --text-muted: #64748b;
-            --border-card: #e2e8f0;
-            --accent-primary: #0284c7;
-            --accent-navy: #0369a1;
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{
-            margin: 0;
-            padding: 1.5rem 1.25rem 3.5rem;
-            background-color: var(--bg-page);
-            color: var(--text-main);
-            font-family: var(--font-sans);
-            line-height: 1.6;
-            -webkit-font-smoothing: antialiased;
-        }}
-        .handout-container {{
-            max-width: 880px;
-            margin: 0 auto;
-        }}
-        .back-nav {{
-            margin-bottom: 1rem;
-        }}
-        .back-link {{
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            color: var(--accent-primary);
-            text-decoration: none;
-            font-size: 0.82rem;
-            font-weight: 600;
-            padding: 0.3rem 0.75rem;
-            border-radius: 6px;
-            background: #ffffff;
-            border: 1px solid var(--border-card);
-            transition: all 0.2s ease;
-        }}
-        .back-link:hover {{
-            background: #f1f5f9;
-            color: var(--accent-navy);
-            text-decoration: none;
-        }}
-        .handout-header {{
-            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-            border: 1px solid var(--border-card);
-            border-left: 5px solid var(--accent-primary);
-            border-radius: 12px;
-            padding: 1.25rem 1.6rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-        }}
-        .handout-title {{
-            margin: 0;
-            font-size: 1.35rem;
-            font-weight: 700;
-            color: var(--text-main);
-            letter-spacing: -0.015em;
-        }}
-        .handout-meta {{
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }}
-        .meta-badge {{
-            display: inline-flex;
-            align-items: center;
-            padding: 0.2rem 0.65rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-        }}
-        .meta-cat {{
-            background: rgba(2, 132, 199, 0.1);
-            color: #0284c7;
-            border: 1px solid rgba(2, 132, 199, 0.25);
-        }}
-        .meta-cefr {{
-            background: rgba(5, 150, 105, 0.1);
-            color: #059669;
-            border: 1px solid rgba(5, 150, 105, 0.25);
-            font-family: var(--font-mono);
-        }}
-        .meta-count {{
-            background: #f1f5f9;
-            color: #475569;
-            border: 1px solid #cbd5e1;
-        }}
-        .lex-entry-card {{
-            background: var(--bg-card);
-            border: 1px solid var(--border-card);
-            border-radius: 10px;
-            padding: 1.15rem 1.45rem;
-            margin-bottom: 0.9rem;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
-            break-inside: avoid;
-            page-break-inside: avoid;
-        }}
-        .lex-prose-card {{
-            padding: 1.5rem 1.75rem;
-        }}
-        .lex-entry-title {{
-            margin: 0 0 0.65rem 0;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid #f1f5f9;
-            font-size: 1.12rem;
-            font-weight: 700;
-            color: var(--accent-navy);
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.45rem;
-        }}
-        .lex-headword {{
-            color: var(--accent-navy);
-        }}
-        .lex-badges {{
-            display: inline-flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.35rem;
-        }}
-        .lex-pill {{
-            display: inline-flex;
-            align-items: center;
-            padding: 0.1rem 0.52rem;
-            border-radius: 999px;
-            font-size: 0.72rem;
-            font-weight: 600;
-            line-height: 1.35;
-            white-space: nowrap;
-            vertical-align: baseline;
-        }}
-        .lex-pill-pos {{
-            background: rgba(2, 132, 199, 0.09);
-            color: #0284c7;
-            border: 1px solid rgba(2, 132, 199, 0.25);
-            font-style: italic;
-        }}
-        .lex-pill-cefr {{
-            background: rgba(5, 150, 105, 0.1);
-            color: #059669;
-            border: 1px solid rgba(5, 150, 105, 0.25);
-            font-family: var(--font-mono);
-            font-size: 0.68rem;
-        }}
-        .lex-pill-grammar {{
-            background: rgba(109, 40, 217, 0.08);
-            color: #6d28d9;
-            border: 1px solid rgba(109, 40, 217, 0.24);
-        }}
-        .lex-pill-register {{
-            background: rgba(217, 119, 6, 0.1);
-            color: #b45309;
-            border: 1px solid rgba(217, 119, 6, 0.28);
-            font-size: 0.68rem;
-            margin-right: 0.25rem;
-        }}
-        .lex-inline-code {{
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            padding: 0.08rem 0.38rem;
-            border-radius: 4px;
-            background: #f1f5f9;
-            color: #0369a1;
-            border: 1px solid #e2e8f0;
-        }}
-        .lex-headword-link {{
-            color: #0284c7;
-            font-weight: 600;
-        }}
-        .lex-subheading {{
-            margin: 0.75rem 0 0.35rem;
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: #0f766e;
-        }}
-        .lex-section-title {{
-            margin: 1.5rem 0 0.75rem;
-            font-size: 1.15rem;
-            font-weight: 700;
-            color: var(--text-main);
-            border-bottom: 2px solid var(--border-card);
-            padding-bottom: 0.35rem;
-        }}
-        .lex-bullet-row {{
-            display: flex;
-            align-items: flex-start;
-            gap: 0.45rem;
-            margin-bottom: 0.32rem;
-            font-size: 0.92rem;
-            color: var(--text-secondary);
-        }}
-        .lex-bullet-dot {{
-            color: var(--accent-primary);
-            font-weight: 700;
-            line-height: 1.5;
-            user-select: none;
-        }}
-        .lex-bullet-text {{
-            flex: 1;
-        }}
-        .lex-bullet-text strong, .lex-paragraph strong {{
-            color: var(--text-main);
-            font-weight: 600;
-        }}
-        .lex-contrast-row {{
-            display: flex;
-            align-items: flex-start;
-            gap: 0.5rem;
-            margin: 0.35rem 0;
-            padding: 0.4rem 0.7rem;
-            border-radius: 6px;
-            font-size: 0.9rem;
-        }}
-        .lex-wrong {{
-            background: #fef2f2;
-            border-left: 3px solid #ef4444;
-            color: #991b1b;
-        }}
-        .lex-right {{
-            background: #f0fdf4;
-            border-left: 3px solid #22c55e;
-            color: #166534;
-        }}
-        .lex-mark-wrong {{
-            color: #ef4444;
-            font-weight: bold;
-        }}
-        .lex-mark-right {{
-            color: #22c55e;
-            font-weight: bold;
-        }}
-        .lex-paragraph {{
-            margin: 0.4rem 0;
-            color: var(--text-secondary);
-            font-size: 0.93rem;
-            line-height: 1.65;
-        }}
-    </style>
-</head>
-<body>
-    <div class="handout-container">
-        <div class="back-nav">
-            <a href="../index.html" class="back-link">&#8592; Back to Unit Index</a>
-        </div>
-        <header class="handout-header">
-            <h1 class="handout-title">{html.escape(display_heading)}</h1>
-            <div class="handout-meta">
-                {"".join(meta_badges)}
-            </div>
-        </header>
+    template = get_template("handout.html")
+    # Inline handout.css to preserve the 100% self-contained offline delivery invariant
+    html_content = inline_asset_css(
+        template,
+        injection_marker="<!-- INJECT:HANDOUT_CSS -->",
+        link_tag='<link rel="stylesheet" href="../assets/handout.css">',
+        css_name="handout.css",
+    )
 
-        {intro_card_html}
-        {body_sections_html}
-    </div>
-</body>
-</html>
-"""
+    replacements = {
+        "{{ DISPLAY_HEADING }}": html.escape(display_heading),
+        "{{ META_BADGES }}": "".join(meta_badges),
+        "{{ INTRO_CARD }}": intro_card_html,
+        "{{ BODY_SECTIONS }}": body_sections_html,
+    }
+    for placeholder, val in replacements.items():
+        html_content = html_content.replace(placeholder, val)
+
+    return html_content
 

@@ -16,6 +16,12 @@ from .portal_renderer import (
     _BI_ICONS_SVG,
     render_index_portal_html,
 )
+from .template_loader import (
+    clear_template_cache,
+    get_asset,
+    get_template,
+    inline_asset_css,
+)
 from .unit_exporter import (
     export_unit_to_directory,
     export_unit_to_zip,
@@ -38,4 +44,8 @@ __all__ = [
     "export_unit_to_directory",
     "export_unit_to_zip",
     "open_directory_in_explorer",
+    "get_template",
+    "get_asset",
+    "inline_asset_css",
+    "clear_template_cache",
 ]
