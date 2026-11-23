@@ -420,7 +420,10 @@ class QuizTranslationMixin:
                     cf = str(t_obj.get("correct_frame") or "").strip()
                     cf_low = cf.lower()
                     wf_low = str(t_obj.get("wrong_frame") or "").strip().lower()
-                    if _dialogic_deictic_re.search(cf):
+                    ge_low = str(t_obj.get("good_example") or "").strip().lower()
+                    if _dialogic_deictic_re.search(cf) or _dialogic_deictic_re.search(wf_low) or _dialogic_deictic_re.search(ge_low):
+                        return True
+                    if "?" in ge_low or "?" in wf_low:
                         return True
                     if "wrong preposition/complement" in wf_low or len(cf.split()) > 6:
                         return True
