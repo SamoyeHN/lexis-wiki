@@ -5,6 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from .linguistic_rules_loader import (
+    get_academic_adj_families,
+    get_adj_prep_valency_map,
+    get_adjunct_prep_pairs,
+    get_anchor_stopwords,
+    get_register_banned_words,
+    get_typical_complement_preps,
+)
+
 
 class DistractorGuardsValencyMixin:
     """Guards for preposition government, valency complementation, and syntactic slot clashes."""
@@ -254,84 +263,12 @@ class DistractorGuardsValencyMixin:
         return False
 
 
-    _ADJ_PREP_VALENCY_MAP = {
-        "to": ["vulnerable", "immune", "conducive", "susceptible", "allergic", "attentive", "adjacent", "subordinate", "accessible"],
-        "of": ["aware", "capable", "characteristic", "deprived", "indicative", "reminiscent", "composed", "devoid", "conscious"],
-        "for": ["eligible", "notorious", "responsible", "suitable", "renowned", "adequate", "prepared", "qualified"],
-        "with": ["consistent", "compatible", "acquainted", "associated", "compliant", "congruent", "comparable"],
-        "from": ["distinct", "exempt", "absent", "derived", "detached", "remote"],
-        "in": ["proficient", "inherent", "rich", "experienced", "versed", "lacking"],
-        "on": ["reliant", "dependent", "contingent", "intent", "keen"]
-    }
-
-    _ACADEMIC_ADJ_FAMILIES = [
-        ["comprehensive", "extensive", "thorough", "limited", "exhaustive", "restricted", "fragmented"],
-        ["available", "accessible", "obtainable", "unavailable", "inaccessible", "restricted", "exclusive"],
-        ["stable", "volatile", "constant", "variable", "consistent", "fluctuating", "fragile"],
-        ["crucial", "fundamental", "marginal", "negligible", "vital", "trivial", "secondary"],
-        ["vulnerable", "susceptible", "immune", "resistant", "resilient", "defenseless"],
-        ["feasible", "viable", "impractical", "attainable", "unrealistic", "plausible"],
-        ["explicit", "ambiguous", "apparent", "obscure", "evident", "vague", "distinct"],
-        ["substantial", "considerable", "minimal", "negligible", "significant", "modest"],
-        ["coherent", "consistent", "incompatible", "contradictory", "harmonious", "conflicting"],
-    ]
-
-    # Academic Register Gate: Filter out slang, informal, archaic, or fantasy/fairy-tale words
-    # that WordNet taxonomy occasionally harbors (e.g. 'dwarf', 'beast' for 'individual', or 'swell', 'cracking' for 'positive').
-    _REGISTER_BANNED_WORDS = {
-        # Archaic / fantasy / fairy-tale nouns
-        "dwarf", "beast", "fauna", "flora", "benthos", "heterotroph", "amphidiploid", "diploid",
-        "ogre", "giant", "goblin", "witch", "wizard", "fairy", "elf", "gnome", "troll",
-        # Colloquial slang / archaic positive adjectives
-        "swell", "cracking", "bully", "smashing", "peachy", "dandy", "nifty", "corking", "groovy", "slap-up", "bang-up",
-        # Taboo / Inappropriate words for educational assessment
-        "sex", "sexy", "sexual", "erotic", "porn", "pornography", "nude", "naked", "suicide", "murder"
-    }
-
-    _ANCHOR_STOPWORDS = {
-        "a", "an", "the", "of", "to", "in", "on", "for", "with", "and", "or", "at",
-        "by", "from", "into", "onto", "out", "off", "up", "down", "as", "be", "is",
-        "are", "was", "were", "been", "being", "have", "has", "had", "do", "does",
-        "did", "will", "would", "shall", "should", "can", "could", "may", "might",
-        "must", "that", "this", "these", "those", "it", "its", "he", "she", "we",
-        "they", "you", "i", "me", "my", "your", "his", "her", "their", "our",
-        "each", "every", "some", "any", "all", "both", "few", "sth", "sb",
-        # Degree adverbs, quantifiers and determiners can never serve as
-        # collocational anchors (they carry no lexical collocation signal;
-        # e.g. 'more' in 'more hours' must not be harvested for 'autonomy').
-        "more", "most", "less", "least", "many", "much", "very", "quite",
-        "rather", "such", "own", "other", "another", "same", "different",
-        "particular", "certain", "various", "several", "enough", "only",
-        "just", "even", "also", "well", "still", "yet", "already",
-        # Empty / generic head nouns carry virtually zero lexical collocational value
-        # (e.g. 'thing', 'stuff', 'item' in 'positive thing' or 'important matter').
-        # Banning them prevents trivial or unacademic frames like 'positive thing'.
-        "thing", "things", "stuff", "person", "people", "way", "ways", "item", "items",
-        # Indefinite pronouns and quantifier nouns are placeholders, not collocations:
-        # 'offer someone something' and 'lots of goodies' say nothing about how the
-        # target actually collocates, so they must never become anchors.
-        "something", "anything", "everything", "nothing", "someone", "somebody",
-        "anyone", "anybody", "everyone", "everybody", "nobody", "one", "ones",
-        "lot", "lots", "bit", "bits", "kind", "kinds", "sort", "sorts",
-        "piece", "pieces", "pair", "pairs", "number", "amount", "rest"
-    }
-
-    # Fixed prepositional adjuncts / set phrases that are interjections or
-    # discourse markers, NEVER valency complements of a governing headword.
-    # When a (prep, pobj) dependency pair hits this blacklist it is skipped,
-    # so 'correlate for example' can no longer be mistaken for a frame.
-    _ADJUNCT_PREP_PAIRS = {
-        ("for", "example"), ("for", "instance"), ("in", "fact"), ("in", "general"),
-        ("at", "first"), ("on", "average"), ("in", "particular"), ("in", "summary"),
-        ("in", "total"), ("in", "brief"), ("in", "short"), ("in", "part")
-    }
-
-    # When a verb has NO Oxford Collocations entry (or an empty 'prep' valency
-    # list), only these typical academic complement prepositions may be
-    # trusted from syntactic guessing; anything else degrades to anchor=None
-    # (neutral template) instead of fabricating a frame (e.g. 'degrade in a
-    # society' from a fronted adjunct).
-    _TYPICAL_COMPLEMENT_PREPS = {"into", "to", "from"}
+    _ADJ_PREP_VALENCY_MAP: Dict[str, List[str]] = get_adj_prep_valency_map()
+    _ACADEMIC_ADJ_FAMILIES: List[List[str]] = get_academic_adj_families()
+    _REGISTER_BANNED_WORDS: Set[str] = get_register_banned_words()
+    _ANCHOR_STOPWORDS: Set[str] = get_anchor_stopwords()
+    _ADJUNCT_PREP_PAIRS: Set[Tuple[str, str]] = get_adjunct_prep_pairs()
+    _TYPICAL_COMPLEMENT_PREPS: Set[str] = get_typical_complement_preps()
 
 
     @classmethod

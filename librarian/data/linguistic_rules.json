@@ -1,0 +1,109 @@
+{
+  "_meta": {
+    "description": "Pedagogical Lexicon & Linguistic Engine Declarative Taxonomies and Invariant Rules",
+    "version": "1.0.0"
+  },
+  "adj_prep_valency_map": {
+    "to": ["vulnerable", "immune", "conducive", "susceptible", "allergic", "attentive", "adjacent", "subordinate", "accessible"],
+    "of": ["aware", "capable", "characteristic", "deprived", "indicative", "reminiscent", "composed", "devoid", "conscious"],
+    "for": ["eligible", "notorious", "responsible", "suitable", "renowned", "adequate", "prepared", "qualified"],
+    "with": ["consistent", "compatible", "acquainted", "associated", "compliant", "congruent", "comparable"],
+    "from": ["distinct", "exempt", "absent", "derived", "detached", "remote"],
+    "in": ["proficient", "inherent", "rich", "experienced", "versed", "lacking"],
+    "on": ["reliant", "dependent", "contingent", "intent", "keen"]
+  },
+  "academic_adj_families": [
+    ["comprehensive", "extensive", "thorough", "limited", "exhaustive", "restricted", "fragmented"],
+    ["available", "accessible", "obtainable", "unavailable", "inaccessible", "restricted", "exclusive"],
+    ["stable", "volatile", "constant", "variable", "consistent", "fluctuating", "fragile"],
+    ["crucial", "fundamental", "marginal", "negligible", "vital", "trivial", "secondary"],
+    ["vulnerable", "susceptible", "immune", "resistant", "resilient", "defenseless"],
+    ["feasible", "viable", "impractical", "attainable", "unrealistic", "plausible"],
+    ["explicit", "ambiguous", "apparent", "obscure", "evident", "vague", "distinct"],
+    ["substantial", "considerable", "minimal", "negligible", "significant", "modest"],
+    ["coherent", "consistent", "incompatible", "contradictory", "harmonious", "conflicting"]
+  ],
+  "register_banned_words": [
+    "dwarf", "beast", "fauna", "flora", "benthos", "heterotroph", "amphidiploid", "diploid",
+    "ogre", "giant", "goblin", "witch", "wizard", "fairy", "elf", "gnome", "troll",
+    "swell", "cracking", "bully", "smashing", "peachy", "dandy", "nifty", "corking", "groovy", "slap-up", "bang-up",
+    "sex", "sexy", "sexual", "erotic", "porn", "pornography", "nude", "naked", "suicide", "murder"
+  ],
+  "anchor_stopwords": [
+    "a", "an", "the", "of", "to", "in", "on", "for", "with", "and", "or", "at",
+    "by", "from", "into", "onto", "out", "off", "up", "down", "as", "be", "is",
+    "are", "was", "were", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "shall", "should", "can", "could", "may", "might",
+    "must", "that", "this", "these", "those", "it", "its", "he", "she", "we",
+    "they", "you", "i", "me", "my", "your", "his", "her", "their", "our",
+    "each", "every", "some", "any", "all", "both", "few", "sth", "sb",
+    "more", "most", "less", "least", "many", "much", "very", "quite",
+    "rather", "such", "own", "other", "another", "same", "different",
+    "particular", "certain", "various", "several", "enough", "only",
+    "just", "even", "also", "well", "still", "yet", "already",
+    "thing", "things", "stuff", "person", "people", "way", "ways", "item", "items",
+    "something", "anything", "everything", "nothing", "someone", "somebody",
+    "anyone", "anybody", "everyone", "everybody", "nobody", "one", "ones",
+    "lot", "lots", "bit", "bits", "kind", "kinds", "sort", "sorts",
+    "piece", "pieces", "pair", "pairs", "number", "amount", "rest"
+  ],
+  "adjunct_prep_pairs": [
+    ["for", "example"], ["for", "instance"], ["in", "fact"], ["in", "general"],
+    ["at", "first"], ["on", "average"], ["in", "particular"], ["in", "summary"],
+    ["in", "total"], ["in", "brief"], ["in", "short"], ["in", "part"]
+  ],
+  "typical_complement_preps": ["into", "to", "from"],
+  "collective_noun_ontology": {
+    "human_role": [
+      ["staff", "personnel", "workforce"],
+      ["crew"],
+      ["cast", "troupe"],
+      ["faculty"],
+      ["jury", "panel", "tribunal"],
+      ["audience", "crowd", "congregation", "throng", "mob"],
+      ["committee", "council", "board", "commission", "assembly", "delegation"],
+      ["choir", "chorus", "orchestra", "band"],
+      ["clientele"],
+      ["clergy"],
+      ["police", "squad", "troop", "regiment", "contingent"],
+      ["gentry", "aristocracy", "elite"]
+    ],
+    "animal": [
+      ["flock"],
+      ["herd", "cattle", "livestock"],
+      ["pack"],
+      ["swarm", "colony"],
+      ["shoal"],
+      ["poultry", "brood"]
+    ],
+    "vessel_batch": [
+      ["fleet", "convoy", "armada"],
+      ["batch", "consignment"],
+      ["bundle", "bunch", "cluster", "array"],
+      ["cargo", "freight"]
+    ]
+  },
+  "predicative_only_adjs": [
+    "asleep", "afraid", "alive", "alone", "ashamed", "aware", "awake", "content", "unable", "prone", "glad"
+  ],
+  "negative_inversion_adverbs": [
+    "hardly", "scarcely", "barely", "seldom", "rarely", "little", "no sooner"
+  ],
+  "negative_inversion_phrases": [
+    "no sooner", "not only", "not until",
+    "under no circumstances", "on no account", "in no way",
+    "at no time", "by no means", "only then", "only later",
+    "only when", "only after", "only by", "only if"
+  ],
+  "delexical_verbs": [
+    "like", "want", "need", "get", "have", "has", "make", "use", "give", "take",
+    "put", "see", "know", "feel", "seem", "look", "go", "come", "say", "try",
+    "help", "let", "call", "find", "keep", "set", "turn", "show", "ask", "tell",
+    "mean", "include", "bring", "send", "add", "appear", "become"
+  ],
+  "delexical_quantifier_nouns": [
+    "lot", "lots", "bit", "bits", "sort", "sorts", "kind", "kinds", "type", "types",
+    "couple", "number", "majority", "minority", "plenty", "rest", "bunch", "load",
+    "loads", "few", "many", "mass", "stuff", "thing", "things", "amount", "quantity"
+  ]
+}

@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .linguistic_rules_loader import (
+    get_collective_noun_ontology,
+    get_predicative_only_adjs,
+)
+
 
 class DistractorGuardsCountabilityMixin:
     """Guards for noun countability symmetry, collective nouns, taboo terms, and grammar profiles."""
@@ -16,41 +21,9 @@ class DistractorGuardsCountabilityMixin:
     # where each inner tuple represents a synonym subgroup guarantees:
     # 1. Intra-subgroup synonyms (e.g. `staff`/`personnel`/`workforce`, `jury`/`panel`) are mutually banned.
     # 2. Orthogonal subgroup heads within the same macro class serve as high-discrimination Tier 3 coordinates.
-    _COLLECTIVE_NOUN_ONTOLOGY: Dict[str, List[Tuple[str, ...]]] = {
-        "human_role": [
-            ("staff", "personnel", "workforce"),
-            ("crew",),
-            ("cast", "troupe"),
-            ("faculty",),
-            ("jury", "panel", "tribunal"),
-            ("audience", "crowd", "congregation", "throng", "mob"),
-            ("committee", "council", "board", "commission", "assembly", "delegation"),
-            ("choir", "chorus", "orchestra", "band"),
-            ("clientele",),
-            ("clergy",),
-            ("police", "squad", "troop", "regiment", "contingent"),
-            ("gentry", "aristocracy", "elite"),
-        ],
-        "animal": [
-            ("flock",),
-            ("herd", "cattle", "livestock"),
-            ("pack",),
-            ("swarm", "colony"),
-            ("shoal",),
-            ("poultry", "brood"),
-        ],
-        "vessel_batch": [
-            ("fleet", "convoy", "armada"),
-            ("batch", "consignment"),
-            ("bundle", "bunch", "cluster", "array"),
-            ("cargo", "freight"),
-        ],
-    }
+    _COLLECTIVE_NOUN_ONTOLOGY: Dict[str, List[Tuple[str, ...]]] = get_collective_noun_ontology()
 
-
-    _PREDICATIVE_ONLY_ADJS = {
-        "asleep", "afraid", "alive", "alone", "ashamed", "aware", "awake", "content", "unable", "prone", "glad"
-    }
+    _PREDICATIVE_ONLY_ADJS: Set[str] = get_predicative_only_adjs()
 
 
     @classmethod

@@ -5,6 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .linguistic_rules_loader import (
+    get_all_negative_inversion_triggers,
+    get_negative_inversion_adverbs,
+    get_negative_inversion_phrases,
+)
+
 
 class DistractorGuardsInversionMixin:
     """Guards for fronted negative/restrictive inversion slots and light-verb collocations."""
@@ -12,18 +18,9 @@ class DistractorGuardsInversionMixin:
     # Family 7 Fronted Negative / Restrictive Inversion Arena:
     # High-order negative or restrictive triggers that trigger Subject-Auxiliary Inversion (SAI)
     # when fronted at the beginning of a clause/sentence (e.g. 'Hardly had the meeting begun when...').
-    _NEGATIVE_INVERSION_ADVERBS: Set[str] = {
-        "hardly", "scarcely", "barely",
-        "seldom", "rarely",
-        "little", "no sooner",
-    }
-    _NEGATIVE_INVERSION_PHRASES: Set[str] = {
-        "no sooner", "not only", "not until",
-        "under no circumstances", "on no account", "in no way",
-        "at no time", "by no means", "only then", "only later",
-        "only when", "only after", "only by", "only if",
-    }
-    _ALL_NEGATIVE_INVERSION_TRIGGERS: Set[str] = _NEGATIVE_INVERSION_ADVERBS | _NEGATIVE_INVERSION_PHRASES
+    _NEGATIVE_INVERSION_ADVERBS: Set[str] = get_negative_inversion_adverbs()
+    _NEGATIVE_INVERSION_PHRASES: Set[str] = get_negative_inversion_phrases()
+    _ALL_NEGATIVE_INVERSION_TRIGGERS: Set[str] = get_all_negative_inversion_triggers()
 
     _AUX_INV_RE: str = r"(?:had|have|has|did|do|does|was|were|is|are|can|could|will|would|should|must|shall|might|may)"
     _SUBJ_INV_RE: str = r"(?:i|you|he|she|it|we|they|one|the|a|an|passengers?|students?|people|[a-z]+)"

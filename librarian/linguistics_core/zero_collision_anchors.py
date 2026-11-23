@@ -16,6 +16,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
+from .linguistic_rules_loader import (
+    get_delexical_quantifier_nouns,
+    get_delexical_verbs,
+)
+
 logger = logging.getLogger("librarian.linguistics")
 
 
@@ -65,12 +70,7 @@ class ZeroCollisionAnchorsMixin:
     # 'need a penalty'. The pairing is grammatically real but says nothing about how
     # this noun actually collocates, so the sense-example cascade rejects it and keeps
     # searching for a partner with genuine collocational content.
-    _DELEXICAL_VERBS = {
-        "like", "want", "need", "get", "have", "has", "make", "use", "give", "take",
-        "put", "see", "know", "feel", "seem", "look", "go", "come", "say", "try",
-        "help", "let", "call", "find", "keep", "set", "turn", "show", "ask", "tell",
-        "mean", "include", "bring", "send", "add", "seem", "appear", "become",
-    }
+    _DELEXICAL_VERBS = get_delexical_verbs()
 
     @classmethod
     def _is_delexical_anchor(cls, anchor: Optional[str], anchor_type: Optional[str],
@@ -87,11 +87,7 @@ class ZeroCollisionAnchorsMixin:
     # content - literally any noun fits them. A partitive compound is only worth shipping
     # when the quantifier noun says something about what may fill the slot, which is what
     # makes 'baskets of goodies' a teachable frame and 'lots of goodies' a fake one.
-    _DELEXICAL_QUANTIFIER_NOUNS = {
-        "lot", "lots", "bit", "bits", "sort", "sorts", "kind", "kinds", "type", "types",
-        "couple", "number", "majority", "minority", "plenty", "rest", "bunch", "load",
-        "loads", "few", "many", "mass", "stuff", "thing", "things", "amount", "quantity",
-    }
+    _DELEXICAL_QUANTIFIER_NOUNS = get_delexical_quantifier_nouns()
 
     @classmethod
     def _partitive_compound_anchor(

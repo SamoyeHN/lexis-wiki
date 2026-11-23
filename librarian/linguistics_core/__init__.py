@@ -65,6 +65,7 @@ from .wsd_scoring import (
     WsdSenseInfo,
 )
 from .wsd_wordnet import WsdWordNetMixin
+from .linguistic_rules_loader import load_linguistic_rules
 
 __all__ = [
     "CXN_ANCHOR_TYPES",
@@ -121,4 +122,5 @@ __all__ = [
     "WsdScoringPatternsMixin",
     "WsdSenseInfo",
     "WsdWordNetMixin",
+    "load_linguistic_rules",
 ]
