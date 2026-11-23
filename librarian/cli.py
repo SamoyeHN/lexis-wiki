@@ -86,12 +86,20 @@ def main():
     audit_parser = subparsers.add_parser("audit", help="Run audit assessment on log files and display the LLM Hero Board")
     audit_parser.add_argument("--json", action="store_true", help="Output audit results as JSON")
 
-    # Batch re-audit command (re-runs the Level 2 expert audit over existing handouts, read-only)
-    reaudit_parser = subparsers.add_parser("re-audit", help="Re-run the Level 2 expert audit over existing quiz handouts and print a summary")
-    reaudit_parser.add_argument("units", nargs="*", help="Specific unit(s) to re-audit (default: all units with handouts)")
+    # Batch re-audit command (re-runs the Level 2 expert audit over existing handouts or extraction artifacts, read-only)
+    reaudit_parser = subparsers.add_parser("re-audit", help="Re-run audit assessment over existing handouts or extraction artifacts")
+    reaudit_parser.add_argument("units", nargs="*", help="Specific unit(s) to re-audit (default: all units)")
+    reaudit_parser.add_argument("--target", choices=["quiz", "extraction", "all"], default="quiz", help="Target artifacts to re-audit: 'quiz', 'extraction', or 'all' (default: quiz)")
     reaudit_parser.add_argument("--template", "-t", choices=["vocabulary", "cloze", "reading", "translation", "listening", "video"], help="Only re-audit this quiz type")
     reaudit_parser.add_argument("--workers", "-w", type=int, default=2, help="Concurrent audit workers (default: 2)")
     reaudit_parser.add_argument("--json", action="store_true", help="Output the summary as JSON")
+
+    # Golden Set E2E regression benchmark command
+    goldenset_parser = subparsers.add_parser("golden-set", help="Run E2E regression benchmarks over the 5 canonical Golden Set units (A1-C1)")
+    goldenset_parser.add_argument("units", nargs="*", help="Specific Golden Set unit(s) to benchmark (default: all 5)")
+    goldenset_parser.add_argument("--fast", action="store_true", help="Fast execution mode (L1 code gates only)")
+    goldenset_parser.add_argument("--llm", action="store_true", help="Enable optional Level-2 LLM judge for extraction audit")
+    goldenset_parser.add_argument("--json", action="store_true", help="Output benchmark results as JSON")
 
     # Rename command
     rename_parser = subparsers.add_parser("rename", help="Atomically rename a unit folder and its internal files")
@@ -782,38 +790,90 @@ def main():
                     print()
 
     elif args.command == "re-audit":
-        from .audit_batch import run_batch, format_summary
-        from .llm import LLMError
-        try:
-            judge_m = config.get("judge_model") or config.get("model")
-            llm.ensure_available(task_name="re_audit_batch", model_override=judge_m)
-        except LLMError as e:
-            print(f"❌ Error: {e}")
+        target = getattr(args, "target", "quiz")
+        has_errors = False
+
+        if target in ("extraction", "all"):
+            from .audit_extraction import batch_audit_extractions, format_extraction_summary
+            print("Re-auditing extraction artifacts (Level-1 deterministic code gate, read-only)…")
+
+            def _ext_progress(done, total, row):
+                mark = "✓" if row.get("passed") else "✗"
+                print(f"  [{done}/{total}] {mark} {row['unit']} score {row.get('score', 0):.1f}")
+
+            ext_summary = batch_audit_extractions(
+                unit_filter=args.units or None,
+                max_workers=args.workers,
+                progress_cb=_ext_progress,
+            )
+            if ext_summary["total"] == 0:
+                print("No extraction artifacts found under wiki/ to re-audit.")
+                if target == "extraction":
+                    sys.exit(1)
+            elif args.json and target == "extraction":
+                import json
+                print(json.dumps(ext_summary, indent=2, ensure_ascii=False))
+            else:
+                print(format_extraction_summary(ext_summary))
+
+            if ext_summary.get("failed", 0) > 0:
+                has_errors = True
+
+        if target in ("quiz", "all"):
+            from .audit_batch import run_batch, format_summary
+            from .llm import LLMError
+            try:
+                judge_m = config.get("judge_model") or config.get("model")
+                llm.ensure_available(task_name="re_audit_batch", model_override=judge_m)
+            except LLMError as e:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
+
+            print("Re-auditing quiz handouts (Level-2 expert audit, read-only)…")
+
+            def _progress(done, total, row):
+                mark = "⚠" if row.get("error") else ("✓" if row.get("passed") else "✗")
+                acc = row.get("blind_solve_accuracy")
+                acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+                print(f"  [{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}")
+
+            summary = run_batch(
+                unit_filter=args.units or None,
+                template_filter=args.template,
+                max_workers=args.workers,
+                progress_cb=_progress,
+            )
+            if summary["total"] == 0:
+                print("No quiz handouts found under wiki/ to re-audit.")
+                sys.exit(1)
+            if args.json:
+                import json
+                output_payload = summary if target == "quiz" else {"quiz": summary, "extraction": ext_summary}
+                print(json.dumps(output_payload, indent=2, ensure_ascii=False))
+            else:
+                print(format_summary(summary))
+            if summary.get("errors", 0) > 0:
+                has_errors = True
+
+        if has_errors:
             sys.exit(1)
 
-        print("Re-auditing quiz handouts (Level-2 expert audit, read-only)…")
+    elif args.command == "golden-set":
+        from .golden_set import run_golden_set_benchmarks, format_golden_set_summary
+        import json
 
-        def _progress(done, total, row):
-            mark = "⚠" if row.get("error") else ("✓" if row.get("passed") else "✗")
-            acc = row.get("blind_solve_accuracy")
-            acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
-            print(f"  [{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}")
-
-        summary = run_batch(
-            unit_filter=args.units or None,
-            template_filter=args.template,
-            max_workers=args.workers,
-            progress_cb=_progress,
+        summary = run_golden_set_benchmarks(
+            units=args.units or None,
+            fast=args.fast,
+            enable_llm=args.llm,
         )
-        if summary["total"] == 0:
-            print("No quiz handouts found under wiki/ to re-audit.")
-            sys.exit(1)
+
         if args.json:
-            import json
             print(json.dumps(summary, indent=2, ensure_ascii=False))
         else:
-            print(format_summary(summary))
-        if summary.get("errors", 0) > 0:
+            print(format_golden_set_summary(summary))
+
+        if summary.get("overall_status") != "passed":
             sys.exit(1)
 
     elif args.command == "pedlex":

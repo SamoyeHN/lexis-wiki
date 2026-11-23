@@ -74,7 +74,7 @@
 
 ### Phase 3: Long-Term (Scalability & Quality Loop)
 - [ ] **Data-Driven Linguistic Rules**: Externalize static lexical tables and syntactic constraint maps from `distractor_engine.py`, `wsd_engine.py`, and `cefr_and_morphology.py` into declarative JSON/YAML or `pedlex.db` tables to curb code bloat.
-- [ ] **Golden Set End-to-End Regression Suite**: Curate 3–5 representative units spanning CEFR levels and genres, pair with `re-audit --target extraction`, and track L1/L2 quality deltas across prompt, rule, and model updates.
+- [x] **Golden Set End-to-End Regression Suite**: Curated 5 canonical units spanning CEFR levels (A1-C1) and diverse genres, integrated `re-audit --target extraction`, added `lexis golden-set` E2E benchmark command and parameterized test suite (`tests/test_golden_set_e2e.py`, `tests/test_audit_extraction.py`) verifying 25 handouts and all extractions with zero defects.
 - [ ] **Agent Skill & MCP Cloud Service Packaging (Pending / Cost Feasibility)**:
   - **Context**: Inbound interest (e.g., Agensi.io marketplace, Claude Code, Cursor/Windsurf tool calling) to package `lexis-wiki`'s neuro-symbolic quiz/wiki generator and psychometric gates as callable remote skills.
   - **Bottleneck & Cost Constraint**: Hosting cloud-accessible endpoints requires dedicated VPS/container servers with Python runtime, `spaCy` transformer models, and ~400MB `pedlex.db` SQLite memory mapping, entailing non-trivial ongoing server rental/maintenance expenses.
