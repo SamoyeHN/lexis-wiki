@@ -612,7 +612,7 @@ def render_index_portal_html(
 ) -> str:
     """
     Renders an elegant, self-contained Bento-grid navigation portal (`index.html`)
-    for an exported unit.
+    for an exported unit in a clean, modern Light academic theme.
     """
     unit_title_clean = html.escape(display_title or unit_name.replace("_", " "))
     cefr_badge = (
@@ -624,15 +624,23 @@ def render_index_portal_html(
     # Render extraction cards
     extraction_cards_html = []
     category_icons = {
-        "source": "📖",
+        "source": "📄",
         "vocabulary": "📚",
         "grammar": "🧩",
         "summary": "📝",
         "mindmap": "🧠",
     }
+    category_tags = {
+        "source": ("SOURCE", "tag-source"),
+        "vocabulary": ("VOCAB", "tag-vocab"),
+        "grammar": ("SYNTAX", "tag-syntax"),
+        "summary": ("DISCOURSE", "tag-discourse"),
+        "mindmap": ("MINDMAP", "tag-mindmap"),
+    }
     for item in extractions:
         cat = item.get("category", "handout")
         icon = category_icons.get(cat, "📄")
+        tag_text, tag_cls = category_tags.get(cat, (cat.upper(), "tag-source"))
         extraction_cards_html.append(
             f"""
             <a href="{html.escape(item['rel_path'])}" target="_blank" class="portal-card">
@@ -640,7 +648,7 @@ def render_index_portal_html(
                 <div class="portal-card-content">
                     <div class="portal-card-header">
                         <span class="portal-card-title">{html.escape(item['title'])}</span>
-                        <span class="portal-card-tag tag-{cat}">{html.escape(cat.upper())}</span>
+                        <span class="portal-card-tag {tag_cls}">{html.escape(tag_text)}</span>
                     </div>
                     <p class="portal-card-desc">{html.escape(item.get('description', ''))}</p>
                 </div>
@@ -651,30 +659,30 @@ def render_index_portal_html(
 
     # Render quiz cards
     quiz_cards_html = []
-    quiz_icons = {
-        "vocabulary": "🎯",
-        "cloze": "✏️",
-        "reading": "🔍",
-        "translation": "🌐",
-        "listening": "🎧",
-        "video": "🎬",
+    quiz_specs = {
+        "vocabulary": ("🎯", "MCQ", "tag-mcq"),
+        "cloze": ("✏️", "OPEN CLOZE", "tag-cloze"),
+        "reading": ("📖", "READING", "tag-reading"),
+        "translation": ("🌐", "TRANSLATION", "tag-translation"),
+        "listening": ("🎧", "AUDIO", "tag-audio"),
+        "video": ("🎬", "VIDEO", "tag-video"),
     }
     for item in quizzes:
         fn_lower = item["filename"].lower()
         q_type = "quiz"
-        for k in quiz_icons:
+        for k in quiz_specs:
             if k in fn_lower:
                 q_type = k
                 break
-        icon = quiz_icons.get(q_type, "🎯")
+        icon, tag_text, tag_cls = quiz_specs.get(q_type, ("🎯", "ASSESSMENT", "tag-quiz"))
         quiz_cards_html.append(
             f"""
-            <a href="{html.escape(item['rel_path'])}" target="_blank" class="portal-card quiz-card">
+            <a href="{html.escape(item['rel_path'])}" target="_blank" class="portal-card">
                 <div class="portal-card-icon">{icon}</div>
                 <div class="portal-card-content">
                     <div class="portal-card-header">
                         <span class="portal-card-title">{html.escape(item['title'])}</span>
-                        <span class="portal-card-tag tag-quiz">INTERACTIVE</span>
+                        <span class="portal-card-tag {tag_cls}">{html.escape(tag_text)}</span>
                     </div>
                     <p class="portal-card-desc">{html.escape(item.get('description', ''))}</p>
                 </div>
@@ -691,24 +699,26 @@ def render_index_portal_html(
     <title>{unit_title_clean} — Study Suite</title>
     <style>
         :root {{
-            --bg-page: #0b1120;
-            --bg-card: #1e293b;
-            --bg-card-hover: #283548;
-            --text-main: #f8fafc;
-            --text-secondary: #94a3b8;
-            --border-card: #334155;
-            --border-card-hover: #475569;
-            --accent-primary: #38bdf8;
-            --accent-indigo: #818cf8;
-            --accent-green: #34d399;
-            --accent-amber: #fbbf24;
+            --bg-page: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-card-hover: #f1f5f9;
+            --text-main: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #64748b;
+            --border-card: #e2e8f0;
+            --border-card-hover: #cbd5e1;
+            --accent-primary: #2563eb;
+            --accent-green: #059669;
+            --accent-green-bg: #ecfdf5;
+            --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
+            --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
             --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }}
         * {{ box-sizing: border-box; }}
         body {{
             margin: 0;
-            padding: 2.5rem 1.5rem 4rem;
+            padding: 2.25rem 1.5rem 3.5rem;
             background-color: var(--bg-page);
             color: var(--text-main);
             font-family: var(--font-sans);
@@ -716,138 +726,139 @@ def render_index_portal_html(
             -webkit-font-smoothing: antialiased;
         }}
         .portal-container {{
-            max-width: 980px;
+            max-width: 960px;
             margin: 0 auto;
         }}
         .hero-banner {{
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            background: #ffffff;
             border: 1px solid var(--border-card);
-            border-radius: 16px;
-            padding: 2rem 2.25rem;
-            margin-bottom: 2.5rem;
-            position: relative;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+            border-left: 5px solid var(--accent-primary);
+            border-radius: 12px;
+            padding: 1.5rem 1.75rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
         }}
         .hero-top {{
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-wrap: wrap;
-            gap: 1rem;
-            margin-bottom: 0.75rem;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
         }}
         .hero-badges {{
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            flex-wrap: wrap;
         }}
         .portal-badge {{
             display: inline-flex;
             align-items: center;
-            padding: 0.22rem 0.65rem;
+            padding: 0.2rem 0.6rem;
             border-radius: 999px;
             font-size: 0.72rem;
             font-weight: 700;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.02em;
         }}
         .badge-unit {{
-            background: rgba(56, 189, 248, 0.12);
-            color: var(--accent-primary);
-            border: 1px solid rgba(56, 189, 248, 0.3);
+            background: #f1f5f9;
+            color: #334155;
+            border: 1px solid #cbd5e1;
             font-family: var(--font-mono);
         }}
         .badge-cefr {{
-            background: rgba(52, 211, 153, 0.12);
+            background: var(--accent-green-bg);
             color: var(--accent-green);
-            border: 1px solid rgba(52, 211, 153, 0.3);
+            border: 1px solid rgba(5, 150, 105, 0.25);
             font-family: var(--font-mono);
-        }}
-        .badge-offline {{
-            background: rgba(251, 191, 36, 0.12);
-            color: var(--accent-amber);
-            border: 1px solid rgba(251, 191, 36, 0.3);
         }}
         .hero-title {{
             margin: 0 0 0.5rem 0;
-            font-size: 1.85rem;
+            font-size: 1.6rem;
             font-weight: 800;
-            color: #ffffff;
+            color: var(--text-main);
             letter-spacing: -0.02em;
-        }}
-        .hero-subtitle {{
-            margin: 0;
-            font-size: 0.95rem;
-            color: var(--text-secondary);
         }}
         .hero-stats {{
             display: flex;
             align-items: center;
-            gap: 1.5rem;
-            margin-top: 1.25rem;
-            padding-top: 1.25rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            gap: 0.6rem;
             font-size: 0.82rem;
-            color: var(--text-secondary);
+            color: var(--text-muted);
         }}
-        .hero-stat-item strong {{
-            color: #ffffff;
+        .hero-stat-pill strong {{
+            color: var(--text-main);
             font-weight: 700;
+        }}
+        .hero-stat-divider {{
+            color: var(--border-card);
         }}
         .section-header {{
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin: 2rem 0 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            margin: 0 0 0.85rem 0;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid var(--border-card);
         }}
         .section-title {{
-            font-size: 1.2rem;
+            font-size: 1.05rem;
             font-weight: 700;
-            color: #ffffff;
+            color: var(--text-main);
             display: flex;
             align-items: center;
-            gap: 0.6rem;
+            gap: 0.45rem;
             margin: 0;
+            letter-spacing: -0.01em;
         }}
         .section-count {{
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             font-weight: 600;
-            color: var(--text-secondary);
-            background: var(--bg-card);
+            color: var(--text-muted);
+            background: #ffffff;
             border: 1px solid var(--border-card);
-            padding: 0.15rem 0.6rem;
+            padding: 0.12rem 0.55rem;
             border-radius: 999px;
+            font-family: var(--font-mono);
         }}
         .portal-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1rem;
+            gap: 0.85rem;
         }}
         .portal-card {{
             display: flex;
             align-items: center;
-            gap: 1rem;
+            gap: 0.85rem;
             background: var(--bg-card);
             border: 1px solid var(--border-card);
-            border-radius: 12px;
-            padding: 1.15rem 1.25rem;
+            border-radius: 10px;
+            padding: 0.95rem 1.15rem;
             text-decoration: none;
             color: inherit;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
+            transition: all 0.15s ease;
+            box-shadow: var(--shadow-sm);
         }}
         .portal-card:hover {{
-            background: var(--bg-card-hover);
-            border-color: var(--border-card-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+            background: #ffffff;
+            border-color: var(--accent-primary);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
             text-decoration: none;
         }}
         .portal-card-icon {{
-            font-size: 1.8rem;
+            font-size: 1.45rem;
             line-height: 1;
             flex-shrink: 0;
+            width: 2.25rem;
+            height: 2.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: #f8fafc;
+            border: 1px solid var(--border-card);
         }}
         .portal-card-content {{
             flex: 1;
@@ -856,51 +867,60 @@ def render_index_portal_html(
         .portal-card-header {{
             display: flex;
             align-items: center;
-            gap: 0.45rem;
-            margin-bottom: 0.25rem;
+            gap: 0.4rem;
+            margin-bottom: 0.2rem;
             flex-wrap: wrap;
         }}
         .portal-card-title {{
-            font-size: 0.98rem;
+            font-size: 0.92rem;
             font-weight: 700;
-            color: #ffffff;
+            color: var(--text-main);
         }}
         .portal-card-tag {{
             font-size: 0.62rem;
             font-weight: 700;
-            padding: 0.1rem 0.4rem;
+            padding: 0.08rem 0.4rem;
             border-radius: 4px;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.03em;
+            font-family: var(--font-mono);
         }}
-        .tag-source {{ background: rgba(56, 189, 248, 0.15); color: #38bdf8; }}
-        .tag-vocabulary {{ background: rgba(52, 211, 153, 0.15); color: #34d399; }}
-        .tag-grammar {{ background: rgba(168, 85, 247, 0.15); color: #c084fc; }}
-        .tag-summary {{ background: rgba(251, 146, 60, 0.15); color: #fb923c; }}
-        .tag-mindmap {{ background: rgba(244, 63, 94, 0.15); color: #fb7185; }}
-        .tag-quiz {{ background: rgba(129, 140, 248, 0.15); color: #818cf8; }}
+        .tag-source {{ background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }}
+        .tag-vocab {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }}
+        .tag-syntax {{ background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }}
+        .tag-discourse {{ background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }}
+        .tag-mindmap {{ background: #fdf2f8; color: #be185d; border: 1px solid #fbcfe8; }}
+        
+        .tag-mcq {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }}
+        .tag-cloze {{ background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }}
+        .tag-reading {{ background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }}
+        .tag-translation {{ background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }}
+        .tag-audio {{ background: #faf5ff; color: #7e22ce; border: 1px solid #e9d5ff; }}
+        .tag-video {{ background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }}
+        .tag-quiz {{ background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }}
+
         .portal-card-desc {{
             margin: 0;
-            font-size: 0.78rem;
+            font-size: 0.76rem;
             color: var(--text-secondary);
-            line-height: 1.4;
+            line-height: 1.35;
         }}
         .portal-card-arrow {{
-            color: var(--text-secondary);
-            font-size: 1.1rem;
-            transition: transform 0.2s ease, color 0.2s ease;
+            color: var(--text-muted);
+            font-size: 1rem;
+            transition: transform 0.15s ease, color 0.15s ease;
             flex-shrink: 0;
         }}
         .portal-card:hover .portal-card-arrow {{
             color: var(--accent-primary);
-            transform: translateX(4px);
+            transform: translateX(3px);
         }}
         .portal-footer {{
-            margin-top: 3.5rem;
+            margin-top: 3rem;
             text-align: center;
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-            padding-top: 1.5rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-card);
+            padding-top: 1.25rem;
         }}
     </style>
 </head>
@@ -911,21 +931,19 @@ def render_index_portal_html(
                 <div class="hero-badges">
                     <span class="portal-badge badge-unit">{html.escape(unit_name)}</span>
                     {cefr_badge}
-                    <span class="portal-badge badge-offline">Offline Ready</span>
                 </div>
             </div>
             <h1 class="hero-title">{unit_title_clean}</h1>
-            <p class="hero-subtitle">Comprehensive Pedagogical Wiki Nodes &amp; Psychometric Interactive Assessment Suite</p>
             <div class="hero-stats">
-                <div class="hero-stat-item"><strong>{len(extractions)}</strong> Extraction Nodes</div>
-                <div class="hero-stat-item"><strong>{len(quizzes)}</strong> Interactive Quizzes</div>
-                <div class="hero-stat-item">Self-Contained Portable Study Package</div>
+                <span class="hero-stat-pill"><strong>{len(extractions)}</strong> Knowledge Nodes</span>
+                <span class="hero-stat-divider">&bull;</span>
+                <span class="hero-stat-pill"><strong>{len(quizzes)}</strong> Interactive Assessments</span>
             </div>
         </header>
 
         <section>
             <div class="section-header">
-                <h2 class="section-title"><span>📚</span> Linguistic Extractions</h2>
+                <h2 class="section-title"><span>📚</span> Knowledge Nodes</h2>
                 <span class="section-count">{len(extractions)} items</span>
             </div>
             <div class="portal-grid">
@@ -933,10 +951,10 @@ def render_index_portal_html(
             </div>
         </section>
 
-        <section style="margin-top: 1.5rem;">
+        <section style="margin-top: 1.75rem;">
             <div class="section-header">
-                <h2 class="section-title"><span>🎯</span> Interactive Quizzes &amp; Assessments</h2>
-                <span class="section-count">{len(quizzes)} quizzes</span>
+                <h2 class="section-title"><span>🎯</span> Interactive Assessments</h2>
+                <span class="section-count">{len(quizzes)} assessments</span>
             </div>
             <div class="portal-grid">
                 {"".join(quiz_cards_html)}
@@ -1087,11 +1105,11 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
             out_source_html.write_text(source_html, encoding="utf-8")
             extracted_files.append(
                 {
-                    "title": "Primary Source Text",
+                    "title": "Source Text",
                     "filename": f"{clean_unit}_source.html",
                     "rel_path": f"extractions/{clean_unit}_source.html",
                     "category": "source",
-                    "description": "Original primary reading passage with clean pedagogical typography",
+                    "description": "Original passage with clean pedagogical typography",
                 }
             )
         except Exception as e:
@@ -1111,8 +1129,8 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                     card_title = f.stem.replace(clean_unit, "").replace("_", " ").strip().title()
                     if "_vocabulary" in f.name:
                         cat = "vocabulary"
-                        card_title = "Vocabulary Breakdown"
-                        desc = "Sense-locked headwords, grammatical patterns & valency cascades"
+                        card_title = "Vocabulary Focus"
+                        desc = "Sense-locked headwords, valency cascades & patterns"
                         cefr_m = re.search(
                             r'overall_cefr_level:\s*["\']?(.*?)["\']?\s*$', md_text, re.MULTILINE
                         )
@@ -1120,12 +1138,12 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                             cefr_level = cefr_m.group(1).strip().upper()
                     elif "_grammar" in f.name:
                         cat = "grammar"
-                        card_title = "Grammar Structures"
-                        desc = "Syntactic patterns, construction frames & SLA contrast pairs"
+                        card_title = "Grammar Patterns"
+                        desc = "Syntactic frames, constructions & SLA contrast pairs"
                     elif "_summary" in f.name:
                         cat = "summary"
-                        card_title = "Pedagogical Summary"
-                        desc = "Discourse organization, key concepts & structural outline"
+                        card_title = "Discourse Summary"
+                        desc = "Discourse organization, macro-propositions & outline"
 
                     html_doc = render_markdown_to_standalone_html(
                         md_text,
@@ -1154,11 +1172,11 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                         shutil.copy2(json_cand, export_extractions_dir / json_cand.name)
                     extracted_files.append(
                         {
-                            "title": "Interactive Mind Map",
+                            "title": "Knowledge Mind Map",
                             "filename": f.name,
                             "rel_path": f"extractions/{f.name}",
                             "category": "mindmap",
-                            "description": "Visual hierarchical knowledge graph and concept nodes",
+                            "description": "Hierarchical concept graph & structural visualization",
                         }
                     )
                 except Exception as e:
@@ -1183,26 +1201,26 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                 out_quiz.write_text(portable_html, encoding="utf-8")
 
                 q_name = f.name
-                q_title = "Quiz"
+                q_title = "Assessment"
                 q_desc = "Interactive assessment"
                 if "vocabulary" in q_name:
                     q_title = "Vocabulary Quiz"
-                    q_desc = "Single-fit context clozes with diagnostic lexicographic explanations"
+                    q_desc = "Single-fit context clozes with diagnostic lexicographic feedback"
                 elif "cloze" in q_name:
-                    q_title = "Cloze Test"
-                    q_desc = "Contextual skeleton clozes and grammatical distractor cascades"
+                    q_title = "Discourse Cloze"
+                    q_desc = "Pure open cloze assessment with acceptable-word scoring"
                 elif "reading" in q_name:
-                    q_title = "Reading Quiz"
+                    q_title = "Reading Comprehension"
                     q_desc = "Discourse reasoning and fallacy-audited reading comprehension"
                 elif "translation" in q_name:
-                    q_title = "Translation Quiz"
-                    q_desc = "SLA minimal-pair error injection translation exercises"
+                    q_title = "Translation Practice"
+                    q_desc = "SLA minimal-pair error injection & structural contrast"
                 elif "listening" in q_name:
-                    q_title = "Listening Quiz"
-                    q_desc = "Conversation analysis multi-turn dialogues with authentic audio"
+                    q_title = "Listening Comprehension"
+                    q_desc = "Conversation analysis multi-turn dialogues with authentic native audio"
                 elif "video" in q_name:
-                    q_title = "Video Quiz"
-                    q_desc = "Timestamp-anchored interactive video comprehension assessment"
+                    q_title = "Video Comprehension"
+                    q_desc = "Timestamp-anchored interactive multimodal video comprehension"
 
                 quiz_files.append(
                     {
