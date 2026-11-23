@@ -13,6 +13,11 @@ from .distractor_engine import (
     DistractorVocabWsdMixin,
 )
 from .slot_frame import SlotFrame
+from .quiz_frames import (
+    QuizFramesMixin,
+    QuizFramesPatientMixin,
+    QuizFramesSlicingMixin,
+)
 from .quiz_skeleton_anchors import QuizSkeletonAnchorsMixin
 from .quiz_skeleton_builder import QuizSkeletonBuilderMixin
 from .quiz_skeleton_context import CXN_ANCHOR_TYPES, SkeletonContext
@@ -42,6 +47,9 @@ __all__ = [
     "DistractorVocabHarvestMixin",
     "DistractorVocabMixin",
     "DistractorVocabWsdMixin",
+    "QuizFramesMixin",
+    "QuizFramesPatientMixin",
+    "QuizFramesSlicingMixin",
     "QuizSkeletonAnchorsMixin",
     "QuizSkeletonBuilderMixin",
     "QuizSkeletonDistractorsMixin",
