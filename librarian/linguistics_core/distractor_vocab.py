@@ -76,56 +76,59 @@ class DistractorVocabMixin:
             wn_pos = "a"
         else:
             wn_pos = None
-        if wn_pos == "a":
-            # In WordNet, adjectives are split into head adjectives ('a') and satellite adjectives ('s')
-            words = wn.words(clean_target, pos="a") + wn.words(clean_target, pos="s")
-        elif wn_pos:
-            words = wn.words(clean_target, pos=wn_pos)
-        else:
-            words = wn.words(clean_target)
 
-        # Morphological base lemma fallback (e.g. 'possessions' -> 'possession')
-        # and hyphenated/compound variant lookup (e.g. 'non-stop' -> 'nonstop')
-        # ensures inflectional and compound variants access the full semantic taxonomy
-        if not words:
-            alt_forms = []
-            if "-" in clean_target:
-                alt_forms.extend([clean_target.replace("-", ""), clean_target.replace("-", " "), clean_target.replace("-", "_")])
-            if " " in clean_target:
-                alt_forms.extend([clean_target.replace(" ", "-"), clean_target.replace(" ", "_")])
-            for alt in alt_forms:
-                if wn_pos == "a":
-                    words = wn.words(alt, pos="a") + wn.words(alt, pos="s")
-                elif wn_pos:
-                    words = wn.words(alt, pos=wn_pos)
-                else:
-                    words = wn.words(alt)
-                if words:
-                    break
+        words = []
+        if wn:
+            if wn_pos == "a":
+                # In WordNet, adjectives are split into head adjectives ('a') and satellite adjectives ('s')
+                words = wn.words(clean_target, pos="a") + wn.words(clean_target, pos="s")
+            elif wn_pos:
+                words = wn.words(clean_target, pos=wn_pos)
+            else:
+                words = wn.words(clean_target)
 
-        if not words and ("-" in clean_target or " " in clean_target):
-            # Compound head word fallback: In English compounds (e.g. 'self-repair', 'decision-making'),
-            # the syntactic and semantic head is usually the second/last component ('repair', 'making').
-            comp_parts = re.split(r"[\-\s]+", clean_target)
-            if len(comp_parts) >= 2 and comp_parts[-1]:
-                head_part = comp_parts[-1]
-                if wn_pos == "a":
-                    words = wn.words(head_part, pos="a") + wn.words(head_part, pos="s")
-                elif wn_pos:
-                    words = wn.words(head_part, pos=wn_pos)
-                else:
-                    words = wn.words(head_part)
+            # Morphological base lemma fallback (e.g. 'possessions' -> 'possession')
+            # and hyphenated/compound variant lookup (e.g. 'non-stop' -> 'nonstop')
+            # ensures inflectional and compound variants access the full semantic taxonomy
+            if not words:
+                alt_forms = []
+                if "-" in clean_target:
+                    alt_forms.extend([clean_target.replace("-", ""), clean_target.replace("-", " "), clean_target.replace("-", "_")])
+                if " " in clean_target:
+                    alt_forms.extend([clean_target.replace(" ", "-"), clean_target.replace(" ", "_")])
+                for alt in alt_forms:
+                    if wn_pos == "a":
+                        words = wn.words(alt, pos="a") + wn.words(alt, pos="s")
+                    elif wn_pos:
+                        words = wn.words(alt, pos=wn_pos)
+                    else:
+                        words = wn.words(alt)
+                    if words:
+                        break
 
-        if not words:
-            nlp = cls.get_spacy()
-            t_lemma = nlp(clean_target)[0].lemma_.lower()
-            if t_lemma != clean_target:
-                if wn_pos == "a":
-                    words = wn.words(t_lemma, pos="a") + wn.words(t_lemma, pos="s")
-                elif wn_pos:
-                    words = wn.words(t_lemma, pos=wn_pos)
-                else:
-                    words = wn.words(t_lemma)
+            if not words and ("-" in clean_target or " " in clean_target):
+                # Compound head word fallback: In English compounds (e.g. 'self-repair', 'decision-making'),
+                # the syntactic and semantic head is usually the second/last component ('repair', 'making').
+                comp_parts = re.split(r"[\-\s]+", clean_target)
+                if len(comp_parts) >= 2 and comp_parts[-1]:
+                    head_part = comp_parts[-1]
+                    if wn_pos == "a":
+                        words = wn.words(head_part, pos="a") + wn.words(head_part, pos="s")
+                    elif wn_pos:
+                        words = wn.words(head_part, pos=wn_pos)
+                    else:
+                        words = wn.words(head_part)
+
+            if not words:
+                nlp = cls.get_spacy()
+                t_lemma = nlp(clean_target)[0].lemma_.lower()
+                if t_lemma != clean_target:
+                    if wn_pos == "a":
+                        words = wn.words(t_lemma, pos="a") + wn.words(t_lemma, pos="s")
+                    elif wn_pos:
+                        words = wn.words(t_lemma, pos=wn_pos)
+                    else:
+                        words = wn.words(t_lemma)
 
         if words:
             oewn_words = [w for w in words if getattr(w, "id", "").startswith("oewn-")]
@@ -139,11 +142,12 @@ class DistractorVocabMixin:
             if not wn_pos:
                 return True
             try:
-                if wn_pos == "a":
-                    if wn.words(lemma, pos="a") or wn.words(lemma, pos="s"):
+                if wn:
+                    if wn_pos == "a":
+                        if wn.words(lemma, pos="a") or wn.words(lemma, pos="s"):
+                            return True
+                    elif wn.words(lemma, pos=wn_pos):
                         return True
-                elif wn.words(lemma, pos=wn_pos):
-                    return True
                 c_ent = cls.get_ldoce_entry(lemma)
                 if c_ent:
                     p_code = {"n": "n", "v": "v", "a": "adj", "r": "adv"}.get(wn_pos, "")
@@ -160,12 +164,13 @@ class DistractorVocabMixin:
                     prim_pos = (cand_ent.get("pos") or "").lower()
                     if prim_pos in ("verb", "adjective", "adverb"):
                         return True
-                pos_list = [w.pos for w in wn.words(lemma)]
-                if any(p in ("a", "s") for p in pos_list):
-                    if "n" not in pos_list or len([p for p in pos_list if p in ("a", "s")]) >= len([p for p in pos_list if p == "n"]):
+                if wn:
+                    pos_list = [w.pos for w in wn.words(lemma)]
+                    if any(p in ("a", "s") for p in pos_list):
+                        if "n" not in pos_list or len([p for p in pos_list if p in ("a", "s")]) >= len([p for p in pos_list if p == "n"]):
+                            return True
+                    if "v" in pos_list and "n" not in pos_list:
                         return True
-                if "v" in pos_list and "n" not in pos_list:
-                    return True
             except Exception:
                 pass
             return False
@@ -179,10 +184,11 @@ class DistractorVocabMixin:
                     prim_pos = (cand_ent.get("pos") or "").lower()
                     if prim_pos in ("noun", "adjective", "adverb"):
                         return True
-                syn_v = len(wn.synsets(lemma, "v"))
-                syn_na = len(wn.synsets(lemma, "n")) + len(wn.synsets(lemma, "a")) + len(wn.synsets(lemma, "s"))
-                if syn_na > syn_v * 2 and syn_v <= 2:
-                    return True
+                if wn:
+                    syn_v = len(wn.synsets(lemma, "v"))
+                    syn_na = len(wn.synsets(lemma, "n")) + len(wn.synsets(lemma, "a")) + len(wn.synsets(lemma, "s"))
+                    if syn_na > syn_v * 2 and syn_v <= 2:
+                        return True
             except Exception:
                 pass
             return False

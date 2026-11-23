@@ -201,7 +201,7 @@ def _score_verbatim(items: List[Dict[str, Any]], task_type: str, user_prompt: st
             # without false-flagging legitimate words WordNet lacks ('ice-cream',
             # "don't") or text-specific terms that appear verbatim in the quote.
             if " " not in clean_word and clean_word.isalpha():
-                if LinguisticEngine.is_known_english_word(clean_word) is not True:
+                if LinguisticEngine.is_known_english_word(clean_word) is False:
                     if clean_word not in clean_quote.split():
                         flags.append(
                             f"❌ Headword '{word}' is not a recognized English word and does not appear "

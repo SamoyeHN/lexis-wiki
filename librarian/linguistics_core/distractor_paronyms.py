@@ -560,7 +560,7 @@ class DistractorParonymsMixin:
         tw_is_artifact_ism = bool(
             wn_pos == "n"
             and tw.endswith("ism")
-            and any(s.lexfile() in ("noun.artifact", "noun.object") for s in cls.get_wordnet().synsets(tw, "n"))
+            and any(s.lexfile() in ("noun.artifact", "noun.object") for s in cls.get_wordnet_synsets(tw, pos="n"))
         )
         scored: List[Tuple[int, str]] = []
         for w in raw_pool:

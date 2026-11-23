@@ -915,23 +915,11 @@ class CefrAndMorphologyMixin:
                 # Web dashboard / background worker threads share WordNet SQLite connection.
                 # SQLite check_same_thread must be disabled for read-only multi-threaded queries.
                 wn.config.allow_multithreading = True
-                try:
-                    cls._wn = wn.Wordnet("oewn:2025+")
-                except Exception:
-                    try:
-                        wn.download("oewn:2025+")
-                        cls._wn = wn.Wordnet("oewn:2025+")
-                    except Exception:
-                        cls._wn = None
+                cls._wn = wn.Wordnet("oewn:2025+")
             except Exception:
-                cls._wn = None
-        if cls._wn is not None:
-            try:
-                import wn
-                if not isinstance(cls._wn, wn.Wordnet) or not wn.lexicons():
-                    cls._wn = None
-            except Exception:
-                cls._wn = None
+                cls._wn = False
+        if cls._wn is False or cls._wn is None:
+            return None
         return cls._wn
 
     @staticmethod
@@ -4133,13 +4121,14 @@ class CefrAndMorphologyMixin:
         if not re.fullmatch(r"[a-z]+(?:['\-][a-z]+)*", w):
             return None  # multi-word / slots / non-alphabetic: out of scope
         try:
-            wn_client = cls.get_wordnet()
-            if len(wn_client.lemmas(w)) > 0:
-                return True
-            # Retry with punctuation flattened (e.g. 'ice-cream' -> 'icecream')
             alt = w.replace("'", "").replace("-", "")
-            if alt != w and len(wn_client.lemmas(alt)) > 0:
-                return True
+            wn_client = cls.get_wordnet()
+            if wn_client is not None:
+                if len(wn_client.lemmas(w)) > 0:
+                    return True
+                # Retry with punctuation flattened (e.g. 'ice-cream' -> 'icecream')
+                if alt != w and len(wn_client.lemmas(alt)) > 0:
+                    return True
 
             # Fallback 1: PedLex 6th Edition dictionary check (covers contemporary words like 'selfie' and function words like 'whether', 'until', 'what')
             try:
@@ -4161,6 +4150,8 @@ class CefrAndMorphologyMixin:
             except Exception:
                 pass
 
+            if wn_client is None and cls._is_pedlex_disabled():
+                return None
             return False
         except Exception:
             return None  # WordNet unavailable: let callers decide the safe default
