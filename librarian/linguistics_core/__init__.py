@@ -38,7 +38,14 @@ from .wsd_engine import WsdEngineMixin
 from .wsd_expressions import WsdExpressionsMixin
 from .wsd_gates import WsdGatesMixin
 from .wsd_lock import WsdLockMixin
-from .wsd_scoring import WsdContext, WsdScoringMixin
+from .wsd_scoring import (
+    WsdContext,
+    WsdScoringDependenciesMixin,
+    WsdScoringGatesMixin,
+    WsdScoringMixin,
+    WsdScoringPatternsMixin,
+    WsdSenseInfo,
+)
 from .wsd_wordnet import WsdWordNetMixin
 
 __all__ = [
@@ -76,6 +83,10 @@ __all__ = [
     "WsdExpressionsMixin",
     "WsdGatesMixin",
     "WsdLockMixin",
+    "WsdScoringDependenciesMixin",
+    "WsdScoringGatesMixin",
     "WsdScoringMixin",
+    "WsdScoringPatternsMixin",
+    "WsdSenseInfo",
     "WsdWordNetMixin",
 ]
