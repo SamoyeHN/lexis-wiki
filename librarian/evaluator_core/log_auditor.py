@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import config
-from ..evaluator import (
+from .dimension_scorers import (
+    _score_pedagogy,
+    _score_schema,
+    _score_uniqueness,
+    _score_verbatim,
+)
+from .eval_helpers import (
     FATAL_QA_FLAGS,
     W_PEDAGOGY,
     W_SCHEMA,
@@ -26,10 +32,6 @@ from ..evaluator import (
     _extract_items,
     _extract_json,
     _extract_target_skeletons,
-    _score_pedagogy,
-    _score_schema,
-    _score_uniqueness,
-    _score_verbatim,
 )
 
 
@@ -285,7 +287,7 @@ class LogEvaluator:
         # Special handling for expert_audit task: align composite_score with deterministic code gate
         if task_type == "expert_audit" and isinstance(parsed, dict):
             try:
-                from .expert_auditor import ExpertAuditor
+                from ..expert_auditor import ExpertAuditor
                 infer_type = "vocabulary"
                 task_lower = (task or "").lower()
                 prompt_lower = (user_prompt or "").lower()
