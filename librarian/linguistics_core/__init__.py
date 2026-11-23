@@ -42,6 +42,12 @@ from .quiz_skeleton_frames import QuizSkeletonFramesMixin
 from .quiz_skeleton_prep import QuizSkeletonPrepMixin
 from .quiz_vocab import QuizVocabMixin
 from .quiz_vocab_cloze import QuizVocabClozeMixin
+from .quiz_reading import (
+    QuizReadingBlueprintsMixin,
+    QuizReadingEvaluatorMixin,
+    QuizReadingGraphMixin,
+    QuizReadingMixin,
+)
 from .wsd_arbitration import WsdArbitrationMixin
 from .wsd_definitions import WsdDefinitionsMixin
 from .wsd_engine import WsdEngineMixin
@@ -90,6 +96,10 @@ __all__ = [
     "QuizSkeletonDistractorsMixin",
     "QuizSkeletonFramesMixin",
     "QuizSkeletonPrepMixin",
+    "QuizReadingBlueprintsMixin",
+    "QuizReadingEvaluatorMixin",
+    "QuizReadingGraphMixin",
+    "QuizReadingMixin",
     "QuizVocabClozeMixin",
     "QuizVocabMixin",
     "SkeletonContext",

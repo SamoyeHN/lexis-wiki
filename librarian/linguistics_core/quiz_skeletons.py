@@ -15,7 +15,12 @@ from .quiz_frames import QuizFramesMixin
 from .quiz_vocab import QuizVocabMixin
 from .quiz_translation import QuizTranslationMixin
 from .quiz_listening import QuizListeningMixin
-from .quiz_reading import QuizReadingMixin
+from .quiz_reading import (
+    QuizReadingBlueprintsMixin,
+    QuizReadingEvaluatorMixin,
+    QuizReadingGraphMixin,
+    QuizReadingMixin,
+)
 from .quiz_cloze import QuizClozeMixin
 
 
@@ -42,6 +47,9 @@ __all__ = [
     "QuizVocabMixin",
     "QuizTranslationMixin",
     "QuizListeningMixin",
+    "QuizReadingBlueprintsMixin",
+    "QuizReadingEvaluatorMixin",
+    "QuizReadingGraphMixin",
     "QuizReadingMixin",
     "QuizClozeMixin",
 ]
