@@ -235,3 +235,28 @@ def test_routes_mixin_direct_dispatch():
     handler.handle_api_post('/api/test-endpoint')
     res_post = json.loads(handler.wfile.getvalue().decode('utf-8'))
     assert res_post.get('test') == 'working'
+
+def test_static_asset_serving_es_modules():
+    import io
+    from unittest.mock import MagicMock
+    from librarian.dashboard import DashboardHTTPRequestHandler
+
+    handler = DashboardHTTPRequestHandler.__new__(DashboardHTTPRequestHandler)
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = io.BytesIO()
+
+    for asset in [
+        "/static/js/dashboard.js",
+        "/static/js/modules/index.js",
+        "/static/js/modules/api.js",
+        "/static/js/modules/state.js",
+        "/static/js/modules/utils.js",
+        "/static/js/modules/glossary.js"
+    ]:
+        handler.wfile.seek(0)
+        handler.wfile.truncate(0)
+        handler.serve_static_asset(asset)
+        content = handler.wfile.getvalue()
+        assert len(content) > 0, f"Failed to serve static asset {asset}"
