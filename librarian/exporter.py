@@ -1,4 +1,5 @@
 import html
+import logging
 import os
 import platform
 import re
@@ -10,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from .config import config
+
+logger = logging.getLogger("librarian.exporter")
 
 
 def detect_video_path_from_html(html_content: str, html_path: Path):
@@ -315,8 +318,9 @@ def render_markdown_to_standalone_html(
     if meta["item_count"]:
         meta_badges.append(f'<span class="meta-badge meta-count">{html.escape(meta["item_count"])} Items</span>')
 
+    intro_body = "\n".join(intro_lines)
     intro_card_html = (
-        f'<section class="lex-entry-card lex-prose-card"><div class="lex-entry-body">{"\n".join(intro_lines)}</div></section>'
+        f'<section class="lex-entry-card lex-prose-card"><div class="lex-entry-body">{intro_body}</div></section>'
         if intro_lines
         else ""
     )
@@ -1030,7 +1034,7 @@ def normalize_export_target_dir(
                 converted = res.stdout.strip()
                 if converted:
                     raw = converted
-            except Exception:
+            except (subprocess.SubprocessError, FileNotFoundError, OSError):
                 pass
         if len(raw) >= 2 and raw[1] == ":":
             drive = raw[0].lower()
@@ -1064,7 +1068,7 @@ def to_windows_display_path(p: Path) -> str:
                 win_path = res.stdout.strip()
                 if win_path:
                     return win_path
-            except Exception:
+            except (subprocess.SubprocessError, FileNotFoundError, OSError):
                 pass
         s = str(p)
         if s.startswith("/mnt/") and len(s) > 6 and s[6] == "/":
@@ -1144,8 +1148,8 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                     "description": "Original passage with clean pedagogical typography",
                 }
             )
-        except Exception as e:
-            print(f"Warning: Failed to export source text for {clean_unit}: {e}")
+        except (OSError, IOError, ValueError) as e:
+            logger.warning(f"Failed to export source text for {clean_unit}: {e}")
 
     # 2. Process extractions/
     extractions_dir = unit_dir / "extractions"
@@ -1193,8 +1197,8 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                             "description": desc,
                         }
                     )
-                except Exception as e:
-                    print(f"Warning: Failed to export extraction {f.name}: {e}")
+                except (OSError, IOError, ValueError) as e:
+                    logger.warning(f"Failed to export extraction {f.name}: {e}")
             elif f.suffix == ".html" and "_mindmap" in f.name:
                 try:
                     out_mm = export_extractions_dir / f.name
@@ -1211,8 +1215,8 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                             "description": "Hierarchical concept graph & structural visualization",
                         }
                     )
-                except Exception as e:
-                    print(f"Warning: Failed to copy mindmap {f.name}: {e}")
+                except (OSError, IOError, ValueError) as e:
+                    logger.warning(f"Failed to copy mindmap {f.name}: {e}")
 
     # 3. Process handouts/
     handouts_dir = unit_dir / "handouts"
@@ -1262,8 +1266,8 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
                         "description": q_desc,
                     }
                 )
-            except Exception as e:
-                print(f"Warning: Failed to export quiz {f.name}: {e}")
+            except (OSError, IOError, ValueError) as e:
+                logger.warning(f"Failed to export quiz {f.name}: {e}")
 
     # 4. Generate exports/index.html navigation portal
     index_html = render_index_portal_html(
@@ -1279,7 +1283,7 @@ def export_unit_to_directory(unit_name: str, custom_target_dir: Optional[Union[s
     win_path = to_windows_display_path(export_dir)
     try:
         rel_path = str(export_dir.relative_to(config.project_root))
-    except Exception:
+    except ValueError:
         rel_path = win_path
 
     return {
@@ -1372,8 +1376,8 @@ def open_directory_in_explorer(dir_path: Union[str, Path]) -> bool:
                         win_path = res.stdout.strip()
                         if win_path:
                             target = win_path
-                    except Exception as e:
-                        print(f"Warning: wslpath failed for {p}: {e}")
+                    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+                        logger.warning(f"wslpath failed for {p}: {e}")
                 subprocess.Popen([explorer_cmd, target])
                 return True
 
@@ -1382,6 +1386,6 @@ def open_directory_in_explorer(dir_path: Union[str, Path]) -> bool:
                 subprocess.Popen(["xdg-open", str(p)])
                 return True
             return False
-    except Exception as e:
-        print(f"Warning: Failed to open directory {p} in file manager: {e}")
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+        logger.warning(f"Failed to open directory {p} in file manager: {e}")
         return False

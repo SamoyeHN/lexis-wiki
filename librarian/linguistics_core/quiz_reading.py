@@ -22,9 +22,12 @@ Implements discourse-level reading comprehension question generation based on:
 
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
 import math
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class DiscourseRelationType(str, Enum):

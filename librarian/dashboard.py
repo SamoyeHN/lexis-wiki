@@ -309,7 +309,7 @@ def background_quiz_worker(job_id, filename, count, template, listening_archetyp
             try:
                 rel_path = Path(result).relative_to(Path(config.project_root))
                 web_path = str(rel_path).replace("\\", "/")
-            except Exception:
+            except ValueError:
                 web_path = result
             DashboardState.update_job(
                 job_id,
@@ -378,7 +378,7 @@ def background_all_quizzes_worker(job_id, filename):
             else:
                 try:
                     rel_path = str(Path(result).relative_to(Path(config.project_root))).replace("\\", "/")
-                except Exception:
+                except ValueError:
                     rel_path = result
                 saved_handouts.append(rel_path)
                 DashboardState.update_job(job_id, log=f"✅ Saved handout: {os.path.basename(result)}")
@@ -421,7 +421,7 @@ def background_video_import_worker(job_id, url_or_path, cookies_from_browser=Non
         
         try:
             filename = str(Path(saved_file).relative_to(Path(config.project_root))).replace("\\", "/")
-        except Exception:
+        except ValueError:
             filename = os.path.basename(saved_file)
             
         if has_subtitles:
@@ -475,7 +475,7 @@ def background_audit_batch_worker(job_id, units=None, template=None, workers=2):
             report_name = f"re_audit_report_{stamp}.json"
             with open(logs_dir / report_name, "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=2, ensure_ascii=False)
-        except Exception:
+        except (OSError, IOError):
             report_name = None
 
         if summary["failed"] == 0 and summary["errors"] == 0:
@@ -625,7 +625,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             if not allowed:
                 self.send_error(403, "Access Denied")
                 return
-        except Exception:
+        except (OSError, ValueError):
             self.send_error(404, "File Not Found")
             return
 
@@ -877,7 +877,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 m_section = re.search(r'^section:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
                                 if m_section and m_section.group(1).strip():
                                     section_val = m_section.group(1).strip()
-                            except Exception:
+                            except (OSError, IOError, UnicodeDecodeError):
                                 pass
                                 
                             if not is_video:
@@ -903,7 +903,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                             m_cefr = re.search(r'overall_cefr_level:\s*["\']?(.*?)["\']?\s*$', v_head, re.MULTILINE)
                                             if m_cefr and m_cefr.group(1).strip():
                                                 cefr_level = m_cefr.group(1).strip().upper()
-                                    except Exception:
+                                    except (OSError, IOError, UnicodeDecodeError):
                                         pass
 
                             # Check handouts / quizzes count
@@ -1028,7 +1028,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                     rel_path = str(f.relative_to(Path(config.project_root))).replace("\\", "/")
                                     if rel_path not in units_dict[category]:
                                         units_dict[category].append(rel_path)
-                                except Exception:
+                                except ValueError:
                                     pass
                             else:
                                 rel_path = str(f.relative_to(wiki_dir)).replace("\\", "/")
@@ -1044,7 +1044,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                 if src not in concepts_by_source:
                                                     concepts_by_source[src] = []
                                                 concepts_by_source[src].append(rel_path)
-                                        except Exception:
+                                        except (OSError, IOError, UnicodeDecodeError):
                                             pass
                 units_dict["concepts_by_source"] = concepts_by_source
                 active_media = {}
@@ -1191,7 +1191,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                     "source": c_node_id,
                                                     "target": node_id
                                                 })
-                                except Exception:
+                                except (OSError, IOError, UnicodeDecodeError):
                                     pass
 
                 # 2. Extract mother source nodes from frontmatter of each compiled file
@@ -1226,7 +1226,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "source": node["id"],
                                         "target": source_node_id
                                     })
-                            except Exception:
+                            except (OSError, IOError, UnicodeDecodeError):
                                 pass
 
                 # 3. Parse links between nodes (Obsidian-style wikilinks)
@@ -1255,7 +1255,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                     "target": potential_node["id"]
                                                 })
                                             break
-                            except Exception:
+                            except (OSError, IOError, UnicodeDecodeError):
                                 pass
 
             response_data = {"nodes": nodes, "links": links}
@@ -1484,7 +1484,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             try:
                                 rel_url = Path(result_path).relative_to(config.project_root).as_posix()
                                 download_url = f"/{rel_url}"
-                            except Exception:
+                            except ValueError:
                                 download_url = f"/wiki/{Path(result_path).parent.name}/handouts/{Path(result_path).name}"
                             response_data = {
                                 "success": True,
@@ -1594,7 +1594,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                                     break
                                 if is_video:
                                     break
-                        except Exception:
+                        except (OSError, IOError, UnicodeDecodeError):
                             pass
 
                 response_data = {"success": True, "is_video": is_video}
@@ -1805,7 +1805,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             file_bytes = content
                         else:
                             file_bytes = b""
-                    except Exception:
+                    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                         filename = None
                         file_bytes = b""
 
@@ -1836,7 +1836,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                             self.wfile.write(json.dumps(response_data).encode("utf-8"))
                             return
-                    except Exception as ex:
+                    except (OSError, ValueError) as ex:
                         response_data = {"success": False, "error": f"Path resolution failed: {str(ex)}"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
@@ -1862,7 +1862,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 if normalize_name(f.stem) == norm_stem_upload:
                                     try:
                                         f.unlink()
-                                    except Exception:
+                                    except OSError:
                                         pass
                     
                     if target_file.suffix.lower() in (".md", ".txt"):
@@ -1872,7 +1872,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             cleaned_text = LinguisticEngine.sanitize_source_markdown(raw_text)
                             cleaned_text = inject_or_lock_frontmatter(cleaned_text, target_series=target_series, target_book=target_book)
                             target_file.write_text(cleaned_text, encoding="utf-8")
-                        except Exception:
+                        except (OSError, ValueError):
                             with open(target_file, "wb") as f:
                                 f.write(file_bytes)
                     else:
@@ -1925,7 +1925,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
-                except Exception as ex:
+                except (OSError, ValueError) as ex:
                     response_data = {"success": False, "error": f"Path resolution failed: {str(ex)}"}
                     self.wfile.write(json.dumps(response_data).encode("utf-8"))
                     return
@@ -1958,7 +1958,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
-                except Exception as ex:
+                except (OSError, ValueError) as ex:
                     response_data = {"success": False, "error": f"Path resolution failed: {str(ex)}"}
                     self.wfile.write(json.dumps(response_data).encode("utf-8"))
                     return
@@ -1980,7 +1980,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             if (is_upload_media and f_is_media) or (is_upload_sub and f_is_sub):
                                 try:
                                     f.unlink()
-                                except Exception:
+                                except OSError:
                                     pass
 
                 with open(target_file, "wb") as f:
@@ -2001,7 +2001,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                             response_data = {"success": False, "error": "Access Denied: Path traversal detected"}
                             self.wfile.write(json.dumps(response_data).encode("utf-8"))
                             return
-                    except Exception as ex:
+                    except (OSError, ValueError) as ex:
                         response_data = {"success": False, "error": f"Path resolution failed: {str(ex)}"}
                         self.wfile.write(json.dumps(response_data).encode("utf-8"))
                         return
@@ -2021,7 +2021,7 @@ category: "video_transcript"
 """
                     try:
                         placeholder_file.write_text(placeholder_content, encoding="utf-8")
-                    except Exception as pe:
+                    except OSError as pe:
                         print(f"Error writing placeholder transcript: {pe}")
 
                 response_data = {

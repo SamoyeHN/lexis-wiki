@@ -20,7 +20,7 @@ import zlib
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, Union
 
 
 

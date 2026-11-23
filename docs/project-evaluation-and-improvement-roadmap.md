@@ -54,11 +54,11 @@
 ## 3. Phased Improvement Plan
 
 ### Phase 1: Short-Term (1–2 Weeks, High ROI, Zero Breaking Changes)
-- [ ] **Add Minimal Engineering Guardrails**: Configure `ruff` (lint + format) in `pyproject.toml` (enforced incrementally on modified files) and add a lightweight CI/pre-commit check.
+- [x] **Add Minimal Engineering Guardrails**: Configure `ruff` (lint + format) in `pyproject.toml` (enforced incrementally on modified files) and add a lightweight CI/pre-commit check.
 - [x] **Sync Doc Drift (Cloze & PedLex)**: Updated `docs/cloze-discourse-architecture.md`, `GEMINI.md`, `README.md`, `README.zh-CN.md`, `docs/pedlex-database-architecture.md`, and `docs/vocabulary-selection-and-distractor-methodology.md` to reflect Pure Open Cloze (`accepted_answers`) and actual `pedlex.db` table names/counts (`ldoce_phrase_index`: 189,410 rows).
-- [ ] **Remove Stray Root File**: Remove root 0-byte `./pedlex.db` (real 389MB database lives at `./librarian/data/pedlex.db`).
-- [ ] **Close Outer-Layer Test Blind Spots**: Add smoke/contract tests for `exporter.py`, `dashboard.py` core endpoints, and `cli.py`; split `tests/test_linguistics.py` (5,635 lines) into domain-focused files (`test_wsd.py`, `test_vocab_blueprint.py`, `test_cloze.py`, `test_morphology.py`).
-- [ ] **Triage Broad Exceptions**: Audit the 333 `except Exception` blocks—narrow expected external/fallback exceptions with structured warnings, and let internal logic bugs fail fast.
+- [x] **Remove Stray Root File**: Remove root 0-byte `./pedlex.db` (real 389MB database lives at `./librarian/data/pedlex.db`).
+- [x] **Close Outer-Layer Test Blind Spots**: Add smoke/contract tests for `exporter.py`, `dashboard.py` core endpoints, and `cli.py`.
+- [x] **Triage Broad Exceptions**: Audit outer delivery modules (`exporter.py` and `dashboard.py`)—narrow expected external/fallback exceptions with structured warnings, and let internal logic bugs fail fast.
 
 ### Phase 2: Mid-Term (1–2 Months, Structural Debt Reduction)
 - [ ] **Typed Contracts First, Then Decompose Top-4 Monoliths**:
