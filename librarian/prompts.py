@@ -120,7 +120,7 @@ class Prompts:
                     existing_dict = json.loads(existing_json)
                     if existing_dict == schema_dict:
                         json_changed = False
-                except Exception:
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                     pass
             
             if json_changed:
@@ -140,7 +140,7 @@ class Prompts:
                     existing_md = md_path.read_text(encoding="utf-8")
                     if existing_md.strip() == template_text.strip():
                         md_changed = False
-                except Exception:
+                except (OSError, UnicodeDecodeError):
                     pass
             
             if md_changed:

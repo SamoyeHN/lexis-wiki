@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import traceback
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import List, Optional
 from ..config import config, normalize_name
 from ..processor import WikiProcessor
 from .state import DashboardState
+
+logger = logging.getLogger("librarian.dashboard.workers")
 
 
 def background_compile_worker(
@@ -55,6 +58,7 @@ def background_compile_worker(
                 )
     except Exception:
         err_msg = traceback.format_exc()
+        logger.exception("Background compile worker failed for job %s: %s", job_id, err_msg)
         DashboardState.update_job(
             job_id,
             progress=100,
@@ -145,6 +149,7 @@ def background_quiz_worker(
             DashboardState.update_job(job_id, log=f"[QUIZ] Handout saved to: {os.path.basename(result)}")
     except Exception:
         err_msg = traceback.format_exc()
+        logger.exception("Background quiz worker failed for job %s: %s", job_id, err_msg)
         DashboardState.update_job(
             job_id,
             progress=100,
@@ -248,6 +253,7 @@ def background_all_quizzes_worker(job_id: str, filename: str) -> None:
             )
     except Exception:
         err_msg = traceback.format_exc()
+        logger.exception("Background quiz worker failed for job %s: %s", job_id, err_msg)
         DashboardState.update_job(
             job_id,
             progress=100,
@@ -308,6 +314,7 @@ def background_video_import_worker(
             )
     except Exception:
         err_msg = traceback.format_exc()
+        logger.exception("Background video worker failed for job %s: %s", job_id, err_msg)
         DashboardState.update_job(job_id, progress=100, status="failed", log=f"[ERROR] Import failed: {err_msg}")
 
 
@@ -373,4 +380,5 @@ def background_audit_batch_worker(
             DashboardState.update_job(job_id, log=f"📄 Report saved to logs/{report_name}")
     except Exception:
         err_msg = traceback.format_exc()
+        logger.exception("Background audit batch worker failed for job %s: %s", job_id, err_msg)
         DashboardState.update_job(job_id, progress=100, status="failed", log=f"❌ Re-audit exception: {err_msg}")

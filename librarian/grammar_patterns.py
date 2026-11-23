@@ -1027,7 +1027,7 @@ class GrammarPatternEngine:
                 return "with + [NP] + [Participle/Adj/PrepP]"
             elif pattern_id == "absolute_construction":
                 return "[NP] + [V-ing / V-ed Phrase], [Main Subject] + [Main VP]"
-        except Exception:
+        except (AttributeError, IndexError, TypeError, ValueError):
             pass
         return base_formula
 

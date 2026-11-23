@@ -554,7 +554,7 @@ class QuizGeneratorMixin(
             else:
                 try:
                     setattr(quiz_obj, "cefr_level", cefr_val)
-                except Exception:
+                except AttributeError:
                     pass
 
             if template_name == "reading":
@@ -1007,7 +1007,7 @@ class QuizGeneratorMixin(
                         else:
                             try:
                                 quiz_obj.questions = final_clean_questions
-                            except Exception:
+                            except AttributeError:
                                 pass
                         quiz_obj = self._shuffle_quiz_options(quiz_obj, preserve_blueprint_order=has_prescribed_options)
 
@@ -1017,7 +1017,7 @@ class QuizGeneratorMixin(
                         else:
                             try:
                                 setattr(quiz_obj, "cefr_level", cefr_val)
-                            except Exception:
+                            except AttributeError:
                                 pass
 
                         if template_name == "reading":
@@ -1118,7 +1118,7 @@ class QuizGeneratorMixin(
                         else:
                             try:
                                 setattr(quiz_obj, "_expert_audit", audit_report)
-                            except Exception:
+                            except AttributeError:
                                 pass
 
                         final_accuracy = audit_report.get("blind_solve_accuracy", 1.0)

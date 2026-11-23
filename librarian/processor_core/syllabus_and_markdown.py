@@ -1089,8 +1089,8 @@ class SyllabusAndMarkdownMixin:
                 det_c = LinguisticEngine.calculate_text_cefr(clean_p_cefr or raw_src_for_cefr)
                 if det_c:
                     cefr = det_c
-            except Exception:
-                pass
+            except (OSError, ValueError, TypeError) as ex:
+                logger.debug("Failed text CEFR calculation: %s", ex)
 
         extractions_dir = unit_dir / "extractions"
         vocab_path = extractions_dir / f"{core_name}_vocabulary.md"
@@ -1216,7 +1216,7 @@ class SyllabusAndMarkdownMixin:
                                     if 'category: "video_transcript"' in test_content or 'video_type:' in test_content or 'video_url:' in test_content or 'source_url:' in test_content:
                                         source_path = f
                                         break
-                                except Exception:
+                                except (OSError, UnicodeDecodeError):
                                     pass
 
                 # If no explicit video transcript found, try standard source paths
@@ -1242,8 +1242,8 @@ class SyllabusAndMarkdownMixin:
             try:
                 from ..video import VideoService
                 transcript = VideoService.reflow_transcript_lines(transcript)
-            except Exception:
-                pass
+            except (ImportError, AttributeError, ValueError) as ex:
+                logger.debug("Reflow transcript lines error: %s", ex)
             # Try multiple common keys for video URL (quoted or unquoted)
             for key in ["source_url", "video_url", "url", "source"]:
                 m_url = re.search(fr'{key}:\s*["\']?([^\n"\']+)["\']?', transcript)
@@ -1301,7 +1301,7 @@ class SyllabusAndMarkdownMixin:
                             updated_md = re.sub(r'title:\s*"YouTube Video [^"]+"', f'title: "{safe_dl_title}"', updated_md)
                         if updated_md != raw_md:
                             source_path.write_text(updated_md, encoding="utf-8")
-                    except Exception:
+                    except OSError:
                         pass
                 except Exception as dl_err:
                     raise RuntimeError(
@@ -1363,6 +1363,6 @@ class SyllabusAndMarkdownMixin:
                         stem = f.stem
                         inventory.append({"name": rel_name, "type": "raw_source", "path": f})
                         inventory.append({"name": stem, "type": "raw_source", "path": f})
-                    except Exception:
+                    except ValueError:
                         pass
         return inventory

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 import os
 import subprocess
 import threading
@@ -8,6 +9,8 @@ from pathlib import Path
 import urllib.request
 
 from .config import config
+
+logger = logging.getLogger("librarian.tts")
 
 KOKORO_RELEASE_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 KOKORO_MODEL_FILENAME = "kokoro-v1.0.int8.onnx"
@@ -161,7 +164,8 @@ class TTSService:
                     v for v in all_voices
                     if str(v.get("Locale", "")).startswith(("en-US", "en-GB", "en-AU", "en-CA"))
                 ]
-        except Exception:
+        except (OSError, RuntimeError, TimeoutError, ImportError) as e:
+            logger.debug("Could not extract live edge-tts voices: %s", e)
             raw_voices = None
 
         if not raw_voices:
@@ -248,7 +252,8 @@ class TTSService:
             if voices_path.exists():
                 archive = np.load(str(voices_path))
                 voice_ids = sorted(list(archive.keys()))
-        except Exception:
+        except (OSError, ValueError, KeyError, ImportError) as e:
+            logger.debug("Could not extract kokoro voices: %s", e)
             voice_ids = []
 
         if not voice_ids:
@@ -441,7 +446,7 @@ class TTSService:
             )
             self._silent_mp3_cache[duration] = proc.stdout
             return proc.stdout
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             return b""
 
     def _encode_pcm_to_mp3(self, samples, sample_rate: int) -> bytes | None:
@@ -470,9 +475,9 @@ class TTSService:
                     timeout=30,
                 )
                 return proc.stdout if proc.stdout else wav_bytes
-            except Exception:
+            except (subprocess.SubprocessError, OSError):
                 return wav_bytes
-        except Exception as e:
+        except (ImportError, OSError, subprocess.SubprocessError, ValueError) as e:
             print(f"    - ! Audio encoding error: {e}")
             return None
 
@@ -494,7 +499,7 @@ class TTSService:
         try:
             audio_bytes = _run_coro_sync(_synthesize(), timeout=45.0)
             return audio_bytes if audio_bytes else None
-        except Exception as e:
+        except (OSError, RuntimeError, TimeoutError) as e:
             print(f"    - ! Native edge-tts error for voice '{voice}': {e}")
             return None
 
@@ -505,7 +510,7 @@ class TTSService:
             lang = "en-gb" if str(voice).lower().startswith(("bf_", "bm_")) else "en-us"
             samples, sr = kokoro.create(text, voice=voice, speed=1.0, lang=lang)
             return samples, sr
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             print(f"    - ! Native kokoro-onnx error for voice '{voice}': {e}")
             return None, None
 
@@ -673,7 +678,7 @@ class TTSService:
 
             try:
                 turn_binaries = _run_coro_sync(_synthesize_all_edge(), timeout=60.0)
-            except Exception as e:
+            except (OSError, RuntimeError, TimeoutError) as e:
                 print(f"    - ! Concurrent edge-tts batch error, falling back to sequential: {e}")
                 turn_binaries = [self._fetch_edge_native(txt, vc) or b"" for _, txt, vc in turn_tasks]
 

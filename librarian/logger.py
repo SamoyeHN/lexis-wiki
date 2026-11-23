@@ -1,9 +1,12 @@
 import os
 import datetime
 import json
+import logging
 import re
 from pathlib import Path
 from .config import config
+
+logger = logging.getLogger("librarian.llm_logger")
 
 def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, status="SUCCESS", failure_category=None, mode=None, api_constraint=None, duration=None, start_time=None, end_time=None, model=None, context_prompt=None):
     """
@@ -76,7 +79,7 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
                 if audit_res.get("flags"):
                     flags_str = "\n".join(f"  {f}" for f in audit_res["flags"])
                     content.append(f"=== QUALITY_FLAGS ===\n{flags_str}")
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         pass
 
     content.append("")
@@ -116,7 +119,7 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
         try:
             data = json.loads(trimmed)
             formatted_response = json.dumps(data, indent=2, ensure_ascii=False)
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError):
             # Handle markdown codeblock ```json ... ```
             if trimmed.startswith("```"):
                 lines = trimmed.splitlines()
@@ -125,7 +128,7 @@ def log_task(task_name, system_prompt, user_prompt, response_text, schema=None, 
                     try:
                         data = json.loads(inner)
                         formatted_response = f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError, TypeError):
                         pass
     content.append(formatted_response)
     content.append("")

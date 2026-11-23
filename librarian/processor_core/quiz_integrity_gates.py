@@ -429,7 +429,7 @@ class QuizIntegrityGatesMixin:
             try:
                 nlp = LinguisticEngine.get_spacy()
                 clean_passage_words |= {t.lemma_.lower() for t in nlp(passage_text) if t.is_alpha and len(t.lemma_) >= 3}
-            except Exception:
+            except (ValueError, TypeError, AttributeError, RuntimeError):
                 pass
         cefr_upper = str(cefr_level or "B2").upper()
         meta_whitelist = {
@@ -858,7 +858,7 @@ class QuizIntegrityGatesMixin:
                 allow_set.add(tok)
                 try:
                     allow_set.update(LinguisticEngine.inflected_forms(tok))
-                except Exception:
+                except (ValueError, TypeError, AttributeError, KeyError):
                     pass
         return allow_set
 
@@ -1078,7 +1078,7 @@ class QuizIntegrityGatesMixin:
             try:
                 nlp = LinguisticEngine.get_spacy()
                 clean_passage_words |= {t.lemma_.lower() for t in nlp(passage_text) if t.is_alpha and len(t.lemma_) >= 3}
-            except Exception:
+            except (ValueError, TypeError, AttributeError, RuntimeError):
                 pass
         meta_whitelist = {
             "speaker", "transcript", "statement", "mention", "discuss", "indicate", "imply", "conclude",
@@ -1127,7 +1127,7 @@ class QuizIntegrityGatesMixin:
             try:
                 if LinguisticEngine.text_contains_form(t, w):
                     return True
-            except Exception:
+            except (ValueError, TypeError, AttributeError, KeyError):
                 pass
             # Multi-word phrase check (handling inflected verbs/nouns inside the phrase, e.g. "turn up" -> "turned up")
             if " " in w:

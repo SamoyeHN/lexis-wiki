@@ -11,8 +11,11 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import logging
 
 from .config import config
+
+logger = logging.getLogger("librarian.glossary_ledger")
 
 
 def normalize_series_slug(series_name: str) -> str:
@@ -157,8 +160,8 @@ class GlossaryLedger:
                         disk_data["unit_index"] = new_u_idx
 
                         self.data.update(disk_data)
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, KeyError, ValueError) as ex:
+                logger.warning("Could not read or parse existing ledger %s: %s", self.ledger_file, ex)
 
         # If prior books exist, ensure all entries are classified
         if self.get_prior_books():
@@ -339,7 +342,7 @@ class GlossaryLedger:
 
                 if self._series_matches(u_ser) and str(u_bk) == str(self.book):
                     matching_units.append(u_dir)
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 pass
 
         # Sort units naturally: Unit 1 Passage A, Unit 1 Passage B, Unit 2...
@@ -425,8 +428,8 @@ class GlossaryLedger:
                     if entry_key not in u_list:
                         u_list.append(entry_key)
 
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, KeyError, ValueError) as ex:
+                logger.debug("Failed harvesting unit vocabulary in %s: %s", u_dir.name, ex)
 
         self.classify_all_entries()
         self.save()

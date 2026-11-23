@@ -84,7 +84,7 @@ class VideoService:
             if len(parts) == 2:
                 return int(parts[0]) * 60 + float(parts[1])
             return float(parts[0])
-        except Exception:
+        except (ValueError, IndexError):
             return 0.0
 
     @classmethod
@@ -438,7 +438,7 @@ class VideoService:
                 lines = self.parse_vtt(content) if sub_file.endswith('.vtt') else self.parse_srt(content)
                 if lines:
                     transcript_text = "\n".join(lines)
-            except Exception:
+            except (OSError, UnicodeDecodeError, ValueError):
                 transcript_text = None
 
         return title, Path(media_file), transcript_text
@@ -531,7 +531,7 @@ class VideoService:
 
                 _compat_open._lexis_patched = True
                 av.open = _compat_open
-        except Exception:
+        except (AttributeError, TypeError):
             pass
 
     @staticmethod
@@ -642,7 +642,7 @@ class VideoService:
                                     break
                         if local_sub_file:
                             break
-                except Exception:
+                except OSError:
                     pass
 
         if local_sub_file and os.path.exists(local_sub_file):

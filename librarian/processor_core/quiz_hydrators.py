@@ -141,7 +141,7 @@ class QuizHydratorMixin:
                     spk1 = tts_service.get_speaker_name(tts_service.voice_a)
                 if not spk2 or spk2.lower() in ("speaker 2", "speaker2"):
                     spk2 = tts_service.get_speaker_name(tts_service.voice_b)
-            except Exception:
+            except (ImportError, AttributeError, KeyError, OSError, RuntimeError):
                 pass
 
         script_list = (

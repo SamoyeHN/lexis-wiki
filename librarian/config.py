@@ -95,14 +95,14 @@ class Config:
                         
                         self.data.update(user_config)
                     self._config_mtime = current_mtime
-            except Exception as e:
+            except (OSError, json.JSONDecodeError) as e:
                 print(f"Warning: Could not load {config_path}: {e}")
 
     def ensure_dirs(self):
         """Create the wiki base directory if it doesn't exist."""
         try:
             self.wiki_content_path.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
+        except OSError as e:
             print(f"Warning: Could not create directories: {e}")
 
     def seed_sample_unit(self):
@@ -113,7 +113,7 @@ class Config:
             if sample_src.exists() and not target_src.exists():
                 target_src.parent.mkdir(parents=True, exist_ok=True)
                 target_src.write_text(sample_src.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception as e:
+        except OSError as e:
             print(f"Warning: Could not seed sample unit: {e}")
 
     def initialize_project(self, target_path=None):
@@ -143,7 +143,7 @@ class Config:
             self.seed_sample_unit()
 
             return True, f"Successfully initialized project at {target_path} (wiki/ structure created)"
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             return False, str(e)
 
     def update_model(self, model_name):
@@ -163,7 +163,7 @@ class Config:
             if config_path.exists():
                 self._config_mtime = config_path.stat().st_mtime
             return True, f"{key} updated to {value}"
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             return False, str(e)
 
     def get(self, key, default=None):
@@ -259,7 +259,7 @@ def is_supplement_unit(unit_name: str, filename_stem: str, current_unit: str = "
                         head = f_check.read(1000)
                     if 'category: "video_transcript"' not in head and 'video_type:' not in head and "Transcription is currently in progress" not in head:
                         primary_exists_and_is_standard_text = True
-                except Exception:
+                except (OSError, UnicodeDecodeError):
                     pass
                 break
 

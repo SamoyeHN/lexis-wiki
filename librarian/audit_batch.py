@@ -113,7 +113,7 @@ def resolve_source_text(unit: str, project_root: Optional[str] = None) -> str:
     if preferred.exists() and preferred.is_file():
         try:
             return preferred.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             return ""
 
     for ext in (".md", ".txt"):
@@ -121,7 +121,7 @@ def resolve_source_text(unit: str, project_root: Optional[str] = None) -> str:
         if candidates:
             try:
                 return candidates[0].read_text(encoding="utf-8")
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 return ""
     return ""
 

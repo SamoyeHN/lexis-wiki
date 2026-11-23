@@ -160,7 +160,7 @@ class ExtractionRunnerMixin:
                     rel_parts = resolved_input.relative_to(resolved_wiki).parts
                     if len(rel_parts) >= 3 and rel_parts[1] == "sources":
                         unit_folder_name = rel_parts[0]
-            except Exception:
+            except (ValueError, OSError, RuntimeError):
                 pass
 
             if not unit_folder_name:

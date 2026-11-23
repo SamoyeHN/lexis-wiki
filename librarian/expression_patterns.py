@@ -476,7 +476,7 @@ class ExpressionPatternEngine:
             if tree_patterns:
                 try:
                     self.matcher.add(pat_id, tree_patterns)
-                except Exception:
+                except (ValueError, KeyError):
                     pass
 
     @classmethod
@@ -605,7 +605,7 @@ class ExpressionPatternEngine:
                                         break
                     if not is_true_three_part:
                         return None
-                except Exception:
+                except (KeyError, TypeError, AttributeError):
                     pass
 
                 phrase = cand_phrase
