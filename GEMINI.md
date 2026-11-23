@@ -58,7 +58,7 @@
 - **Modular Architecture (`librarian/linguistics_core/`)**:
   - `quiz_patterns.py`: Five-source authentic example pre-selection and atomic pattern bundles.
   - `quiz_frames.py`: First-principles verb patient ontology and example-derived cloze slot frame slicing.
-  - `quiz_vocab.py`: Target skeleton assembly, option coordination, and universal double-key screening.
+  - `quiz_vocab.py`: Unified facade composing modular skeleton mixins (`quiz_vocab_cloze`, `quiz_skeleton_prep`, `quiz_skeleton_anchors`, `quiz_skeleton_distractors`, `quiz_skeleton_frames`, `quiz_skeleton_builder`).
   - `quiz_translation.py`: Translation minimal-pair micro-task blueprints and error-injection specs.
   - `quiz_listening.py`: Functional dialogue trajectories and listening comprehension blueprints.
   - `quiz_skeletons.py`: Unified Facade Mixin exposing backward-compatible public APIs.
