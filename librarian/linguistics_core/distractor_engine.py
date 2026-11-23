@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .distractor_guards import DistractorGuardsMixin
+from .distractor_guards import (
+    DistractorGuardsCollisionMixin,
+    DistractorGuardsCountabilityMixin,
+    DistractorGuardsInversionMixin,
+    DistractorGuardsMixin,
+    DistractorGuardsValencyMixin,
+)
 from .distractor_paronyms import DistractorParonymsMixin
 from .distractor_phrases import DistractorPhrasesMixin
 from .distractor_inflections import DistractorInflectionsMixin
@@ -38,7 +44,11 @@ class DistractorEngineMixin(
 
 __all__ = [
     "DistractorEngineMixin",
+    "DistractorGuardsCollisionMixin",
+    "DistractorGuardsCountabilityMixin",
+    "DistractorGuardsInversionMixin",
     "DistractorGuardsMixin",
+    "DistractorGuardsValencyMixin",
     "DistractorParonymsMixin",
     "DistractorPhrasesMixin",
     "DistractorInflectionsMixin",
