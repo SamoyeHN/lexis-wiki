@@ -7,8 +7,10 @@ import * as api from './api.js';
 import * as state from './state.js';
 import * as utils from './utils.js';
 import * as glossary from './glossary.js';
+import * as hero_board from './hero_board.js';
+import * as graph from './graph.js';
 
-export { api, state, utils, glossary };
+export { api, state, utils, glossary, hero_board, graph };
 
 // Expose modules namespace on window for developer console and debugging
 if (typeof window !== 'undefined') {
@@ -16,6 +18,8 @@ if (typeof window !== 'undefined') {
         api,
         state,
         utils,
-        glossary
+        glossary,
+        hero_board,
+        graph
     };
 }

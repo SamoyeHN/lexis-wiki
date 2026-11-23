@@ -15,7 +15,7 @@
 
     // canvas variables for 2D network force graph
     let canvas = document.getElementById('wiki-canvas');
-    let ctx = canvas.getContext('2d');
+    let ctx = canvas ? canvas.getContext('2d') : null;
     let nodes = [];
     let links = [];
     let scale = 1;
@@ -5457,7 +5457,6 @@
     window._populateGenderVoiceSelect = _populateGenderVoiceSelect;
     window.buildStandaloneExtractionHtml = buildStandaloneExtractionHtml;
     window.bundleStandaloneExe = bundleStandaloneExe;
-    window.cleanup = cleanup;
     window.clearLibrarySearch = clearLibrarySearch;
     window.closeSettingsModal = closeSettingsModal;
     window.closeUnitWorkspace = closeUnitWorkspace;
@@ -5489,7 +5488,6 @@
     window.generateQuiz = generateQuiz;
     window.getActiveSubTabCategory = getActiveSubTabCategory;
     window.getSeriesDisplayName = getSeriesDisplayName;
-    window.getUnitNameFromPath = getUnitNameFromPath;
     window.handleFileSelect = handleFileSelect;
     window.handleLocalVideoAction = handleLocalVideoAction;
     window.hbBarHTML = hbBarHTML;
@@ -5551,7 +5549,6 @@
     window.showToast = showToast;
     window.sortHeroBoard = sortHeroBoard;
     window.startReAuditAll = startReAuditAll;
-    window.step = step;
     window.stopTTSVoicePreview = stopTTSVoicePreview;
     window.submitLexisAsk = submitLexisAsk;
     window.switchMediaTab = switchMediaTab;

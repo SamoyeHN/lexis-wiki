@@ -268,7 +268,9 @@ def test_static_asset_serving_es_modules():
         "/static/js/modules/api.js",
         "/static/js/modules/state.js",
         "/static/js/modules/utils.js",
-        "/static/js/modules/glossary.js"
+        "/static/js/modules/glossary.js",
+        "/static/js/modules/hero_board.js",
+        "/static/js/modules/graph.js"
     ]:
         handler.wfile.seek(0)
         handler.wfile.truncate(0)
