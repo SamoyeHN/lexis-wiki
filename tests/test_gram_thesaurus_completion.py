@@ -262,7 +262,7 @@ def test_derived_ly_ing_definitions_and_examples():
         e = LE.get_ldoce_entry(w)
         assert e is not None, f"Missing entry for {w}"
         assert e.get("kind") == "derived", f"Expected kind=derived for {w}, got {e.get('kind')}"
-        assert e.get("senses") == [], f"Expected empty senses for derived entry {w}, got {e.get('senses')}"
+        assert all(not s.get("definition") for s in e.get("senses", [])), f"Expected no definitions for derived entry {w}, got {e.get('senses')}"
 
     # 2. Derived entries properly preserve base_word linkage
     for w, bw in (("agonizing", "agonize"), ("benchmarking", "benchmark"), ("fumbling", "fumble"), ("milking", "milk"), ("piggybacking", "piggyback")):

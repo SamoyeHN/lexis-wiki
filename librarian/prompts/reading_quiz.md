@@ -11,7 +11,7 @@ Create a reading comprehension assessment calibrated to the curriculum level ({c
 2. **Blueprint Execution Mandate**:
    - Strictly execute each pre-computed Item Specification in sequential order (Item 1 to Item {count}).
    - Use the exact 'Mandatory Question Stem' specified for that item without alteration.
-   - Paraphrase the specified anchor sentence following 'Paraphrase Target' to construct the uniquely correct answer (NEVER copy 3 or more consecutive words from the anchor sentence).
+   - Paraphrase the specified anchor sentence following 'Paraphrase Target' to construct the uniquely correct answer (NEVER copy 3 or more consecutive words from the anchor sentence; use synonyms or fresh syntactic structures).
    - Strictly implement the 3 prescribed distractor fallacy operators for that item.
    - Questions must require genuine comprehension of the text rather than superficial string-matching. Use clear phrasing without outer quotation marks.
 

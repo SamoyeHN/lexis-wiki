@@ -1870,7 +1870,7 @@ class WsdEngineMixin:
                                             score += 35
                                         # Specialized geographic/spatial alignment for world/earth/country
                                         if po in ("earth", "world", "globe", "country", "empire", "land"):
-                                            if any(k in s_defn for k in ("world", "earth", "place", "part of the world", "distant")):
+                                            if any(re.search(rf"\b{re.escape(k)}\b", s_defn) for k in ("world", "earth", "part of the world", "distant place", "region", "territory")):
                                                 score += 35
 
                             if tok.dep_ == "compound" and tok.head and tok.head.pos_ == "NOUN":
@@ -2567,7 +2567,7 @@ class WsdEngineMixin:
 
                                     # Human subject physical body movement / posture alignment vs situation/business turnaround
                                     # (e.g. 'She turned around and walked away', 'The student turned around and smiled')
-                                    if any(k in sp or k in s_defn for k in ("your body", "body", "look in a different direction", "move your body", "posture")):
+                                    if any(re.search(rf"\b{re.escape(k)}\b", sp or "") or re.search(rf"\b{re.escape(k)}\b", s_defn) for k in ("your body", "body", "look in a different direction", "move your body", "posture")):
                                         score += 60
                                     elif any(k in s_defn for k in ("if a situation", "if a business", "if a shop or business", "consider an idea", "making a product")):
                                         score -= 40

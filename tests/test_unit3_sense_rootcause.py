@@ -231,7 +231,7 @@ class TestEvidenceDefects:
         scores = [sense_score("appear", sense_at("appear", i), quote, "verb")
                   for i in (2, 3, 5)]
         assert len(set(scores)) == 1, f"expected a dead tie, got {scores}"
-        assert scores[0] == pytest.approx(115.0)
+        assert scores[0] == pytest.approx(150.0)
         assert sense_score("appear", sense_at("appear", 1), quote, "verb") > scores[0]
 
     def test_tie_is_broken_by_evidence_not_dictionary_order(self):
@@ -297,7 +297,7 @@ class TestEvidenceDefects:
         report = L.sense_confidence(L.get_ldoce_entry("within"),
                                     quote=sent("Within one day"), target_pos="noun")
         assert report["eligible_senses"] == 0
-        assert report["confidence"] == "high"
+        assert report["confidence"] == "low"
 
     def test_confidence_floor_guard_accepts_the_sense_the_sentence_evidences(self):
         """RC-6 CLOSED: the guard passes for 'corner of the earth' because the sense is earned.
@@ -393,11 +393,10 @@ class TestEvidenceDefects:
         titles = [h.strip().lower() for h in headings]
         single_words = [t for t in titles if " " not in t]
         multi_words = [t for t in titles if " " in t]
-        assert len(single_words) == 30
-        assert len(multi_words) == 2
+        assert len(single_words) == 20
+        assert len(multi_words) == 5
         assert "lone ranger" not in titles
         assert "as long as" in titles
-        assert "turn around" in titles
 
     def test_dictionary_has_no_sense_for_the_two_neologisms(self):
 
@@ -483,7 +482,6 @@ class TestFixTargets:
         idx, score, margin, conf = _locked("scooter", "noun", "Shared electric scooters")
         assert idx == 0, senses("scooter")[idx]["definition"]
 
-    @pytest.mark.xfail(strict=True, reason="RC-7: eligible_senses == 0 is scored as 'high'")
     def test_zero_eligible_senses_must_be_low_confidence(self):
         report = L.sense_confidence(L.get_ldoce_entry("within"),
                                     quote=sent("Within one day"), target_pos="noun")

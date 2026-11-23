@@ -3294,42 +3294,45 @@ class PedlexDbMixin:
                             "authentic_example": ex0,
                         })
                     elif pats and s_pos in ("verb", "adjective"):
+                        var_lead_pat = r"^(?:" + "|".join(re.escape(v) for v in q_vars) + r")"
                         for raw_p in pats:
                             p0 = re.sub(r"\s+\betc\.?\b", "", str(raw_p)).strip()
                             if not p0 or len(p0.split()) > 5 or "/" in p0:
                                 continue
                             p0_low = p0.lower()
-                            if re.search(rf"^{re.escape(w_clean)}\s+to\s+do\b", p0_low):
+                            if re.search(rf"{var_lead_pat}\s+to\s+do\b", p0_low):
+                                norm_p0 = var_alt_re.sub(w_clean, p0)
                                 out.append({
                                     "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                                     "trap_type": "SYNTAX_COMP_TRAP",
                                     "forbidden_frame": f"*{w_clean} + V-ing (gerund)*",
                                     "bad_example": f"*{w_clean} doing something*",
-                                    "good_example": ex0 or p0,
-                                    "rule_note": f"'{w_clean}' governs a 'to'-infinitive ('{p0}'), never a bare '-ing' gerund (*{w_clean} doing*).",
-                                    "correct_frame": p0,
+                                    "good_example": ex0 or norm_p0,
+                                    "rule_note": f"'{w_clean}' governs a 'to'-infinitive ('{norm_p0}'), never a bare '-ing' gerund (*{w_clean} doing*).",
+                                    "correct_frame": norm_p0,
                                     "wrong_frame": f"*{w_clean} + V-ing* (using an `-ing` gerund instead of `to` + base verb)",
-                                    "warning_note": f"Required frame: {p0} (never *{w_clean} + V-ing*)",
+                                    "warning_note": f"Required frame: {norm_p0} (never *{w_clean} + V-ing*)",
                                     "authentic_example": ex0,
                                 })
                                 break
-                            elif re.search(rf"^{re.escape(w_clean)}\s+doing\b", p0_low):
+                            elif re.search(rf"{var_lead_pat}\s+doing\b", p0_low):
+                                norm_p0 = var_alt_re.sub(w_clean, p0)
                                 out.append({
                                     "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                                     "trap_type": "SYNTAX_COMP_TRAP",
                                     "forbidden_frame": f"*{w_clean} + to-infinitive*",
                                     "bad_example": f"*{w_clean} to do something*",
-                                    "good_example": ex0 or p0,
-                                    "rule_note": f"'{w_clean}' governs an '-ing' gerund complement ('{p0}'), never a 'to'-infinitive (*{w_clean} to do*).",
-                                    "correct_frame": p0,
+                                    "good_example": ex0 or norm_p0,
+                                    "rule_note": f"'{w_clean}' governs an '-ing' gerund complement ('{norm_p0}'), never a 'to'-infinitive (*{w_clean} to do*).",
+                                    "correct_frame": norm_p0,
                                     "wrong_frame": f"*{w_clean} + to-infinitive* (using `to` + base verb instead of `-ing` gerund)",
-                                    "warning_note": f"Required frame: {p0} (never *{w_clean} to do*)",
+                                    "warning_note": f"Required frame: {norm_p0} (never *{w_clean} to do*)",
                                     "authentic_example": ex0,
                                 })
                                 break
                             else:
                                 m_gov_prep = re.match(
-                                    rf"^{re.escape(w_clean)}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\s+(?:somebody|something|sb|sth)\b",
+                                    rf"{var_lead_pat}\s+(in|on|at|to|with|for|from|of|into|about|over|against)\s+(?:somebody|something|sb|sth)\b",
                                     p0_low,
                                 )
                                 if m_gov_prep:
@@ -3339,16 +3342,17 @@ class PedlexDbMixin:
                                         "to": "for/with", "of": "from/about", "from": "of", "for": "to",
                                         "about": "on/of", "over": "on", "against": "with", "at": "in/to",
                                     }.get(prep_tok, "to")
+                                    norm_p0 = var_alt_re.sub(w_clean, p0)
                                     out.append({
                                         "word": w_clean, "pos": s_pos, "sense_idx": s_idx,
                                         "trap_type": "PREP_COLLOC_TRAP",
                                         "forbidden_frame": f"*{w_clean} {alt_prep}*",
                                         "bad_example": f"*{w_clean} {alt_prep} something*",
-                                        "good_example": ex0 or p0,
-                                        "rule_note": f"Use '{p0}', not '*{w_clean} {alt_prep}*'.",
-                                        "correct_frame": p0,
+                                        "good_example": ex0 or norm_p0,
+                                        "rule_note": f"Use '{norm_p0}', not '*{w_clean} {alt_prep}*'.",
+                                        "correct_frame": norm_p0,
                                         "wrong_frame": f"*{w_clean} {alt_prep}*",
-                                        "warning_note": f"Required frame: {p0}",
+                                        "warning_note": f"Required frame: {norm_p0}",
                                         "authentic_example": ex0,
                                     })
                                     break

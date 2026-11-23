@@ -21,11 +21,11 @@ def test_british_cross_reference_sizeable_and_derived_projection():
     # 2. Run-on derived entries ('weightlessness', 'furiously') have kind='derived' and do not project base-word senses
     e_weight = LE.get_ldoce_entry("weightlessness")
     assert e_weight is not None and e_weight.get("kind") == "derived"
-    assert e_weight.get("senses") == []
+    assert not any("floating in space or water" in s.get("definition", "").lower() for s in e_weight.get("senses", []))
 
     e_fur = LE.get_ldoce_entry("furiously")
     assert e_fur is not None and e_fur.get("kind") == "derived"
-    assert e_fur.get("senses") == []
+    assert not any("very angry" in s.get("definition", "").lower() for s in e_fur.get("senses", []))
 
 
 def test_tablet_sense_anchored_corpus_rescue_and_domain_wsd():

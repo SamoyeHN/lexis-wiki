@@ -21,6 +21,13 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 # Grounded in Contrastive SLA Error Taxonomies & PedLex Collocations
 # -----------------------------------------------------------------------------
 L1_FALSE_COLLOCATION_CATALOG: Dict[str, Dict[str, str]] = {
+    "within": {
+        "correct_frame": "within [time limit]",
+        "wrong_frame": "*during / inside [time limit]*",
+        "pedagogical_note": "In English, use 'within' to denote a time limit (e.g. 'within 24 hours'); avoid Chinglish calques '*during 24 hours*' or '*inside 24 hours*' for Chinese '在……之内'.",
+        "model_example": "We should have the test results back within 24 hours.",
+        "zh_cue": "在……之内 / 在……内",
+    },
     "knowledge": {
         "correct_frame": "acquire / gain knowledge",
         "wrong_frame": "*learn knowledge*",
@@ -410,6 +417,16 @@ class QuizTranslationMixin:
                         return True
                     if "wrong preposition/complement" in wf_low or len(cf.split()) > 6:
                         return True
+                    # Reject traps where wrong_frame is an entire sentence or clause (> 6 words or contains punctuation)
+                    # to prevent LLM prompts from being polluted with spliced unrelated dictionary examples
+                    if len(wf_low.split()) > 6 or any(p in wf_low for p in (".", "!", "?", ";")):
+                        return True
+                    # For COMMON_ERROR_CORPUS, target word must be present in good_example (the correct target usage),
+                    # not merely present as the erroneous token in bad_example!
+                    if t_type == "COMMON_ERROR_CORPUS":
+                        good_ex = str(t_obj.get("good_example") or "").lower()
+                        if w_clean not in good_ex:
+                            return True
                     if t_type != "PREP_COLLOC_TRAP":
                         return False
                     # Reject generic nominal 'Noun + of' preposition traps (e.g. 'emblem of' vs '*emblem from*',

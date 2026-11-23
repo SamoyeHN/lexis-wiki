@@ -32,7 +32,7 @@ Generate a realistic everyday or academic spoken dialogue and a rigorous compreh
 {skill_distribution_guidance}
    - **Question Stem Guidance**: {question_stem_guidance}
    - **Option Guidelines & Single-Fit Validity**:
-     * Provide 4 concise, grammatically parallel options grounded in your generated dialogue ({option_complexity_guidance}).
+     * Provide 4 concise, grammatically parallel options grounded in your generated dialogue ({option_complexity_guidance}). Never exceed the word limit for options (strictly <= 12 words for CEFR A1/A2, <= 16 words for B1).
      * **Correct Answer (`options[correct_answer_index]`)**: Place the true answer at the exact `Prescribed Correct Answer Index`, paraphrasing the target exchange naturally—NEVER copy 5+ consecutive words verbatim from a dialogue turn.
      * **3 Plausible Distractors**: Fill the other 3 option slots with realistic false choices grounded in your dialogue using the item's suggested `Distractor Traps` (e.g., swapping speaker roles, flipping a condition/polarity, or mixing in a detail from another turn). Ensure no distractor is accidentally true.
 

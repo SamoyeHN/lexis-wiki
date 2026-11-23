@@ -749,6 +749,8 @@ class DistractorEngineMixin:
                 ("uncountable" in _t_gram_low and "countable" not in re.sub(r"\buncountable\b", "", _t_gram_low))
                 or cls._is_primarily_uncountable_noun(clean_target)
             )
+            and not _bridged_concrete_plural_ics
+            and "plural" not in _t_gram_low
         )
         target_strictly_countable = (
             wn_pos == "n"
@@ -2903,62 +2905,70 @@ class DistractorEngineMixin:
                             if len(safe_distractors) >= target_count:
                                 break
                 elif paronym_cands:
-                    best_p_word, best_p_score = paronym_cands[0]
-                    # "2 + 1" Standard Distractor Blending:
-                    # - For nouns (`wn_pos == 'n'`), Slot 3 is populated by a high-discrimination morphological/phonetic peer when:
-                    #   (a) Multi-syllable root-sharing paronym (`len >= 7` and `pref >= 4`, e.g. specimen/spectrum, emergence/emergency, scientist/science),
-                    #   (b) Stressed `-ion` (`-tion`/`-sion`) rhyme peer (`recession` -> `concession`/`succession`/`obsession`, `collision` -> `precision`/`coalition`),
-                    #   (c) Academic suffix family peer (`-ics`, `-ist`, `-ism`, `-ship`, `-ware`, `-type`, `-ology`, e.g. `electronics`/`physics`, `scientist`/`physicist`, `optimism`/`criticism`, `hardware`/`software`),
-                    #   (d) Rhyme-containing noun peer (`min_len >= 5` and suffix containment, e.g. `venue` -> `revenue`/`avenue`),
-                    #   while never popping concrete coordinates for short everyday words (shopper, heat, cricket, clue, coat).
-                    if wn_pos == "n":
-                        _acad_sfx = ("ics", "ist", "ism", "ship", "ware", "type", "ology", "archy", "cracy")
-                        is_true_orthographic_peer = (
-                            (len(clean_target) >= 7 and cls._common_prefix_len(clean_target, best_p_word) >= 4)
-                            or (
-                                clean_target.endswith(("tion", "sion"))
-                                and best_p_word.endswith(("tion", "sion"))
-                                and cls._common_suffix_len(clean_target, best_p_word) >= 4
-                                and cls._phonetic_rhyme_tail(clean_target) == cls._phonetic_rhyme_tail(best_p_word)
+                    for best_p_word, best_p_score in paronym_cands:
+                        # "2 + 1" Standard Distractor Blending:
+                        # - For nouns (`wn_pos == 'n'`), Slot 3 is populated by a high-discrimination morphological/phonetic peer when:
+                        #   (a) Multi-syllable root-sharing paronym (`len >= 7` and `pref >= 4`, e.g. specimen/spectrum, emergence/emergency, scientist/science),
+                        #   (b) Stressed `-ion` (`-tion`/`-sion`) rhyme peer (`recession` -> `concession`/`succession`/`obsession`, `collision` -> `precision`/`coalition`),
+                        #   (c) Academic suffix family peer (`-ics`, `-ist`, `-ism`, `-ship`, `-ware`, `-type`, `-ology`, e.g. `electronics`/`physics`, `scientist`/`physicist`, `optimism`/`criticism`, `hardware`/`software`),
+                        #   (d) Rhyme-containing noun peer (`min_len >= 5` and suffix containment, e.g. `venue` -> `revenue`/`avenue`),
+                        #   while never popping concrete coordinates for short everyday words (shopper, heat, cricket, clue, coat).
+                        if wn_pos == "n":
+                            _acad_sfx = ("ics", "ist", "ism", "ship", "ware", "type", "ology", "archy", "cracy")
+                            is_true_orthographic_peer = (
+                                (len(clean_target) >= 7 and cls._common_prefix_len(clean_target, best_p_word) >= 4)
+                                or (
+                                    clean_target.endswith(("tion", "sion"))
+                                    and best_p_word.endswith(("tion", "sion"))
+                                    and cls._common_suffix_len(clean_target, best_p_word) >= 4
+                                    and cls._phonetic_rhyme_tail(clean_target) == cls._phonetic_rhyme_tail(best_p_word)
+                                )
+                                or (
+                                    clean_target.endswith(("ance", "ence", "ment"))
+                                    and best_p_word.endswith(("ance", "ence", "ment"))
+                                    and cls._common_suffix_len(clean_target, best_p_word) >= 5
+                                    and cls._phonetic_rhyme_tail(clean_target) == cls._phonetic_rhyme_tail(best_p_word)
+                                )
+                                or any(clean_target.endswith(sf) and best_p_word.endswith(sf) for sf in _acad_sfx)
+                                or (
+                                    min(len(clean_target), len(best_p_word)) >= 5
+                                    and abs(len(clean_target) - len(best_p_word)) <= 3
+                                    and (best_p_word.endswith(clean_target) or clean_target.endswith(best_p_word))
+                                )
                             )
-                            or (
-                                clean_target.endswith(("ance", "ence", "ment"))
-                                and best_p_word.endswith(("ance", "ence", "ment"))
-                                and cls._common_suffix_len(clean_target, best_p_word) >= 5
-                                and cls._phonetic_rhyme_tail(clean_target) == cls._phonetic_rhyme_tail(best_p_word)
+                        else:
+                            is_true_orthographic_peer = (
+                                clean_target[0] == best_p_word[0]
+                                or cls._common_suffix_len(clean_target, best_p_word) >= 4
                             )
-                            or any(clean_target.endswith(sf) and best_p_word.endswith(sf) for sf in _acad_sfx)
+                        can_replace_coord = is_true_orthographic_peer and (
+                            best_p_score >= 45
                             or (
-                                min(len(clean_target), len(best_p_word)) >= 5
-                                and abs(len(clean_target) - len(best_p_word)) <= 3
-                                and (best_p_word.endswith(clean_target) or clean_target.endswith(best_p_word))
+                                pure_generic_coords
+                                and best_p_score >= 28
+                                and cls._common_prefix_len(clean_target, best_p_word) >= 4
                             )
                         )
-                    else:
-                        is_true_orthographic_peer = (
-                            clean_target[0] == best_p_word[0]
-                            or cls._common_suffix_len(clean_target, best_p_word) >= 4
-                        )
-                    can_replace_coord = is_true_orthographic_peer and (
-                        best_p_score >= 45
-                        or (
-                            pure_generic_coords
-                            and best_p_score >= 28
-                            and cls._common_prefix_len(clean_target, best_p_word) >= 4
-                        )
-                    )
-                    if wn_pos == "n":
-                        if target_strictly_uncountable and cls._is_primarily_countable_noun(best_p_word):
-                            if sum(1 for s in safe_distractors if cls._is_primarily_countable_noun(s)) >= 1:
-                                can_replace_coord = False
-                        elif target_strictly_countable and cls._is_primarily_uncountable_noun(best_p_word):
-                            if sum(1 for s in safe_distractors if cls._is_primarily_uncountable_noun(s)) >= 1:
-                                can_replace_coord = False
-                    if can_replace_coord and best_p_word not in safe_distractors:
-                        popped = safe_distractors.pop()
-                        distractor_metadata.pop(popped, None)
-                        safe_distractors.append(best_p_word)
-                        distractor_metadata[best_p_word] = "orthographic_paronym"
+                        replace_idx = -1
+                        if wn_pos == "n" and can_replace_coord:
+                            if target_strictly_uncountable and cls._is_primarily_countable_noun(best_p_word):
+                                c_indices = [idx for idx, s in enumerate(safe_distractors) if cls._is_primarily_countable_noun(s)]
+                                if len(c_indices) >= 1:
+                                    replace_idx = c_indices[-1]
+                                else:
+                                    can_replace_coord = False
+                            elif target_strictly_countable and cls._is_primarily_uncountable_noun(best_p_word):
+                                u_indices = [idx for idx, s in enumerate(safe_distractors) if cls._is_primarily_uncountable_noun(s)]
+                                if len(u_indices) >= 1:
+                                    replace_idx = u_indices[-1]
+                                else:
+                                    can_replace_coord = False
+                        if can_replace_coord and best_p_word not in safe_distractors:
+                            popped = safe_distractors.pop(replace_idx)
+                            distractor_metadata.pop(popped, None)
+                            safe_distractors.append(best_p_word)
+                            distractor_metadata[best_p_word] = "orthographic_paronym"
+                            break
 
         # Tier 3.9: Noun Countability-Contrast Safe Distractor Slot ("countability_contrast_uncountable")
         # For countable singular/plural or [plural] nouns in `_NOUN_COUNTABILITY_CONTRAST_MAP`, inject at most 1
@@ -3094,30 +3104,45 @@ class DistractorEngineMixin:
                 or t_gram_prof_n.get("pure_uncountable")
             )
             if is_strictly_uncountable_noun_target:
+                t_lem_n = cls.lemma_of(clean_target)
+                rev_map = cls.get_noun_countability_contrast_map(reverse=True)
+                curated_contrast_cands: List[str] = []
+                for key_w in (clean_target, t_lem_n):
+                    for c_cand in rev_map.get(key_w, []):
+                        if c_cand not in curated_contrast_cands:
+                            curated_contrast_cands.append(c_cand)
+
                 # 1. Promote or normalize existing countable distractor metadata (protecting paronyms and antonyms)
+                curated_in_distractors = [d for d in safe_distractors if d in curated_contrast_cands]
+                if curated_in_distractors:
+                    distractor_metadata[curated_in_distractors[0]] = "countability_contrast_countable"
+                elif not curated_contrast_cands:
+                    c_distractors = [
+                        d for d in safe_distractors
+                        if cls._is_primarily_countable_noun(d)
+                        and distractor_metadata.get(d) not in ("orthographic_paronym", "antonym")
+                    ]
+                    if c_distractors:
+                        distractor_metadata[c_distractors[0]] = "countability_contrast_countable"
+
+                # Prune excess countable distractors beyond the 1-foil quota
                 c_distractors = [
                     d for d in safe_distractors
                     if cls._is_primarily_countable_noun(d)
                     and distractor_metadata.get(d) not in ("orthographic_paronym", "antonym")
                 ]
-                if c_distractors:
-                    distractor_metadata[c_distractors[0]] = "countability_contrast_countable"
-                    # Prune any excess countable distractors beyond the 1-foil quota
-                    if len(c_distractors) > 1:
-                        for extra_c in c_distractors[1:]:
-                            if extra_c in safe_distractors:
-                                safe_distractors.remove(extra_c)
-                                distractor_metadata.pop(extra_c, None)
+                if len(c_distractors) > 1:
+                    keep_c = curated_in_distractors[0] if curated_in_distractors else c_distractors[0]
+                    for extra_c in list(c_distractors):
+                        if extra_c != keep_c and extra_c in safe_distractors:
+                            safe_distractors.remove(extra_c)
+                            distractor_metadata.pop(extra_c, None)
 
-                # 2. If no countable foil is present yet, inject at most 1 from reverse countability contrast map or thesaurus
-                if not any(v == "countability_contrast_countable" for v in distractor_metadata.values()):
-                    t_lem_n = cls.lemma_of(clean_target)
-                    rev_map = cls.get_noun_countability_contrast_map(reverse=True)
-                    contrast_pool_c: List[str] = []
-                    for key_w in (clean_target, t_lem_n):
-                        for c_cand in rev_map.get(key_w, []):
-                            if c_cand not in contrast_pool_c:
-                                contrast_pool_c.append(c_cand)
+                # 2. If no countable foil is present yet, or a curated foil is available and missing, inject at most 1 from reverse countability contrast map or thesaurus
+                has_curated_contrast = any(d in curated_contrast_cands for d in safe_distractors)
+                need_curated_injection = bool(curated_contrast_cands and not has_curated_contrast)
+                if not any(v == "countability_contrast_countable" for v in distractor_metadata.values()) or need_curated_injection:
+                    contrast_pool_c: List[str] = list(curated_contrast_cands)
 
                     # Also inspect LDOCE thesaurus for countable peers
                     t_entry_n = cls.get_ldoce_entry(t_lem_n) or cls.get_ldoce_entry(clean_target)
@@ -3153,7 +3178,20 @@ class DistractorEngineMixin:
                             break
 
                     if picked_countable:
-                        if len(safe_distractors) < target_count:
+                        # If safe_distractors has an un-curated countable distractor, replace it
+                        uncurated_c = [
+                            d for d in safe_distractors
+                            if cls._is_primarily_countable_noun(d)
+                            and d not in curated_contrast_cands
+                            and distractor_metadata.get(d) not in ("orthographic_paronym", "antonym")
+                        ]
+                        if uncurated_c:
+                            rep_d = uncurated_c[0]
+                            rep_idx = safe_distractors.index(rep_d)
+                            safe_distractors[rep_idx] = picked_countable
+                            distractor_metadata.pop(rep_d, None)
+                            distractor_metadata[picked_countable] = "countability_contrast_countable"
+                        elif len(safe_distractors) < target_count:
                             safe_distractors.append(picked_countable)
                             distractor_metadata[picked_countable] = "countability_contrast_countable"
                         elif len(safe_distractors) >= target_count:
@@ -4363,7 +4401,13 @@ class DistractorEngineMixin:
         if not senses:
             return False
         g0 = str(senses[0].get("grammar") or "").lower()
-        return "uncountable" in g0 and "countable" not in re.sub(r"\buncountable\b", "", g0)
+        m_u = re.search(r"\buncountable\b", g0)
+        m_c = re.search(r"\bcountable\b", g0)
+        if m_u and not m_c:
+            return True
+        if m_u and m_c:
+            return m_u.start() < m_c.start()
+        return False
 
     @classmethod
     def _is_primarily_countable_noun(cls, word: str) -> bool:
@@ -4383,7 +4427,13 @@ class DistractorEngineMixin:
         if not senses:
             return False
         g0 = str(senses[0].get("grammar") or "").lower()
-        return "countable" in g0 and "uncountable" not in g0
+        m_c = re.search(r"\bcountable\b", g0)
+        m_u = re.search(r"\buncountable\b", g0)
+        if m_c and not m_u:
+            return True
+        if m_c and m_u:
+            return m_c.start() < m_u.start()
+        return False
 
     @classmethod
     def get_word_gram_profile(cls, word: str, pos: Optional[str] = None) -> Dict[str, Any]:

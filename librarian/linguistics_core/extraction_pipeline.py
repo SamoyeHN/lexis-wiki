@@ -2972,7 +2972,10 @@ class ExtractionPipelineMixin:
             if u_res and u_res[0] and u_res[1]:
                 u_owner, u_sense, _u_row = u_res
                 entry = {"headword": word, "pos": pos or u_sense.get("pos"), "senses": [dict(u_sense, pos=pos or u_sense.get("pos"))]}
-        if entry and entry.get("kind") == "derived" and not entry.get("senses"):
+        if entry and entry.get("kind") == "derived" and (
+            not entry.get("senses")
+            or all(s.get("gloss_source") in ("wordnet", "empty") or not s.get("definition") for s in entry.get("senses", []))
+        ):
             return []
         raw_senses = entry.get("senses", []) if entry else []
 

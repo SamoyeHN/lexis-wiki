@@ -285,8 +285,27 @@ class QuizReadingMixin:
         s_counter = 1
         for sec in sections:
             doc = nlp(sec.body_text)
+            # Recombine sentences that were split inside unclosed quotation marks
+            merged_sents: List[str] = []
+            pending = ""
             for sent in doc.sents:
-                s_text = sent.text.strip()
+                t = sent.text.strip()
+                if not t:
+                    continue
+                if pending:
+                    pending += " " + t
+                    if pending.count('"') % 2 == 0 and pending.count('“') == pending.count('”'):
+                        merged_sents.append(pending)
+                        pending = ""
+                else:
+                    if (t.count('"') % 2 != 0) or (t.count('“') != t.count('”')):
+                        pending = t
+                    else:
+                        merged_sents.append(t)
+            if pending:
+                merged_sents.append(pending)
+
+            for s_text in merged_sents:
                 if len(s_text) < 15:
                     continue
                 s_id = f"S-{s_counter}"
@@ -418,7 +437,7 @@ class QuizReadingMixin:
             t = re.sub(r"\s*-\s*", "-", t)
             t = re.sub(r"\s+'s\b", "'s", t)
             t = re.sub(r"\s+", " ", t).strip()
-            t = re.sub(r"^(?:my|your|his|her|its|our|their|this|that|these|those)\s+", "", t, flags=re.I)
+            t = re.sub(r"^(?:a|an|the|my|your|his|her|its|our|their|this|that|these|those)\s+", "", t, flags=re.I)
             return t.strip()
 
         def get_topic_noun(s_text: str) -> str:
@@ -497,6 +516,14 @@ class QuizReadingMixin:
                     pass
             return ""
 
+        def format_topic_subject(raw_topic: str) -> str:
+            if not raw_topic:
+                return ""
+            t = raw_topic.strip()
+            if not t.lower().startswith(("the ", "a ", "an ", "this ", "these ")):
+                return f"the {t}" if not t.endswith("s") else t
+            return t
+
         def score_sentence(s_text: str) -> int:
             score = 10
             words = s_text.split()
@@ -508,9 +535,17 @@ class QuizReadingMixin:
             elif 12 <= w_len <= 35:
                 score += 4
 
+            # Penalize questions / rhetorical dialogic queries (assessments must test assertions, not questions)
+            if s_text.endswith("?") or "?" in s_text:
+                score -= 12
+
             # Penalize meta-announcements and framing
             if re.match(r"^(here\s+(?:is|are|'s)|let(?:\'s|\s+us|\s+me)|of course|in this section|for example|as (?:we|you) know)\b", s_text, re.I):
                 score -= 8
+
+            # Penalize dialogic interlocutor framing (e.g. 'you may say', 'you might think', 'warn him')
+            if re.search(r"\b(?:you\s+may\s+say|you\s+might\s+say|you\s+may\s+ask|you\s+might\s+think|warn\s+(?:him|her|them))\b", s_text, re.I):
+                score -= 10
 
             # Penalize quotes / direct speech fragments
             if re.match(r'^[“\"\'‘]', s_text) or re.search(r'[”\"\'’]$', s_text) or '"' in s_text or '“' in s_text:
@@ -536,9 +571,11 @@ class QuizReadingMixin:
             candidates: List[Tuple[int, str, str]],
             fallback_pool: Optional[List[Tuple[int, str, str]]] = None,
         ) -> Tuple[int, str, str]:
-            # 1. Prefer candidate in an unused section (following candidate sequence)
-            for c in candidates:
-                if c[0] not in used_sections and c[1] not in used_anchors:
+            scored_candidates = sorted(candidates, key=lambda c: score_sentence(c[2]), reverse=True)
+
+            # 1. Prefer candidate in an unused section with positive score
+            for c in scored_candidates:
+                if c[0] not in used_sections and c[1] not in used_anchors and score_sentence(c[2]) >= 0:
                     return c
 
             # 2. Prefer unused section from fallback pool or sentence pool with highest sentence score
@@ -550,11 +587,12 @@ class QuizReadingMixin:
                 ]
                 if sec_sentences:
                     sec_sentences.sort(key=lambda s: score_sentence(s[2]), reverse=True)
-                    return sec_sentences[0]
+                    if score_sentence(sec_sentences[0][2]) >= 0:
+                        return sec_sentences[0]
 
-            # 3. Candidate not in used anchors
-            for c in candidates:
-                if c[1] not in used_anchors:
+            # 3. Candidate not in used anchors with positive score
+            for c in scored_candidates:
+                if c[1] not in used_anchors and score_sentence(c[2]) >= 0:
                     return c
 
             # 4. Any sentence not in used anchors with highest sentence score
@@ -666,7 +704,7 @@ class QuizReadingMixin:
             gist_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.EXTREME_WORD,
-                    blueprint_instruction="Craft an overstatement using 'only' or 'always' that makes the idea too extreme.",
+                    blueprint_instruction="Overgeneralize the main idea using restrictive qualifiers (e.g. 'only', 'always'), keeping the phrasing plausible rather than cartoonish.",
                     target_misconception="Falling for an overstatement with extreme words like 'only' or 'always'.",
                 ),
                 ReadingDistractorSpec(
@@ -777,7 +815,7 @@ class QuizReadingMixin:
         c_title = get_sec_title(causal_anchor[0])
         has_custom_c = not bool(re.match(r"^Paragraph\s+\d+$", c_title, re.IGNORECASE))
 
-        c_topic = get_topic_noun(causal_anchor[2])
+        c_topic = format_topic_subject(get_topic_noun(causal_anchor[2]))
 
         if is_foundational:
             if c_topic:
@@ -914,7 +952,7 @@ class QuizReadingMixin:
         cnt_title = get_sec_title(contrast_anchor[0])
         has_custom_cnt = not bool(re.match(r"^Paragraph\s+\d+$", cnt_title, re.IGNORECASE))
         is_genuine_contrast = any(contrast_anchor[1] == s[1] for s in graph.contrast_spans)
-        cnt_topic = get_topic_noun(contrast_anchor[2])
+        cnt_topic = format_topic_subject(get_topic_noun(contrast_anchor[2]))
 
         if not is_genuine_contrast:
             item3_skill = DiscourseRelationType.FACTUAL_MECHANISM
@@ -943,7 +981,7 @@ class QuizReadingMixin:
                     ),
                     ReadingDistractorSpec(
                         operator=DistractorFallacyOperator.EXTREME_WORD,
-                        blueprint_instruction="Use 'every single' or 'all' to turn the detail into an absolute rule.",
+                        blueprint_instruction="Overgeneralize the detail into an absolute requirement or universal condition (e.g. 'all people always...', 'requires everyone to...'), keeping the tone plausible rather than cartoonish.",
                         target_misconception="Overgeneralizing a specific factual detail into an absolute requirement.",
                     ),
                     ReadingDistractorSpec(
@@ -1163,7 +1201,7 @@ class QuizReadingMixin:
         ref_id_4, ref_text_4 = get_distant_ref(factual_anchor[0])
         f_title = get_sec_title(factual_anchor[0])
         has_custom_f = not bool(re.match(r"^Paragraph\s+\d+$", f_title, re.IGNORECASE))
-        f_topic = get_topic_noun(factual_anchor[2])
+        f_topic = format_topic_subject(get_topic_noun(factual_anchor[2]))
 
         if is_foundational:
             if f_topic:
@@ -1190,7 +1228,7 @@ class QuizReadingMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.EXTREME_WORD,
-                    blueprint_instruction="Add an extreme word like 'only' or 'strictly' to restrict the fact.",
+                    blueprint_instruction="Add an extreme qualifier like 'only' or 'strictly' to restrict the fact in a plausible way.",
                     target_misconception="Exaggerating manageable facts into an urgent or absolute extreme.",
                 ),
                 ReadingDistractorSpec(
@@ -1299,7 +1337,7 @@ class QuizReadingMixin:
         ref_id_5, ref_text_5 = get_distant_ref(modality_anchor[0])
         m_title = get_sec_title(modality_anchor[0])
         has_custom_m = not bool(re.match(r"^Paragraph\s+\d+$", m_title, re.IGNORECASE))
-        m_topic = get_topic_noun(modality_anchor[2])
+        m_topic = format_topic_subject(get_topic_noun(modality_anchor[2]))
 
         if is_foundational:
             if m_topic:
@@ -1316,17 +1354,17 @@ class QuizReadingMixin:
                 )
             modality_para_target = (
                 f"State the author's suggestion or feeling in anchor [{modality_anchor[1]}]: '{modality_anchor[2]}' "
-                "using simple words (5 to 10 words)."
+                "using simple words (5 to 10 words, zero 3-gram verbatim copying)."
             )
             modality_distractors = [
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.EXTREME_WORD,
-                    blueprint_instruction="Turn the gentle suggestion into a strict command using 'must' or 'demands'.",
-                    target_misconception="Turning a gentle recommendation into a mandatory rule.",
+                    blueprint_instruction="Turn the tentative recommendation or possibility into an absolute requirement or certainty (e.g. asserting that riders always suffer injuries or must obey strict mandates), avoiding cartoonish phrasing.",
+                    target_misconception="Turning a tentative recommendation into a mandatory rule or certainty.",
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.OPPOSITE_FACT,
-                    blueprint_instruction="Suggest the opposite: say the author dislikes or advises against this.",
+                    blueprint_instruction="Suggest the opposite: claim the author strongly disapproves or advises against this, keeping the statement plausible.",
                     target_misconception="Promoting an attitude directly opposite to the author's perspective.",
                 ),
                 ReadingDistractorSpec(
@@ -1437,13 +1475,7 @@ class QuizReadingMixin:
             i_title = get_sec_title(inf_anchor[0])
             has_custom_i = not bool(re.match(r"^Paragraph\s+\d+$", i_title, re.IGNORECASE))
             raw_topic = get_topic_noun(inf_anchor[2])
-            if raw_topic:
-                if not raw_topic.lower().startswith(("the ", "a ", "an ", "this ", "these ")):
-                    topic_subject = f"the {raw_topic}" if not raw_topic.endswith("s") else raw_topic
-                else:
-                    topic_subject = raw_topic
-            else:
-                topic_subject = "this topic"
+            topic_subject = format_topic_subject(raw_topic) or "this topic"
 
             if is_foundational:
                 inf_stem = (
@@ -1547,12 +1579,16 @@ class QuizReadingMixin:
         if not selected:
             return selected
 
-        # Sort items: Keep MACRO_GIST at Item 1, sort paragraph-specific items chronologically by target_paragraph_index
+        # Sort items: Keep MACRO_GIST at Item 1, PRAGMATIC_INFERENCE at the end, sort middle paragraph-specific items chronologically by target_paragraph_index
         macro_items = [b for b in selected if b.skill_type == DiscourseRelationType.MACRO_GIST]
-        local_items = [b for b in selected if b.skill_type != DiscourseRelationType.MACRO_GIST]
+        inf_items = [b for b in selected if b.skill_type == DiscourseRelationType.PRAGMATIC_INFERENCE]
+        local_items = [
+            b for b in selected
+            if b.skill_type not in (DiscourseRelationType.MACRO_GIST, DiscourseRelationType.PRAGMATIC_INFERENCE)
+        ]
         local_items.sort(key=lambda b: b.target_paragraph_index)
 
-        ordered = macro_items + local_items
+        ordered = macro_items + local_items + inf_items
         for idx, item in enumerate(ordered, 1):
             item.item_index = idx
 

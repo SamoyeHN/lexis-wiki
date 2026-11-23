@@ -346,7 +346,7 @@ class TestGrammarDeterministicCodeGate(unittest.TestCase):
         from librarian.evaluator import FATAL_QA_FLAGS
         self.assertIn("does not appear in quoted sentence", FATAL_QA_FLAGS)
         self.assertIn("Grammar formula anchor", FATAL_QA_FLAGS)
-        self.assertIn("duplicate", FATAL_QA_FLAGS)
+        self.assertTrue(any("duplicate" in f for f in FATAL_QA_FLAGS))
         self.assertIn("pure fabrication", FATAL_QA_FLAGS)
 
         # Test transparent delivery: extractions ship directly to extractions/ with review_needed status

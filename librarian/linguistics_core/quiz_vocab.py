@@ -49,9 +49,11 @@ class QuizVocabMixin:
         if not singles:
             return multis[:target_count]
 
-        # Calculate quotas (if multi_word_ratio <= 0.0, strictly return 100% single words)
+        # Calculate quotas (if multi_word_ratio <= 0.0, prioritize single words and backfill with multis if needed)
         if multi_word_ratio <= 0.0:
-            return singles[:target_count]
+            if len(singles) >= target_count:
+                return singles[:target_count]
+            return (singles + multis)[:target_count]
 
         quota_multi = max(1, int(round(target_count * multi_word_ratio)))
         quota_single = target_count - quota_multi
@@ -1105,7 +1107,7 @@ class QuizVocabMixin:
 
         nlp = cls.get_spacy()
         parsed_items = cls._normalize_vocab_items_input(vocab_content, preserve_slash_slots=True)
-        if multi_word_ratio <= 0.0:
+        if multi_word_ratio <= 0.0 and len(parsed_items) > target_count:
             # Vocabulary Quiz evaluates single lexical items exclusively; exclude multi-word collocations/phrases
             single_candidates = [
                 it for it in parsed_items
@@ -1113,8 +1115,12 @@ class QuizVocabMixin:
                 and len(str(it.get("word") or "").split()) == 1
                 and it.get("part_of_speech", "").lower() not in ("phrase", "collocation", "phrasal verb", "set phrase", "idiom")
             ]
-            if single_candidates:
+            if len(single_candidates) >= target_count:
                 parsed_items = single_candidates
+            elif single_candidates:
+                rem_needed = max(0, target_count - len(single_candidates))
+                multi_candidates = [it for it in parsed_items if it not in single_candidates]
+                parsed_items = single_candidates + multi_candidates[:rem_needed]
 
         if len(parsed_items) > target_count + 4:
             parsed_items = cls._balance_single_and_multi_word(

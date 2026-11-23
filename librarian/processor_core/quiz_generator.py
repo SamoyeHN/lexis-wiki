@@ -1638,7 +1638,7 @@ class QuizGeneratorMixin:
                     "Avoid complex speculative or hypothetical framing."
                 )
                 kwargs["option_complexity_guidance"] = (
-                    "ideally 3 to 8 words, using only basic everyday A1-A2 vocabulary "
+                    "strictly 12 words or fewer (ideally 3 to 8 words), using only basic everyday A1-A2 vocabulary "
                     "such as 'work hours', 'schedule', 'sign in', 'next', 'cold', 'rest', 'water', 'doctor'"
                 )
                 kwargs["skill_distribution_guidance"] = (
