@@ -30,9 +30,11 @@ from .extraction_vocab import (
     ExtractionVocabMixin,
 )
 from .quiz_frames import (
+    QuizFramesClauseIsolationMixin,
     QuizFramesMixin,
     QuizFramesPatientMixin,
     QuizFramesSlicingMixin,
+    QuizFramesSlotSlicingMixin,
 )
 from .quiz_skeleton_anchors import QuizSkeletonAnchorsMixin
 from .quiz_skeleton_builder import QuizSkeletonBuilderMixin
@@ -88,9 +90,11 @@ __all__ = [
     "ExtractionVocabExamplesMixin",
     "ExtractionVocabExtractorMixin",
     "ExtractionVocabMixin",
+    "QuizFramesClauseIsolationMixin",
     "QuizFramesMixin",
     "QuizFramesPatientMixin",
     "QuizFramesSlicingMixin",
+    "QuizFramesSlotSlicingMixin",
     "QuizSkeletonAnchorsMixin",
     "QuizSkeletonBuilderMixin",
     "QuizSkeletonDistractorsMixin",

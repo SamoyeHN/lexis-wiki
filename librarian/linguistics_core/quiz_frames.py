@@ -3,7 +3,11 @@ Verb patient ontology classification and cloze slot frame derivation facade.
 """
 
 from .quiz_frames_patient import QuizFramesPatientMixin
-from .quiz_frames_slicing import QuizFramesSlicingMixin
+from .quiz_frames_slicing import (
+    QuizFramesClauseIsolationMixin,
+    QuizFramesSlicingMixin,
+    QuizFramesSlotSlicingMixin,
+)
 
 
 class QuizFramesMixin(QuizFramesPatientMixin, QuizFramesSlicingMixin):
@@ -15,7 +19,9 @@ class QuizFramesMixin(QuizFramesPatientMixin, QuizFramesSlicingMixin):
 
 
 __all__ = [
+    "QuizFramesClauseIsolationMixin",
     "QuizFramesMixin",
     "QuizFramesPatientMixin",
     "QuizFramesSlicingMixin",
+    "QuizFramesSlotSlicingMixin",
 ]
