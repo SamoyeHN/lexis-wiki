@@ -167,7 +167,7 @@ class ChatExecutorMixin:
                     )
                     else "API_ERROR"
                 )
-                from .logger import log_task
+                from ..logger import log_task
                 log_task(
                     f"{t_name}_{mode_str}",
                     system_prompt,
@@ -346,7 +346,7 @@ class ChatExecutorMixin:
 
                 # Auto-sync slotted pattern_formula from design_audit for grammar if missing slots, and normalize slots
                 if isinstance(data, dict) and "grammar_patterns" in data and isinstance(data["grammar_patterns"], list):
-                    from .processor import WikiProcessor
+                    from ..processor import WikiProcessor
                     for g_item in data["grammar_patterns"]:
                         if isinstance(g_item, dict):
                             cur_formula = str(g_item.get("pattern_formula", "")).strip()
@@ -365,12 +365,12 @@ class ChatExecutorMixin:
                             
                             # Auto-hydrate category if missing from simplified GrammarItem schema
                             if not g_item.get("category"):
-                                from .linguistics import LinguisticEngine
+                                from ..linguistics import LinguisticEngine
                                 g_quote = str(g_item.get("quote", "")).strip()
                                 g_item["category"] = LinguisticEngine.classify_grammar_dependency(g_quote) or "Information Packaging"
 
                             # Level 1 Code Gate: Auto-remap explicit category mismatches
-                            from .evaluator import auto_remap_grammar_category
+                            from ..evaluator import auto_remap_grammar_category
                             _, remap_notice = auto_remap_grammar_category(g_item)
                             if remap_notice:
                                 import logging
@@ -382,13 +382,13 @@ class ChatExecutorMixin:
                     if not data["grammar_patterns"] and "### DETERMINISTIC TARGET PATTERNS" in user_prompt:
                         import logging
                         logging.getLogger("librarian").info("🩹 Model returned empty grammar_patterns; hydrating in-place from deterministic target patterns in prompt.")
-                        from .schemas import GrammarItem
+                        from ..schemas import GrammarItem
                         skel_matches = re.findall(
                             r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
                             re.sub(r'\r\n|\r', '\n', user_prompt)
                         )
-                        from .evaluator import _extract_source_content
-                        from .linguistics import LinguisticEngine
+                        from ..evaluator import _extract_source_content
+                        from ..linguistics import LinguisticEngine
                         src_for_heal = _extract_source_content(user_prompt)
                         _, s_pool = LinguisticEngine.tokenize_and_index_sentences(src_for_heal) if src_for_heal else ({}, {})
                         for _, sid, cat, formula, quote in skel_matches:
@@ -415,8 +415,8 @@ class ChatExecutorMixin:
                             r'(\d+)\.\s*\[([^\]]+)\](?:\s*\(([^)]+)\))?\s*Formula:\s*`([^`]+)`(?:\s*Quote:\s*"([^"]+)")?',
                             re.sub(r'\r\n|\r', '\n', user_prompt)
                         )
-                        from .evaluator import _extract_source_content
-                        from .linguistics import LinguisticEngine
+                        from ..evaluator import _extract_source_content
+                        from ..linguistics import LinguisticEngine
                         src_for_heal = _extract_source_content(user_prompt)
                         _, s_pool = LinguisticEngine.tokenize_and_index_sentences(src_for_heal) if src_for_heal else ({}, {})
                         for _, sid, pos_type, formula, quote in expr_matches:
@@ -460,8 +460,8 @@ class ChatExecutorMixin:
                             r'(\d+)\.\s*\[([^\]]+)\]\s*\*\*([^*]+)\*\*\s*\(([^)]+)\)[^\n]*(?:\n\s*Quote:\s*"([^"]+)")?',
                             re.sub(r'\r\n|\r', '\n', user_prompt)
                         )
-                        from .evaluator import _extract_source_content
-                        from .linguistics import LinguisticEngine
+                        from ..evaluator import _extract_source_content
+                        from ..linguistics import LinguisticEngine
                         src_for_heal = _extract_source_content(user_prompt)
                         _, s_pool = LinguisticEngine.tokenize_and_index_sentences(src_for_heal) if src_for_heal else ({}, {})
                         for _, sid, headword, pos_type, quote in vocab_matches:
@@ -521,7 +521,7 @@ class ChatExecutorMixin:
 
                 # Level 1 Code Gate: Anti-Copying & Quality Self-Healing for example_usage
                 # Small models often get lazy and copy quoted_sentence into example_usage verbatim
-                from .evaluator import _clean_core
+                from ..evaluator import _clean_core
                 for array_key in ("vocabulary", "expressions"):
                     items = data.get(array_key) if isinstance(data, dict) else None
                     if not isinstance(items, list):
@@ -555,8 +555,8 @@ class ChatExecutorMixin:
 
                 # Auto-heal compound/slashed or annotated part_of_speech tags in vocabulary items (e.g. 'adjective/noun', 'verb (phrasal)')
                 if isinstance(data, dict) and "vocabulary" in data and isinstance(data["vocabulary"], list):
-                    from .schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES, _normalize_enum
-                    from .linguistics import LinguisticEngine
+                    from ..schemas import PARTS_OF_SPEECH, EXPRESSION_TYPES, _normalize_enum
+                    from ..linguistics import LinguisticEngine
                     from typing import get_args
                     allowed_pos = get_args(PARTS_OF_SPEECH)
                     allowed_expr = get_args(EXPRESSION_TYPES)
@@ -779,7 +779,7 @@ class ChatExecutorMixin:
                 # prune it directly in Python rather than fruitlessly asking the LLM to fix a hallucination.
                 try:
                     if isinstance(data, dict):
-                        from .evaluator import prune_hallucinated_items
+                        from ..evaluator import prune_hallucinated_items
                         data, pruned_notices = prune_hallucinated_items(data, user_prompt, task_name or "")
                         if pruned_notices:
                             import logging
@@ -805,7 +805,7 @@ class ChatExecutorMixin:
                 max_qa_retries = 1
                 if retry_count < max_qa_retries and not kwargs.get("_disable_qa_retry", False):
                     try:
-                        from .evaluator import LogEvaluator
+                        from ..evaluator import LogEvaluator
                         dict_to_eval = data if isinstance(data, dict) else (dataclasses.asdict(result_obj) if dataclasses.is_dataclass(result_obj) else None)
                         if dict_to_eval:
                             simulated_log = {
@@ -832,7 +832,7 @@ class ChatExecutorMixin:
                             # so any surviving flags (including unhealed missing '____' slots) are actionable.
                             actionable_flags = list(flags)
 
-                            from .evaluator import FATAL_QA_FLAGS
+                            from ..evaluator import FATAL_QA_FLAGS
                             has_fatal_flags = any(
                                 any(fatal in f for fatal in FATAL_QA_FLAGS)
                                 for f in actionable_flags
@@ -856,7 +856,7 @@ class ChatExecutorMixin:
                                     elif "CONTENT:" in user_prompt:
                                         source_header = "CONTENT:"
 
-                                from .qa_ticket import (
+                                from ..qa_ticket import (
                                     build_qa_tickets,
                                     detect_array_key,
                                     format_qa_ticket_block,
@@ -884,7 +884,7 @@ class ChatExecutorMixin:
                                 )
                                 # Log retry attempt with truthful failure category
                                 retry_fail_cat = "QA_FATAL_FLAG" if has_fatal_flags else "QA_LOW_SCORE"
-                                from .logger import log_task
+                                from ..logger import log_task
                                 log_task(
                                     f"{t_name}_{mode_str}",
                                     system_prompt,
@@ -929,7 +929,7 @@ class ChatExecutorMixin:
 
                 # 6.5. ATTACH FINAL QA AUDIT METADATA TO RESULT OBJECT
                 try:
-                    from .evaluator import LogEvaluator
+                    from ..evaluator import LogEvaluator
                     dict_for_final_eval = data if isinstance(data, dict) else (dataclasses.asdict(result_obj) if dataclasses.is_dataclass(result_obj) else None)
                     if dict_for_final_eval:
                         final_simulated_log = {
@@ -955,7 +955,7 @@ class ChatExecutorMixin:
                     logging.getLogger("librarian").debug(f"Final QA audit attachment skipped: {final_eval_err}")
 
                 # 6.6. DERIVE TRUTHFUL OUTCOME STATUS FROM QA AUDIT & LOG
-                from .evaluator import FATAL_QA_FLAGS
+                from ..evaluator import FATAL_QA_FLAGS
                 task_status = "SUCCESS"
                 task_fail_cat = None
                 if final_audit and isinstance(final_audit, dict):
@@ -969,7 +969,7 @@ class ChatExecutorMixin:
                         task_status = "REVIEW_NEEDED"
                         task_fail_cat = "QA_FATAL_FLAG" if has_audit_fatal else "QA_LOW_SCORE"
 
-                from .logger import log_task
+                from ..logger import log_task
                 self.last_log_path = log_task(
                     f"{t_name}_{mode_str}",
                     system_prompt,
@@ -1002,7 +1002,7 @@ class ChatExecutorMixin:
                         failure_cat = "SCHEMA_MISMATCH"
 
                 # Log even on parse failure with failure categorization so it is auditable
-                from .logger import log_task
+                from ..logger import log_task
                 log_task(
                     f"{t_name}_{mode_str}",
                     system_prompt,
@@ -1021,7 +1021,7 @@ class ChatExecutorMixin:
                 raise LLMError(f"Failed to generate structured data matching schema: {e}")
         else:
             if not stream and not skip_log:
-                from .logger import log_task
+                from ..logger import log_task
                 log_task(
                     f"{t_name}_{mode_str}",
                     system_prompt,

@@ -4,7 +4,12 @@ Unified Extraction Pipeline facade composing source hygiene, grammar, expression
 
 from .extraction_source import ExtractionSourceMixin
 from .extraction_grammar import ExtractionGrammarMixin
-from .extraction_expressions import ExtractionExpressionsMixin
+from .extraction_expressions import (
+    ExtractionExpressionsCandidatesMixin,
+    ExtractionExpressionsExtractorMixin,
+    ExtractionExpressionsMixin,
+    ExtractionExpressionsSkeletonsMixin,
+)
 from .extraction_vocab import (
     ExtractionVocabCandidatesMixin,
     ExtractionVocabExamplesMixin,
@@ -13,7 +18,10 @@ from .extraction_vocab import (
 )
 
 __all__ = [
+    "ExtractionExpressionsCandidatesMixin",
+    "ExtractionExpressionsExtractorMixin",
     "ExtractionExpressionsMixin",
+    "ExtractionExpressionsSkeletonsMixin",
     "ExtractionGrammarMixin",
     "ExtractionPipelineMixin",
     "ExtractionSourceMixin",

@@ -279,7 +279,7 @@ class JsonRepairMixin:
         if not isinstance(data, dict) or not user_prompt:
             return
 
-        from .evaluator import _extract_source_content
+        from ..evaluator import _extract_source_content
         source_content = _extract_source_content(user_prompt)
         if not source_content:
             return
@@ -421,8 +421,8 @@ class JsonRepairMixin:
         if not isinstance(data, dict) or not user_prompt:
             return
 
-        from .evaluator import _extract_source_content
-        from .linguistics import LinguisticEngine
+        from ..evaluator import _extract_source_content
+        from ..linguistics import LinguisticEngine
 
         source = _extract_source_content(user_prompt)
         if not source:
