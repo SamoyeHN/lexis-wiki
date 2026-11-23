@@ -13,6 +13,12 @@ from .distractor_engine import (
     DistractorVocabWsdMixin,
 )
 from .slot_frame import SlotFrame
+from .extraction_vocab import (
+    ExtractionVocabCandidatesMixin,
+    ExtractionVocabExamplesMixin,
+    ExtractionVocabExtractorMixin,
+    ExtractionVocabMixin,
+)
 from .quiz_frames import (
     QuizFramesMixin,
     QuizFramesPatientMixin,
@@ -47,6 +53,10 @@ __all__ = [
     "DistractorVocabHarvestMixin",
     "DistractorVocabMixin",
     "DistractorVocabWsdMixin",
+    "ExtractionVocabCandidatesMixin",
+    "ExtractionVocabExamplesMixin",
+    "ExtractionVocabExtractorMixin",
+    "ExtractionVocabMixin",
     "QuizFramesMixin",
     "QuizFramesPatientMixin",
     "QuizFramesSlicingMixin",
