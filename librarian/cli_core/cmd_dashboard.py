@@ -259,8 +259,6 @@ def handle_dashboard(args: argparse.Namespace) -> None:
             except Exception:
                 pass
 
-        browser_state = {"opened": False}
-
         # Open browser automatically in a separate thread
         # (skipped when LEXIS_NO_BROWSER is set - e.g. automated tests)
         def open_browser():
@@ -278,49 +276,38 @@ def handle_dashboard(args: argparse.Namespace) -> None:
                     try:
                         res = subprocess.run(wsl_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
                         if res.returncode == 0:
-                            browser_state["opened"] = True
                             return
                     except Exception:
                         continue
             try:
-                if webbrowser.open(url):
-                    browser_state["opened"] = True
+                webbrowser.open(url)
             except Exception:
                 pass
 
         threading.Thread(target=open_browser, daemon=True).start()
 
-        # Auto-shutdown once the browser is gone:
+        # Auto-shutdown only on explicit tab close (/api/shutdown beacon) or Ctrl+C:
         #  - Beacon:    /api/shutdown fired by the page's beforeunload handler. It is
         #               ARMED, not immediate: an F5 refresh also fires the beacon, but
         #               the browser reconnects within ~1s; the first new request
         #               (touch()) cancels the pending shutdown and the page reloads
         #               normally. If nothing comes back within SHUTDOWN_GRACE the
         #               client truly left, and the server exits.
-        #  - Fallback:  idle timeout. The page polls every ~3s, so a foreground tab
-        #               keeps the server alive — but browsers throttle timers in
-        #               background tabs, so allow a generous window (5 min) before
-        #               concluding the client is gone.
+        #  - No Idle Timeout: Server stays alive while tabs remain open (even when
+        #               browsers throttle background tab timers).
         #  - Safety:    never kill in-progress background jobs (compile / re-audit);
         #               the server stays up until they finish, then exits automatically.
-        IDLE_TIMEOUT = 300         # seconds without any request => client is gone (5 min)
-        NO_CLIENT_GRACE = 300 if is_wsl else 60  # seconds to wait when browser was auto-opened
         SHUTDOWN_GRACE = 45        # seconds after the beacon to wait for a reconnect (covers slow refresh / tab transitions)
-        server_start_ts = time.time()
 
         def _should_exit():
-            shutdown_at, last_ts, has_running = DashboardState.lifecycle()
+            shutdown_at, _, has_running = DashboardState.lifecycle()
             if has_running:
                 return False  # hold until running background jobs complete
             if shutdown_at is not None:
                 # Grace period: if the client reconnects (F5 refresh), touch() has
                 # already cleared shutdown_at and we stay up.
                 return (time.time() - shutdown_at) > SHUTDOWN_GRACE
-            if last_ts is None:
-                # If no browser could be auto-opened (e.g., headless terminal), do not premature-exit at 60s
-                grace = NO_CLIENT_GRACE if browser_state["opened"] else 3600
-                return (time.time() - server_start_ts) > grace
-            return (time.time() - last_ts) > IDLE_TIMEOUT
+            return False
 
         # Poll with a socket-level timeout: handle_request() then returns
         # after 0.2s of silence instead of blocking forever, so the exit

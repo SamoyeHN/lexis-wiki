@@ -37,6 +37,7 @@ class SkeletonContext:
     canonical_pos: str
 
     # Dictionary / Sense Grounding
+    passage_cefr: Optional[str] = None
     target_entry: Optional[Dict[str, Any]] = None
     entry_base: Optional[Dict[str, Any]] = None
     locked_sense: Optional[Dict[str, Any]] = None

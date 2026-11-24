@@ -825,7 +825,7 @@ class VocabCardEnrichmentMixin:
             return None, None
 
         entry_pos = {"verb": "verb", "noun": "noun", "adj": "adj"}.get(canonical_pos)
-        entry = cls.get_oxford_collocations(tw, pos=entry_pos) if entry_pos else {}
+        entry = cls.get_pedlex_collocations(tw, pos=entry_pos) if entry_pos else {}
 
         candidates: List[str] = []
         if entry_pos == "verb":

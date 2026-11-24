@@ -12,6 +12,12 @@ logger = logging.getLogger("librarian.linguistics.vocab_distractors")
 
 class DistractorVocabWsdMixin:
 
+    _AUDITORY_PREDICATES = {
+        "hear", "listen", "overhear", "sound", "ring", "whisper", "shout", "cry",
+        "loud", "faint", "soft", "harsh", "quiet", "noisy", "deafening", "audible",
+        "earshot", "angry", "screaming", "yelling", "speak", "spoke", "spoken", "utter",
+    }
+
     @classmethod
     def _pos_ok(cls, lemma: str, wn_pos: Optional[str] = None) -> bool:
         """Keep hyponym/coordinate candidates on the target's own part of speech."""
@@ -40,15 +46,26 @@ class DistractorVocabWsdMixin:
             cand_ent = cls.get_ldoce_entry(lemma)
             if cand_ent:
                 prim_pos = (cand_ent.get("pos") or "").lower()
-                if prim_pos in ("verb", "adjective", "adverb"):
+                all_senses = cand_ent.get("senses") or []
+                noun_senses = [s for s in all_senses if cls._pos_code(s.get("pos") or prim_pos) == "n"]
+                if prim_pos == "noun" or len(noun_senses) >= 2:
+                    return False
+                if prim_pos in ("verb", "adjective", "adverb") and len(noun_senses) == 0:
                     return True
             wn = cls.get_wordnet()
             if wn:
                 pos_list = [w.pos for w in wn.words(lemma)]
-                if any(p in ("a", "s") for p in pos_list):
-                    if "n" not in pos_list or len([p for p in pos_list if p in ("a", "s")]) >= len([p for p in pos_list if p == "n"]):
-                        return True
+                syns = wn.synsets(lemma)
+                syn_n = len([s for s in syns if s.pos == "n"])
+                syn_a = len([s for s in syns if s.pos in ("a", "s")])
+                syn_v = len([s for s in syns if s.pos == "v"])
+                if syn_a > syn_n * 2 and syn_n <= 1:
+                    return True
+                if syn_v > syn_n * 3 and syn_n <= 1:
+                    return True
                 if "v" in pos_list and "n" not in pos_list:
+                    return True
+                if any(p in ("a", "s") for p in pos_list) and "n" not in pos_list:
                     return True
             return False
         except Exception:
@@ -137,7 +154,6 @@ class DistractorVocabWsdMixin:
     ) -> Dict[str, Any]:
         """Executes Phase 1: WSD, definition locking, and sense-locked antonym extraction."""
         wn = cls.get_wordnet()
-        ocd = cls.get_oxford_collocations()
 
         # Map POS to WordNet tag ('n', 'v', 'a', 'r')
         if pos.startswith("adv") or pos == "r":
@@ -269,9 +285,16 @@ class DistractorVocabWsdMixin:
             def_doc = nlp(def_clean.lower())
             quote_doc = nlp(quote_clean.lower())
             self_forms = {clean_target, target_lemma} | {t.lemma_.lower() for t in nlp(clean_target)}
-            _generic_degree_mods = {"extreme", "extremely", "complete", "completely", "total", "totally"}
+            _generic_degree_mods = {"extreme", "extremely", "complete", "completely", "total", "totally", "want", "wants", "wanted"}
             def_tokens = (({t.lemma_.lower() for t in def_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms) - _generic_degree_mods
             quote_tokens = ({t.lemma_.lower() for t in quote_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
+            anchor_low = (context_anchor or "").lower().strip()
+            quote_low = (quote or "").lower()
+            has_auditory_context = (
+                anchor_low in cls._AUDITORY_PREDICATES
+                or any(ap in quote_tokens for ap in cls._AUDITORY_PREDICATES)
+                or any(re.search(rf"\b{re.escape(ap)}\b", quote_low) for ap in ("hear", "listen", "overhear", "loud", "faint", "angry", "whisper", "shout", "sound", "speak", "voice"))
+            )
 
             scored_synsets = []
             seen_syn_ids = set()
@@ -337,6 +360,7 @@ class DistractorVocabWsdMixin:
                     s_direct_doc = nlp((s.definition() + " " + " ".join(s.examples()) + " " + s_peer_text).lower())
                     s_direct_lemmas = ({t.lemma_.lower() for t in s_direct_doc if t.is_alpha and not t.is_stop and len(t.text) >= 3} - cls._ANCHOR_STOPWORDS) - self_forms
 
+                    imm_hyper = s.hypernyms()[0] if s.hypernyms() else None
                     chain_texts = []
                     cur = s
                     depth = 0
@@ -381,7 +405,9 @@ class DistractorVocabWsdMixin:
                     # Penalize metalinguistic/word-level senses (e.g. 'loanword: a word borrowed from another language')
                     # when the pedagogical definition is not about language/words/grammar
                     if not is_linguistic_def and (
-                        s_def_low.startswith(("a word ", "an expression ", "a linguistic ", "the grammatical "))
+                        s_def_low.startswith(("a word ", "an expression ", "a linguistic ", "the grammatical ", "a term used in ", "a term in "))
+                        or "phonetics" in s_def_low
+                        or "phonology" in s_def_low
                         or (s_lf == "noun.communication" and ("word" in s_direct_lemmas or "language" in s_direct_lemmas))
                     ):
                         penalty += 12
@@ -418,6 +444,35 @@ class DistractorVocabWsdMixin:
                     ):
                         penalty += 8
 
+                    # Auditory Context Weighting:
+                    if has_auditory_context and wn_pos == "n":
+                        is_auditory_synset = (
+                            s_lf in ("noun.communication", "noun.sound", "noun.event")
+                            or any(w in s_def_low for w in ("sound", "vocal", "auditory", "voice", "speech", "utterance", "noise"))
+                        )
+                        is_abstract_faculty_synset = (
+                            s_lf in ("noun.attribute", "noun.cognition", "noun.relation")
+                            or "ability to" in s_def_low
+                            or "faculty of" in s_def_low
+                        )
+                        if is_auditory_synset and not is_abstract_faculty_synset:
+                            penalty -= 15
+                        elif is_abstract_faculty_synset:
+                            penalty += 15
+
+                    # Ontological Hypernym Penalty:
+                    # Penalize synsets whose immediate hypernym is an ultra-abstract ontological container
+                    # (e.g. 'condition, status', 'state', 'attribute') rather than a specific taxonomy
+                    if imm_hyper and hasattr(imm_hyper, "id") and imm_hyper.id in getattr(cls, "_ABSTRACT_ONTOLOGY_HYPERNYMS", set()):
+                        penalty += 8
+
+                    # Musical / Melody Domain Mismatch Penalty:
+                    # When context and pedagogical definition do not pertain to music/singing,
+                    # heavily penalize musical/instrument/polyphonic voice synsets (e.g. voice = polyphonic part).
+                    is_music_context = bool((def_tokens | quote_tokens) & {"music", "musical", "song", "sing", "singing", "melody", "tune", "instrument", "choir", "opera"})
+                    if not is_music_context and ("music" in chain_str_low or "melody" in s_def_low or "musical" in s_def_low or "polyphonic" in s_def_low):
+                        penalty += 14
+
                     def_ov = len(def_tokens.intersection(s_direct_lemmas)) * 6 + len(def_tokens.intersection(chain_lemmas)) * 3
                     quote_ov = (
                         len(quote_tokens.intersection(s_def_lemmas)) * 2 +
@@ -429,8 +484,14 @@ class DistractorVocabWsdMixin:
                     s_lemmas_low = {sw.lemma().lower() for sw in s.words()}
                     if pedlex_units and (s_lemmas_low & pedlex_units):
                         unit_signpost_bonus += 14
-                    if pedlex_signpost and (pedlex_signpost in s_direct_lemmas or pedlex_signpost in chain_lemmas):
-                        unit_signpost_bonus += 6
+                    pedlex_signpost_lemma = nlp(pedlex_signpost)[0].lemma_.lower() if pedlex_signpost else ""
+                    if pedlex_signpost and (
+                        pedlex_signpost in s_direct_lemmas
+                        or pedlex_signpost_lemma in s_direct_lemmas
+                        or pedlex_signpost in chain_lemmas
+                        or pedlex_signpost_lemma in chain_lemmas
+                    ):
+                        unit_signpost_bonus += 12
                     if wn_pos == "n" and strict_ped_ox_syns:
                         ox_syn_peers = (s_lemmas_low - self_forms) & strict_ped_ox_syns
                         if ox_syn_peers:
@@ -438,6 +499,9 @@ class DistractorVocabWsdMixin:
                         ox_direct_peers = (s_direct_lemmas - self_forms) & strict_ped_ox_syns
                         if ox_direct_peers:
                             unit_signpost_bonus += min(6, len(ox_direct_peers) * 2)
+                        ox_chain_peers = (chain_lemmas - self_forms) & strict_ped_ox_syns
+                        if ox_chain_peers:
+                            unit_signpost_bonus += min(6, len(ox_chain_peers) * 2)
                     score = def_ov + quote_ov + unit_signpost_bonus - penalty
                     scored_synsets.append((score, s))
 
@@ -445,7 +509,7 @@ class DistractorVocabWsdMixin:
             if scored_synsets:
                 best_ov = scored_synsets[0][0]
                 if best_ov > 0:
-                    target_synsets = [s for ov, s in scored_synsets if ov >= max(1, best_ov - 1)]
+                    target_synsets = [s for ov, s in scored_synsets if ov >= max(1, best_ov - 3)]
                 else:
                     target_synsets = [scored_synsets[0][1]]
         if not target_synsets:
@@ -654,9 +718,9 @@ class DistractorVocabWsdMixin:
                     or all(any(r in str(s.get("register") or "").lower() for r in _bad_ant_regs) for s in al_pos_senses)
                 ):
                     cefr_penalty += 3
-                if al in ocd:
+                if cls.is_exact_pedlex_headword(al):
                     prio = 0 - priority_bonus + cefr_penalty
-                elif cls.get_word_cefr(al) in ("A1", "A2", "B1", "B2", "C1") or any(al.startswith(p) and al[len(p):] in ocd for p in ("un", "in", "im", "ir", "il", "non", "dis")):
+                elif cls.get_word_cefr(al) in ("A1", "A2", "B1", "B2", "C1") or any(al.startswith(p) and cls.is_exact_pedlex_headword(al[len(p):]) for p in ("un", "in", "im", "ir", "il", "non", "dis")):
                     prio = 1 - priority_bonus + cefr_penalty
                 elif wn_pos in ("a", "r"):
                     prio = 2 - priority_bonus + cefr_penalty
@@ -757,7 +821,6 @@ class DistractorVocabWsdMixin:
             "definition": definition,
             "quote": quote,
             "wn": wn,
-            "ocd": ocd,
             "nlp": nlp,
             "target_synsets": target_synsets,
             "global_synonyms": global_synonyms,
@@ -771,4 +834,5 @@ class DistractorVocabWsdMixin:
             "pedlex_signpost": pedlex_signpost,
             "pedlex_units": pedlex_units,
             "sense_antonyms": sense_antonyms,
+            "has_auditory_context": locals().get("has_auditory_context", False),
         }

@@ -37,10 +37,10 @@ class DistractorGuardsValencyMixin:
             return set()
         preps: Set[str] = set()
 
-        # 1. Oxford Collocations Dictionary
-        ocd = cls.get_oxford_collocations()
-        if w in ocd:
-            for p in ocd[w].get("prep", []):
+        # 1. PedLex Collocations
+        ped_coll = cls.get_pedlex_collocations(w)
+        if ped_coll:
+            for p in ped_coll.get("prep", []):
                 p_clean = p.strip().lower()
                 if p_clean in cls._STANDARD_PREPOSITIONS:
                     preps.add(p_clean)
@@ -142,14 +142,11 @@ class DistractorGuardsValencyMixin:
     ) -> Dict[str, Dict[str, Any]]:
         """Pustejovsky Generative Lexicon Qualia Scenario Verb Bridge:
         Extracts concrete scenario/institution/activity nouns from the target verb's definition
-        and harvests co-scenario lifecycle verbs from `ocd[noun]['verb_before']` that share the same
+        and harvests co-scenario lifecycle verbs from `pedlex[noun]['verb_before']` that share the same
         domain scenario while exhibiting contrasting syntactic valency (e.g., `apply for`, `attend [obj]`,
         `graduate from`, `withdraw from` for `enroll in [school/university/course]`)."""
         t = (target_word or "").strip().lower()
         if not t:
-            return {}
-        ocd = cls.get_oxford_collocations()
-        if ocd is None:
             return {}
         def_text = (definition or "").strip()
         if not def_text:
@@ -182,7 +179,7 @@ class DistractorGuardsValencyMixin:
                     cand_n
                     and cand_n not in _meta_stop_nouns
                     and cand_n not in t_variants
-                    and cand_n in ocd
+                    and cls.is_exact_pedlex_headword(cand_n)
                     and cand_n not in scenario_nouns
                 ):
                     n_ent = cls.get_ldoce_entry(cand_n)
@@ -194,7 +191,7 @@ class DistractorGuardsValencyMixin:
         anc_prep = (context_anchor or "").strip().lower() if anchor_type == "prep" else ""
         peers: Dict[str, Dict[str, Any]] = {}
         for n in scenario_nouns[:5]:
-            vb_list = ocd.get(n, {}).get("verb_before", [])
+            vb_list = (cls.get_pedlex_collocations(n) or {}).get("verb_before", [])
             for raw_item in vb_list:
                 if not isinstance(raw_item, str):
                     continue
@@ -549,7 +546,7 @@ class DistractorGuardsValencyMixin:
             clean_anc_p = anchor.strip().lower()
             if clean_anc_p in cls._STANDARD_PREPOSITIONS:
                 gov_prep = clean_anc_p
-        if not gov_prep and extracted_gov_prep:
+        if not gov_prep and extracted_gov_prep and anchor_type in (None, "", "prep"):
             gov_prep = extracted_gov_prep
 
         if gov_prep and (wn_pos in ("n", "a") or pos_norm in ("n", "noun", "a", "adj", "adjective")):

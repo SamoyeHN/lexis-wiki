@@ -589,9 +589,9 @@ class QuizFramesPatientMixin:
             seen_lem.add("person")
             cands.insert(0, ("someone", "person"))
 
-        # 3. Fallback to Oxford collocations if still sparse (STRICTLY for single-word base verbs)
+        # 3. Fallback to PedLex collocations if still sparse (STRICTLY for single-word base verbs)
         if len(cands) < 2 and head_v and len(w_toks) == 1:
-            collocs = cls.get_oxford_collocations(head_v)
+            collocs = cls.get_pedlex_collocations(head_v)
             for cn in (collocs or {}).get("colloc_nouns") or []:
                 cn_clean = re.sub(r"[^a-z]", "", str(cn).lower())
                 if (

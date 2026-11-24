@@ -20,11 +20,23 @@ class QuizSkeletonPrepMixin:
         batch_target_words: Set[str],
         nlp: Any,
         has_multiple_candidates: bool = True,
+        passage_level: Optional[str] = None,
     ) -> Optional[SkeletonContext]:
         """
         Stage 1: Preprocess vocabulary target item, decompose multi-word constructions,
         and lock authoritative pedagogical sense before anchor resolution.
         """
+        # Resolve passage CEFR level from item metadata, explicit argument, or active ContextVar
+        passage_cefr = (
+            it.get("passage_cefr")
+            or it.get("overall_cefr_level")
+            or it.get("cefr_level")
+            or passage_level
+            or cls.get_current_passage_cefr()
+        )
+        if passage_cefr:
+            passage_cefr = str(passage_cefr).strip().upper()
+
         anchor = None
         anchor_type = None
         anchor_source = "curriculum_collocation"
@@ -679,6 +691,7 @@ class QuizSkeletonPrepMixin:
             w_lower=w_lower,
             raw_pos=raw_pos,
             canonical_pos=canonical_pos,
+            passage_cefr=passage_cefr,
             target_entry=target_entry,
             entry_base=entry_base,
             locked_sense=locked_sense,

@@ -30,7 +30,6 @@ class DistractorVocabAssemblyMixin:
         definition = wsd_ctx["definition"]
         quote = wsd_ctx["quote"]
         wn = wsd_ctx["wn"]
-        ocd = wsd_ctx["ocd"]
         nlp = wsd_ctx["nlp"]
         target_synsets = wsd_ctx["target_synsets"]
         global_synonyms = wsd_ctx["global_synonyms"]
@@ -160,13 +159,13 @@ class DistractorVocabAssemblyMixin:
                         forbidden_words.add(cand)
             elif wn_pos == "a" and anchor_type == "modified_noun":
                 # Modified Noun Collocation Clash - reject legal adjectives that also collocate with the noun
-                anchor_entry = ocd.get(clean_anchor, {})
+                anchor_entry = cls.get_pedlex_collocations(clean_anchor) or {}
                 for a in anchor_entry.get("adj", []):
                     tok = a.split()[0].lower()
                     if tok not in sense_antonyms:
                         forbidden_words.add(tok)
             else:
-                anchor_entry = ocd.get(clean_anchor, {})
+                anchor_entry = cls.get_pedlex_collocations(clean_anchor) or {}
                 # If target is verb, anchor is noun: check verb_before and verb_after
                 for v in anchor_entry.get("verb_before", []) + anchor_entry.get("verb_after", []):
                     forbidden_words.add(v.split()[0].lower())
@@ -300,6 +299,15 @@ class DistractorVocabAssemblyMixin:
                 elif cand in tier0_ldoce_thesaurus:
                     distractor_metadata[cand] = "ldoce_thesaurus"
                 elif anchor_type == "prep" and has_cand_clash and cand_clash_r == "unattested_prepositional_government_clash":
+                    is_sem_peer = (
+                        cand in tier0_ldoce_thesaurus
+                        or cand in tier2_hyponyms
+                        or cand in tier3_coordinates
+                        or (wn_pos == "n" and _is_aligned_noun_coord(cand))
+                        or (target_lfs_set and any(cs.lexfile() in target_lfs_set for cs in (wn.synsets(cand, wn_pos) if wn else [])))
+                    )
+                    if not is_sem_peer and (len(safe_distractors) + len(candidates) > target_count):
+                        continue
                     distractor_metadata[cand] = "preposition_valency"
                 elif wn_pos == "a":
                     if anchor_type == "prep" and any(cand in adjs for p, adjs in cls._ADJ_PREP_VALENCY_MAP.items() if p != context_anchor):
@@ -365,26 +373,26 @@ class DistractorVocabAssemblyMixin:
             target_syns_pre = [s for s in target_synsets if s.lexfile()]
             target_lfs_pre = [s.lexfile() for s in target_syns_pre if s.lexfile()]
             if target_lfs_pre:
-                if not cls._ocd_lexfile_cache:
-                    for w in ocd.keys():
+                if not cls._pedlex_lexfile_cache:
+                    for w in cls.get_pedlex_headwords():
                         if (
                             len(w) >= 3
                             and w.isalpha()
                             and not re.fullmatch(r"(.)\1+", w)
                             and cls.is_exact_pedlex_headword(w)
-                            and (cls.word_zipf(w) >= 3.0 or w in ocd)
+                            and cls.word_zipf(w) >= 3.0
                         ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
                                 lf = w_syns[0].lexfile()
-                                if lf not in cls._ocd_lexfile_cache:
-                                    cls._ocd_lexfile_cache[lf] = []
-                                cls._ocd_lexfile_cache[lf].append(w)
+                                if lf not in cls._pedlex_lexfile_cache:
+                                    cls._pedlex_lexfile_cache[lf] = []
+                                cls._pedlex_lexfile_cache[lf].append(w)
                 _ref_syn = target_syns_pre[0]
                 _ref_hyp = _ref_syn.hypernyms()[0] if _ref_syn.hypernyms() else _ref_syn
                 for t_lf in target_lfs_pre:
                     raw_lf_pool = [
-                        fb for fb in cls._ocd_lexfile_cache.get(t_lf, [])
+                        fb for fb in cls._pedlex_lexfile_cache.get(t_lf, [])
                         if (
                             fb != clean_target
                             and fb not in forbidden_words
@@ -490,8 +498,8 @@ class DistractorVocabAssemblyMixin:
                     distractor_metadata[_cw] = _cmech
 
         # Collocational head-noun adjective harvest for sparse adjectives before corpus_fallback:
-        # e.g. '... of ____ land' -> ocd['land']['adj'] ('industrial', 'dry', 'native', 'public')
-        #      '... of ____ energy' -> ocd['energy']['adj'] ('nuclear', 'atomic', 'alternative')
+        # e.g. '... of ____ land' -> pedlex['land']['adj'] ('industrial', 'dry', 'native', 'public')
+        #      '... of ____ energy' -> pedlex['energy']['adj'] ('nuclear', 'atomic', 'alternative')
         if len(safe_distractors) < target_count and wn_pos == "a" and context_anchor:
             _anchor_low = str(context_anchor).strip().lower()
             _m_adj_head = re.search(r"_{2,}\s+([a-z]{3,})\b", _anchor_low)
@@ -499,10 +507,10 @@ class DistractorVocabAssemblyMixin:
                 _anchor_low if (anchor_type == "modified_noun" and _anchor_low.isalpha() and len(_anchor_low) >= 3) else ""
             )
             if _head_n:
-                _head_ocd = cls.get_oxford_collocations(_head_n) or {}
+                _head_pedlex = cls.get_pedlex_collocations(_head_n) or {}
                 _raw_adj_cands: List[str] = []
                 _seen_adj = set(safe_distractors) | set(exclude_words) | set(forbidden_words) | set(global_synonyms) | {clean_target, _head_n}
-                for _entry in _head_ocd.get("adj", []):
+                for _entry in _head_pedlex.get("adj", []):
                     for _tok in str(_entry).replace("/", " ").split():
                         _tok = _tok.strip().lower()
                         if (
@@ -1011,25 +1019,26 @@ class DistractorVocabAssemblyMixin:
                             and d not in curated_contrast_cands
                             and distractor_metadata.get(d) not in ("orthographic_paronym", "antonym")
                         ]
-                        if uncurated_c:
-                            rep_d = uncurated_c[0]
-                            rep_idx = safe_distractors.index(rep_d)
-                            safe_distractors[rep_idx] = picked_countable
-                            distractor_metadata.pop(rep_d, None)
-                            distractor_metadata[picked_countable] = "countability_contrast_countable"
+                        if need_curated_injection and picked_countable in curated_contrast_cands:
+                            if uncurated_c:
+                                rep_d = uncurated_c[0]
+                                rep_idx = safe_distractors.index(rep_d)
+                                safe_distractors[rep_idx] = picked_countable
+                                distractor_metadata.pop(rep_d, None)
+                                distractor_metadata[picked_countable] = "countability_contrast_countable"
+                            elif len(safe_distractors) >= target_count:
+                                last_d = safe_distractors[-1]
+                                if distractor_metadata.get(last_d) in (
+                                    "coordinate", "troponym", "attribute_coordinate",
+                                    "synonym", "ldoce_thesaurus", "dynamic_domain_fallback",
+                                ):
+                                    safe_distractors.pop()
+                                    distractor_metadata.pop(last_d, None)
+                                    safe_distractors.append(picked_countable)
+                                    distractor_metadata[picked_countable] = "countability_contrast_countable"
                         elif len(safe_distractors) < target_count:
                             safe_distractors.append(picked_countable)
                             distractor_metadata[picked_countable] = "countability_contrast_countable"
-                        elif len(safe_distractors) >= target_count:
-                            last_d = safe_distractors[-1]
-                            if distractor_metadata.get(last_d) in (
-                                "coordinate", "troponym", "attribute_coordinate",
-                                "synonym", "ldoce_thesaurus", "dynamic_domain_fallback",
-                            ):
-                                safe_distractors.pop()
-                                distractor_metadata.pop(last_d, None)
-                                safe_distractors.append(picked_countable)
-                                distractor_metadata[picked_countable] = "countability_contrast_countable"
 
         # Second Defense: Dynamic domain-aligned fallback using target WordNet lexfile
         # When candidates pool is still sparse, extract homogeneous fallback words from the target's
@@ -1038,25 +1047,25 @@ class DistractorVocabAssemblyMixin:
             target_syns = [s for s in target_synsets if s.lexfile()] or [s for s in wn.synsets(clean_target, "n") if s.lexfile()]
             target_lfs = [s.lexfile() for s in target_syns if s.lexfile()]
             if target_lfs:
-                # Lazy-build or retrieve lexfile-indexed OCD nouns
-                if not cls._ocd_lexfile_cache:
-                    for w in ocd.keys():
+                # Lazy-build or retrieve lexfile-indexed PedLex nouns
+                if not cls._pedlex_lexfile_cache:
+                    for w in cls.get_pedlex_headwords():
                         if (
                             len(w) >= 3
                             and w.isalpha()
                             and not re.fullmatch(r"(.)\1+", w)
                             and cls.is_exact_pedlex_headword(w)
-                            and (cls.word_zipf(w) >= 3.0 or w in ocd)
+                            and cls.word_zipf(w) >= 3.0
                         ):
                             w_syns = [ws for ws in wn.synsets(w, "n") if ws.lexfile()]
                             if w_syns:
                                 lf = w_syns[0].lexfile()
-                                if lf not in cls._ocd_lexfile_cache:
-                                    cls._ocd_lexfile_cache[lf] = []
-                                cls._ocd_lexfile_cache[lf].append(w)
+                                if lf not in cls._pedlex_lexfile_cache:
+                                    cls._pedlex_lexfile_cache[lf] = []
+                                cls._pedlex_lexfile_cache[lf].append(w)
                 for t_lf in target_lfs:
                     raw_fb_pool = [
-                        fb for fb in cls._ocd_lexfile_cache.get(t_lf, [])
+                        fb for fb in cls._pedlex_lexfile_cache.get(t_lf, [])
                         if (
                             fb != clean_target
                             and fb not in forbidden_words

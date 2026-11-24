@@ -52,14 +52,14 @@ class DistractorGuardsCountabilityMixin:
         c_low = (cand or "").strip().lower()
         if not t_low or not c_low or t_low == c_low:
             return False
-        # 1. Oxford collocations of target
-        t_coll = cls.get_oxford_collocations(t_low) or {}
+        # 1. PedLex collocations of target
+        t_coll = cls.get_pedlex_collocations(t_low) or {}
         for cat in ("colloc_nouns", "verb_before", "noun_after", "verb"):
             for cw in t_coll.get(cat) or []:
                 if re.search(rf"\b{re.escape(c_low)}\b", cw.lower()):
                     return True
-        # 2. Oxford collocations of candidate
-        c_coll = cls.get_oxford_collocations(c_low) or {}
+        # 2. PedLex collocations of candidate
+        c_coll = cls.get_pedlex_collocations(c_low) or {}
         for cat in ("colloc_nouns", "verb_before", "noun_after", "verb"):
             for cw in c_coll.get(cat) or []:
                 if re.search(rf"\b{re.escape(t_low)}\b", cw.lower()):
@@ -488,8 +488,8 @@ class DistractorGuardsCountabilityMixin:
                     ]) or p_low.endswith(" to"):
                         has_to_prep = True
 
-        ocd = cls.get_oxford_collocations()
-        if "to" in ocd.get(w, {}).get("prep", []):
+        ped_coll = cls.get_pedlex_collocations(w) or {}
+        if "to" in ped_coll.get("prep", []):
             has_to_prep = True
 
         if w in cls._ADJ_PREP_VALENCY_MAP.get("to", []):

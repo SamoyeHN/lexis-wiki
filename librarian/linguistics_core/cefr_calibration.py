@@ -8,10 +8,14 @@ import os
 import re
 import sqlite3
 import threading
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 logger = logging.getLogger("librarian.linguistics")
+
+# Thread-safe and async-safe context variable for the currently active passage CEFR level.
+_CURRENT_PASSAGE_CEFR: ContextVar[Optional[str]] = ContextVar("_CURRENT_PASSAGE_CEFR", default=None)
 
 
 class CefrCalibrationMixin:
@@ -599,32 +603,31 @@ class CefrCalibrationMixin:
     @classmethod
     def _lexicon_profile(cls, form: str) -> Tuple[bool, bool, Optional[str], str]:
         """
-        What the PedLex/OCD lexicon and CEFR analyzer say about a surface form.
+        What the PedLex lexicon and CEFR analyzer say about a surface form.
 
         An inflected form is not itself a headword - 'attaches', 'children' and 'buses'
-        appear in neither OCD nor the CEFR headword list even though 'attach', 'child' and
+        appear in neither PedLex nor the CEFR headword list even though 'attach', 'child' and
         'bus' appear in both - so a gate that reads the surface literally treats every
         inflected distractor as obscure and rejects it for A1/A2/B1 targets. An empty
         literal lookup is therefore retried through the lemma. The retry is lazy: the
         ordinary single-word path never pays a spaCy call for it.
 
-        Returns (in_ocd, is_academic_cefr, cefr_level_or_None, form_the_lookup_resolved_to).
+        Returns (in_pedlex, is_academic_cefr, cefr_level_or_None, form_the_lookup_resolved_to).
         """
         f = (form or "").strip().lower()
         if not f:
             return (False, False, None, "")
-        ocd = cls.get_oxford_collocations()
-        in_ocd = f in ocd
+        in_pedlex = cls.is_exact_pedlex_headword(f)
         level = cls.get_word_cefr(f)
         resolved = f
-        if not (in_ocd or level):
+        if not (in_pedlex or level):
             lemma = cls._surface_lemma(f)
             if lemma:
                 resolved = lemma
-                in_ocd = lemma in ocd
+                in_pedlex = cls.is_exact_pedlex_headword(lemma)
                 level = cls.get_word_cefr(lemma)
         is_acad = level in ("B2", "C1")
-        return (in_ocd, is_acad, level, resolved)
+        return (in_pedlex, is_acad, level, resolved)
 
     @classmethod
     def _obscure_affix_forms(cls, form: str) -> List[str]:
@@ -644,21 +647,50 @@ class CefrCalibrationMixin:
         return out[:5]
 
     @classmethod
-    def is_cefr_compliant_distractor(cls, candidate: str, target_word: str) -> bool:
+    def get_current_passage_cefr(cls) -> Optional[str]:
+        """Returns the currently active passage CEFR level from context."""
+        return _CURRENT_PASSAGE_CEFR.get()
+
+    @classmethod
+    def set_current_passage_cefr(cls, level: Optional[str]) -> Any:
+        """Sets the active passage CEFR level in context. Returns reset token."""
+        lvl = str(level).strip().upper() if level else None
+        if lvl and lvl not in cls.CEFR_ORDER:
+            lvl = None
+        return _CURRENT_PASSAGE_CEFR.set(lvl)
+
+    @classmethod
+    def reset_current_passage_cefr(cls, token: Any) -> None:
+        """Resets the active passage CEFR level using the token returned by set_current_passage_cefr."""
+        if token is not None:
+            _CURRENT_PASSAGE_CEFR.reset(token)
+
+    @classmethod
+    def is_cefr_compliant_distractor(
+        cls,
+        candidate: str,
+        target_word: str,
+        passage_level: Optional[str] = None,
+    ) -> bool:
         """
-        Enforces the Psychometric Distractor Ceiling Principle:
-        1. Distractor must NOT be significantly harder than the target word.
-        2. Specifically, candidate CEFR rank <= target CEFR rank + 1, with a hard ceiling:
-           - For A1/A2 target: distractor must be <= B1 (never B2, C1, C2, or obscure unlisted).
-           - For B1 target: distractor must be <= B2 (never C1, C2, or obscure unlisted).
-           - For B2 target: distractor must be <= C1.
-        3. Lexicon Filter: candidate must exist in PedLex/OCD or CEFR database.
+        Enforces the SLA Lexical Accessibility Matrix & Dual-Track Distractor Ceiling Principle:
+        1. Distractor must NOT be significantly harder than either the target word or the passage context:
+           effective_ceiling = min(Ceiling(Target_CEFR), Global_Ceiling(Passage_CEFR))
+           - For A1/A2 context: distractor hard ceiling is B1 (never B2, C1, C2, or obscure unlisted).
+           - For B1 context: distractor hard ceiling is B2 (never C1, C2, or obscure unlisted).
+           - For B2 context: distractor hard ceiling is C1.
+        2. SLA Foundational Gates across CEFR tiers:
+           - A1 contexts: Distractor must belong to LDOCE core 1000/2000/3000 defining lexicon or high-frequency
+             (core_level in (1, 2, 3) or freq_tags). Academic Word List (AWL) terms strictly banned.
+             B1+ distractors must have high spoken/written frequency tags.
+           - A2 contexts: Distractor must belong to core defining lexicon or high-frequency; AWL terms require high frequency.
+           - B1 contexts: Distractor must belong to core 3000, high-frequency, or recognized AWL vocabulary.
+             Rejects rare/obscure non-core non-AWL intruders.
+        3. Lexicon Filter: candidate must exist in PedLex or CEFR database.
         4. Morphological Anomaly Gate:
            - Max length <= max(11, len(target) + 4) (rejects 14+ letter monsters like 'conceivableness').
            - Rejects obscure multi-affix formations ('-ableness', '-lessness', '-icalness', '-fulness').
-        5. every one of those tests is applied to the surface form the student
-           reads. Difficulty belongs to the lemma ('attaches' is as easy as 'attach'), but
-           length and affix weirdness belong to the spelling on the page.
+        5. Applied to the surface form the student reads.
         """
         c_clean = candidate.lower().strip()
         t_clean = target_word.lower().strip()
@@ -682,37 +714,49 @@ class CefrCalibrationMixin:
         if c_clean in cls._ANCHOR_STOPWORDS:
             return False
 
-        # Lexicon Filter: must be recognized in OCD or CEFR (through the lemma when the
+        # Lexicon Filter: must be recognized in PedLex or CEFR (through the lemma when the
         # candidate is an inflection rather than a headword).
-        in_ocd, is_acad, c_lvl_str, resolved = cls._lexicon_profile(c_clean)
+        in_pedlex, is_acad, c_lvl_str, resolved = cls._lexicon_profile(c_clean)
 
         analyzer = cls.get_cefr_analyzer()
         if not analyzer:
-            return in_ocd or is_acad
+            return in_pedlex or is_acad
 
         t_lvl_str = cls._lexicon_profile(t_clean)[2] or "B2"
         t_rank = cls.CEFR_ORDER.get(t_lvl_str, 4)
-        # the ceiling itself comes from the shared table, not from a
-        # ladder hand-written inside this gate.
-        ceiling_rank = cls._ceiling_rank(t_rank, "support")
+
+        # Dual-Track Ceiling Resolution:
+        # Reconciles micro target word CEFR with macro passage context CEFR.
+        effective_passage = (passage_level or cls.get_current_passage_cefr() or "").strip().upper()
+        p_rank = cls.CEFR_ORDER.get(effective_passage) if effective_passage in cls.CEFR_ORDER else None
+
+        t_ceiling_rank = cls._ceiling_rank(t_rank, "support")
+        if p_rank is not None:
+            p_ceiling_rank = cls._ceiling_rank(p_rank, "support")
+            ceiling_rank = min(t_ceiling_rank, p_ceiling_rank)
+            effective_base_rank = min(t_rank, p_rank)
+        else:
+            ceiling_rank = t_ceiling_rank
+            effective_base_rank = t_rank
 
         if not c_lvl_str:
             # Candidate is unlisted in CEFR database!
-            # If target is A1, A2, or B1, completely reject unlisted candidates (e.g. 'conceivableness')
-            if t_rank <= 3:
+            # If target or passage is A1, A2, or B1, completely reject unlisted candidates (e.g. 'conceivableness')
+            if effective_base_rank <= 3:
                 return False
-            # For B2/C1 targets, only allow if verified in OCD
-            return in_ocd
+            # For B2/C1 targets, only allow if verified in PedLex
+            return in_pedlex
 
         c_rank = cls.CEFR_ORDER.get(c_lvl_str, 4)
 
         # Distractor Ceiling Gate: a distractor may never sit above the ceiling
-        # its target's band licenses (A1/A2 -> B1, B1 -> B2, B2 -> C1, C1+ -> C2).
+        # its target/passage band licenses (A1/A2 -> B1, B1 -> B2, B2 -> C1, C1+ -> C2).
         # Exception: Direct morphological negative antonyms (e.g. unpunctual from punctual, imperfect from perfect)
         # share the exact base lemma and are transparently understood by learners, exempting them from CEFR ceiling.
         _polar_duals = (
             ("on", "off"), ("off", "on"),
             ("in", "out"), ("out", "in"),
+            ("in", "de"), ("de", "in"),
             ("up", "down"), ("down", "up"),
             ("over", "under"), ("under", "over"),
         )
@@ -734,26 +778,100 @@ class CefrCalibrationMixin:
         # (LDOCE 3000 defining lexicon: core_level >= 1 or non-empty freq_tags, or is_awl, or inflection of such).
         # Rejects obscure/C1/C2 words like 'subjugation', 'pretext', 'commiserate', 'impasse', 'salvation'
         # which cefrpy heuristically/statistically misclassifies as A2 or B1.
-        if t_rank <= 2 and not is_direct_negation and not cls._is_ldoce_disabled():
+        if effective_base_rank <= 3 and not is_direct_negation and not cls._is_ldoce_disabled():
             c_entry = cls.get_ldoce_entry(c_clean)
             c_core = (c_entry.get("core_level") or 0) if c_entry else 0
             c_freq = bool(c_entry.get("freq_tags")) if c_entry else False
             c_awl = bool(c_entry.get("is_awl")) if c_entry else False
-            if not (c_core >= 1 or c_freq or (t_rank == 3 and c_awl)):
-                lem = cls._surface_lemma(c_clean)
-                if lem and lem != c_clean:
+
+            # If surface form does not have core/frequency tags (e.g. inflected forms like 'children', 'boxes', 'attaches'),
+            # inspect candidate lemmas/headwords to inherit defining core properties.
+            if not (c_core >= 1 or c_freq):
+                lem_cands = set(cls._headword_candidates(c_clean))
+                s_lem = cls._surface_lemma(c_clean)
+                if s_lem:
+                    lem_cands.add(s_lem)
+                if resolved and resolved != c_clean:
+                    lem_cands.add(resolved)
+                for lem in lem_cands:
+                    if not lem or lem == c_clean:
+                        continue
                     lem_entry = cls.get_ldoce_entry(lem)
-                    c_core = (lem_entry.get("core_level") or 0) if lem_entry else 0
-                    c_freq = bool(lem_entry.get("freq_tags")) if lem_entry else False
-                    c_awl = bool(lem_entry.get("is_awl")) if lem_entry else False
-            if t_rank <= 2:
+                    if lem_entry:
+                        lem_core = lem_entry.get("core_level") or 0
+                        lem_freq = bool(lem_entry.get("freq_tags"))
+                        lem_awl = bool(lem_entry.get("is_awl"))
+                        if lem_core or lem_freq:
+                            c_core = max(c_core, lem_core)
+                            c_freq = c_freq or lem_freq
+                            c_awl = lem_awl
+                            break
+
+            if effective_base_rank == 1:
+                # A1 foundational gate:
+                # 1. Distractor must belong to LDOCE core defining lexicon (1000/2000/3000) or high-frequency
                 if not (c_core >= 1 or c_freq):
                     return False
+                # 2. Academic Word List (AWL) abstract terms strictly barred in A1
+                if c_awl:
+                    return False
+                # 3. B1+ distractors barred unless bearing high spoken/written frequency tags
+                if c_rank >= 3 and not c_freq:
+                    return False
+            elif effective_base_rank == 2:
+                # A2 foundational gate:
+                if not (c_core >= 1 or c_freq):
+                    return False
+                if c_awl and not c_freq:
+                    return False
+                # +1 Band Frequency Lock: B1+ distractors in A2 must bear everyday spoken/written frequency tags
+                # (blocks low-frequency cultural/domain words like 'choir'/'orchestra' lacking S1..S3/W1..W3).
+                if c_rank > 2 and not c_freq:
+                    return False
             else:
-                if not (c_core >= 1 or c_freq or c_awl):
+                # B1 intermediate gate:
+                # If distractor sits above B1 (i.e. c_rank > 3, B2 ceiling), it must be grounded in
+                # everyday frequency, AWL, or LDOCE 1000/2000 core vocabulary (core_level >= 2).
+                if c_rank > 3 and not (c_freq or c_awl or c_core >= 2):
                     return False
 
-        return in_ocd or is_acad or analyzer.is_word_in_database(resolved) or is_direct_negation
+        return in_pedlex or is_acad or analyzer.is_word_in_database(resolved) or is_direct_negation
+
+    @classmethod
+    def distractor_familiarity_key(
+        cls,
+        word: str,
+        target_word: str = "",
+        passage_level: Optional[str] = None,
+    ) -> Tuple[int, int, int, int]:
+        """Sort key (ascending = more familiar) prioritizing base-level, high-frequency, core-1000/2000 words."""
+        w_clean = (word or "").strip().lower()
+        t_clean = (target_word or "").strip().lower()
+        _, _, c_lvl_str, _ = cls._lexicon_profile(w_clean)
+        c_rank = cls.CEFR_ORDER.get(c_lvl_str or "", 4)
+
+        t_lvl_str = cls._lexicon_profile(t_clean)[2] if t_clean else None
+        t_rank = cls.CEFR_ORDER.get(t_lvl_str or "", 3)
+        eff_p = (passage_level or cls.get_current_passage_cefr() or "").strip().upper()
+        p_rank = cls.CEFR_ORDER.get(eff_p) if eff_p in cls.CEFR_ORDER else None
+        base_rank = min(t_rank, p_rank) if p_rank is not None else t_rank
+
+        entry = cls.get_ldoce_entry(w_clean) if not cls._is_ldoce_disabled() else None
+        core_lvl = (entry.get("core_level") or 0) if entry else 0
+        freq_tags = (entry.get("freq_tags") or []) if entry else []
+        # Score S1/W1=3, S2/W2=2, S3/W3=1, none=0 (summed across spoken & written)
+        freq_score = 0
+        for tag in freq_tags:
+            t_s = str(tag).upper()
+            if t_s in ("S1", "W1"):
+                freq_score += 3
+            elif t_s in ("S2", "W2"):
+                freq_score += 2
+            elif t_s in ("S3", "W3"):
+                freq_score += 1
+
+        is_above_base = 1 if c_rank > base_rank else 0
+        return (is_above_base, -freq_score, -core_lvl, c_rank)
 
     CEFR_CEILING_BY_LEVEL = {
         "A1": "B1", "A2": "B1", "B1": "B2", "B2": "C1", "C1": "C2", "C2": "C2",
@@ -833,7 +951,7 @@ class CefrCalibrationMixin:
             seen.add(token)
             if any(mark in token for mark in ("'", "\u2019")):
                 continue
-            _in_ocd, _in_awl, level, resolved = cls._lexicon_profile(token)
+            _in_pedlex, _in_awl, level, resolved = cls._lexicon_profile(token)
             if level and cls.CEFR_ORDER.get(level, 0) > ceiling_rank:
                 # The graded list carries inflected spellings too ('rescheduled' C2).
                 # When the word behind the surface form is one the passage or the

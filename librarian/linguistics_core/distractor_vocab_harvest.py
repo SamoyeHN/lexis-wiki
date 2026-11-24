@@ -12,6 +12,20 @@ logger = logging.getLogger("librarian.linguistics.vocab_distractors")
 
 class DistractorVocabHarvestMixin:
 
+    _ABSTRACT_ONTOLOGY_HYPERNYMS = {
+        "oewn-00024900-n",  # state
+        "oewn-13943868-n",  # condition, status
+        "oewn-05207437-n",  # state, province
+        "oewn-00023100-n",  # quality
+        "oewn-00024444-n",  # attribute
+        "oewn-00002137-n",  # abstraction, abstract entity
+        "oewn-00001740-n",  # entity
+        "oewn-00002684-n",  # physical object
+        "oewn-00003553-n",  # whole, unit
+        "oewn-00007347-n",  # attribute
+        "oewn-00030761-n",  # psychological feature
+    }
+
     @classmethod
     def _harvest_vocab_candidates(
         cls,
@@ -28,7 +42,6 @@ class DistractorVocabHarvestMixin:
         definition = wsd_ctx["definition"]
         quote = wsd_ctx["quote"]
         wn = wsd_ctx["wn"]
-        ocd = wsd_ctx["ocd"]
         nlp = wsd_ctx["nlp"]
         target_synsets = wsd_ctx["target_synsets"]
         global_synonyms = wsd_ctx["global_synonyms"]
@@ -236,7 +249,7 @@ class DistractorVocabHarvestMixin:
                             wn_pos != "n"
                             or (
                                 it.get("section_index") is not None
-                                and context_anchor.lower() != "into"
+                                and context_anchor.lower() not in ("into", "between")
                                 and clean_target not in cls.get_strict_pedlex_and_oxford_synonyms(picked, pos="noun")
                                 and cls.lemma_of(clean_target) not in cls.get_strict_pedlex_and_oxford_synonyms(picked, pos="noun")
                             )
@@ -312,7 +325,7 @@ class DistractorVocabHarvestMixin:
                         and " " not in lemma
                         and "_" not in lemma
                         and "-" not in lemma
-                        and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
+                        and cls.is_exact_pedlex_headword(lemma)
                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                         and not _is_informal_or_slang_distractor(lemma)
                     ):
@@ -347,7 +360,7 @@ class DistractorVocabHarvestMixin:
                             and " " not in lemma
                             and "_" not in lemma
                             and "-" not in lemma
-                            and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
+                            and cls.is_exact_pedlex_headword(lemma)
                             and _pos_ok(lemma)
                             and cls.is_cefr_compliant_distractor(lemma, clean_target)
                             and not _is_informal_or_slang_distractor(lemma)
@@ -370,7 +383,7 @@ class DistractorVocabHarvestMixin:
                                 and " " not in lemma
                                 and "_" not in lemma
                                 and "-" not in lemma
-                                and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
+                                and cls.is_exact_pedlex_headword(lemma)
                                 and _pos_ok(lemma)
                                 and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                 and not _is_informal_or_slang_distractor(lemma)
@@ -386,7 +399,7 @@ class DistractorVocabHarvestMixin:
                                     and " " not in lemma
                                     and "_" not in lemma
                                     and "-" not in lemma
-                                    and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
+                                    and cls.is_exact_pedlex_headword(lemma)
                                     and _pos_ok(lemma)
                                     and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                     and not _is_informal_or_slang_distractor(lemma)
@@ -452,7 +465,7 @@ class DistractorVocabHarvestMixin:
                                         and " " not in lemma
                                         and "_" not in lemma
                                         and "-" not in lemma
-                                        and (cls.is_exact_pedlex_headword(lemma) if cls._ensure_ldoce_conn() else lemma in ocd)
+                                        and cls.is_exact_pedlex_headword(lemma)
                                         and _pos_ok(lemma)
                                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                         and not _is_informal_or_slang_distractor(lemma)
@@ -476,7 +489,7 @@ class DistractorVocabHarvestMixin:
                                 0 if (_t_has_rel_sfx and w.endswith(_rel_sfx)) else 1,
                                 0
                                 if (
-                                    w in ocd
+                                    cls.is_exact_pedlex_headword(w)
                                     or int((cls.get_ldoce_entry(w) or {}).get("core_level") or 0) > 0
                                     or cls._lexicon_profile(w)[2] in ("A2", "B1", "B2")
                                 )
@@ -670,11 +683,48 @@ class DistractorVocabHarvestMixin:
                         if "plural" in g0_low and "countable" not in re.sub(r"\buncountable\b", "", g0_low):
                             return False
                     c_wn_n = [cs for cs in wn.synsets(cand_lem, "n") if cs.lexfile()] or wn.synsets(cand_lem, "n")
+                    cand_target_syn = sis_syn if (sis_syn and sis_syn.lexfile()) else (c_wn_n[0] if c_wn_n else None)
                     if c_wn_n:
-                        if s.lexfile() == "noun.person" and c_wn_n[0].lexfile() != "noun.person":
+                        cand_lf = cand_target_syn.lexfile() if cand_target_syn else c_wn_n[0].lexfile()
+                        if s.lexfile() == "noun.person" and cand_lf != "noun.person":
                             return False
-                        if s.lexfile() and s.lexfile() != "noun.person" and c_wn_n[0].lexfile() == "noun.person":
+                        if s.lexfile() and s.lexfile() != "noun.person" and cand_lf == "noun.person":
                             return False
+                        # Reject collective group nouns (e.g. 'staff') when target is not a group noun
+                        if s.lexfile() and s.lexfile() != "noun.group" and (cand_lf == "noun.group" or (c_wn_n and c_wn_n[0].lexfile() == "noun.group")):
+                            return False
+                        # Auditory / Speech alignment gate: When target synset is sound/communication and context has auditory cues,
+                        # coordinate must also have primary lexfile in sound/communication/event, blocking abstract attributes like 'capacity', 'diameter', 'lifestyle'.
+                        if s.lexfile() in ("noun.communication", "noun.sound"):
+                            if wsd_ctx.get("has_auditory_context") or (context_anchor and context_anchor.lower() in getattr(cls, "_AUDITORY_PREDICATES", set())):
+                                if cand_lf not in ("noun.communication", "noun.sound", "noun.event"):
+                                    return False
+                                if cand_lf == "noun.event":
+                                    cand_noun_defs = " ".join(str(sn.get("definition") or "").lower() for sn in c_senses_n)
+                                    if not any(snd_w in cand_noun_defs for snd_w in ("sound", "noise", "audible", "loud", "faint", "listen", "ear")):
+                                        return False
+                        # Physical Token / Document / Label Affordance Gate:
+                        # When target is a small paper token, label, sticker, ticket, or postal stamp,
+                        # reject large shipping containers ('parcel', 'box', 'crate'), postal routing codes ('postcode', 'zipcode'),
+                        # monetary fee amounts ('cost', 'price', 'fee', 'fare', 'charge', 'rate', 'dollar', 'cent'),
+                        # and mathematical diagrams/charts ('graph', 'chart', 'diagram').
+                        is_token_target = (
+                            bool(locals().get("_material_genus_words", set()) & {"paper", "card", "cardboard"})
+                            or (definition and any(tk in definition.lower() for tk in ("piece of paper", "small piece", "postage stamp", "label", "sticker", "ticket", "token")))
+                        )
+                        if is_token_target:
+                            cand_noun_defs = " ".join(str(sn.get("definition") or "").lower() for sn in c_senses_n)
+                            if any(c_box in cand_noun_defs for c_box in ("package", "parcel", "box", "container", "wrapped")):
+                                return False
+                            if any(c_code in cand_noun_defs or c_code in cand_lem for c_code in ("postcode", "zipcode", "zip code", "code")):
+                                return False
+                            if any(c_fee in cand_noun_defs for c_fee in ("unit of money", "currency", "amount of money", "price", "fee", "cost", "sum of money", "charge")):
+                                return False
+                            if any(c_diag in cand_noun_defs for c_diag in ("diagram", "drawing that uses", "sets of measurements", "mathematical", "quantity")):
+                                return False
+                            cand_all_lfs = {cs.lexfile() for cs in c_wn_n if cs.lexfile()}
+                            if cand_all_lfs and not (cand_all_lfs & {"noun.artifact", "noun.object", "noun.communication"}):
+                                return False
                         # Reject biological/anatomical coordinates (e.g. 'palate' under 'surface') when target is non-biological
                         _bio_lfs = ("noun.body", "noun.animal", "noun.plant")
                         if (
@@ -682,27 +732,27 @@ class DistractorVocabHarvestMixin:
                             and s.lexfile() not in _bio_lfs
                             and not locals().get("is_bio_sample_def")
                             and (
-                                c_wn_n[0].lexfile() in _bio_lfs
-                                or (sis_syn is not None and sis_syn.lexfile() in _bio_lfs)
+                                (sis_syn is not None and sis_syn.lexfile() in _bio_lfs)
+                                or (sis_syn is None and c_wn_n and c_wn_n[0].lexfile() in _bio_lfs)
                             )
                         ):
                             return False
                         # Reject metonymic building/container/artifact coordinates (e.g. 'room', 'suite', 'house', 'hall', 'floor')
                         # whose primary WordNet sense is concrete physical/location when target is a `noun.group` collective noun.
-                        if s.lexfile() == "noun.group" and c_wn_n[0].lexfile() in (
+                        if s.lexfile() == "noun.group" and cand_lf in (
                             "noun.artifact", "noun.location", "noun.body",
                             "noun.substance", "noun.object", "noun.food", "noun.plant",
                         ):
                             return False
                     # Monosemous in PedLex and sharing primary WordNet lexfile -> aligned
-                    # (Exclude broad `noun.person` so kinship/age terms like 'aunt'/'baby' must share domain cues with occupation targets.)
+                    # (Exclude broad `noun.person` and abstract ontology lexfiles `noun.state`, `noun.attribute`, `noun.cognition`, `noun.act`
+                    # so abstract nouns must share domain cues/tokens with the target).
                     if (
                         len(c_senses_n) == 1
                         and s.lexfile()
-                        and s.lexfile() != "noun.person"
-                        and c_wn_n
-                        and c_wn_n[0].lexfile() == s.lexfile()
-                        and (sis_syn is None or not sis_syn.lexfile() or sis_syn.lexfile() == s.lexfile())
+                        and s.lexfile() not in ("noun.person", "noun.state", "noun.attribute", "noun.cognition", "noun.act")
+                        and cand_target_syn
+                        and cand_target_syn.lexfile() == s.lexfile()
                     ):
                         return True
                     if sis_syn is None or hyper_syn is None:
@@ -712,6 +762,7 @@ class DistractorVocabHarvestMixin:
                         "person", "people", "thing", "things", "place", "time", "part", "type",
                         "kind", "form", "amount", "number", "small", "large", "used", "make",
                         "made", "making", "taken", "order", "particular", "usually", "often",
+                        "point", "period", "state", "situation", "condition", "fact", "case", "way", "level",
                     }
                     # Check if top-2 PedLex senses share domain tokens (with plural -s normalization) with sister synset / hypernym / target definition
                     prim_txt = re.sub(
@@ -730,9 +781,16 @@ class DistractorVocabHarvestMixin:
                         tok for tok in re.findall(r"\b[a-z]{3,}\b", prim_txt)
                         if tok not in cls._PARONYM_STOP_DEF_TOKS and tok not in cls._ANCHOR_STOPWORDS and tok not in _meta_stop and tok != cand_lem
                     }
+                    def _stem_root(tok: str) -> str:
+                        t = tok.lower()
+                        for sfx in ("fulness", "lessness", "ability", "iveness", "ment", "ness", "ful", "less", "able", "ible", "ive", "ion", "ity", "ic", "al", "ly", "ing", "ed", "er", "or", "s"):
+                            if t.endswith(sfx) and len(t) - len(sfx) >= 3:
+                                return t[:-len(sfx)]
+                        return t
+
                     prim_toks = set(raw_prim_toks) | {
                         tok[:-1] for tok in raw_prim_toks if tok.endswith("s") and len(tok) > 3
-                    }
+                    } | {_stem_root(tok) for tok in raw_prim_toks}
                     branch_txt = " ".join([
                         str(sis_syn.definition() or ""),
                         " ".join(sis_syn.examples() or []),
@@ -748,13 +806,20 @@ class DistractorVocabHarvestMixin:
                         raw_branch_toks |= ((def_tokens - _meta_stop) - {cand_lem})
                     branch_toks = set(raw_branch_toks) | {
                         tok[:-1] for tok in raw_branch_toks if tok.endswith("s") and len(tok) > 3
-                    }
+                    } | {_stem_root(tok) for tok in raw_branch_toks}
                     return bool(prim_toks & branch_toks)
 
                 # Tier 3: Coordinate terms (sisters under same hypernym - Troponyms for verbs)
                 for hyper in s.hypernyms():
-                    # Allow up to 200 hyponyms for specific mid/deep-level noun hypernyms (min_depth >= 4, e.g. container=166, fabric=176, metallic element=78)
+                    if hasattr(hyper, "id") and hyper.id in cls._ABSTRACT_ONTOLOGY_HYPERNYMS:
+                        continue
                     h_depth = hyper.min_depth() if hasattr(hyper, "min_depth") else 0
+                    if wn_pos == "n":
+                        if h_depth < 4:
+                            continue
+                        if h_depth == 4 and len(hyper.hyponyms()) > 50 and getattr(hyper, "lexfile", lambda: "")() in ("noun.state", "noun.Tops", "noun.act", "noun.attribute"):
+                            continue
+                    # Allow up to 200 hyponyms for specific mid/deep-level noun hypernyms (min_depth >= 4, e.g. container=166, fabric=176, metallic element=78)
                     if wn_pos == "n" and h_depth >= 4:
                         max_hypos = 200
                     else:
@@ -779,14 +844,26 @@ class DistractorVocabHarvestMixin:
                         h_ov = sum(1 for dt in def_tokens if dt in h_txt) * 2 + 1
                     sis_pool = list(hyper.hyponyms())
                     for sis in list(sis_pool):
-                        # Unwrap multi-word taxonomic intermediate nodes (e.g. 'natural fiber', 'precious metal')
+                        # Unwrap multi-word or category intermediate nodes (e.g. 'auditory communication' -> 'utterance'/'speech', 'natural fiber' -> 'silk')
                         if (
                             wn_pos == "n"
                             and sis.id != s.id
-                            and not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in sis.words())
-                            and 0 < len(sis.hyponyms()) <= 25
+                            and 0 < len(sis.hyponyms()) <= 20
+                            and (
+                                not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in sis.words())
+                                or any(sw.lemma() in ("marker", "label", "fastener", "covering", "document", "sheet", "ticket", "token", "speech", "utterance", "vocalization", "sound", "noise") for sw in sis.words())
+                            )
                         ):
-                            sis_pool.extend(sis.hyponyms())
+                            for sub in sis.hyponyms():
+                                sis_pool.append(sub)
+                                if (
+                                    0 < len(sub.hyponyms()) <= 15
+                                    and (
+                                        not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in sub.words())
+                                        or any(sw.lemma() in ("label", "tag", "ticket", "speech", "utterance", "sound", "noise", "vocalization") for sw in sub.words())
+                                    )
+                                ):
+                                    sis_pool.extend(sub.hyponyms())
                     for sis in sis_pool:
                         if sis.id == s.id:
                             continue
@@ -801,7 +878,7 @@ class DistractorVocabHarvestMixin:
                                 and " " not in lemma
                                 and "_" not in lemma
                                 and "-" not in lemma
-                                and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                                and cls.is_exact_pedlex_headword(lemma)
                                 and _pos_ok(lemma)
                                 and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                 and not _is_informal_or_slang_distractor(lemma)
@@ -887,8 +964,10 @@ class DistractorVocabHarvestMixin:
                                     coord_hyper_overlap[h_lem] = max(coord_hyper_overlap.get(h_lem, 0), 1)
                                     tier3_coordinates.append(h_lem)
                         for g_hyper in hyper.hypernyms():
-                            # Block upper-ontology root grand-hypernyms (depth <= 3 for substances so 'fuel' at depth 4 is kept; depth <= 4 otherwise)
-                            min_g_depth = 3 if target_lf == "noun.substance" else 4
+                            if hasattr(g_hyper, "id") and g_hyper.id in cls._ABSTRACT_ONTOLOGY_HYPERNYMS:
+                                continue
+                            # Block upper-ontology root grand-hypernyms (depth <= 3 for substances/communications/artifacts so 'fuel' or 'symbol' at depth 4 is kept; depth <= 4 otherwise)
+                            min_g_depth = 3 if target_lf in ("noun.substance", "noun.communication", "noun.artifact") else 4
                             if hasattr(g_hyper, "min_depth") and g_hyper.min_depth() <= min_g_depth:
                                 continue
                             max_g_hypos = 65 if not tier3_coordinates else 35
@@ -918,15 +997,30 @@ class DistractorVocabHarvestMixin:
                                         coord_hyper_overlap[gh_lem] = max(coord_hyper_overlap.get(gh_lem, 0), 1)
                                         tier3_coordinates.append(gh_lem)
                             g_sis_pool = list(g_hyper.hyponyms())
-                            for g_sis in list(g_sis_pool):
-                                # Unwrap multi-word taxonomic intermediate nodes (e.g. 'paper money' -> 'bill', 'animal fiber' -> 'silk', 'wool')
+                            unwrapped_g_sis = []
+                            for g_sis in g_sis_pool:
+                                if g_sis.id == hyper.id:
+                                    continue
+                                unwrapped_g_sis.append(g_sis)
+                                # Unwrap intermediate taxonomic grouping nodes (e.g. 'marker' -> 'label' -> 'sticker'/'ticket', 'natural fiber' -> 'silk')
                                 if (
-                                    g_sis.id != hyper.id
-                                    and not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in g_sis.words())
-                                    and 0 < len(g_sis.hyponyms()) <= 25
+                                    0 < len(g_sis.hyponyms()) <= 20
+                                    and (
+                                        not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in g_sis.words())
+                                        or any(sw.lemma() in ("marker", "label", "fastener", "covering", "document", "sheet", "ticket", "token", "speech", "utterance", "vocalization", "sound", "noise") for sw in g_sis.words())
+                                    )
                                 ):
-                                    g_sis_pool.extend(g_sis.hyponyms())
-                            for sis in g_sis_pool:
+                                    for sub in g_sis.hyponyms():
+                                        unwrapped_g_sis.append(sub)
+                                        if (
+                                            0 < len(sub.hyponyms()) <= 15
+                                            and (
+                                                not any(" " not in sw.lemma() and "_" not in sw.lemma() and "-" not in sw.lemma() for sw in sub.words())
+                                                or any(sw.lemma() in ("label", "tag", "ticket", "speech", "utterance", "sound", "noise", "vocalization") for sw in sub.words())
+                                            )
+                                        ):
+                                            unwrapped_g_sis.extend(sub.hyponyms())
+                            for sis in unwrapped_g_sis:
                                 if target_lf and sis.lexfile() != target_lf:
                                     continue
                                 for sw in sis.words():
@@ -940,7 +1034,7 @@ class DistractorVocabHarvestMixin:
                                         and " " not in lemma
                                         and "_" not in lemma
                                         and "-" not in lemma
-                                        and (lemma in ocd or bool(cls.get_ldoce_entry(lemma)))
+                                        and cls.is_exact_pedlex_headword(lemma)
                                         and _pos_ok(lemma)
                                         and cls.is_cefr_compliant_distractor(lemma, clean_target)
                                         and not _is_informal_or_slang_distractor(lemma)
@@ -1017,10 +1111,7 @@ class DistractorVocabHarvestMixin:
                     "noun.artifact", "noun.substance", "noun.communication",
                     "noun.possession", "noun.plant", "noun.food", "noun.object",
                 )
-                if (
-                    (_is_concrete_t and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count * 2)
-                    or (wn_pos == "n" and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count)
-                ):
+                if _is_concrete_t and len(tier0_ldoce_thesaurus) + len(tier3_coordinates) < target_count * 2:
                     conn_cue = cls._ldoce_conn if cls._ensure_ldoce_conn() else None
                     if conn_cue is not None:
                         _cue_stop = {
@@ -1105,7 +1196,7 @@ class DistractorVocabHarvestMixin:
                                 if cls._pos_code(_h_ent.get("pos") or "") != "n":
                                     continue
                                 if (
-                                    _lem not in ocd
+                                    not cls.is_exact_pedlex_headword(_lem)
                                     and int(_h_ent.get("core_level") or 0) == 0
                                     and not any(sn.get("examples") for sn in (_h_ent.get("senses") or []))
                                 ):
@@ -1215,7 +1306,11 @@ class DistractorVocabHarvestMixin:
                     for _grp_rank, _other_grp in enumerate(cls._COLLECTIVE_NOUN_ONTOLOGY[_coll_macro]):
                         if _other_grp == _coll_own_sub:
                             continue
-                        for _peer_w in _other_grp:
+                        _sorted_grp = sorted(
+                            _other_grp,
+                            key=lambda _w: cls.distractor_familiarity_key(_w, clean_target)[0],
+                        )
+                        for _peer_w in _sorted_grp:
                             if (
                                 _peer_w != clean_target
                                 and _peer_w not in global_synonyms
@@ -1257,10 +1352,12 @@ class DistractorVocabHarvestMixin:
                     prim_toks = set(re.findall(r"\b[a-z]{3,}\b", prim_def)) - {cand_w}
                     if prim_toks & (coord_domain_cues - {cand_w}) and len(prim_toks) >= 2:
                         prim_aligned = True
-                if not prim_aligned and not pos_senses and target_lfs_set:
+                if not prim_aligned and target_lfs_set:
                     c_wn = wn.synsets(cand_w, wn_pos)
                     if c_wn and c_wn[0].lexfile() in target_lfs_set:
                         prim_aligned = True
+                if not prim_aligned and _is_collective_noun_target and coord_hyper_overlap.get(cand_w, 0) >= 30:
+                    prim_aligned = True
                 c_lvl_raw = cls._lexicon_profile(cand_w)[2]
                 c_lvl = c_lvl_raw or "C1"
                 c_rank = cls.CEFR_ORDER.get(c_lvl, 5)
@@ -1269,17 +1366,19 @@ class DistractorVocabHarvestMixin:
                     c_float = float(c_rank)
                 diff_overshoot = 1 if (c_float > t_float + 0.6) else 0
                 has_ldoce_core = 0 if int(c_ent.get("core_level") or 0) > 0 else 1
-                is_non_core = 0 if (cand_w in ocd or has_ldoce_core == 0 or (c_lvl_raw in ("A1", "A2", "B1", "B2") and diff_overshoot == 0)) else 1
+                is_curated_peer = 0 if coord_hyper_overlap.get(cand_w, 0) >= 20 else 1
+                is_non_core = 0 if (cls.is_exact_pedlex_headword(cand_w) or has_ldoce_core == 0 or (c_lvl_raw in ("A1", "A2", "B1", "B2") and diff_overshoot == 0)) else 1
                 gerund_mismatch = 1 if (wn_pos == "n" and cand_w.endswith("ing") and not clean_target.endswith("ing")) else 0
                 return (
                     gerund_mismatch,
                     countability_mismatch,
+                    0 if prim_aligned else 1,
+                    is_curated_peer,
                     diff_overshoot,
                     has_ldoce_core,
                     is_non_core,
                     -coord_hyper_overlap.get(cand_w, 0),
                     0 if has_ex else 1,
-                    0 if prim_aligned else 1,
                     abs(c_rank - t_rank),
                     1 if c_rank >= 6 else 0,
                 )

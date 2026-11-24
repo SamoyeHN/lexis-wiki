@@ -254,8 +254,23 @@ class QuizSkeletonFramesMixin:
                 is_copula_adj=is_copula_adj,
                 is_attributive_only_adj=is_attributive_only_adj,
             )
+            _raw_q = (it.get("quote") or it.get("raw_quote") or "").strip()
             if opt_ex:
-                ldoce_pattern_example = opt_ex
+                _anc_str = str(anchor or "").strip().lower()
+                # If anchor was grounded in the authentic lesson quote and opt_ex lacks this anchor,
+                # but the lesson quote contains both the target and the anchor, preserve the authentic lesson collocation!
+                if (
+                    _anc_str
+                    and _anc_str not in cls._ANCHOR_STOPWORDS
+                    and _raw_q
+                    and re.search(rf"\b{re.escape(_anc_str)}\w*\b", _raw_q, re.IGNORECASE)
+                    and not re.search(rf"\b{re.escape(_anc_str)}\w*\b", opt_ex, re.IGNORECASE)
+                ):
+                    ldoce_pattern_example = _raw_q
+                else:
+                    ldoce_pattern_example = opt_ex
+            elif _raw_q:
+                ldoce_pattern_example = _raw_q
             if not cxn_override_pat and anchor_type not in _cxn_anchor_types:
                 best_pattern = opt_pat
             elif opt_pat and not best_pattern:
@@ -324,15 +339,13 @@ class QuizSkeletonFramesMixin:
                 pass
 
         # Synchronize adverb `anchor` & `anchor_type` to the syntactic partner in `ldoce_pattern_example`
-        # whenever the winning example instantiates a concrete modified verb/adjective different from (or filling in) `anchor`.
+        # ONLY when no anchor was determined yet! If an anchor was already resolved (e.g. from the textbook quote
+        # like 'follow' for 'closely'), NEVER overwrite it with an unrelated partner from the dictionary example.
         if (
             canonical_pos == "adv"
             and anchor_type != "discourse"
+            and not anchor
             and ldoce_pattern_example
-            and (
-                not anchor
-                or not re.search(rf"\b{re.escape(str(anchor).lower())}\w*\b", ldoce_pattern_example.lower())
-            )
         ):
             try:
                 _sync_adv_doc = nlp(ldoce_pattern_example)
@@ -901,6 +914,15 @@ class QuizSkeletonFramesMixin:
                     cloze_slot_frame = f"... {anchor} ____"
                 else:
                     cloze_slot_frame = "... act ____"
+            elif canonical_pos == "function_word":
+                _fw_def = str(it.get("definition") or "").lower()
+                _fw_ex = str(ldoce_pattern_example or it.get("quote") or "").lower()
+                if re.search(r"\b(?:period of time|time|hours?|days?|weeks?|months?|years?|minutes?|seconds?|deadline|before|during|until)\b", f"{_fw_def} {_fw_ex}"):
+                    cloze_slot_frame = "... ____ [time period, e.g. three days]"
+                elif re.search(r"\b(?:distance|place|area|city|town|country|building|road|street|side|river)\b", f"{_fw_def} {_fw_ex}"):
+                    cloze_slot_frame = "... ____ [place, e.g. the city]"
+                else:
+                    cloze_slot_frame = f"... ____ {resolved_obj_anim}"
             else:
                 cloze_slot_frame = f"... ____ {resolved_obj_anim}"
 
@@ -1005,9 +1027,26 @@ class QuizSkeletonFramesMixin:
 
         if is_pure_uncountable_target and cloze_slot_frame:
             cloze_slot_frame = re.sub(r"\b(?:a|an|each|every)\s+_{2,}\b", "____", cloze_slot_frame, flags=re.IGNORECASE).strip()
+        elif is_plural_noun and cloze_slot_frame:
+            cloze_slot_frame = re.sub(
+                r"\b(have|has|had)\s+the\s+(_{2,})\b",
+                r"\1 \2",
+                cloze_slot_frame,
+                flags=re.IGNORECASE,
+            ).strip()
         elif has_mixed_vc_initials and cloze_slot_frame:
             if has_uncountable_contrast_foil and not is_plural_noun:
                 cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "each ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
+            elif canonical_pos == "adj":
+                is_non_gradable = (
+                    is_attributive_only_adj
+                    or w_lower in cls._NON_GRADABLE_ADJS
+                    or final_target.lower() in cls._NON_GRADABLE_ADJS
+                )
+                _adj_repl = "the ____" if is_non_gradable else "a very ____"
+                cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", _adj_repl, cloze_slot_frame, flags=re.IGNORECASE).strip()
+            elif canonical_pos == "noun" and not re.search(r"\b(?:a|an)\s+_{2,}\s+of\b", cloze_slot_frame, re.IGNORECASE):
+                cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "another ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
             else:
                 cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "the ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
 
@@ -1063,12 +1102,16 @@ class QuizSkeletonFramesMixin:
                         cloze_slot_frame.lower(),
                     )
                 )
+                plural_noun_slot_hint = (
+                    f" (Plural noun slot (e.g. '{final_target}'): use bare plural '____', or precede '____' "
+                    "with a subject-matching possessive ('his/her/their') or plural quantifier ('many/several').)"
+                )
                 if is_quantifier_frame and quant_head_noun:
                     stem_core += f" (Quantifier head noun slot: blank only '{quant_head_noun}' inside '{w_lower}')."
                 elif half_slice_target:
                     stem_core += f" (Collocation slot: blank only '{half_slice_target}' inside expression '{w_lower}')."
                 elif is_plural_noun and not re.search(r"\b(?:several|many|few|fewer|two|three|four|these|those|various)\s+_{2,}", cloze_slot_frame.lower()):
-                    stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
+                    stem_core += plural_noun_slot_hint
                 elif is_copula_adj and not _frame_has_copula:
                     stem_core += " (Complete predicate required: stem MUST include the linking verb so the adjective predicate is complete; NEVER place before a noun)."
                 elif is_attributive_only_adj and not m_adj_noun:
@@ -1093,7 +1136,10 @@ class QuizSkeletonFramesMixin:
         elif best_pattern:
             stem_core = "Fit into the Required Stem Frame above."
             if is_plural_noun:
-                stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
+                stem_core += (
+                f" (Plural noun slot (e.g. '{final_target}'): use bare plural '____', or precede '____' "
+                "with a subject-matching possessive ('his/her/their') or plural quantifier ('many/several').)"
+            )
             elif is_copula_adj:
                 stem_core += " (Complete predicate required: stem MUST include the linking verb; NEVER place before a noun)."
             elif is_attributive_only_adj:
@@ -1107,7 +1153,10 @@ class QuizSkeletonFramesMixin:
         else:
             stem_core = "Write a natural sentence containing '____' that matches the Definition above."
             if is_plural_noun:
-                stem_core += f" (Plural noun slot required: e.g. '{final_target}')."
+                stem_core += (
+                f" (Plural noun slot (e.g. '{final_target}'): use bare plural '____', or precede '____' "
+                "with a subject-matching possessive ('his/her/their') or plural quantifier ('many/several').)"
+            )
             elif is_copula_adj:
                 stem_core += " (Complete predicate required: stem MUST include a linking/copular verb; NEVER place before a noun)."
             elif is_attributive_only_adj:
@@ -1140,7 +1189,14 @@ class QuizSkeletonFramesMixin:
         _blank_after_prep = bool(
             cloze_slot_frame
             and re.search(
-                r"\b(?:a|an|each|every|of|on|in|at|for|with|from|by|to|into|under|over|the|his|her|their|our|your|my|its|own|no)\s+____",
+                r"\b(?:"
+                r"a|an|each|every|either|neither|one|"
+                r"the|this|that|these|those|"
+                r"his|her|their|our|your|my|its|own|"
+                r"no|little|much|less|more|some|any|enough|sufficient|ample|"
+                r"several|many|few|fewer|both|all|"
+                r"of|on|in|at|for|with|from|by|to|into|under|over|through|without|about|against|towards|upon"
+                r")\s+____",
                 cloze_slot_frame.lower(),
             )
         )
@@ -1225,7 +1281,8 @@ class QuizSkeletonFramesMixin:
                 _sg_locked_low = _sg_locked.lower()
                 if _sg_s0_low and _sg_locked_low and _sg_locked_low != _sg_s0_low and _sg_s0_low not in _sg_locked_low and _sg_locked_low not in _sg_s0_low:
                     _sg_stop = {
-                        "the", "a", "an", "to", "in", "on", "at", "of", "for", "with",
+                        "the", "a", "an", "their", "his", "her", "its", "our", "my", "your",
+                        "another", "each", "every", "very", "to", "in", "on", "at", "of", "for", "with",
                         "by", "from", "as", "is", "was", "are", "were", "be", "been", "being",
                         "something", "someone", "somebody", "that", "this", "it", "they", "verb",
                     }
@@ -1259,23 +1316,14 @@ class QuizSkeletonFramesMixin:
         )
         if discriminator_note:
             # Strip generic non-grammatical Contrast labels ('polar opposite', 'orthographic look-alike', 'different degree/scale')
+            # and target-side Grammar Box dictionary examples (redundant / conflicting with Required Stem Frame & Sense Guard).
             filtered_disc = re.sub(
                 r"Contrast:\s*vs\s*'[^']+'\s*\((?:polar opposite of target meaning|orthographic look-alike / paronym with distinct meaning|different degree/scale or collocational frame|polar opposite)\)\.\s*",
                 "",
                 discriminator_note,
             ).strip()
+            filtered_disc = re.sub(r"\s*Grammar Box:.*$", "", filtered_disc).strip()
             if filtered_disc:
-                if verb_form_tag == "VB" and "Grammar Box:" in filtered_disc:
-                    _gb_tail = filtered_disc.split("Grammar Box:", 1)[1].lower()
-                    for _vb_t in ("VBZ", "VBD", "VBG", "VBN"):
-                        _vb_infl = (cls._inflect_verb(w_lower, _vb_t) or "").lower()
-                        if _vb_infl and _vb_infl != w_lower and re.search(rf"\b{re.escape(_vb_infl)}\b", _gb_tail):
-                            filtered_disc = filtered_disc.replace(
-                                "Grammar Box:",
-                                f"Grammar Box (Pattern only — keep base form '{w_lower}' in your stem):",
-                                1,
-                            )
-                            break
                 task_parts.append(filtered_disc)
 
         micro_task = " ".join(task_parts)
@@ -1290,17 +1338,32 @@ class QuizSkeletonFramesMixin:
             else:
                 anchor_source = "dictionary"
 
-        # Gate 3 (Evidence & Distractor Completeness Gate): drop unanchored items whose distractors
-        # degraded 100% to random corpus/domain fallback when other candidates exist in the unit.
+        # Gate 3 (Evidence & Distractor Completeness Gate): drop items whose distractors
+        # degraded predominantly (>= 2/3) to random corpus/domain fallback, or bare determiner-only frames
+        # that still rely on fallback distractors, when spare candidates exist in the unit.
+        _fallback_dist_count = sum(
+            1 for d_w in dist_list if str((dist_meta or {}).get(d_w) or "").endswith("fallback")
+        )
+        _bare_frame_zero_content = bool(
+            not cloze_slot_frame
+            or re.match(
+                r"^\.\.\.\s*(?:a|an|the|each|every|his|her|their|its|our|my|your|another)?\s*_{2,}\s*$",
+                cloze_slot_frame.strip(),
+                re.IGNORECASE,
+            )
+        )
         if (
-            anchor_downgrade == "sense_recognition"
-            and dist_meta
-            and all(str(m or "").endswith("fallback") for m in dist_meta.values())
+            dist_list
+            and (
+                (anchor_downgrade == "sense_recognition" and _fallback_dist_count == len(dist_list))
+                or _fallback_dist_count >= 2
+                or (_bare_frame_zero_content and _fallback_dist_count >= 1)
+            )
             and has_multiple_candidates
         ):
             logging.getLogger(__name__).info(
-                f"🚫 Gate 3 (DROP_UNANCHORED_FALLBACK_ITEM): '{final_target}' has no collocational anchor "
-                f"and 100% fallback distractors ({list(dist_meta.keys())}) — dropped."
+                f"🚫 Gate 3 (DROP_FALLBACK_HEAVY_ITEM): '{final_target}' degraded to {_fallback_dist_count}/{len(dist_list)} "
+                f"fallback distractors ({dist_list}) — dropped."
             )
             return None
 

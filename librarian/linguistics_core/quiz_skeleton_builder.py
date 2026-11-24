@@ -4,6 +4,7 @@ Coordinates single-item blueprint stages and executes batch slot distribution ba
 """
 
 import logging
+import re
 import zlib
 from typing import Any, Dict, List, Optional, Set
 
@@ -20,6 +21,7 @@ class QuizSkeletonBuilderMixin:
         used_distractors: Set[str],
         nlp: Any,
         has_multiple_candidates: bool = True,
+        passage_level: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Coordinates the 4 stages for a single vocabulary target item:
@@ -34,6 +36,7 @@ class QuizSkeletonBuilderMixin:
             batch_target_words=batch_target_words,
             nlp=nlp,
             has_multiple_candidates=has_multiple_candidates,
+            passage_level=passage_level,
         )
         if not ctx:
             return None
@@ -58,6 +61,7 @@ class QuizSkeletonBuilderMixin:
         vocab_content: Any,
         target_count: int = 10,
         multi_word_ratio: float = 0.0,
+        passage_level: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Track 2: Pre-Computed Generative Skeletons (Proficiency Testing / 语境迁移单选题)
@@ -69,6 +73,23 @@ class QuizSkeletonBuilderMixin:
         """
         if not vocab_content:
             return []
+
+        # Resolve effective passage CEFR level from argument, markdown YAML frontmatter, or item dicts
+        eff_passage = passage_level
+        if not eff_passage:
+            if isinstance(vocab_content, str):
+                m_lvl = re.search(r'^(?:overall_cefr_level|cefr_level):\s*["\']?([A-Ca-c][12])["\']?', vocab_content, re.MULTILINE)
+                if m_lvl:
+                    eff_passage = m_lvl.group(1).upper()
+            elif isinstance(vocab_content, list):
+                for _elem in vocab_content:
+                    if isinstance(_elem, dict):
+                        _elem_lvl = _elem.get("passage_cefr") or _elem.get("overall_cefr_level") or _elem.get("cefr_level")
+                        if _elem_lvl:
+                            eff_passage = str(_elem_lvl).strip().upper()
+                            break
+        if not eff_passage:
+            eff_passage = cls.get_current_passage_cefr()
 
         nlp = cls.get_spacy()
         parsed_items = cls._normalize_vocab_items_input(vocab_content, preserve_slash_slots=True)
@@ -86,6 +107,32 @@ class QuizSkeletonBuilderMixin:
                 rem_needed = max(0, target_count - len(single_candidates))
                 multi_candidates = [it for it in parsed_items if it not in single_candidates]
                 parsed_items = single_candidates + multi_candidates[:rem_needed]
+
+        # Mutual Collocation Partner Eviction:
+        # If two candidates form an authentic collocational pair (e.g. 'closely' modifying 'follow'),
+        # evict the partner from the target candidates so it does not get banned by the batch target leakage gate,
+        # enabling anchor absorption ('淘汰一个，两个都测了') with zero target redundancy.
+        if len(parsed_items) > target_count and nlp:
+            kept_items: List[Dict[str, Any]] = []
+            evicted_words: Set[str] = set()
+            for _it in parsed_items:
+                _w_lem = cls.lemma_of(str(_it.get("word") or "").strip().lower())
+                if _w_lem in evicted_words:
+                    continue
+                kept_items.append(_it)
+                _q_str = str(_it.get("quote") or "").strip()
+                if _q_str:
+                    try:
+                        _q_doc = nlp(_q_str)
+                        for _tk in _q_doc:
+                            if _tk.lemma_.lower() == _w_lem:
+                                _h_lem = _tk.head.lemma_.lower()
+                                if _h_lem != _w_lem and len(_h_lem) >= 4 and _h_lem not in cls._ANCHOR_STOPWORDS:
+                                    evicted_words.add(_h_lem)
+                    except Exception:
+                        pass
+            if len(kept_items) >= target_count:
+                parsed_items = kept_items
 
         if len(parsed_items) > target_count + 4:
             parsed_items = cls._balance_single_and_multi_word(
@@ -110,17 +157,24 @@ class QuizSkeletonBuilderMixin:
                         batch_target_words.add(_tok)
 
         has_multiple_candidates = len(parsed_items) > 1
-        for it in parsed_items:
-            skel = cls._build_single_item_skeleton(
-                it,
-                single_word_targets=single_word_targets,
-                batch_target_words=batch_target_words,
-                used_distractors=used_distractors,
-                nlp=nlp,
-                has_multiple_candidates=has_multiple_candidates,
-            )
-            if skel:
-                skeletons.append(skel)
+
+        # Bind active passage CEFR level across the skeleton generation run
+        token = cls.set_current_passage_cefr(eff_passage)
+        try:
+            for it in parsed_items:
+                skel = cls._build_single_item_skeleton(
+                    it,
+                    single_word_targets=single_word_targets,
+                    batch_target_words=batch_target_words,
+                    used_distractors=used_distractors,
+                    nlp=nlp,
+                    has_multiple_candidates=has_multiple_candidates,
+                    passage_level=eff_passage,
+                )
+                if skel:
+                    skeletons.append(skel)
+        finally:
+            cls.reset_current_passage_cefr(token)
 
         # Balance single-word headwords vs multi-word expressions (e.g. 100% single words by default)
         skeletons = cls._balance_single_and_multi_word(skeletons, target_count=target_count, multi_word_ratio=multi_word_ratio)

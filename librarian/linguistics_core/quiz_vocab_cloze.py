@@ -34,22 +34,15 @@ class QuizVocabClozeMixin:
             else:
                 singles.append(it)
 
-        # If only one type exists, return up to target_count
-        if not multis:
-            return singles[:target_count]
+        # If no single words exist, return multis up to target_count
         if not singles:
             return multis[:target_count]
 
-        # Calculate quotas (if multi_word_ratio <= 0.0, prioritize single words and backfill with multis if needed)
-        if multi_word_ratio <= 0.0:
-            if len(singles) >= target_count:
-                return singles[:target_count]
-            return (singles + multis)[:target_count]
-
-        quota_multi = max(1, int(round(target_count * multi_word_ratio)))
+        # Calculate quotas (if multi_word_ratio <= 0.0 or no multis, prioritize single words)
+        quota_multi = 0 if (multi_word_ratio <= 0.0 or not multis) else min(len(multis), max(1, int(round(target_count * multi_word_ratio))))
         quota_single = target_count - quota_multi
 
-        sel_multi = multis[:quota_multi]
+        sel_multi = multis[:quota_multi] if quota_multi > 0 else []
         # Avoid selecting a single-word item whose headword is already a core lexical word
         # inside one of the selected multi-word expressions (e.g. 'pose a threat to' + 'threat')
         # whenever enough non-overlapping single-word items exist.
@@ -136,13 +129,45 @@ class QuizVocabClozeMixin:
         disjoint_singles.sort(key=_single_item_pedagogical_priority)
         overlapping_singles.sort(key=_single_item_pedagogical_priority)
         ordered_singles = disjoint_singles + overlapping_singles
-        sel_single = ordered_singles[:quota_single]
+        # Mutual Collocation Partner Eviction:
+        # When an item with a concrete collocational partner (e.g. 'closely' with anchor 'follow')
+        # is selected, evict the partner from remaining candidates to avoid redundant testing,
+        # effectively testing both words within one item via anchor absorption.
+        sel_single: List[Dict[str, Any]] = []
+        selected_anchors: Set[str] = set()
+        selected_targets: Set[str] = set()
+        evicted_singles: List[Dict[str, Any]] = []
+
+        for s_it in ordered_singles:
+            sw_raw = str(s_it.get("target_word") or s_it.get("word") or "").strip().lower()
+            sw_lem = cls.lemma_of(sw_raw) if sw_raw else ""
+            anc_raw = str(s_it.get("context_anchor") or s_it.get("anchor") or "").strip().lower()
+            anc_lem = cls.lemma_of(anc_raw) if anc_raw else ""
+
+            if sw_lem in selected_anchors or (anc_lem and anc_lem in selected_targets):
+                evicted_singles.append(s_it)
+                continue
+
+            sel_single.append(s_it)
+            if sw_lem:
+                selected_targets.add(sw_lem)
+            if anc_lem and len(anc_lem) >= 3 and anc_lem not in cls._ANCHOR_STOPWORDS:
+                selected_anchors.add(anc_lem)
+
+            if len(sel_single) >= quota_single:
+                break
+
+        # Graceful backfill from evicted singles if not enough non-colliding singles exist
+        if len(sel_single) < quota_single:
+            deficit = quota_single - len(sel_single)
+            sel_single.extend(evicted_singles[:deficit])
 
         # Backfill if one group has fewer items than its allocated quota
         if len(sel_multi) < quota_multi:
             deficit = quota_multi - len(sel_multi)
-            sel_single.extend(ordered_singles[len(sel_single):len(sel_single) + deficit])
-        elif len(sel_single) < quota_single:
+            rem_singles = [s for s in ordered_singles if s not in sel_single]
+            sel_single.extend(rem_singles[:deficit])
+        elif len(sel_single) < quota_single and len(sel_multi) < len(multis):
             deficit = quota_single - len(sel_single)
             sel_multi.extend(multis[len(sel_multi):len(sel_multi) + deficit])
 

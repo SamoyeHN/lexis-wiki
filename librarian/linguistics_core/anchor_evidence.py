@@ -420,8 +420,8 @@ class AnchorEvidenceMixin:
 
         registered = p_low in cls.get_ldoce_preps(tw)
         if not registered:
-            ocd_pos = {"verb": "verb", "noun": "noun", "adj": "adj"}.get((canonical_pos or "").lower())
-            registered = p_low in cls.get_oxford_collocations(tw, pos=ocd_pos).get("prep", [])
+            ped_pos = {"verb": "verb", "noun": "noun", "adj": "adj"}.get((canonical_pos or "").lower())
+            registered = p_low in cls.get_pedlex_collocations(tw, pos=ped_pos).get("prep", [])
         if not registered:
             return False  # pure syntactic complement harvested from the quote — keep it
 

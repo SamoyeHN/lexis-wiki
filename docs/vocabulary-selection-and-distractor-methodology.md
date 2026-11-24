@@ -262,12 +262,53 @@ Once the final options are assembled and inflected, `has_double_key_collision` c
 - Detects predicate phrase collisions via `ldoce_phrase_index` (`be through with`).
 - Auto-refills colliding distractors from the dynamic fallback pool, guaranteeing **0 double keys across all items**.
 
-### 7.3 Foundational CEFR Ceiling & LDOCE Defining Lexicon Gate (`is_cefr_compliant_distractor`)
-For foundational learner tiers ($A1, A2, B1$, i.e. $t_{\text{rank}} \le 3$), statistical frequency algorithms (such as `cefrpy`) possess heuristic blind spots that inadvertently assign low CEFR scores (e.g. A2/B1) to obscure, formal, or theological C1/C2 terms (e.g., `subjugation`, `pretext`, `commiserate`, `impasse`, `salvation`).
+### 7.3 Dual-Track CEFR Ceiling & SLA Lexical Accessibility Matrix (`is_cefr_compliant_distractor`)
 
-To eliminate cognitive overload and inappropriate distractor difficulty:
-1. **LDOCE 3000 Core Defining Lexicon Verification**: Distractors for A1/A2/B1 targets must have `core_level >= 1` (LDOCE 3000 core words), non-empty `freq_tags` (`S1..S3`, `W1..W3`), or `is_awl` (Academic Word List, for B1) in `pedlex.db` on either the surface form or its lemma.
-2. **Unified Pipeline Compliance**: Closes prior bypasses where construction family contrasts (`cxn_cands`) or primary sense antonyms (`sense_antonyms[0]`) bypassed the CEFR compliance check. Every distractor from any tier must pass `is_cefr_compliant_distractor`.
+Statistical frequency algorithms (such as `cefrpy`) possess heuristic blind spots that inadvertently assign low CEFR scores (e.g. A2/B1) to obscure, formal, or archaic C1/C2 terms (e.g., `clamorous`, `subjugation`, `pretext`, `commiserate`, `impasse`, `salvation`). Furthermore, when an A1 passage contains an isolated B1 target word, naive target-based ceilings can pull in inappropriate B2 distractors, causing severe learner cognitive overload.
+
+To guarantee pedagogically valid distractors, `is_cefr_compliant_distractor` implements a **Dual-Track Ceiling and SLA Accessibility Matrix** grounded in PedLex LDOCE 1000/2000/3000 and Coxhead's Academic Word List (AWL):
+
+#### 1. Dual-Track Ceiling Formula
+The effective CEFR ceiling for any distractor candidate is constrained by both the micro target word CEFR and the macro passage CEFR:
+$$\text{effective\_ceiling} = \min\left(\text{Ceiling}(\text{Target\_CEFR}),\ \text{Global\_Ceiling}(\text{Passage\_CEFR})\right)$$
+
+| Passage / Target CEFR | Ceiling Rank | Effective Maximum Distractor Level Allowed |
+| :---: | :---: | :--- |
+| **A1** | 2 | **A2** (strictly elementary, max B1 only if target is B1) |
+| **A2** | 3 | **B1** (lower intermediate threshold) |
+| **B1** | 4 | **B2** (upper intermediate ceiling) |
+| **B2** | 5 | **C1** (advanced academic/general) |
+| **C1 / C2** | 6 | **C2** (full unconstrained mastery) |
+
+#### 2. Tiered SLA Lexical Accessibility Rules
+Distractor candidates are filtered against their `pedlex.db` metadata (`core_level`, `freq_tags`, `is_awl`):
+- **A1 Contexts (Absolute Foundation)**:
+  - Candidates must belong to the LDOCE 1000/2000/3000 core defining vocabulary (`core_level >= 1`) or possess verified spoken/written frequency tags (`freq_tags: S1..S3, W1..W3`).
+  - Academic Word List (AWL) items are **strictly banned** (`c_awl -> False`).
+  - Candidates rated B1 or above without everyday frequency tags are rejected (preventing intruders like `expertise` or `clamorous`).
+- **A2 Contexts (Elementary)**:
+  - Candidates must belong to the defining vocabulary (`core_level >= 1`) or possess frequency tags (`c_freq`).
+  - AWL candidates require high everyday frequency (`c_awl and c_freq`).
+  - **+1 Band Frequency Lock**: Any candidate exceeding A2 (`c_rank > 2`, i.e., B1 ceiling) MUST carry verified everyday spoken/written frequency tags (`S1..S3`, `W1..W3`), blocking low-frequency cultural/domain words (e.g., `choir`, `orchestra`) while permitting high-frequency peers (e.g., `army` with `S1/W1`).
+- **B1 Contexts (Threshold)**:
+  - Distractors at or below B1 (`c_rank <= 3`, e.g. collective nouns like `swarm`, `dull`, `noisy`) are accepted as natural peer options.
+  - **+1 Band Frequency Lock**: Distractors exceeding B1 (`c_rank > 3`, i.e. B2 ceiling words) must be grounded in everyday frequency (`c_freq`), recognized AWL (`c_awl`), or LDOCE 1000/2000 core vocabulary (`core_level >= 2`), systematically eliminating obscure non-core intruders.
+- **B2 / C1 Contexts (Upper-Intermediate & Advanced)**:
+  - When the passage is B2, the macro ceiling caps distractors at B2, preventing C2 academic words from overloading the test.
+  - When the passage reaches C1, high-order academic vocabulary (`allocate`), stylistic nuances, and literary items (`clamorous`, `meticulous`) are unlocked.
+
+#### 3. Familiarity-First Candidate Ranking (`distractor_familiarity_key`)
+Distractor candidates harvested from semantic clusters (e.g., `collective_noun_ontology`), thesaurus pools, and WordNet coordinates are never selected by arbitrary tuple order. Eligible candidates are sorted by **SLA Familiarity Priority** before selection:
+1. **CEFR Proximity**: Candidates at or below the base CEFR level (`c_rank <= effective_base_rank`) strictly outrank `+1` ceiling candidates.
+2. **Everyday Frequency Band (`freq_tags`)**: `S1/W1` $>$ `S2/W2` $>$ `S3/W3` $>$ untagged.
+3. **LDOCE Defining Tier (`core_level`)**: `3` (1000) $>$ `2` (2000) $>$ `1` (3000) $>$ `0`.
+For example, from `("choir", "chorus", "orchestra", "band")`, `band` (`A1`, `core=3`, `S2/W2`) naturally outranks `choir` (`B1`, `core=2`, `[]`).
+
+#### 4. Morphological Inflection Lemma Inheritance
+In learner dictionaries, inflected surface forms (such as plurals like `children`, `boxes`, or third-person singular verbs like `attaches`) exist as cross-reference entity entries with `core_level: 0`. When verifying candidate accessibility, the engine automatically resolves `_headword_candidates` and `_surface_lemma` (`children` $\rightarrow$ `child`, `boxes` $\rightarrow$ `box`), allowing inflected surface forms to inherit their base lemma's `core_level`, `freq_tags`, and `is_awl` ratings.
+
+#### 5. Unified Pipeline Compliance
+Closes all potential bypasses: construction family contrasts (`cxn_cands`), primary sense antonyms (`sense_antonyms[0]`), and paronym harvesting must all pass `is_cefr_compliant_distractor`. Zero exceptions.
 
 ### 7.4 Collocation Part-of-Speech & Slot Agreement Gate
 In multi-word expression slicing (`collocation_half_slice`), Rule 1 (Copular / Passive + Participle/Adjective + Preposition, e.g. `be filled with`, `be proud of`) matches adjacent copular verbs (`is/was/are/were/be/been/being`).

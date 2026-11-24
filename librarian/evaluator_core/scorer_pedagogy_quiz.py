@@ -310,9 +310,13 @@ def validate_quiz_item(
             m_left_aux = re.search(r"\b(has|have|had)(?:\s+been)?\s+____", q_text, re.IGNORECASE)
             if m_left_aux:
                 aux_word = m_left_aux.group(1).lower()
+                is_been_copula = "been" in m_left_aux.group(0).lower()
+                wn = LinguisticEngine.get_wordnet() if is_been_copula else None
                 vb_clashing = []
                 for o in options:
                     o_head = str(o).strip().split()[0].lower()
+                    if is_been_copula and wn and (wn.synsets(o_head, pos="a") or wn.synsets(o_head, pos="s")):
+                        continue
                     o_base = LinguisticEngine.lemma_of(o_head) or o_head
                     if o_head == o_base and LinguisticEngine._is_base_verb_lemma(o_base):
                         vbn_form = (LinguisticEngine._inflect_verb(o_base, "VBN") or "").lower()

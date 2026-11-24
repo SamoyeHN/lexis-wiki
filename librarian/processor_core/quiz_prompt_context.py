@@ -45,8 +45,9 @@ def _build_vocabulary_context(
     ctx.unit_headwords = unit_headwords
     ctx.banned_quiz_sentences = banned_quiz_sentences
 
+    unit_cefr = data.get("cefr_level")
     skeletons = LinguisticEngine.build_precomputed_target_skeletons(
-        raw_vocab, target_count=count, multi_word_ratio=0.0
+        raw_vocab, target_count=count, multi_word_ratio=0.0, passage_level=unit_cefr
     )
     effective_count = min(count, len(skeletons)) if skeletons else 0
     ctx.kwargs["count"] = effective_count
@@ -64,6 +65,16 @@ def _build_vocabulary_context(
         prescribed_opts = s.get("prescribed_options", [])
         raw_frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
         frame_str, surface_notes = processor._render_llm_surface_frame(raw_frame_str, s)
+
+        # Pipeline Exit Invariant: Ensure target word or base headword NEVER leaks into Required Stem Frame outside '____'
+        tw_val = str(s.get("target_word") or "").strip().lower()
+        bw_val = str(s.get("base_headword") or tw_val).strip().lower()
+        for t_leak in (tw_val, bw_val):
+            if t_leak and len(t_leak) >= 3 and re.search(rf"\b{re.escape(t_leak)}\b", frame_str, re.IGNORECASE):
+                frame_str = re.sub(rf"\bto\s+{re.escape(t_leak)}\b", "to", frame_str, flags=re.IGNORECASE)
+                frame_str = re.sub(rf"\b{re.escape(t_leak)}\b", "", frame_str, flags=re.IGNORECASE).strip()
+                frame_str = re.sub(r"\s+", " ", frame_str)
+
         ctx.blueprint_specs.append({
             "target_word": s.get("target_word"),
             "base_headword": s.get("base_headword"),

@@ -37,45 +37,51 @@ class DistractorVocabMixin(
         definition: Optional[str] = None,
         quote: Optional[str] = None,
         return_metadata: bool = False,
+        passage_level: Optional[str] = None,
     ) -> Union[List[str], Tuple[List[str], Dict[str, str]]]:
         """
         Synthesizes high-discrimination, collision-free distractors for a target vocabulary word,
         grounded in the target's authentic curriculum definition (Sense-Specific Primacy).
         """
-        clean_target = target_word.strip().lower()
+        token = cls.set_current_passage_cefr(passage_level) if passage_level else None
+        try:
+            clean_target = target_word.strip().lower()
 
-        # Closed Grammatical Paradigms Gate:
-        # If target word is an indexed function word (connective, clausal conjunction, preposition),
-        # retrieve psychometrically calibrated distractors directly from closed paradigms.
-        if cls.is_function_word(clean_target):
-            f_dists, f_meta = cls.get_function_word_distractors(
-                clean_target,
+            # Closed Grammatical Paradigms Gate:
+            # If target word is an indexed function word (connective, clausal conjunction, preposition),
+            # retrieve psychometrically calibrated distractors directly from closed paradigms.
+            if cls.is_function_word(clean_target):
+                f_dists, f_meta = cls.get_function_word_distractors(
+                    clean_target,
+                    target_count=target_count,
+                    exclude_words=exclude_words,
+                )
+                if len(f_dists) >= target_count:
+                    if return_metadata:
+                        return f_dists, f_meta
+                    return f_dists
+
+            wsd_ctx = cls._prepare_vocab_wsd_and_antonyms(
+                clean_target=clean_target,
+                pos=pos,
+                context_anchor=context_anchor,
+                anchor_type=anchor_type,
                 target_count=target_count,
                 exclude_words=exclude_words,
+                definition=definition,
+                quote=quote,
             )
-            if len(f_dists) >= target_count:
-                if return_metadata:
-                    return f_dists, f_meta
-                return f_dists
 
-        wsd_ctx = cls._prepare_vocab_wsd_and_antonyms(
-            clean_target=clean_target,
-            pos=pos,
-            context_anchor=context_anchor,
-            anchor_type=anchor_type,
-            target_count=target_count,
-            exclude_words=exclude_words,
-            definition=definition,
-            quote=quote,
-        )
+            harvest_ctx = cls._harvest_vocab_candidates(wsd_ctx)
 
-        harvest_ctx = cls._harvest_vocab_candidates(wsd_ctx)
-
-        return cls._assemble_vocab_distractors(
-            wsd_ctx=wsd_ctx,
-            harvest_ctx=harvest_ctx,
-            return_metadata=return_metadata,
-        )
+            return cls._assemble_vocab_distractors(
+                wsd_ctx=wsd_ctx,
+                harvest_ctx=harvest_ctx,
+                return_metadata=return_metadata,
+            )
+        finally:
+            if token is not None:
+                cls.reset_current_passage_cefr(token)
 
     @classmethod
     def generate_zero_collision_distractors(

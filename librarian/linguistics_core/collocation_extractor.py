@@ -1,5 +1,5 @@
 """
-Collocation extraction from LDOCE and Oxford Collocations Dictionary (OCD).
+Collocation extraction from PedLex (LDOCE 6th Edition).
 """
 
 import datetime
@@ -20,6 +20,36 @@ logger = logging.getLogger("librarian.linguistics")
 
 
 class CollocationExtractorMixin:
+
+    @classmethod
+    def get_pedlex_headwords(cls) -> List[str]:
+        """Returns all distinct headwords from the pedlex (ldoce) table."""
+        if cls._ldoce_conn is None:
+            cls.get_ldoce_entry("the")
+        conn = cls._ldoce_conn
+        if conn is not None:
+            try:
+                c = conn.cursor()
+                c.execute("SELECT DISTINCT word FROM ldoce")
+                return [r[0] for r in c.fetchall()]
+            except Exception:
+                pass
+        return []
+
+    @classmethod
+    def get_pedlex_collocations(
+        cls,
+        word: Optional[str] = None,
+        pos: Optional[str] = None,
+        context_sentence: Optional[str] = None,
+    ) -> Any:
+        """
+        Retrieves authoritative, semantically prioritized collocations from PedLex 6th Edition.
+        When word is None, returns a dict-like view of all headwords in PedLex that resolves
+        collocation entries on demand.
+        When word is given, extracts preposition patterns, verb-noun, adjective-noun, and adverb collocations.
+        """
+        return cls.get_ldoce_collocations(word=word, pos=pos, context_sentence=context_sentence)
 
     @classmethod
     def get_ldoce_collocations(
@@ -47,15 +77,7 @@ class CollocationExtractorMixin:
                     res = cls.get_ldoce_collocations(str(key))
                     return res if res else (default if default is not None else {})
                 def keys(self) -> List[str]:
-                    conn = cls._ldoce_conn
-                    if conn is not None:
-                        try:
-                            c = conn.cursor()
-                            c.execute("SELECT word FROM ldoce")
-                            return [r[0] for r in c.fetchall()]
-                        except Exception:
-                            pass
-                    return []
+                    return cls.get_pedlex_headwords()
 
             return _LDOCEHeadwordsView()
 
@@ -216,21 +238,6 @@ class CollocationExtractorMixin:
 
         return res
 
-    @classmethod
-    def get_oxford_collocations(
-        cls,
-        word: Optional[str] = None,
-        pos: Optional[str] = None,
-        context_sentence: Optional[str] = None,
-    ) -> Any:
-        """
-        [DEPRECATED in favor of PedLex 6th Edition]
-        Redirects to get_ldoce_collocations to eliminate mechanical A-Z alphabetical bias
-        and ground all collocation resolution 100% in PedLex frequency & pedagogical salience.
-        """
-        return cls.get_ldoce_collocations(word=word, pos=pos, context_sentence=context_sentence)
-
-
     # ------------------------------------------------------------------
     # Collocation rendering (遗留 ①)
     # ------------------------------------------------------------------
@@ -359,13 +366,13 @@ class CollocationExtractorMixin:
         top_k: int = 5,
     ) -> List[str]:
         """
-        Retrieves top authoritative, natural collocations for a word from Oxford Collocations Dictionary.
+        Retrieves top authoritative, natural collocations for a word from PedLex.
         Respects target POS to eliminate cross-POS anomalies.
         Synthesizes phrases like 'lay the foundation', 'firm foundation', 'comprehensive guide'.
         """
         if not word:
             return []
-        entry = cls.get_oxford_collocations(word, pos=pos, context_sentence=context_sentence)
+        entry = cls.get_pedlex_collocations(word, pos=pos, context_sentence=context_sentence)
         if not entry:
             return []
 

@@ -43,8 +43,8 @@ class CefrAndMorphologyMixin(
     _inflected_forms_cache: Dict[Tuple[str, str], Set[str]] = {}
     _ldoce_tables: Optional[Set[str]] = None
     _ldoce_compounds: Optional[Dict[str, str]] = None
-    _ocd_lexfile_cache: Dict[str, List[str]] = {}
-    _ocd_verb_lexfile_cache: Dict[str, List[str]] = {}
+    _pedlex_lexfile_cache: Dict[str, List[str]] = {}
+    _pedlex_verb_lexfile_cache: Dict[str, List[str]] = {}
     _phrase_text_cache: Dict[str, List[Tuple[str, str]]] = {}
     _phrase_evidence_cache: Dict[Tuple[str, str], List[str]] = {}
     _wsd_llm_cache: Dict[str, Tuple[int, str]] = {}

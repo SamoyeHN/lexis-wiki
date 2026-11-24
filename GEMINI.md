@@ -23,6 +23,9 @@
 ### 1.2 Architectural Discipline & Theory-First Correction Mandate
 - **Zero Tolerance for Band-Aid Bloat**: Never accumulate brittle word-specific regex hacks, ad-hoc `if-else` patches, or arbitrary exception branches.
 - **First-Principles Escalation**: Proactively escalate linguistic edge cases to clean neuro-symbolic mechanisms (Top-$K$ symbolic candidate filtering + 1-token LLM arbitration).
+- **Unidirectional Pipeline Invariant & Zero Downstream Inversion (`流水线单向解耦与出水口物理不变量原则`)**:
+  - **Zero Downstream Heuristic Guessing**: Downstream rendering layers (`SlotFrame`, hydrators) perform deterministic syntactic projection only. Never re-parse raw corpus text to "guess" tokens, preventing multi-layer side-effects from overturning upstream masking (e.g. re-injecting `target_word` into cloze frames).
+  - **Pipeline Exit Invariant Gate**: Prompt assembly exit points (`quiz_prompt_context.py`) must enforce physical invariants (<0.01ms, 0 tokens) before dispatch: zero target/lemma leakage outside `____`, strictly single blank (`re.findall(r'_{2,}', frame) == 1`), and 1:1 option-target alignment.
 - **Mandatory Correction of Flawed Methods (`违背常识与既有学科理论的方法必须主动纠偏`)**:
   - Never blindly execute requests that violate SLA, Conversation Analysis, cognitive load, or psychometric theory.
   - Proactively challenge flawed assumptions (e.g., plotline-stitching in listening) and enforce established theoretical models (Conversation Analysis Three-Part Turn Micro-Structure, Lexical Approach semi-open skeletons, Light/Heavy Turn Alternation, and Cambridge/IELTS `Bait → Real Key` listening signposts).
@@ -77,8 +80,12 @@
 
 ## 4. Deterministic CEFR Calibration & QA Audit
 
-### 4.1 Zero-LLM CEFR Calibration (`cefrpy`)
+### 4.1 Zero-LLM CEFR Calibration & Dual-Track Ceiling (`cefrpy` + PedLex SLA Matrix)
 - Headword and passage CEFR levels (`A1`–`C2`) are computed deterministically via `cefrpy` + Zipf frequency gates; output schemas exclude CEFR fields so LLMs never guess difficulty.
+- **Dual-Track CEFR Ceiling & SLA Lexical Accessibility Matrix (`is_cefr_compliant_distractor`)**:
+  - Enforces $\text{effective\_ceiling} = \min(\text{Ceiling}(\text{Target\_CEFR}), \text{Global\_Ceiling}(\text{Passage\_CEFR}))$.
+  - Gates distractors via LDOCE 1000/2000/3000 defining tiers (`core_level: 3|2|1`), oral/written frequency bands (`freq_tags: S1..S3, W1..W3`), and Academic Word List (`is_awl`), barring cognitive overload (e.g. `clamorous`, `expertise`) from foundational A1–B1 assessments while unlocking them in C1.
+  - Surface forms automatically inherit base lemma ratings (`children` $\rightarrow$ `child`).
 
 ### 4.2 Two-Level QA Quality Audit
 1. **Level 1: Deterministic Code Gate (`evaluator.py`, <5ms, 0 tokens)**:

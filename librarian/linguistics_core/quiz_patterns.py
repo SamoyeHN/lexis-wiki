@@ -1133,6 +1133,12 @@ class QuizPatternsMixin:
             seen_ex_norm.add(ex_norm)
             sc = tier_bonuses.get(tier, 15)
 
+            # Collocational Anchor Boost: Prioritize candidate examples containing the target's authentic collocational anchor
+            if anchor and str(anchor).strip().lower() not in cls._ANCHOR_STOPWORDS:
+                anc_check = str(anchor).strip().lower()
+                if re.search(rf"\b{re.escape(anc_check)}\w*\b", ex_norm):
+                    sc += 60
+
             # Exact inflected form preference (especially for plural nouns or participial adjectives/verbs)
             if re.search(rf"\b{re.escape(ft_low)}\b", ex_norm):
                 sc += 35 if (is_plural_noun or ft_low != bw_low) else 28

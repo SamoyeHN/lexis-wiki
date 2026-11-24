@@ -81,6 +81,20 @@ def test_slot_frame_to_llm_surface_infinitive():
     assert "to" in surface2
     assert any("Follow 'to' with a specific action verb" in n for n in notes2)
 
+    # When example sentence's infinitive verb IS the target word itself, it must NOT leak into the frame
+    skel_offer = {
+        "target_word": "offer",
+        "base_headword": "offer",
+        "prescribed_options": ["consider", "practice", "offer", "enjoy"],
+    }
+    surface3, notes3 = frame.to_llm_surface(
+        example_txt="I don't need any help, but it was nice of you to offer.",
+        skeleton=skel_offer,
+    )
+    assert surface3 == "... ____ to"
+    assert "offer" not in surface3
+    assert any("Follow 'to' with a specific action verb" in n for n in notes3)
+
 
 def test_slot_frame_to_llm_surface_mandative_subjunctive():
     frame = SlotFrame.from_symbolic_str("... that [sb] (should) [V-base]")

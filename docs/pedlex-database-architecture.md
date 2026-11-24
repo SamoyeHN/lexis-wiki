@@ -144,6 +144,9 @@ Every record's `data_json` contains a structured dictionary with the following c
 | `collocations` | `dict[str, list]` | Collocation boxes grouped by bucket (`nouns`, `verbs`, `adjectives`, `phrases`), with per-item `gloss`, `sense_idx`, `sense_indices`, `pos`, and `homograph_num`. |
 | `cross_collocations` | `list[dict]` | Collocations cross-referenced from other entries (`collocation`, `example`, `gloss`, `sense_idx`, `target_word`, `target_sense_num`, `target_sense_idx`). |
 | `word_family` | `dict[str, list]` | Morphological family groupings (`noun`, `verb`, `adjective`, `adverb`). |
+| `core_level` | `int` \| `null` | Longman Communication 3000 tier (`3`: Top 1-1000 `●●●`, `2`: Top 1001-2000 `●●○`, `1`: Top 2001-3000 `●○○`, `0`/`null`: unstarred 3000+). |
+| `freq_tags` | `list[str]` | Oral & written frequency bands from Longman Corpus Network (`S1`..`S3`, `W1`..`W3`). |
+| `is_awl` | `bool` | Coxhead Academic Word List (AWL) membership flag. |
 | `phrasal_verbs` | `list[dict]` | Phrasal verbs catalogued under this verb entry (with unpacked `1a)`/`1b)` subsenses and `[SIGNPOST]` tags). |
 | `phrases` | `list[dict]` | Fixed idioms and phrase patterns catalogued under this entry (`phrase`, `node_word`, `sense_idx`, `definition`, `examples`). |
 | `entry_status` | `str` | Provenance status (`active`, `derived`, `repaired`). |
@@ -236,6 +239,27 @@ Built and verified via [`scripts/build_ldoce_db.py`](../scripts/build_ldoce_db.p
 6. **Offline Derived-Word Sense Bridging (`gloss_source = "base_sense_bridge"`)**:
    - **Attribute Schema**: During `upgrade_pedlex_db.py`, all 4,949 `kind='derived'` rows (`-ly`, `-ness`, `-ity`, `-ment`, `-ation`) are pre-bridged with morphological definitions and headword-attested examples harvested from their `base_word` entry (`derived_forms`, `language_activator`, `thesaurus`, `collocations`, and `senses`).
    - **Runtime Application**: Works in tandem with runtime `_resolve_ldoce_kind` (Section 6) so derived words carry immediate non-empty definitions and examples in SQL queries and card enrichment.
+
+### 3.4 Longman Communication 3000, LDV Defining Vocabulary, and Frequency Tiers
+
+In second language acquisition (SLA) and lexicography, LDOCE establishes two foundational pillars embedded in `pedlex.db`:
+
+#### 1. Longman Communication 3000 (`core_level` & `freq_tags`)
+Extracted from the 330-million-word Longman Corpus Network and British National Corpus (BNC), the 3,000 most frequent words in spoken and written English account for over 86% of all natural communications. In PedLex, these words are indexed across two complementary attributes:
+- **`core_level` (Three Tiers of Frequency)**:
+  - `core_level: 3` (`●●●`): **Top 1 – 1,000** most frequent words in English (fundamental everyday baseline: `time`, `water`, `silent`, `control`, `simple`).
+  - `core_level: 2` (`●●○`): **Top 1,001 – 2,000** high-frequency words (broad communicative baseline: `abandon`, `advocate`, `expertise`, `patient`).
+  - `core_level: 1` (`●○○`): **Top 2,001 – 3,000** medium-frequency core words (threshold vocabulary: `nuance`, `dignity`, `spontaneous`).
+  - `core_level: 0` / `null`: **3,000+ unstarred words** (low-frequency literary, academic, technical, or specialized terms: `clamorous`, `equestrian`, `sesquipedalian`).
+- **`freq_tags` (Oral vs. Written Frequency Bands)**:
+  - `S1`, `S2`, `S3`: Top 1,000 / 2,000 / 3,000 words in **Spoken English**.
+  - `W1`, `W2`, `W3`: Top 1,000 / 2,000 / 3,000 words in **Written English**.
+  - For example, `think` has `['S1', 'W1']` (top 1,000 in both modes), while `silent` has `['W3']` (top 3,000 in writing).
+- **`is_awl` (Academic Word List)**:
+  - Boolean flag indicating whether the headword belongs to the 570 word families of Averil Coxhead's Academic Word List (AWL), essential for academic prose and higher-tier SLA assessment (e.g. `expertise`, `abandon`, `advocate`).
+
+#### 2. Longman Defining Vocabulary (LDV, 朗文 2000 核心释义词表)
+All 230,000+ definitions in LDOCE are authored strictly using a controlled vocabulary of ~2,000 core words. This eliminates circular or obscure definitions ("explaining unknown words with even more obscure words"). In `pedlex.db`, this defining vocabulary aligns with `core_level >= 2` and forms the grounding lexicon for candidate comprehension and SLA accessibility checks.
 
 ---
 

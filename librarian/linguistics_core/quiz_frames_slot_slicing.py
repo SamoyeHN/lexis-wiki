@@ -7,6 +7,16 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class QuizFramesSlotSlicingMixin:
+    _NON_GRADABLE_ADJS = frozenset({
+        "regulatory", "compensatory", "rival", "primary", "secondary", "chief", "major", "minor",
+        "senior", "junior", "initial", "final", "previous", "current", "future", "former", "main",
+        "only", "same", "single", "double", "triple", "unique", "impossible", "alive", "dead",
+        "perfect", "total", "whole", "entire", "exact", "equal", "annual", "daily", "weekly",
+        "monthly", "electric", "electronic", "digital", "online", "offline", "wooden", "plastic",
+        "metal", "golden", "nuclear", "solar", "medical", "legal", "financial", "economic",
+        "local", "national", "international", "public", "private", "ancient", "historical",
+    })
+
     @classmethod
     def derive_cloze_slot_frame_from_example(
         cls,
@@ -72,7 +82,12 @@ class QuizFramesSlotSlicingMixin:
                     return "each" if has_uncountable_contrast_foil else "the"
             elif canonical_pos == "adj":
                 if has_mixed_vc_initials and d_l in ("a", "an"):
-                    return "the"
+                    is_non_gradable = (
+                        is_attributive_only_adj
+                        or bw_low in cls._NON_GRADABLE_ADJS
+                        or ft_low in cls._NON_GRADABLE_ADJS
+                    )
+                    return "the" if is_non_gradable else "a very"
             return d_l
 
         def _pobj_phrase(prep_tok, max_words: int = 3) -> str:
@@ -860,8 +875,21 @@ class QuizFramesSlotSlicingMixin:
                 return f"... {left_aux}____ {doc[t_tok.i + 1].text.lower()}"
             if anchor and anchor_type == "prep" and not _is_forbidden(str(anchor).lower()):
                 return f"... {left_aux}____ {str(anchor).lower()}"
-            if t_tok.i > 0 and doc[t_tok.i - 1].is_alpha and doc[t_tok.i - 1].pos_ not in ("DET", "ADP", "CCONJ", "SCONJ") and not _is_forbidden(doc[t_tok.i - 1].lemma_.lower()):
+            if (
+                t_tok.i > 0
+                and not (t_tok.i >= 2 and doc[t_tok.i - 2].text in ("-", "–"))
+                and doc[t_tok.i - 1].is_alpha
+                and doc[t_tok.i - 1].pos_ in ("AUX", "ADV", "PART")
+                and not _is_forbidden(doc[t_tok.i - 1].lemma_.lower())
+            ):
                 return f"... {doc[t_tok.i - 1].text.lower()} ____"
+            if (
+                t_tok.dep_ == "amod"
+                and t_tok.head.pos_ in ("NOUN", "PROPN")
+                and t_tok.head.i > t_tok.i
+                and not _is_forbidden(t_tok.head.lemma_.lower())
+            ):
+                return f"... the {t_tok.head.text.lower()} was ____"
             return f"... {left_aux}____ {patient_ontology_slot or '[object]'}"
 
         # 4. Noun (`canonical_pos == "noun"`)
@@ -1008,8 +1036,18 @@ class QuizFramesSlotSlicingMixin:
                         d_cap = (det_str or "the").capitalize()
                         return f"{d_cap} ____ {v_head.text.lower()} that ..."
                 elif v_head.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_head.lemma_.lower()):
-                    d_pref = det_str or "the"
-                    return f"... {d_pref} ____ {v_head.text.lower()}"
+                    d_pref = det_str if is_pure_uncountable_target else (det_str or "the")
+                    aux_mid = ""
+                    if t_tok.i + 1 < v_head.i and v_head.i - t_tok.i <= 4:
+                        aux_toks = [
+                            t.text.lower()
+                            for t in doc[t_tok.i + 1 : v_head.i]
+                            if t.pos_ in ("AUX", "PART") or t.dep_ in ("aux", "auxpass", "neg")
+                        ]
+                        if aux_toks and len(aux_toks) == (v_head.i - t_tok.i - 1):
+                            aux_mid = " ".join(aux_toks) + " "
+                    prefix_d = f"{d_pref} " if d_pref else ""
+                    return f"... {prefix_d}____ {aux_mid}{v_head.text.lower()}"
 
             # 4e. Object of a preposition (`in ____`, `on the ____`, `under ____`)
             if t_tok.dep_ == "pobj" and t_tok.head and t_tok.head.dep_ == "prep":

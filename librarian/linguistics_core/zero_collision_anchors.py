@@ -26,7 +26,7 @@ logger = logging.getLogger("librarian.linguistics")
 
 class ZeroCollisionAnchorsMixin:
     @classmethod
-    def find_ocd_zero_collision_anchor(
+    def find_pedlex_zero_collision_anchor(
         cls,
         target_word: str,
         pos: str = "noun",
@@ -35,7 +35,6 @@ class ZeroCollisionAnchorsMixin:
         quote: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
-        [DEPRECATED in favor of PedLex 6th Edition]
         Delegates directly to find_ldoce_zero_collision_anchor to ensure 100% PedLex semantic ordering
         and pedagogical grounding across all callers.
         """

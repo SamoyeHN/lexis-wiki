@@ -74,7 +74,8 @@ class SlotFrame:
             examples_raw = m.group(2).strip()
             first_ex = re.split(r"\s*/\s*", examples_raw)[0].strip()
             if first_ex:
-                notes.append(f"Use a concrete {cat} noun (e.g. '{first_ex}' or similar).")
+                prefix = "" if cat.lower().startswith("concrete") else "concrete "
+                notes.append(f"Use a {prefix}{cat} noun (e.g. '{first_ex}' or similar).")
                 return first_ex
             return "the issue"
 
@@ -87,8 +88,21 @@ class SlotFrame:
 
         # 2. Replace `to do [sth]` / `to do something` / `to [verb]` with a concrete infinitive or rule
         if re.search(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", surface, flags=re.IGNORECASE):
-            m_inf = re.search(r"\bto\s+([a-z]{3,})\b", example_txt.lower()) if example_txt else None
-            inf_v = m_inf.group(1) if (m_inf and m_inf.group(1) not in ("do", "be", "have", "get", "the", "a")) else ""
+            inf_v = ""
+            if example_txt:
+                tw_low = str((skeleton or {}).get("target_word") or "").strip().lower()
+                bw_low = str((skeleton or {}).get("base_headword") or tw_low).strip().lower()
+                prescribed = {str(opt).strip().lower() for opt in (skeleton or {}).get("prescribed_options") or []}
+                disallowed = {tw_low, bw_low, "do", "be", "have", "get", "the", "a"} | prescribed
+                for m_match in re.finditer(r"\bto\s+([a-z]{3,})\b", example_txt.lower()):
+                    cand = m_match.group(1)
+                    if (
+                        cand not in disallowed
+                        and not (bw_low and cand.startswith(bw_low))
+                        and cand not in prescribed
+                    ):
+                        inf_v = cand
+                        break
             if inf_v:
                 surface = re.sub(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", f"to {inf_v}", surface, flags=re.IGNORECASE)
             else:
@@ -108,6 +122,7 @@ class SlotFrame:
         # 4. Resolve remaining metasyntax brackets and number-neutral slash copulas
         surface = re.sub(r"\[sb\]", "someone", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[sth\]", "the project", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[something\]", "something", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", "the issue", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[V-base\]", "act", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[noun\]", "system", surface, flags=re.IGNORECASE)
@@ -139,6 +154,19 @@ class SlotFrame:
             ):
                 surface = re.sub(r"____", "was ____", surface, count=1)
                 notes.append("Keep a passive auxiliary ('was/were/is/are') directly before '____'.")
+
+        # 6. Universal Target Leakage Guard: Ensure target word or base word NEVER leaks into surface outside '____'
+        if skeleton:
+            tw_low = str(skeleton.get("target_word") or "").strip().lower()
+            bw_low = str(skeleton.get("base_headword") or tw_low).strip().lower()
+            for tgt in (tw_low, bw_low):
+                if tgt and len(tgt) >= 3:
+                    if re.search(rf"\bto\s+{re.escape(tgt)}\b", surface, flags=re.IGNORECASE):
+                        surface = re.sub(rf"\bto\s+{re.escape(tgt)}\b", "to", surface, flags=re.IGNORECASE)
+                        if "Follow 'to' with a specific action verb (never write the literal phrase 'to do something')." not in notes:
+                            notes.append("Follow 'to' with a specific action verb (never write the literal phrase 'to do something').")
+                    elif re.search(rf"\b{re.escape(tgt)}\b", surface, flags=re.IGNORECASE):
+                        surface = re.sub(rf"\b{re.escape(tgt)}\b", "", surface, flags=re.IGNORECASE).strip()
 
         surface = re.sub(r"\s+", " ", surface).strip()
         return surface, notes

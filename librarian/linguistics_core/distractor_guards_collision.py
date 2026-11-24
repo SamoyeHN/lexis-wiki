@@ -348,7 +348,7 @@ class DistractorGuardsCollisionMixin:
                     # Both share the non-finite/clausal complement slot and are semantic neighbors -> double-key collision!
                     return True, "double_key_pattern"
 
-        t_preps_raw = cls.get_oxford_collocations(t, pos=pos).get("prep", []) + cls.get_oxford_collocations(t_lem, pos=pos).get("prep", [])
+        t_preps_raw = cls.get_pedlex_collocations(t, pos=pos).get("prep", []) + cls.get_pedlex_collocations(t_lem, pos=pos).get("prep", [])
         t_preps = [w.strip().lower() for p in t_preps_raw for w in p.split("/") if w.strip()]
         for lp in list(cls.get_ldoce_preps(t, pos=pos)) + list(cls.get_ldoce_preps(t_lem, pos=pos)):
             if lp not in t_preps:
@@ -377,7 +377,7 @@ class DistractorGuardsCollisionMixin:
                 d_def_w = cls._get_def_content_words(d_lem, "n") | {d_lem}
                 if (t_def_w & _productive_source_domains) and (d_def_w & _productive_source_domains):
                     return True, "double_key_prep"
-            d_preps_raw = cls.get_oxford_collocations(d, pos=pos or "noun").get("prep", []) + cls.get_oxford_collocations(d_lem, pos=pos or "noun").get("prep", [])
+            d_preps_raw = cls.get_pedlex_collocations(d, pos=pos or "noun").get("prep", []) + cls.get_pedlex_collocations(d_lem, pos=pos or "noun").get("prep", [])
             d_preps = [w.strip().lower() for p in d_preps_raw for w in p.split("/") if w.strip()]
             for lp in list(cls.get_ldoce_preps(d, pos=pos)) + list(cls.get_ldoce_preps(d_lem, pos=pos)):
                 if lp not in d_preps:
@@ -509,7 +509,7 @@ class DistractorGuardsCollisionMixin:
                     if a_clean not in q_low and a_lem not in q_low:
                         return True, "double_key_slot"
 
-                d_entry = cls.get_oxford_collocations(d, pos=pos or "noun")
+                d_entry = cls.get_pedlex_collocations(d, pos=pos or "noun")
                 shared_colloc = False
                 if anchor_type == "adj":
                     shared_colloc = a_clean in [a.split()[0].lower() for a in d_entry.get("adj", [])]
@@ -545,7 +545,7 @@ class DistractorGuardsCollisionMixin:
                                     shared_colloc = True
                                     break
                     if not shared_colloc and anchor_type == "object":
-                        a_entry = cls.get_oxford_collocations(a_clean, pos="noun")
+                        a_entry = cls.get_pedlex_collocations(a_clean, pos="noun")
                         if d in [v.split()[0].lower() for v in a_entry.get("verb_before", [])] or d_lem in [v.split()[0].lower() for v in a_entry.get("verb_before", [])]:
                             shared_colloc = True
                         if not shared_colloc:
@@ -559,7 +559,7 @@ class DistractorGuardsCollisionMixin:
                                         shared_colloc = True
                                         break
                     if not shared_colloc and anchor_type == "modified_noun":
-                        a_entry = cls.get_oxford_collocations(a_clean, pos="noun")
+                        a_entry = cls.get_pedlex_collocations(a_clean, pos="noun")
                         if d in [adj_w.split()[0].lower() for adj_w in a_entry.get("adj", [])] or d_lem in [adj_w.split()[0].lower() for adj_w in a_entry.get("adj", [])]:
                             shared_colloc = True
                         if not shared_colloc:
@@ -603,10 +603,10 @@ class DistractorGuardsCollisionMixin:
             a_clean = anchor.lower()
             pos_low_anc = str(pos or "").strip().lower()
             if pos_low_anc.startswith("v") and anchor_type in ("object", "collocation"):
-                d_entry = cls.get_oxford_collocations(d, pos="verb")
+                d_entry = cls.get_pedlex_collocations(d, pos="verb")
                 if a_clean in [n.split()[0].lower() for n in d_entry.get("colloc_nouns", [])]:
                     return True, "double_key_collocation"
-                a_entry = cls.get_oxford_collocations(a_clean, pos="noun")
+                a_entry = cls.get_pedlex_collocations(a_clean, pos="noun")
                 if d in [v.split()[0].lower() for v in a_entry.get("verb_before", [])]:
                     return True, "double_key_collocation"
                 a_ldoce = cls.get_ldoce_entry(a_clean)
@@ -617,7 +617,7 @@ class DistractorGuardsCollisionMixin:
                         if d in v_item.get("collocation", "").lower():
                             return True, "double_key_collocation"
             elif pos_low_anc.startswith(("a", "j")) and not pos_low_anc.startswith("adv") and anchor_type == "modified_noun":
-                a_entry = cls.get_oxford_collocations(a_clean, pos="noun")
+                a_entry = cls.get_pedlex_collocations(a_clean, pos="noun")
                 if d in [adj.split()[0].lower() for adj in a_entry.get("adj", [])] and d not in antonyms:
                     return True, "double_key_collocation"
                 a_ldoce = cls.get_ldoce_entry(a_clean)
@@ -628,7 +628,7 @@ class DistractorGuardsCollisionMixin:
                         if d in a_item.get("collocation", "").lower() and d not in antonyms:
                             return True, "double_key_collocation"
             elif pos_low_anc.startswith("n") and anchor_type in ("verb", "verb_subject"):
-                d_entry = cls.get_oxford_collocations(d, pos="noun")
+                d_entry = cls.get_pedlex_collocations(d, pos="noun")
                 if a_clean in [v.split()[0].lower() for v in d_entry.get("verb_before", [])] and d not in antonyms:
                     return True, "double_key_collocation"
                 d_ldoce = cls.get_ldoce_entry(d)

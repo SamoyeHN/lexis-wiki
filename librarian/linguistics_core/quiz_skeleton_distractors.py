@@ -113,7 +113,7 @@ class QuizSkeletonDistractorsMixin:
             cand, canonical_pos, requires_object=(ctx.verb_requires_object is True)
         ):
             return False
-        return cls.is_cefr_compliant_distractor(cand, w_lower)
+        return cls.is_cefr_compliant_distractor(cand, w_lower, passage_level=ctx.passage_cefr)
 
     @classmethod
     def _clear_and_refill_distractors(
@@ -174,7 +174,8 @@ class QuizSkeletonDistractorsMixin:
                         context_anchor=anchor, anchor_type=anchor_type,
                         target_count=8, exclude_words=excl_set,
                         definition=it.get("definition"), quote=it.get("quote"),
-                        return_metadata=True
+                        return_metadata=True,
+                        passage_level=ctx.passage_cefr,
                     )
                     r_meta = r_meta or {}
             except Exception:
@@ -238,7 +239,7 @@ class QuizSkeletonDistractorsMixin:
                     if cand != w_lower and cand not in cleared_list and cand not in excl_set and not cls._is_double_key(ctx, cand):
                         cleared_list.append(cand)
         merged_meta = {
-            d: (curr_meta.get(d) or r_meta.get(d) or "distant_contrast")
+            d: (curr_meta.get(d) or r_meta.get(d) or "corpus_fallback")
             for d in cleared_list
         }
         return cleared_list, merged_meta
@@ -383,7 +384,8 @@ class QuizSkeletonDistractorsMixin:
                 exclude_words=used_distractors,
                 definition=it.get("definition"),
                 quote=it.get("quote"),
-                return_metadata=True
+                return_metadata=True,
+                passage_level=ctx.passage_cefr,
             )
 
         # Ensure we have valid distractors; fallback to zero_collision if needed
@@ -657,7 +659,7 @@ class QuizSkeletonDistractorsMixin:
                         if cand != w_lower and cand not in cleared_list and cand not in excl_set and not _is_double_key(cand):
                             cleared_list.append(cand)
             merged_meta = {
-                d: (curr_meta.get(d) or r_meta.get(d) or "distant_contrast")
+                d: (curr_meta.get(d) or r_meta.get(d) or "corpus_fallback")
                 for d in cleared_list
             }
             return cleared_list, merged_meta

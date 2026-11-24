@@ -120,7 +120,7 @@ class QuizSkeletonAnchorsMixin:
             if not anchor and it["quote"]:
                 try:
                     doc = nlp(it["quote"])
-                    v_collocs = cls.get_oxford_collocations(w_lower, pos="verb")
+                    v_collocs = cls.get_pedlex_collocations(w_lower, pos="verb")
                     consensus_preps = set(v_collocs.get("prep", []))
                     if sense_native_prep:
                         consensus_preps.add(sense_native_prep)
@@ -340,9 +340,9 @@ class QuizSkeletonAnchorsMixin:
                                                     sense_ex_dobj_nouns.append(n_f)
                         except Exception:
                             pass
-                    v_entry = cls.get_oxford_collocations(w_lower, pos="verb")
-                    ocd_nouns = v_entry.get("colloc_nouns", []) + v_entry.get("noun_after", [])
-                    candidates = sense_ex_dobj_nouns + [n for n in ocd_nouns if n not in sense_ex_dobj_nouns]
+                    v_entry = cls.get_pedlex_collocations(w_lower, pos="verb")
+                    ped_nouns = v_entry.get("colloc_nouns", []) + v_entry.get("noun_after", [])
+                    candidates = sense_ex_dobj_nouns + [n for n in ped_nouns if n not in sense_ex_dobj_nouns]
                     if candidates:
                         anchor = cls._select_sense_aligned_anchor(candidates, definition=it.get("definition"), quote=it.get("quote"), target_word=w_lower, forbidden=batch_target_words)
                         if not anchor and sense_ex_dobj_nouns:
@@ -354,7 +354,7 @@ class QuizSkeletonAnchorsMixin:
                     anchor_type = "prep"
 
         elif canonical_pos == "noun":
-            n_entry = cls.get_oxford_collocations(w_lower, pos="noun")
+            n_entry = cls.get_pedlex_collocations(w_lower, pos="noun")
             q_low_n = (it.get("quote") or "").lower()
             # Family 5: Shell Nouns & Abstract Nouns Taking Post-Nominal Complements
             if not anchor and q_low_n and word_subcats & {"N_SHELL_TO_DO", "N_SHELL_OF_DOING", "N_SHELL_THAT_ONLY"}:
@@ -563,9 +563,9 @@ class QuizSkeletonAnchorsMixin:
                     anchor_type = "it_extrapos"
                     cxn_override_pat = f"it is {w_lower} that ..."
                     cxn_override_frame = "It is ____ that ..."
-            # Pre-fetch OCD entry & attested prepositions so Adjective Step A1 never mistakes a clause-level
+            # Pre-fetch PedLex entry & attested prepositions so Adjective Step A1 never mistakes a clause-level
             # temporal/circumstantial adjunct (e.g. 'remained unsolved for 1,400 years') for a bound adjective preposition.
-            adj_entry = cls.get_oxford_collocations(w_lower, pos="adj")
+            adj_entry = cls.get_pedlex_collocations(w_lower, pos="adj")
             attested_adj_preps = set()
             if sense_native_prep:
                 attested_adj_preps.add(sense_native_prep.lower())

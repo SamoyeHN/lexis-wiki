@@ -491,7 +491,12 @@ class DistractorFallbacksMixin:
             # 3. Trivalent Verb + Object + Preposition (+ NP / -ing)
             if (subcat.startswith("V_OBJ_PREP_") or subcat in ("V_OBJ_FROM_ING", "V_OBJ_INTO_ING")) and prep_a:
                 if (atype == "prep" and anc_low == prep_a) or (
-                    q_low and re.search(rf"\b{re.escape(prep_a)}\s+(?:[a-z]+\s+)?[a-z]+", q_low)
+                    atype not in ("object", "verb_subject")
+                    and q_low
+                    and re.search(
+                        rf"\b{re.escape(w_clean)}(?:s|es|ed|d|ing)?\b[^.?!;]{{1,45}}\b{re.escape(prep_a)}\s+(?:[a-z]+\s+)?[a-z]+",
+                        q_low,
+                    )
                 ):
                     return sp
 

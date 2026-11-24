@@ -71,11 +71,10 @@ class DistractorParonymsMixin:
             except Exception:
                 pass
 
-        # Open-source / fallback enrichment from OCD + WordNet if PedLex is disabled or sparse
+        # Open-source / fallback enrichment from PedLex + WordNet if PedLex table is disabled or sparse
         if not any(pos_vocab.values()):
             wn = cls.get_wordnet()
-            ocd = cls.get_oxford_collocations()
-            pool = set(ocd.keys())
+            pool = set(cls.get_pedlex_headwords())
             for w in pool:
                 if not w or not w.isalpha() or len(w) < 4:
                     continue
@@ -88,9 +87,9 @@ class DistractorParonymsMixin:
                     except Exception:
                         pass
         else:
-            # Ensure pluralia tantum / -ics academic disciplines in OCD (e.g. 'mechanics', 'robotics')
+            # Ensure pluralia tantum / -ics academic disciplines in PedLex (e.g. 'mechanics', 'robotics')
             # that live inside singular PedLex headword articles are indexed under 'n'.
-            for w in cls.get_oxford_collocations().keys():
+            for w in cls.get_pedlex_headwords():
                 if w and w.isalpha() and len(w) >= 6 and w.lower().endswith("ics"):
                     pos_vocab["n"].add(w.lower())
 

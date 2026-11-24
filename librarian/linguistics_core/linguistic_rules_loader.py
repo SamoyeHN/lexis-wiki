@@ -143,7 +143,7 @@ def get_collective_noun_ontology() -> Dict[str, List[Tuple[str, ...]]]:
             ("jury", "panel", "tribunal"),
             ("audience", "crowd", "congregation", "throng", "mob"),
             ("committee", "council", "board", "commission", "assembly", "delegation"),
-            ("choir", "chorus", "orchestra", "band"),
+            ("band", "choir", "chorus", "orchestra"),
             ("clientele",),
             ("clergy",),
             ("police", "squad", "troop", "regiment", "contingent"),
@@ -212,7 +212,7 @@ def get_delexical_verbs() -> Set[str]:
         return set(raw)
     return {
         "like", "want", "need", "get", "have", "has", "make", "use", "give", "take",
-        "put", "see", "know", "feel", "seem", "look", "go", "come", "say", "try",
+        "put", "see", "know", "feel", "seem", "look", "hear", "go", "come", "say", "try",
         "help", "let", "call", "find", "keep", "set", "turn", "show", "ask", "tell",
         "mean", "include", "bring", "send", "add", "appear", "become",
     }
