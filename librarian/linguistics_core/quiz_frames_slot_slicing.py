@@ -675,10 +675,17 @@ class QuizFramesSlotSlicingMixin:
                     elif _md_low.endswith(("self", "selves")):
                         _mid_slot = "oneself"
                     elif _md_low in ("me", "you", "him", "her", "us", "whom", "someone", "somebody", "everyone", "anyone", "nobody") or mid_dobj.ent_type_ == "PERSON":
-                        _mid_slot = "someone"
+                        _mid_slot = "[person/group]"
                     else:
                         _mid_slot = cls._resolve_object_animacy_from_example(ex_clean, ft_low, default_tag="something")
-                    return f"... {left_aux}____ {_mid_slot} {prep_c.text.lower()}"
+                        if _mid_slot == "someone":
+                            _mid_slot = "[person/group]"
+                    _prep_surf = (
+                        "as to"
+                        if prep_c.text.lower() == "as" and prep_c.i + 1 < len(doc) and doc[prep_c.i + 1].text.lower() == "to"
+                        else prep_c.text.lower()
+                    )
+                    return f"... {left_aux}____ {_mid_slot} {_prep_surf}"
                 return f"... {left_aux}____ {prep_c.text.lower()}{_pobj_phrase(prep_c)}"
 
             # 3c. Direct object (`dobj` / `obj` / `oprd`)
@@ -743,11 +750,17 @@ class QuizFramesSlotSlicingMixin:
                         and (nxt_after_obj.head == t_tok or nxt_after_obj.head == dobj_c)
                         and nxt_after_obj.text.lower() in ("to", "into", "onto", "on", "from", "with", "for", "against", "in", "at", "upon", "towards", "as")
                     ):
-                        trail_prt_or_prep = f" {nxt_after_obj.text.lower()}"
+                        nxt_low = nxt_after_obj.text.lower()
+                        if nxt_low == "as" and dobj_c.i + 2 < len(doc) and doc[dobj_c.i + 2].text.lower() == "to":
+                            trail_prt_or_prep = " as to"
+                        else:
+                            trail_prt_or_prep = f" {nxt_low}"
                 if patient_ontology_slot and not partitive_of_tail:
                     return f"... {left_aux}____ {patient_ontology_slot}{trail_prt_or_prep}"
                 if dobj_c.pos_ == "PRON" or dobj_c.ent_type_ == "PERSON" or _is_forbidden(dobj_c.lemma_.lower()):
                     anim = cls._resolve_object_animacy_from_example(ex_clean, ft_low, default_tag="[sb/sth]")
+                    if anim == "someone":
+                        anim = "[person/group]"
                     return f"... {left_aux}____ {anim}{trail_prt_or_prep}"
                 if dobj_c.pos_ in ("NOUN", "PROPN"):
                     # Collect determiners/quantifiers/numbers between `t_tok` and `dobj_c`
@@ -755,7 +768,10 @@ class QuizFramesSlotSlicingMixin:
                     poss_idx = next((idx for idx, t in enumerate(raw_span[:-1]) if t.dep_ == "poss" and t.pos_ in ("NOUN", "PROPN")), None)
                     if poss_idx is not None:
                         after_poss = [t.text.lower() for t in raw_span[poss_idx + 1 :] if (t.is_alpha or t.like_num) and not _is_forbidden(t.lemma_.lower())]
-                        span_toks = ["the"] + after_poss if after_poss else [dobj_c.text.lower()]
+                        if after_poss and cls._is_body_part_noun(dobj_c.lemma_.lower()):
+                            span_toks = after_poss
+                        else:
+                            span_toks = ["the"] + after_poss if after_poss else [dobj_c.text.lower()]
                     else:
                         span_toks = [
                             t.text.lower()
@@ -1168,7 +1184,7 @@ class QuizFramesSlotSlicingMixin:
                 )
                 if _mid_obj is not None:
                     _obj_slot = (
-                        "someone"
+                        "[person/group]"
                         if (
                             _mid_obj.text.lower() in ("him", "her", "me", "us", "you", "someone", "somebody", "anyone", "everyone")
                             or _mid_obj.ent_type_ == "PERSON"

@@ -129,3 +129,34 @@ def test_quiz_hydrator_render_llm_surface_frame_delegation():
 
     assert surf_from_str == surf_from_obj
     assert notes_str == notes_obj
+
+
+def test_slot_frame_to_llm_surface_body_part_noun():
+    frame = SlotFrame.from_symbolic_str("... ____ [body part, e.g. shoulders]")
+    surface, notes = frame.to_llm_surface()
+    assert surface == "... ____ shoulders"
+    assert "the shoulders" not in surface
+    assert any("subject-matching possessive" in n and "shoulders" in n for n in notes)
+
+
+def test_slot_frame_to_llm_surface_open_person_object():
+    # 1. With trailing preposition and generic someone
+    f1 = SlotFrame.from_symbolic_str("... ____ [person/group, e.g. someone] as")
+    surf1, notes1 = f1.to_llm_surface()
+    assert surf1 == "... ____ ... as"
+    assert "someone" not in surf1
+    assert any("concrete person or group noun phrase" in n for n in notes1)
+
+    # 2. Bare [person/group] without exemplars
+    f2 = SlotFrame.from_symbolic_str("... ____ [person/group] into")
+    surf2, notes2 = f2.to_llm_surface()
+    assert surf2 == "... ____ ... into"
+    assert "[person/group]" not in surf2
+    assert any("concrete person or group noun phrase" in n for n in notes2)
+
+    # 3. Trailing [person/group] at clause end
+    f3 = SlotFrame.from_symbolic_str("... ____ [person/group]")
+    surf3, notes3 = f3.to_llm_surface()
+    assert surf3 == "... ____ ..."
+    assert "someone" not in surf3
+    assert any("concrete person or group noun phrase" in n for n in notes3)

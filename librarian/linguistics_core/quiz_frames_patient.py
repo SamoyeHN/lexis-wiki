@@ -122,6 +122,15 @@ class QuizFramesPatientMixin:
     }
 
     @classmethod
+    def _is_body_part_noun(cls, lemma: str) -> bool:
+        """Return True iff the noun lemma's primary WordNet synset is ``noun.body``."""
+        wn = cls.get_wordnet()
+        if not wn or not lemma:
+            return False
+        syns = wn.synsets(lemma.lower(), pos="n")
+        return bool(syns and syns[0].lexfile() == "noun.body")
+
+    @classmethod
     def _classify_noun_patient_ontology(cls, lemma: str) -> str:
         if lemma in ("person", "people", "someone", "somebody", "human", "individual"):
             return "person"
@@ -147,14 +156,28 @@ class QuizFramesPatientMixin:
         all_lfs = {s.lexfile() for s in syns}
         if all_lfs & {"noun.time"}:
             return "temporal"
+        def _is_human_or_social_group(syn) -> bool:
+            lf = syn.lexfile()
+            if lf == "noun.person":
+                return True
+            if lf == "noun.group":
+                try:
+                    hyps = {lem for h in syn.closure("hypernym") for lem in h.lemmas()}
+                    return bool(hyps & {"social group", "organization", "people", "person", "gathering"})
+                except Exception:
+                    return True
+            return False
+
         s0_lf = syns[0].lexfile()
-        if s0_lf in cls.PERSON_SUPERSENSES:
+        if _is_human_or_social_group(syns[0]):
             return "person"
+        if s0_lf == "noun.group":
+            return "abstract_event"
         if s0_lf in cls.PHYSICAL_SUPERSENSES:
             return "physical"
         if s0_lf in cls.ABSTRACT_EVENT_SUPERSENSES:
             return "abstract_event"
-        if all_lfs & cls.PERSON_SUPERSENSES and not (all_lfs & cls.PHYSICAL_SUPERSENSES):
+        if any(_is_human_or_social_group(s) for s in syns) and not (all_lfs & cls.PHYSICAL_SUPERSENSES):
             return "person"
         if all_lfs & cls.PHYSICAL_SUPERSENSES:
             return "physical"
@@ -425,7 +448,26 @@ class QuizFramesPatientMixin:
                                     break
                         if real_lem not in seen_lem and real_lem not in pred_words:
                             seen_lem.add(real_lem)
-                            cands.append((f"the {real_c_tok.text.lower()}", real_lem))
+                            has_det_or_poss = any(ch.dep_ in ("det", "poss") for ch in real_c_tok.children)
+                            if has_det_or_poss:
+                                np_surface = f"the {real_c_tok.text.lower()}"
+                            else:
+                                left_mods = [
+                                    ch.text.lower()
+                                    for ch in sorted(real_c_tok.children, key=lambda t: t.i)
+                                    if ch.dep_ in ("compound", "amod")
+                                    and ch.i < real_c_tok.i
+                                    and real_c_tok.i - ch.i <= 2
+                                    and ch.is_alpha
+                                    and not _is_forb(ch.lemma_.lower())
+                                    and ch.lemma_.lower() not in pred_words
+                                ]
+                                np_surface = (
+                                    f"{left_mods[-1]} {real_c_tok.text.lower()}"
+                                    if left_mods
+                                    else real_c_tok.text.lower()
+                                )
+                            cands.append((np_surface, real_lem))
 
         # 2. Dependency-Constrained Definition Parsing (Step 2)
         if nlp and len(cands) < 2:
@@ -616,6 +658,7 @@ class QuizFramesPatientMixin:
 
         # Classify candidates into physical, abstract_event, person
         phys_cands: List[str] = []
+        body_cands: List[str] = []
         abs_cands: List[str] = []
         person_cands: List[str] = []
         for np_text, lem in cands:
@@ -625,6 +668,10 @@ class QuizFramesPatientMixin:
                     person_cands.append(np_text)
             elif cat == "physical":
                 phys_cands.append(np_text)
+                if cls._is_body_part_noun(lem):
+                    bare_np = re.sub(r"^the\s+", "", np_text, flags=re.I).strip()
+                    if bare_np:
+                        body_cands.append(bare_np)
             elif cat == "abstract_event":
                 abs_cands.append(np_text)
 
@@ -639,7 +686,7 @@ class QuizFramesPatientMixin:
                 )
             )
             or bool(
-                re.search(r"\b(?:someone|somebody)\s+(?:feel|think|believe|understand|do)\b", defn_low)
+                re.search(r"\b(?:someone|somebody)\s+(?:feels?|thinks?|believes?|understands?|does|do)\b", defn_low)
             )
             or bool(
                 re.search(r"\b(?:with|to|for|about|against|upon|after|at|of|from)\s+(?:you|someone|somebody|a person|people)\b", defn_low)
@@ -650,9 +697,9 @@ class QuizFramesPatientMixin:
         )
 
         if has_explicit_sb_only and person_cands:
-            exemplars = person_cands[:2]
-            ex_inline = " / ".join(exemplars)
-            slot_label = f"[person/group, e.g. {ex_inline}]"
+            concrete_p = [p for p in person_cands if p.lower() != "someone"]
+            exemplars = concrete_p[:2] if concrete_p else ["someone"]
+            slot_label = f"[person/group, e.g. {' / '.join(concrete_p[:2])}]" if concrete_p else "[person/group]"
             ont_type = "person_group"
         elif has_physical_def and phys_cands:
             exemplars = phys_cands[:2]
@@ -663,9 +710,9 @@ class QuizFramesPatientMixin:
                 slot_label = f"[concrete physical object, e.g. {ex_inline}]"
             ont_type = "concrete_physical"
         elif (has_person_def or (person_cands and not abs_cands and not phys_cands)) and person_cands:
-            exemplars = person_cands[:2]
-            ex_inline = " / ".join(exemplars)
-            slot_label = f"[person/group, e.g. {ex_inline}]"
+            concrete_p = [p for p in person_cands if p.lower() != "someone"]
+            exemplars = concrete_p[:2] if concrete_p else ["someone"]
+            slot_label = f"[person/group, e.g. {' / '.join(concrete_p[:2])}]" if concrete_p else "[person/group]"
             ont_type = "person_group"
         elif abs_cands and (
             len(abs_cands) > len(phys_cands)
@@ -696,20 +743,29 @@ class QuizFramesPatientMixin:
                 slot_label = f"[situation/event, e.g. {ex_inline}]"
                 ont_type = "situation_event"
         elif person_cands and (len(person_cands) > len(phys_cands) or has_person_def):
-            exemplars = person_cands[:2]
-            ex_inline = " / ".join(exemplars)
-            slot_label = f"[person/group, e.g. {ex_inline}]"
+            concrete_p = [p for p in person_cands if p.lower() != "someone"]
+            exemplars = concrete_p[:2] if concrete_p else ["someone"]
+            slot_label = f"[person/group, e.g. {' / '.join(concrete_p[:2])}]" if concrete_p else "[person/group]"
             ont_type = "person_group"
         elif phys_cands:
-            exemplars = phys_cands[:2]
-            ex_inline = " / ".join(exemplars)
-            if has_animal:
-                slot_label = f"[concrete physical object/animal, e.g. {ex_inline}]"
-            elif person_cands:
-                slot_label = f"[physical person or concrete object, e.g. {ex_inline}]"
+            if (
+                body_cands
+                and re.sub(r"^the\s+", "", phys_cands[0], flags=re.I).strip() == body_cands[0]
+            ):
+                exemplars = body_cands[:2]
+                ex_inline = " / ".join(exemplars)
+                slot_label = f"[body part, e.g. {ex_inline}]"
+                ont_type = "body_part"
             else:
-                slot_label = f"[concrete physical object, e.g. {ex_inline}]"
-            ont_type = "concrete_physical"
+                exemplars = phys_cands[:2]
+                ex_inline = " / ".join(exemplars)
+                if has_animal:
+                    slot_label = f"[concrete physical object/animal, e.g. {ex_inline}]"
+                elif person_cands:
+                    slot_label = f"[physical person or concrete object, e.g. {ex_inline}]"
+                else:
+                    slot_label = f"[concrete physical object, e.g. {ex_inline}]"
+                ont_type = "concrete_physical"
         elif abs_cands:
             exemplars = abs_cands[:2]
             ex_inline = " / ".join(exemplars)

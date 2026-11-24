@@ -74,6 +74,25 @@ class SlotFrame:
             examples_raw = m.group(2).strip()
             first_ex = re.split(r"\s*/\s*", examples_raw)[0].strip()
             if first_ex:
+                if cat.lower() == "body part":
+                    notes.append(
+                        f"Body-part object: precede '{first_ex}' with a subject-matching possessive "
+                        f"('his/her/their/my'), e.g. 'his {first_ex}'."
+                    )
+                    return first_ex
+                if cat.lower() in ("person/group", "person", "someone"):
+                    concrete_ex = [
+                        ex.strip()
+                        for ex in re.split(r"\s*/\s*", examples_raw)
+                        if ex.strip() and ex.strip().lower() not in ("someone", "somebody", "person", "people")
+                    ]
+                    ex_hint = (
+                        f" (e.g. '{concrete_ex[0]}', 'employees', 'the audience' — avoid generic 'someone')"
+                        if concrete_ex
+                        else " (e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')"
+                    )
+                    notes.append(f"Object slot requires a concrete person or group noun phrase{ex_hint}.")
+                    return "..."
                 prefix = "" if cat.lower().startswith("concrete") else "concrete "
                 notes.append(f"Use a {prefix}{cat} noun (e.g. '{first_ex}' or similar).")
                 return first_ex
@@ -120,7 +139,13 @@ class SlotFrame:
             notes.append("Use a subjunctive base-form verb after 'that' (never write '(should)' or brackets).")
 
         # 4. Resolve remaining metasyntax brackets and number-neutral slash copulas
-        surface = re.sub(r"\[sb\]", "someone", surface, flags=re.IGNORECASE)
+        if re.search(r"\[(?:sb|someone|person/group)\]", surface, flags=re.IGNORECASE):
+            surface = re.sub(r"\[(?:sb|someone|person/group)\]", "...", surface, flags=re.IGNORECASE)
+            if not any("concrete person or group" in n for n in notes):
+                notes.append(
+                    "Object slot requires a concrete person or group noun phrase "
+                    "(e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')."
+                )
         surface = re.sub(r"\[sth\]", "the project", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[something\]", "something", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", "the issue", surface, flags=re.IGNORECASE)
@@ -168,6 +193,7 @@ class SlotFrame:
                     elif re.search(rf"\b{re.escape(tgt)}\b", surface, flags=re.IGNORECASE):
                         surface = re.sub(rf"\b{re.escape(tgt)}\b", "", surface, flags=re.IGNORECASE).strip()
 
+        surface = re.sub(r"(?:\.\.\.\s*){2,}", "... ", surface)
         surface = re.sub(r"\s+", " ", surface).strip()
         return surface, notes
 
