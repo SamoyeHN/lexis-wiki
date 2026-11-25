@@ -236,7 +236,27 @@ def test_adj_quote_unattested_noun_falls_back_to_five_source():
     p = Path("wiki/Book_4_Unit_6_Section_A/extractions/Book_4_Unit_6_Section_A_vocabulary.md")
     if not p.exists():
         pytest.skip("Book_4_Unit_6_Section_A_vocabulary.md not present")
-    skels = LinguisticEngine.build_precomputed_target_skeletons(p.read_text(), target_count=15, passage_level="B2")
+    skels = LinguisticEngine.build_precomputed_target_skeletons(p.read_text(), target_count=20, passage_level="B2")
     c_skel = next((s for s in skels if s.get("target_word", "").lower() == "controversial"), None)
     assert c_skel is not None
     assert "uranium" not in str(c_skel.get("cloze_slot_frame") or "").lower()
+
+    m_skel = next((s for s in skels if s.get("target_word", "").lower() == "monopoly"), None)
+    if m_skel is not None:
+        frame_str = str(m_skel.get("cloze_slot_frame") or "").lower()
+        assert "each ____" not in frame_str
+        assert "have a ____ on" in frame_str
+        m_opts = {o.lower() for o in m_skel.get("prescribed_options") or []}
+        assert "ascendant" not in m_opts
+        assert "monotony" in m_opts
+        assert "monotone" in m_opts
+        # All options must start with consonant to prevent 'a' vs 'an' leakage
+        for opt in m_opts:
+            assert opt[0] not in "aeiou", f"Vowel initial option '{opt}' causes article leakage with 'have a ____ on'"
+
+    l_skel = next((s for s in skels if s.get("target_word", "").lower() == "lump"), None)
+    assert l_skel is not None
+    assert "____ of" in str(l_skel.get("cloze_slot_frame") or "").lower()
+    l_opts = {o.lower() for o in l_skel.get("prescribed_options") or []}
+    assert "banana" not in l_opts
+    assert "massif" not in l_opts

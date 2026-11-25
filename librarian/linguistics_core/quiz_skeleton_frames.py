@@ -853,6 +853,7 @@ class QuizSkeletonFramesMixin:
                 is_plural_noun=is_plural_noun,
                 is_pure_uncountable_target=is_pure_uncountable_target,
                 is_target_strictly_countable=is_target_strictly_countable,
+                is_singular_only_noun=("[singular]" in t_noun_gram_str),
                 has_mixed_vc_initials=has_mixed_vc_initials,
                 has_uncountable_contrast_foil=has_uncountable_contrast_foil,
                 verb_form_tag=verb_form_tag,
@@ -1043,8 +1044,14 @@ class QuizSkeletonFramesMixin:
                 flags=re.IGNORECASE,
             ).strip()
         elif has_mixed_vc_initials and cloze_slot_frame:
-            if has_uncountable_contrast_foil and not is_plural_noun:
+            is_fixed_singular_idiom = (
+                "[singular]" in t_noun_gram_str
+                or bool(re.search(r"\b(?:have|has|had|hold|holds|held|gain|gained|take|took|make|made)\s+(?:a|an|each)\s+_{2,}\b", cloze_slot_frame, flags=re.IGNORECASE))
+            )
+            if has_uncountable_contrast_foil and not is_plural_noun and not is_fixed_singular_idiom:
                 cloze_slot_frame = re.sub(r"\b(?:a|an)\s+_{2,}\b", "each ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
+            elif is_fixed_singular_idiom and re.search(r"\b(?:a|an|each)\s+_{2,}\b", cloze_slot_frame, flags=re.IGNORECASE):
+                cloze_slot_frame = re.sub(r"\b(?:a|an|each)\s+_{2,}\b", "the ____", cloze_slot_frame, flags=re.IGNORECASE).strip()
             elif canonical_pos == "adj":
                 is_non_gradable = (
                     is_attributive_only_adj

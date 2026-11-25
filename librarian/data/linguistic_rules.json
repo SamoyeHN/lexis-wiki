@@ -82,6 +82,15 @@
       ["batch", "consignment"],
       ["bundle", "bunch", "cluster", "array"],
       ["cargo", "freight"]
+    ],
+    "partitive_measure": [
+      ["lump", "chunk", "nugget"],
+      ["drop", "droplet"],
+      ["wisp", "puff", "plume"],
+      ["slice", "slab", "wedge"],
+      ["pinch", "grain", "speck"],
+      ["sheet", "strip"],
+      ["strand", "thread"]
     ]
   },
   "predicative_only_adjs": [

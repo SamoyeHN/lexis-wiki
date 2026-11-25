@@ -773,12 +773,17 @@ class CefrCalibrationMixin:
         if c_rank > ceiling_rank and not is_direct_negation:
             return False
 
-        # SLA & Psychometric Ceiling Gate for Foundational Levels (A1, A2, B1):
-        # A distractor must come from the foundational core vocabulary:
-        # (LDOCE 3000 defining lexicon: core_level >= 1 or non-empty freq_tags, or is_awl, or inflection of such).
-        # Rejects obscure/C1/C2 words like 'subjugation', 'pretext', 'commiserate', 'impasse', 'salvation'
-        # which cefrpy heuristically/statistically misclassifies as A2 or B1.
-        if effective_base_rank <= 3 and not is_direct_negation and not cls._is_ldoce_disabled():
+        # SLA & Psychometric Ceiling Gate for Foundational Levels (A1, A2, B1) and C2 Accessibility:
+        # 1. Foundational Levels (effective_base_rank <= 3):
+        #    A distractor must come from the foundational core vocabulary:
+        #    (LDOCE 3000 defining lexicon: core_level >= 1 or non-empty freq_tags, or is_awl, or inflection of such).
+        #    Rejects obscure/C1/C2 words like 'subjugation', 'pretext', 'commiserate', 'impasse', 'salvation'
+        #    which cefrpy heuristically/statistically misclassifies as A2 or B1.
+        # 2. C2 Accessibility Gate (c_rank >= 6):
+        #    Any C2 distractor candidate must be grounded in everyday frequency (freq_tags), AWL, or LDOCE core vocabulary.
+        #    Rejects obscure, literary, or domain-bound C2 words (e.g. 'ascendant', 'supererogation') while
+        #    preserving attested, high-utility C2 terms.
+        if (effective_base_rank <= 3 or c_rank >= 6) and not is_direct_negation and not cls._is_ldoce_disabled():
             c_entry = cls.get_ldoce_entry(c_clean)
             c_core = (c_entry.get("core_level") or 0) if c_entry else 0
             c_freq = bool(c_entry.get("freq_tags")) if c_entry else False
@@ -807,6 +812,20 @@ class CefrCalibrationMixin:
                             c_awl = lem_awl
                             break
 
+            # Paronym exception: High-discrimination orthographic paronyms sharing prefix/suffix (e.g. monotony/monotone from monopoly)
+            # test morphological precision and are transparently related, exempting them from obscure C2 gating.
+            is_paronym_peer = (
+                len(t_clean) >= 5
+                and (
+                    cls._common_prefix_len(t_clean, c_clean) >= 4
+                    or cls._common_suffix_len(t_clean, c_clean) >= 4
+                )
+            )
+
+            # Reject ungrounded obscure C2 distractors across all target levels (unless paronym peer)
+            if c_rank >= 6 and not (c_core >= 1 or c_freq or c_awl or is_paronym_peer):
+                return False
+
             if effective_base_rank == 1:
                 # A1 foundational gate:
                 # 1. Distractor must belong to LDOCE core defining lexicon (1000/2000/3000) or high-frequency
@@ -828,7 +847,7 @@ class CefrCalibrationMixin:
                 # (blocks low-frequency cultural/domain words like 'choir'/'orchestra' lacking S1..S3/W1..W3).
                 if c_rank > 2 and not c_freq:
                     return False
-            else:
+            elif effective_base_rank == 3:
                 # B1 intermediate gate:
                 # If distractor sits above B1 (i.e. c_rank > 3, B2 ceiling), it must be grounded in
                 # everyday frequency, AWL, or LDOCE 1000/2000 core vocabulary (core_level >= 2).

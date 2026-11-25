@@ -1274,24 +1274,35 @@ class DistractorVocabHarvestMixin:
                     break
             if _coll_macro:
                 _def_low_coll = (definition or "").strip().lower()
-                _non_coll_prefixes = (
-                    "a natural ability", "a long thick stick", "a hard cover", "a flat piece",
-                    "a small paper", "a large bag", "a thin flat", "a narrow piece", "a mould", "a mold",
-                )
-                _coll_def_cues = {
-                    "people", "person", "workers", "employees", "teachers", "actors", "performers",
-                    "musicians", "singers", "sailors", "officers", "soldiers", "customers", "members",
-                    "priests", "leaders", "group", "crowd", "organization", "department", "university",
-                    "college", "school", "ship", "ships", "plane", "aircraft", "play", "film", "movie",
-                    "theatre", "theater", "court", "judge", "decide", "birds", "sheep", "goats", "animals",
-                    "cows", "cattle", "wolves", "dogs", "insects", "bees", "ants", "fish", "chickens",
-                    "hens", "vehicles", "boats", "things", "items", "objects", "flowers", "keys",
-                }
-                if _def_low_coll:
-                    _def_coll_toks = set(re.findall(r"\b[a-z]{3,}\b", _def_low_coll))
-                    _is_collective_noun_target = bool(_def_coll_toks & _coll_def_cues) and not _def_low_coll.startswith(_non_coll_prefixes)
+                if _coll_macro == "partitive_measure":
+                    _part_def_cues = {
+                        "piece", "mass", "amount", "quantity", "line", "drop",
+                        "grain", "slice", "sheet", "strip", "strand", "butter",
+                        "coal", "smoke", "water", "paper", "hair", "salt",
+                    }
+                    _is_collective_noun_target = (
+                        not _def_low_coll
+                        or bool(set(re.findall(r"\b[a-z]{3,}\b", _def_low_coll)) & _part_def_cues)
+                    )
                 else:
-                    _is_collective_noun_target = bool(not target_synsets or target_synsets[0].lexfile() == "noun.group")
+                    _non_coll_prefixes = (
+                        "a natural ability", "a long thick stick", "a hard cover", "a flat piece",
+                        "a small paper", "a large bag", "a thin flat", "a narrow piece", "a mould", "a mold",
+                    )
+                    _coll_def_cues = {
+                        "people", "person", "workers", "employees", "teachers", "actors", "performers",
+                        "musicians", "singers", "sailors", "officers", "soldiers", "customers", "members",
+                        "priests", "leaders", "group", "crowd", "organization", "department", "university",
+                        "college", "school", "ship", "ships", "plane", "aircraft", "play", "film", "movie",
+                        "theatre", "theater", "court", "judge", "decide", "birds", "sheep", "goats", "animals",
+                        "cows", "cattle", "wolves", "dogs", "insects", "bees", "ants", "fish", "chickens",
+                        "hens", "vehicles", "boats", "things", "items", "objects", "flowers", "keys",
+                    }
+                    if _def_low_coll:
+                        _def_coll_toks = set(re.findall(r"\b[a-z]{3,}\b", _def_low_coll))
+                        _is_collective_noun_target = bool(_def_coll_toks & _coll_def_cues) and not _def_low_coll.startswith(_non_coll_prefixes)
+                    else:
+                        _is_collective_noun_target = bool(not target_synsets or target_synsets[0].lexfile() == "noun.group")
                 if _is_collective_noun_target:
                     global_synonyms.update(_coll_own_sub)
                     # Remove orthogonal collective-noun subgroup members that Oxford Writer's Thesaurus

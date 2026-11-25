@@ -31,6 +31,7 @@ class QuizFramesSlotSlicingMixin:
         is_plural_noun: bool = False,
         is_pure_uncountable_target: bool = False,
         is_target_strictly_countable: bool = False,
+        is_singular_only_noun: bool = False,
         has_mixed_vc_initials: bool = False,
         has_uncountable_contrast_foil: bool = False,
         verb_form_tag: Optional[str] = None,
@@ -77,9 +78,11 @@ class QuizFramesSlotSlicingMixin:
                         return "several"
                 elif has_uncountable_contrast_foil and not is_plural_noun:
                     if d_l in ("a", "an", "the"):
+                        if is_singular_only_noun:
+                            return "the" if has_mixed_vc_initials else "a"
                         return "each" if has_mixed_vc_initials else "a"
                 elif has_mixed_vc_initials and d_l in ("a", "an"):
-                    return "each" if has_uncountable_contrast_foil else "the"
+                    return "each" if (has_uncountable_contrast_foil and not is_singular_only_noun) else "the"
             elif canonical_pos == "adj":
                 if has_mixed_vc_initials and d_l in ("a", "an"):
                     is_non_gradable = (
@@ -952,7 +955,7 @@ class QuizFramesSlotSlicingMixin:
                 if prev_det_i >= 0 and doc[prev_det_i].text.lower() in ("a", "an", "the", "each", "every", "his", "her", "their", "its", "our", "my", "your", "no"):
                     det_tok = doc[prev_det_i]
             default_noun_det = (
-                ("several" if is_plural_noun else ("each" if has_mixed_vc_initials else "a"))
+                ("several" if is_plural_noun else ("the" if (has_mixed_vc_initials and is_singular_only_noun) else ("each" if has_mixed_vc_initials else "a")))
                 if has_uncountable_contrast_foil
                 else ("a" if is_target_strictly_countable and not is_plural_noun and not has_mixed_vc_initials else ("the" if not is_pure_uncountable_target else ""))
             )

@@ -153,7 +153,11 @@ class DistractorVocabAssemblyMixin:
             clean_anchor = context_anchor.strip().lower()
             if (wn_pos in ("a", "n") or not wn_pos) and anchor_type == "prep":
                 # Preposition Valency Gate - reject candidates that also govern the target preposition
+                # (except orthogonal collective/partitive nouns on 'of', e.g. 'lump of' vs 'drop/slice/sheet of',
+                # which share 'of' syntactically while remaining mutually exclusive by physical substance).
                 for cand in candidates:
+                    if clean_anchor == "of" and cls._are_orthogonal_collective_nouns(clean_target, cand):
+                        continue
                     cand_preps = cls.get_governed_prepositions(cand, pos=pos)
                     if clean_anchor in cand_preps or cls.lookup_ldoce_phrase(f"{cand} {clean_anchor}"):
                         forbidden_words.add(cand)
