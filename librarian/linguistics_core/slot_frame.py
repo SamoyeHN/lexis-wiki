@@ -76,8 +76,9 @@ class SlotFrame:
             if first_ex:
                 if cat.lower() == "body part":
                     notes.append(
-                        f"Body-part object: precede '{first_ex}' with a subject-matching possessive "
-                        f"('his/her/their/my'), e.g. 'his {first_ex}'."
+                        f"Body-part object: if the subject is a person, precede '{first_ex}' with a subject-matching "
+                        f"possessive ('his/her/their/my'); if the subject is non-human or general, use a natural "
+                        f"modifier or bare plural (e.g. 'blood {first_ex}')."
                     )
                     return first_ex
                 if cat.lower() in ("person/group", "person", "someone"):
@@ -139,6 +140,20 @@ class SlotFrame:
             notes.append("Use a subjunctive base-form verb after 'that' (never write '(should)' or brackets).")
 
         # 4. Resolve remaining metasyntax brackets and number-neutral slash copulas
+        def _repl_poss_placeholder(m: re.Match) -> str:
+            head_n = m.group(1).strip()
+            notes.append(
+                f"Possessive slot: precede '{head_n}' with a context-matching possessive "
+                f"(e.g. 'the manager's {head_n}', 'his {head_n}', or bare '{head_n}' — never write literal 'someone's')."
+            )
+            return head_n
+
+        surface = re.sub(
+            r"\b(?:someone's|somebody's|sb's|one's)\s+([a-zA-Z]+)\b",
+            _repl_poss_placeholder,
+            surface,
+            flags=re.IGNORECASE,
+        )
         if re.search(r"\[(?:sb|someone|person/group)\]", surface, flags=re.IGNORECASE):
             surface = re.sub(r"\[(?:sb|someone|person/group)\]", "...", surface, flags=re.IGNORECASE)
             if not any("concrete person or group" in n for n in notes):

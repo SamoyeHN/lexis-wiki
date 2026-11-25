@@ -211,3 +211,20 @@ def test_patient_ontology_no_forced_the_on_poss_uncountable_or_plural():
     )
     assert slot_sg is not None
     assert slot_sg["exemplars"][0] == "the opinion"
+
+
+def test_slot_frame_to_llm_surface_possessive_placeholder_and_exert_collision():
+    from librarian.linguistics import LinguisticEngine
+    f_poss = SlotFrame.from_symbolic_str("... ____ someone's displeasure")
+    surf, notes = f_poss.to_llm_surface()
+    assert surf == "... ____ displeasure"
+    assert "someone's" not in surf
+    assert any("never write literal 'someone's'" in n for n in notes)
+
+    cands, _ = LinguisticEngine.get_construction_contrast_distractors(
+        "exert", pos="verb", context_anchor="pressure", anchor_type="lv_triad"
+    )
+    assert "exercise" not in cands
+    assert "impose" not in cands
+    is_dk, _ = LinguisticEngine.double_key_collision("exert", "exercise", pos="verb")
+    assert is_dk is True

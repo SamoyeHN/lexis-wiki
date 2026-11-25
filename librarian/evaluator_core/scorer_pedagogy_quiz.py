@@ -241,7 +241,7 @@ def validate_quiz_item(
             if echoed_dists:
                 no_stem_leak = False
                 flags.append(
-                    f"❌ Quiz item '{target}': Distractor option(s) echo verbatim in question stem outside blank: {echoed_dists}"
+                    f"❌ Quiz item '{target}': Question stem already contains distractor(s): {echoed_dists}"
                 )
 
         # Article Leakage Gate

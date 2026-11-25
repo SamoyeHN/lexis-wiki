@@ -515,6 +515,14 @@ class QuizSkeletonFramesMixin:
             quote=it.get("quote") or it.get("raw_quote"),
         )
         eff_pos = "noun" if is_quantifier_frame else canonical_pos
+        if ldoce_cloze_frame and anchor_type == "prep":
+            _m_fp = re.search(
+                r"_{2,}\s+(to|with|from|on|for|in|into|of|against|at|upon|towards|toward|over|under|about|by|as)\b",
+                ldoce_cloze_frame,
+                flags=re.IGNORECASE,
+            )
+            if _m_fp and _m_fp.group(1).lower() != (anchor or "").lower():
+                anchor = _m_fp.group(1).lower()
         has_double_key_collision = (
             not half_slice_target
             and canonical_pos != "function_word"

@@ -82,7 +82,7 @@ class DistractorGuardsInversionMixin:
         "pose": ["present", "cause", "create", "raise", "set", "make"],
         "wreak": ["cause", "bring", "make", "create", "play"],
         "bear": ["have", "hold", "keep", "carry", "show", "bring"],
-        "exert": ["put", "apply", "impose", "exercise", "bring"],
+        "exert": ["deliver", "offer", "yield", "maintain", "implement"],
         "draw": ["make", "reach", "pull", "take", "write"],
         "run": ["take", "bear", "have", "face", "meet"],
         "take": ["make", "have", "get", "give", "bring", "hold"],

@@ -184,7 +184,11 @@ class DistractorGuardsCollisionMixin:
             d_is_attested, _ = cls.is_attested_light_verb_collocation(verb=d, noun=lv_n, prep=lv_p)
             if d_is_attested:
                 return True, "double_key_collocation"
-            return False, "none"
+            if lv_slot_ctx.get("verb") in {
+                "cast", "shed", "strike", "pay", "pose", "wreak", "bear", "draw",
+                "take", "make", "give", "do", "have", "hold", "keep", "set", "put",
+            }:
+                return False, "none"
 
         # Construction Family Subcategorization Gate (`pedlex_cxn_index`):
         # When `anchor_type` or `quote` locks one of the 8 construction families, any candidate in
