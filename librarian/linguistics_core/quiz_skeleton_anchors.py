@@ -649,13 +649,28 @@ class QuizSkeletonAnchorsMixin:
                                 quote_adj_is_attributive = True
                             if head_n is not None:
                                 quote_adj_is_attributive = True
+                                _head_n_lem = head_n.lemma_.lower()
+                                _adj_collocs_low = {
+                                    str(cn).strip().lower()
+                                    for cn in (adj_entry or {}).get("colloc_nouns", [])
+                                }
+                                _sense_ex_blob = " ".join(
+                                    [str(x) for x in ((locked_sense or {}).get("examples") or [])]
+                                    + [str(x) for x in ((locked_sense or {}).get("patterns") or [])]
+                                ).lower()
+                                _quote_noun_attested = (
+                                    not _adj_collocs_low
+                                    or _head_n_lem in _adj_collocs_low
+                                    or bool(re.search(rf"\b{re.escape(_head_n_lem)}\b", _sense_ex_blob))
+                                )
                                 if (
-                                    head_n.pos_ != "PRON"
+                                    _quote_noun_attested
+                                    and head_n.pos_ != "PRON"
                                     and head_n.text.lower() not in cls._ANCHOR_STOPWORDS
-                                    and head_n.lemma_.lower() != w_lower
-                                    and not cls._in_forbidden_word_set(head_n.lemma_.lower(), batch_target_words)
+                                    and _head_n_lem != w_lower
+                                    and not cls._in_forbidden_word_set(_head_n_lem, batch_target_words)
                                 ):
-                                    anchor = head_n.lemma_.lower()
+                                    anchor = _head_n_lem
                                     anchor_type = "modified_noun"
                         # A3. Predicative / Causative Complement: Check if adjective is complement of a causative/linking verb
                         if not anchor and eff_head.dep_ in ("ccomp", "xcomp", "acomp", "oprd") and eff_head.head and eff_head.head.pos_ in ("VERB", "AUX"):
