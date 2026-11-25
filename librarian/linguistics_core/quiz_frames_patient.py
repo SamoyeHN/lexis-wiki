@@ -92,34 +92,43 @@ class QuizFramesPatientMixin:
         "noun.time", "noun.possession",
     }
 
-    CRISIS_KEYWORDS = {
-        "conflict", "crisis", "tension", "war", "violence", "fighting",
-        "protest", "clash", "rebellion", "strike", "dispute", "quarrel",
-        "scandal", "threat", "danger", "hostility", "aggression", "revolt",
-        "riot", "rioting",
+    _ABSTRACT_HYPERNYM_TABLE: Tuple[Tuple[Set[str], str, str], ...] = (
+        ({"conflict", "hostility", "warfare", "aggression", "danger", "threat", "rebellion", "riot"}, "situation/crisis", "situation_crisis"),
+        ({"difficulty", "difficultness", "trouble", "obstacle", "adversity", "dilemma", "hardship"}, "problem/issue", "problem_issue"),
+        ({"process", "activity", "inquiry", "investigation", "discussion", "negotiation", "procedure"}, "process/activity", "process_activity"),
+        ({"feeling", "emotion", "sentiment", "mood", "psychological state", "mental state", "cognitive state", "symptom"}, "feeling/state", "feeling_state"),
+        ({"assets", "sum", "capital", "income", "funds", "wealth", "financial aid"}, "funds/resources", "funds_resources"),
+        ({"belief", "opinion", "attitude", "conviction", "doubt", "concern", "criticism", "objection"}, "opinion/concern", "opinion_concern"),
+    )
+    _ABSTRACT_LEXFILE_FALLBACK: Dict[str, Tuple[str, str]] = {
+        "noun.feeling": ("feeling/state", "feeling_state"),
+        "noun.cognition": ("idea/attitude", "idea_attitude"),
+        "noun.communication": ("statement/opinion", "statement_opinion"),
+        "noun.possession": ("funds/resources", "funds_resources"),
+        "noun.process": ("process/activity", "process_activity"),
     }
-    PROBLEM_KEYWORDS = {
-        "problem", "difficulty", "issue", "challenge", "trouble", "dilemma",
-        "obstacle", "hardship", "barrier", "disagreement", "dispute", "controversy",
-    }
-    PROCESS_KEYWORDS = {
-        "process", "activity", "negotiation", "negotiations", "discussion",
-        "discussions", "campaign", "investigation", "reform", "development",
-        "change", "procedure", "learning", "trade", "cooperation", "talks",
-    }
-    FEELING_KEYWORDS = {
-        "pain", "symptom", "symptoms", "anxiety", "fear", "anger", "stress",
-        "grief", "suffering", "loneliness", "panic", "burden", "feeling",
-        "feelings", "illness", "depression", "guilt", "distress",
-    }
-    ASSET_KEYWORDS = {
-        "money", "fund", "funds", "capital", "investment", "budget", "tax",
-        "taxes", "grant", "grants", "resource", "resources", "wealth", "revenue",
-    }
-    OPINION_KEYWORDS = {
-        "opinion", "view", "views", "idea", "concern", "concerns", "support",
-        "criticism", "doubt", "doubts", "dissatisfaction", "objection", "objections", "intention",
-    }
+
+    @classmethod
+    def _classify_abstract_slot_category(cls, abs_lemmas: List[str]) -> Tuple[str, str]:
+        """Classify abstract patient nouns via WordNet hypernym closure + lexfile fallback."""
+        wn = cls.get_wordnet()
+        if wn:
+            for lem in abs_lemmas:
+                syns = wn.synsets(lem.lower(), pos="n")
+                if not syns:
+                    continue
+                s0 = syns[0]
+                try:
+                    hyps = {hl for h in s0.closure("hypernym") for hl in h.lemmas()} | set(s0.lemmas())
+                except Exception:
+                    hyps = set(s0.lemmas())
+                for anchors, label, ont_type in cls._ABSTRACT_HYPERNYM_TABLE:
+                    if hyps & anchors:
+                        return label, ont_type
+                lf_hit = cls._ABSTRACT_LEXFILE_FALLBACK.get(s0.lexfile())
+                if lf_hit:
+                    return lf_hit
+        return "situation/event", "situation_event"
 
     @classmethod
     def _is_body_part_noun(cls, lemma: str) -> bool:
@@ -448,8 +457,13 @@ class QuizFramesPatientMixin:
                                     break
                         if real_lem not in seen_lem and real_lem not in pred_words:
                             seen_lem.add(real_lem)
+                            has_explicit_the = any(ch.dep_ == "det" and ch.text.lower() == "the" for ch in real_c_tok.children)
                             has_det_or_poss = any(ch.dep_ in ("det", "poss") for ch in real_c_tok.children)
-                            if has_det_or_poss:
+                            is_plural_or_uncountable = (
+                                real_c_tok.tag_ in ("NNS", "NNPS")
+                                or cls._is_primarily_uncountable_noun(real_lem)
+                            )
+                            if has_explicit_the or (has_det_or_poss and not is_plural_or_uncountable):
                                 np_surface = f"the {real_c_tok.text.lower()}"
                             else:
                                 left_mods = [
@@ -720,28 +734,9 @@ class QuizFramesPatientMixin:
         ):
             exemplars = abs_cands[:2]
             ex_inline = " / ".join(exemplars)
-            all_abs_text = " ".join(exemplars).lower() + " " + defn_low
-            if any(w in all_abs_text for w in cls.CRISIS_KEYWORDS):
-                slot_label = f"[situation/crisis, e.g. {ex_inline}]"
-                ont_type = "situation_crisis"
-            elif any(w in all_abs_text for w in cls.PROBLEM_KEYWORDS):
-                slot_label = f"[problem/issue, e.g. {ex_inline}]"
-                ont_type = "problem_issue"
-            elif any(w in all_abs_text for w in cls.PROCESS_KEYWORDS):
-                slot_label = f"[process/activity, e.g. {ex_inline}]"
-                ont_type = "process_activity"
-            elif any(w in all_abs_text for w in cls.FEELING_KEYWORDS):
-                slot_label = f"[feeling/state, e.g. {ex_inline}]"
-                ont_type = "feeling_state"
-            elif any(w in all_abs_text for w in cls.ASSET_KEYWORDS):
-                slot_label = f"[funds/resources, e.g. {ex_inline}]"
-                ont_type = "funds_resources"
-            elif any(w in all_abs_text for w in cls.OPINION_KEYWORDS):
-                slot_label = f"[opinion/concern, e.g. {ex_inline}]"
-                ont_type = "opinion_concern"
-            else:
-                slot_label = f"[situation/event, e.g. {ex_inline}]"
-                ont_type = "situation_event"
+            abs_lemmas = [ex.split()[-1].lower() for ex in exemplars if ex.strip()]
+            cat_label, ont_type = cls._classify_abstract_slot_category(abs_lemmas)
+            slot_label = f"[{cat_label}, e.g. {ex_inline}]"
         elif person_cands and (len(person_cands) > len(phys_cands) or has_person_def):
             concrete_p = [p for p in person_cands if p.lower() != "someone"]
             exemplars = concrete_p[:2] if concrete_p else ["someone"]

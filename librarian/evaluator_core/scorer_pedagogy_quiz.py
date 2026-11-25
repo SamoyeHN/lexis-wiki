@@ -570,7 +570,8 @@ def validate_quiz_item(
     elif not is_single_blank:
         flags.append(f"❌ Quiz item '{target}': Multiple blanks detected in stem")
     elif not no_stem_leak:
-        flags.append(f"❌ Quiz item '{target}': Target word leaks into question stem: {leaked_words}")
+        if leaked_words:
+            flags.append(f"❌ Quiz item '{target}': Target word leaks into question stem: {leaked_words}")
     elif not no_article_leak:
         flags.append(f"❌ Quiz item '{target}': indefinite article leakage before blank")
     elif not no_verbatim_example:

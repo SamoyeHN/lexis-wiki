@@ -649,6 +649,11 @@ class QuizFramesSlotSlicingMixin:
                 return f"... {left_aux}____ to [verb]"
 
             # 3b. Bound preposition complement (`pose for`, `correlate with`, `originate in`, `remind sb of`, `endow sb with`)
+            _temporal_adj_nouns = {
+                "time", "year", "years", "month", "months", "week", "weeks",
+                "day", "days", "decade", "decades", "century", "centuries",
+                "night", "morning", "evening", "hour", "hours", "moment",
+            }
             prep_c = next(
                 (
                     c for c in t_tok.children
@@ -656,6 +661,11 @@ class QuizFramesSlotSlicingMixin:
                     and not (is_tok_passive and c.text.lower() == "by" and anchor_type != "prep")
                     and c.i > t_tok.i
                     and c.text.lower() in ("for", "with", "in", "into", "to", "from", "on", "of", "at", "about", "against", "over", "under", "between", "as", "upon", "towards", "by")
+                    and not (
+                        c.text.lower() in ("over", "for", "in", "at")
+                        and not any(mc.dep_ in ("dobj", "obj") and t_tok.i < mc.i < c.i for mc in t_tok.children)
+                        and any(pc.dep_ == "pobj" and pc.lemma_.lower() in _temporal_adj_nouns for pc in c.children)
+                    )
                 ),
                 None,
             )
@@ -768,7 +778,11 @@ class QuizFramesSlotSlicingMixin:
                     poss_idx = next((idx for idx, t in enumerate(raw_span[:-1]) if t.dep_ == "poss" and t.pos_ in ("NOUN", "PROPN")), None)
                     if poss_idx is not None:
                         after_poss = [t.text.lower() for t in raw_span[poss_idx + 1 :] if (t.is_alpha or t.like_num) and not _is_forbidden(t.lemma_.lower())]
-                        if after_poss and cls._is_body_part_noun(dobj_c.lemma_.lower()):
+                        if after_poss and (
+                            cls._is_body_part_noun(dobj_c.lemma_.lower())
+                            or dobj_c.tag_ in ("NNS", "NNPS")
+                            or cls._is_primarily_uncountable_noun(dobj_c.lemma_.lower())
+                        ):
                             span_toks = after_poss
                         else:
                             span_toks = ["the"] + after_poss if after_poss else [dobj_c.text.lower()]

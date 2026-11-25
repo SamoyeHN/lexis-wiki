@@ -180,6 +180,21 @@ class SlotFrame:
                 surface = re.sub(r"____", "was ____", surface, count=1)
                 notes.append("Keep a passive auxiliary ('was/were/is/are') directly before '____'.")
 
+        # 5b. Subject-verb agreement guard when an auxiliary (`have`, `has`, `are`, `were`) is locked directly before `____`
+        if re.search(r"\bhave\s+_{2,}", surface, flags=re.IGNORECASE):
+            notes.append(
+                "Subject-verb agreement: 'have ____' requires a plural subject (e.g. 'the pipes', 'years of neglect') "
+                "or 'I/you/we/they' — never a singular noun."
+            )
+        elif re.search(r"\bhas\s+_{2,}", surface, flags=re.IGNORECASE):
+            notes.append(
+                "Subject-verb agreement: 'has ____' requires a 3rd-person singular subject (e.g. 'corrosion', 'the policy')."
+            )
+        elif re.search(r"\b(?:are|were)\s+_{2,}", surface, flags=re.IGNORECASE):
+            notes.append(
+                "Subject-verb agreement: 'are/were ____' requires a plural subject."
+            )
+
         # 6. Universal Target Leakage Guard: Ensure target word or base word NEVER leaks into surface outside '____'
         if skeleton:
             tw_low = str(skeleton.get("target_word") or "").strip().lower()

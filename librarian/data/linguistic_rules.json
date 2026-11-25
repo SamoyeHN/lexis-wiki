@@ -50,7 +50,8 @@
   "adjunct_prep_pairs": [
     ["for", "example"], ["for", "instance"], ["in", "fact"], ["in", "general"],
     ["at", "first"], ["on", "average"], ["in", "particular"], ["in", "summary"],
-    ["in", "total"], ["in", "brief"], ["in", "short"], ["in", "part"]
+    ["in", "total"], ["in", "brief"], ["in", "short"], ["in", "part"],
+    ["over", "time"], ["over", "year"], ["over", "decade"], ["in", "time"], ["at", "time"]
   ],
   "typical_complement_preps": ["into", "to", "from"],
   "collective_noun_ontology": {

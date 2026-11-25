@@ -160,3 +160,54 @@ def test_slot_frame_to_llm_surface_open_person_object():
     assert surf3 == "... ____ ..."
     assert "someone" not in surf3
     assert any("concrete person or group noun phrase" in n for n in notes3)
+
+
+def test_slot_frame_to_llm_surface_aux_agreement():
+    f_have = SlotFrame.from_symbolic_str("... have ____ over time")
+    surf, notes = f_have.to_llm_surface()
+    assert surf == "... have ____ over time"
+    assert any("plural subject" in n for n in notes)
+
+
+def test_wordnet_abstract_slot_classification():
+    from librarian.linguistics import LinguisticEngine
+    assert LinguisticEngine._classify_abstract_slot_category(["confidence"]) == ("feeling/state", "feeling_state")
+    assert LinguisticEngine._classify_abstract_slot_category(["problem"]) == ("problem/issue", "problem_issue")
+    assert LinguisticEngine._classify_abstract_slot_category(["funds"]) == ("funds/resources", "funds_resources")
+    assert LinguisticEngine._classify_abstract_slot_category(["negotiation"]) == ("process/activity", "process_activity")
+
+
+def test_patient_ontology_no_forced_the_on_poss_uncountable_or_plural():
+    from librarian.linguistics import LinguisticEngine
+    slot_conf = LinguisticEngine._extract_verb_patient_ontology(
+        word="corrode",
+        canonical_pos="verb",
+        target_entry=None,
+        locked_sense=None,
+        definition="to gradually make something weaker",
+        authentic_example="Corruption has corroded our confidence in the police force.",
+    )
+    assert slot_conf is not None
+    assert slot_conf["exemplars"][0] == "confidence"
+
+    slot_plural = LinguisticEngine._extract_verb_patient_ontology(
+        word="ignore",
+        canonical_pos="verb",
+        target_entry=None,
+        locked_sense=None,
+        definition="to pay no attention to something",
+        authentic_example="They ignored his warnings.",
+    )
+    assert slot_plural is not None
+    assert slot_plural["exemplars"][0] == "warnings"
+
+    slot_sg = LinguisticEngine._extract_verb_patient_ontology(
+        word="express",
+        canonical_pos="verb",
+        target_entry=None,
+        locked_sense=None,
+        definition="to state what you think",
+        authentic_example="She expressed her opinion.",
+    )
+    assert slot_sg is not None
+    assert slot_sg["exemplars"][0] == "the opinion"

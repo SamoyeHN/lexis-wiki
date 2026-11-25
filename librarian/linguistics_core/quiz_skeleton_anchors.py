@@ -421,6 +421,12 @@ class QuizSkeletonAnchorsMixin:
                                             break
                                     if pobj_tok is not None and (prep_word, pobj_tok) in cls._ADJUNCT_PREP_PAIRS:
                                         continue
+                                    if prep_word in ("over", "for", "in", "at") and pobj_tok in (
+                                        "morning", "afternoon", "evening", "night", "midnight", "noon",
+                                        "day", "week", "weekend", "month", "year", "decade", "century",
+                                        "hour", "minute", "moment", "time",
+                                    ):
+                                        continue
                                     anchor = prep_word
                                     anchor_type = "prep"
                                     prep_obj = pobj_tok
