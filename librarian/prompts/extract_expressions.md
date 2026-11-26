@@ -11,7 +11,7 @@ Extract genuine multi-word expressions from the text.
    - `quoted_sentence`: MUST be the exact, complete authentic sentence from the passage containing the expression. Use its pre-located sentence anchor `[S-ID]`.
 
 2. **Contextual Meaning & Original Usage**:
-   - `definition`: Provide a precise, context-specific pedagogical definition.
+   - `definition`: Provide a precise, context-specific pedagogical definition matching the expression's idiomatic or figurative meaning in context rather than a literal word-by-word interpretation.
    - `example_usage`: MUST be an original, brand-new communicative academic sentence demonstrating the expression in a fresh context. 🚫 STRICTLY FORBIDDEN: NEVER copy, recycle, or repeat the source text sentence! You must invent an independent example sentence.
 
 3. **Phraseological Design Audit (`design_audit`)**:

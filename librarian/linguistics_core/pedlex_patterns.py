@@ -494,7 +494,7 @@ class PedlexPatternsMixin:
                             if not has_poss:
                                 continue
                         # Do not allow prepositions or finite verbs inside a short nominal/modifier infix slot
-                        if any(_tok_pos(st) in ("ADP", "SCONJ", "CCONJ") for st in span_toks):
+                        if any(_tok_pos(st) in ("ADP", "SCONJ", "CCONJ") or (_tok_pos(st) in ("VERB", "AUX") and _tok_tag(st) not in ("VBN", "VBG")) for st in span_toks):
                             continue
                         if _match_step(c_idx + 1, t_idx + span_len):
                             return True

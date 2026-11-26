@@ -5,6 +5,7 @@ CLI subparser and handler for audit, re-audit, and golden-set benchmarking.
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from ..config import config
 from ..llm import llm
@@ -22,6 +23,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     reaudit_parser.add_argument("--target", choices=["quiz", "extraction", "all"], default="quiz", help="Target artifacts to re-audit: 'quiz', 'extraction', or 'all' (default: quiz)")
     reaudit_parser.add_argument("--template", "-t", choices=["vocabulary", "cloze", "reading", "translation", "listening", "video"], help="Only re-audit this quiz type")
     reaudit_parser.add_argument("--workers", "-w", type=int, default=2, help="Concurrent audit workers (default: 2)")
+    reaudit_parser.add_argument("--llm", action="store_true", help="Enable Level-2 LLM semantic evaluation (e.g. WSD sense alignment for extractions)")
+    reaudit_parser.add_argument("--fix", action="store_true", help="Automatically repair detected defects (e.g. in-place WSD sense cures)")
     reaudit_parser.add_argument("--json", action="store_true", help="Output the summary as JSON")
     reaudit_parser.set_defaults(handler=handle_reaudit)
 
@@ -77,7 +80,13 @@ def handle_reaudit(args: argparse.Namespace) -> None:
 
     if target in ("extraction", "all"):
         from ..audit_extraction import batch_audit_extractions, format_extraction_summary
-        print("Re-auditing extraction artifacts (Level-1 deterministic code gate, read-only)…")
+        enable_llm = getattr(args, "llm", False)
+        fix = getattr(args, "fix", False)
+        if enable_llm:
+            mode_desc = "Level-2 semantic audit with LLM arbitration" + (", auto-cure enabled" if fix else ", read-only")
+        else:
+            mode_desc = "Level-1 deterministic code gate, read-only"
+        print(f"Re-auditing extraction artifacts ({mode_desc})…")
 
         def _ext_progress(done, total, row):
             mark = "✓" if row.get("passed") else "✗"
@@ -87,6 +96,8 @@ def handle_reaudit(args: argparse.Namespace) -> None:
             unit_filter=args.units or None,
             max_workers=args.workers,
             progress_cb=_ext_progress,
+            enable_llm=enable_llm,
+            fix=fix,
         )
         if ext_summary["total"] == 0:
             print("No extraction artifacts found under wiki/ to re-audit.")
@@ -97,11 +108,19 @@ def handle_reaudit(args: argparse.Namespace) -> None:
         else:
             print(format_extraction_summary(ext_summary))
 
+        from ..audit_extraction import save_extraction_audit_log
+        ext_log_paths = save_extraction_audit_log(ext_summary)
+        try:
+            rel_ext_log = ext_log_paths["log_path"].relative_to(Path(config.project_root))
+        except ValueError:
+            rel_ext_log = ext_log_paths["log_path"]
+        print(f"📄 Extraction defect log saved to: {rel_ext_log}")
+
         if ext_summary.get("failed", 0) > 0:
             has_errors = True
 
     if target in ("quiz", "all"):
-        from ..audit_batch import run_batch, format_summary
+        from ..audit_batch import run_batch, format_summary, save_quiz_audit_log
         from ..llm import LLMError
         try:
             judge_m = config.get("judge_model") or config.get("model")
@@ -132,7 +151,15 @@ def handle_reaudit(args: argparse.Namespace) -> None:
             print(json.dumps(output_payload, indent=2, ensure_ascii=False))
         else:
             print(format_summary(summary))
-        if summary.get("errors", 0) > 0:
+
+        quiz_log_paths = save_quiz_audit_log(summary)
+        try:
+            rel_quiz_log = quiz_log_paths["log_path"].relative_to(Path(config.project_root))
+        except ValueError:
+            rel_quiz_log = quiz_log_paths["log_path"]
+        print(f"📄 Quiz defect log saved to: {rel_quiz_log}")
+
+        if summary.get("errors", 0) > 0 or summary.get("failed", 0) > 0:
             has_errors = True
 
     if has_errors:

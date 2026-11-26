@@ -467,8 +467,8 @@ class TestFixTargets:
         idx, score, margin, conf = _locked("fall", "noun", "have a big fall")
         assert idx == 86, senses("fall")[idx]["definition"]
 
-    @pytest.mark.xfail(strict=True, reason="RC-3: 'in your dreams' fired non-adjacently")
     def test_dream_must_lock_the_wish_sense(self):
+        """RC-3 closed: noun coordination with myths locks wish sense."""
         idx, score, margin, conf = _locked("dream", "noun", "appeared in myths")
         assert idx == 1, senses("dream")[idx]["definition"]
 

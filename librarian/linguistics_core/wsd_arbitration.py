@@ -74,7 +74,8 @@ class WsdArbitrationMixin:
         sentence: str,
         candidates: List[Dict[str, Any]],
         model: Optional[str] = None,
-        discourse_context: str = ""
+        discourse_context: str = "",
+        target_pos: Optional[str] = None,
     ) -> int:
         """
         Neuro-Symbolic Zero-Hallucination LLM Reranker.
@@ -86,7 +87,7 @@ class WsdArbitrationMixin:
             return 0
 
         from librarian.config import config
-        active_model = str(model or config.get("model") or "").strip()
+        active_model = str(model or config.get("wsd_model") or config.get("judge_model") or config.get("model") or "").strip()
 
         letters = [chr(ord("A") + i) for i in range(min(len(candidates), 20))]
         unique_poses = {
@@ -94,11 +95,15 @@ class WsdArbitrationMixin:
             for c in candidates[:len(letters)]
             if str(c.get("pos") or "").strip()
         }
+        eff_pos_target = str(target_pos or "").strip().lower()
         shared_pos = next(iter(unique_poses)) if len(unique_poses) == 1 else ""
+        if not eff_pos_target and shared_pos:
+            eff_pos_target = shared_pos.lower()
+
         options_text = []
         cand_sig_parts = []
         for idx, cand in enumerate(candidates[:len(letters)]):
-            pos_str = f"({cand.get('pos', '')}) " if (cand.get("pos") and not shared_pos) else ""
+            pos_str = f"({cand.get('pos', '')}) " if (cand.get("pos") and (not shared_pos or len(unique_poses) > 1)) else ""
             raw_s = cand.get("raw_sense") if isinstance(cand.get("raw_sense"), dict) else {}
             defn_str = cand.get('definition', '').strip()
             signpost_raw = str(cand.get("signpost") or raw_s.get("signpost") or "").strip()
@@ -145,7 +150,7 @@ class WsdArbitrationMixin:
             cand_sig_parts.append(f"{cand.get('pos', '')}:{signpost_str}{gram_str}{defn_str}:{pat_str}")
 
         ctx_clean = str(discourse_context or "").strip()
-        pos_header = f" ({shared_pos})" if shared_pos else ""
+        pos_header = f" ({eff_pos_target or shared_pos})" if (eff_pos_target or shared_pos) else ""
         if ctx_clean and ">>" in ctx_clean and "<<" in ctx_clean:
             context_section = (
                 f"Select the single best dictionary sense for '{item_name}'{pos_header}.\n\n"
@@ -160,10 +165,19 @@ class WsdArbitrationMixin:
                 f"{ctx_block}"
             )
 
+        pos_constraint_instruction = ""
+        if eff_pos_target:
+            pos_constraint_instruction = (
+                f"- MANDATORY PART-OF-SPEECH INVARIANT: '{item_name}' functions as a {eff_pos_target.upper()} in this context. "
+                f"You MUST select a candidate sense matching this exact part of speech ({eff_pos_target}). "
+                f"NEVER choose a verb definition for a noun context or a noun definition for a verb context.\n"
+            )
+
         prompt = (
             f"{context_section}"
             f"Candidate Senses:\n" + "\n".join(options_text) + "\n\n"
             f"Instructions:\n"
+            f"{pos_constraint_instruction}"
             f"- Match the candidate whose definition, [SIGNPOST], and [Pattern: ...] best fit how '{item_name}' is used in the target sentence.\n"
             f"- Match the semantic domain of the governing verb or argument in the sentence (e.g., speaking/writing/expressing an argument vs. thinking/remembering vs. seeing/hearing), rather than merely matching a preposition in an example sentence.\n"
             f"- Respect selectional restrictions (e.g., 'if a [subject] ...', animate vs. inanimate arguments) and register/domain tags ([formal], [informal], [spoken], [technical], [disapproving]).\n"
@@ -171,7 +185,7 @@ class WsdArbitrationMixin:
             f"Reply with ONLY the single capital letter ({letters[0]}-{letters[-1]}):"
         )
 
-        cache_raw = f"{active_model}|v5|{item_name.strip().lower()}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
+        cache_raw = f"{active_model}|v6|{item_name.strip().lower()}|{eff_pos_target}|{sentence.strip()}|{ctx_clean}|{'||'.join(cand_sig_parts)}"
         cache_key = hashlib.sha1(cache_raw.encode("utf-8")).hexdigest()
 
         active_session = getattr(cls._wsd_session_local, "session", None)

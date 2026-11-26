@@ -186,7 +186,8 @@ class WsdScoringPatternsMixin:
                         br_interior,
                     )
                     has_slot_in_br = bool(re.search(r"(\.\.\.|somebody|something|someone|\bsb\b|\bsth\b|\bdoing\b|\bto\s+do\b|\()", br_interior))
-                    frame_win = cls.PATTERN_FRAME_WINDOW if has_slot_in_br else 1
+                    is_adv_frame = bool(eff_p in ("adv", "adverb"))
+                    frame_win = cls.PATTERN_FRAME_WINDOW if (has_slot_in_br or is_adv_frame) else 1
                     if len(words_in_pat) >= 2 and cls._quote_has_frame(q_seq, words_in_pat, window=frame_win):
                         score += 40
                         matched_pat = True
@@ -508,11 +509,6 @@ class WsdScoringPatternsMixin:
                     if "mail" in sp or "postage stamp" in s.get("units", []) or "envelope" in s_defn:
                         score += 50
 
-            if eff_pos == "adverb" and target_w_clean == "closely":
-                if re.search(r"\b(follow|follows|followed|following)\b.*\b(time|times|trend|trends|development|developments|news|events)\b.*\bclosely\b", q_low_all):
-                    if "carefully" in s_defn:
-                        score += 50
-
             if eff_pos == "adjective" and target_w_clean == "simple":
                 if re.search(r"\bsimple\b[^\"'“”]{0,20}[\"'“”]", q_low_all):
                     if "not difficult" in s_defn or "complicated" in s_defn:
@@ -542,11 +538,6 @@ class WsdScoringPatternsMixin:
             if eff_pos == "noun" and target_w_clean == "message":
                 if any(k in q_low_all for k in ("voice message", "text message", "phone message", "left me a message", "leave a message", "send a message")):
                     if i == 0 or "spoken or written piece of information" in s_defn:
-                        score += 50
-
-            if eff_pos == "noun" and target_w_clean == "freedom":
-                if re.search(r"\bfreedom\b.*\b(chance|opportunity|choice|choices|choose)\b", q_low_all):
-                    if "right to do what you want" in s_defn:
                         score += 50
 
             # Passage A specific sense guards:

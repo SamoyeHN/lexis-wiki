@@ -605,8 +605,15 @@ class ExtractionVocabCandidatesMixin:
                     u_clean = re.sub(r'\[.*?\]|\(.*?\)', '', u_phr).strip().lower()
                     if " " not in w_low and u_clean.startswith(("not ", "no ", "never ")) and s_defn_low.startswith(("no ", "not ", "never ")):
                         continue
-                    u_clean_no_slot = re.sub(r"\b(?:somebody's|someone's|something's|somebody|someone|something|sb's|sb|sth|one's|oneself|etc)\b\.?", "", u_clean).strip()
-                    u_toks = [t for t in re.findall(r"[a-z]+", u_clean_no_slot) if t not in ("a", "an", "the", "some", "any", "doing")]
+                    u_clean_no_slot = re.sub(r"\b(?:somebody's|someone's|something's|somebody|someone|something|sb's|sb|sth|one's|oneself|your|my|his|her|their|our|etc)\b\.?", "", u_clean).strip()
+                    # Preserve slash alternatives (e.g. "hat/cap", "to/toward") as alternative slot groups
+                    raw_slots = [s for s in re.split(r"\s+", u_clean_no_slot) if s]
+                    u_groups: List[List[str]] = []
+                    for s_tok in raw_slots:
+                        alts = [t for t in re.findall(r"[a-z]+", s_tok) if t not in ("a", "an", "the", "some", "any", "doing")]
+                        if alts:
+                            u_groups.append(alts)
+                    u_toks = [g[0] for g in u_groups if g]
                     # For predicative adjective valency units starting with a copula/linking verb
                     # (e.g. 'be accustomed to (doing) something', 'be aware of', 'be fond of'),
                     # strip the leading copula so the unit is evaluated on its '<adj> + <prep>' core.
@@ -617,6 +624,7 @@ class ExtractionVocabCandidatesMixin:
                         and cls.form_matches(u_toks[1], w_low)
                     ):
                         u_toks = u_toks[1:]
+                        u_groups = u_groups[1:]
                     # Preserve 2-word nominal compound <modifier> + <headword> or <headword> + <noun> (e.g. 'postage stamp', 'comic book')
                     if (
                         s_p == "n"
@@ -632,19 +640,20 @@ class ExtractionVocabCandidatesMixin:
                     ):
                         all_multi_unattested = False
                         break
+                    # Check contiguous phrase or typed slot pattern match first
+                    if cls.match_typed_slot_pattern(u_phr, quote, headword=w_low) or (u_clean and re.search(rf"\b{re.escape(u_clean)}\b", q_low)):
+                        all_multi_unattested = False
+                        break
+                    if len(u_groups) <= 1:
+                        all_multi_unattested = False
+                        break
                     # When extracting a single-word headword (e.g. 'likelihood'), do NOT allow a prepositional/adverbial idiom unit
-                    # starting with another word (e.g. 'in all likelihood') to define the bare noun!
+                    # starting with another word (e.g. 'in all likelihood') to define the bare noun if not contiguously present!
                     if " " not in w_low and len(u_toks) >= 2 and not cls.form_matches(u_toks[0], w_low):
                         continue
-                    if cls.match_typed_slot_pattern(u_phr, quote, headword=w_low):
-                        all_multi_unattested = False
-                        break
-                    if len(u_toks) <= 1:
-                        all_multi_unattested = False
-                        break
                     if " " not in w_low and u_toks[0] in ("not", "no", "never") and s_defn_low.startswith(("no ", "not ", "never ")):
                         continue
-                    if all(_unit_tok_matches(q_low, t) for t in u_toks):
+                    if all(any(_unit_tok_matches(q_low, alt) for alt in grp) for grp in u_groups):
                         all_multi_unattested = False
                         break
                     # Preserve unit sense if it is a <headword> + <preposition> frame (e.g. 'an embarrassment of riches')
@@ -973,6 +982,22 @@ class ExtractionVocabCandidatesMixin:
                         "margin": float(margin or 0.0),
                         "confidence": conf or "high",
                     })
+
+            if candidates:
+                candidates.sort(key=lambda c: float(c.get("score", 0.0)), reverse=True)
+                if len(candidates) > 1:
+                    top_sc = float(candidates[0].get("score", 0.0))
+                    runner_sc = float(candidates[1].get("score", 0.0))
+                    eff_margin = max(0.0, top_sc - runner_sc)
+                    eff_conf = "high" if eff_margin >= 15.0 else ("medium" if eff_margin >= 8.0 else "low")
+                    candidates[0]["margin"] = eff_margin
+                    candidates[0]["confidence"] = eff_conf
+                    for c in candidates[1:]:
+                        c["margin"] = max(0.0, float(c.get("score", 0.0)) - top_sc)
+                        c["confidence"] = "low"
+                else:
+                    candidates[0]["margin"] = 999.0
+                    candidates[0]["confidence"] = "high"
 
         # Cross-Lexicon Pool Fusion (WordNet oewn:2025+):
         # 1. Trigger when PedLex has NO senses matching the target POS.

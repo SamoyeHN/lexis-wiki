@@ -12,6 +12,112 @@ class WsdScoringDependenciesMixin:
     """Stage 3 scoring: authentic dependency trees, selectional restrictions, and cue index bonus."""
 
     @classmethod
+    def _score_adjective_selectional_restriction(
+        cls, target_w: str, defn: str, mod_noun: str
+    ) -> float:
+        """Universal Adjective Selectional Restriction & Collocational Binding Gate.
+
+        Evaluates whether the modified head noun satisfies the sense's bound nominal argument
+        (e.g., 'well-kept secret', 'acute angle', 'sound sleep') or prototypical semantic field
+        (e.g., 'well-kept building or garden', 'stale bread or cake') without hardcoded word lists.
+        """
+        if not defn or not mod_noun or not target_w:
+            return 0.0
+
+        w = re.escape(target_w.lower().strip())
+        # Generic dictionary definition patterns for adjectives:
+        # Pattern 1: "a/an [target] [Noun...] is/are/means/etc."
+        # Pattern 2: "[Noun...] that is [target] is/are/means/etc."
+        # Pattern 3: "[target] [Noun...] is/are/means/etc."
+        m1 = re.match(
+            rf"^(?:a|an)\s+{w}\s+([a-z\s,/\-]+?)\s+(?:is|are|means|belongs|has|have|shows|criticizes|describes)\b",
+            defn,
+            re.I,
+        )
+        m2 = re.match(
+            rf"^([a-z\s,/\-]+?)\s+that\s+is\s+{w}\s+(?:is|are|means|smells|tastes|looks|shows|belongs)\b",
+            defn,
+            re.I,
+        )
+        m3 = re.match(
+            rf"^{w}\s+([a-z\s,/\-]+?)\s+(?:is|are|means|belong|belongs)\b",
+            defn,
+            re.I,
+        )
+
+        m = m1 or m2 or m3
+        if not m:
+            return 0.0
+
+        raw = m.group(1).strip()
+        is_bound = not any(k in raw for k in (" or ", ", ", "etc", "and ", "such as", "for example"))
+
+        mod_noun = mod_noun.lower().strip()
+
+        if is_bound:
+            # Bound collocation / fixed nominal argument (e.g. "secret", "angle", "accent", "official", "sleep")
+            bound_tokens = [
+                tok
+                for tok in re.findall(r"[a-z]+", raw)
+                if tok not in ("a", "an", "the", "something", "someone")
+            ]
+            if not bound_tokens:
+                return 0.0
+            bound_noun = bound_tokens[-1]
+
+            # 1. Direct lemma / substring match
+            if mod_noun == bound_noun or bound_noun in mod_noun or mod_noun in bound_noun:
+                return 60.0
+
+            # 2. WordNet synonymy check
+            try:
+                mod_synsets = cls.get_wordnet_synsets(mod_noun, pos="n")
+                bound_synsets = cls.get_wordnet_synsets(bound_noun, pos="n")
+                if set(mod_synsets) & set(bound_synsets):
+                    return 50.0
+            except Exception:
+                pass
+
+            # 3. Selectional restriction clash
+            return -80.0
+        else:
+            # Open-class prototypical exemplars (e.g. "building or garden", "bread or cake", "illness or disease")
+            proto_tokens = [
+                tok
+                for tok in re.findall(r"[a-z]+", raw)
+                if tok
+                not in (
+                    "a",
+                    "an",
+                    "the",
+                    "or",
+                    "and",
+                    "etc",
+                    "something",
+                    "someone",
+                    "such",
+                    "as",
+                    "for",
+                    "example",
+                )
+            ]
+            if mod_noun in proto_tokens:
+                return 40.0
+
+            try:
+                mod_supers = cls.get_wordnet_supersenses(mod_noun, pos="n")
+                proto_supers = set()
+                for p in proto_tokens:
+                    proto_supers.update(cls.get_wordnet_supersenses(p, pos="n"))
+
+                if mod_supers & proto_supers:
+                    return 25.0
+            except Exception:
+                pass
+
+            return 0.0
+
+    @classmethod
     def _score_sense_dependencies_and_cues(
         cls, s: Dict[str, Any], i: int, ctx: WsdContext, s_info: WsdSenseInfo, score: float
     ) -> float:
@@ -137,15 +243,8 @@ class WsdScoringDependenciesMixin:
                             # Semantic alignment for style/practice/method with conventional / standard senses
                             if mod_noun in ("style", "practice", "method", "way", "approach") and any(term in s_def_tokens for term in ("method", "practice", "way", "usual", "normal")):
                                 score += 25
-                            # Specific alignment for well-kept / well-maintained: if modified noun is not a 'secret', penalize the secret sense
-                            if "well-kept secret" in s_defn:
-                                if mod_noun != "secret":
-                                    score -= 30
-                                else:
-                                    score += 40
-                            elif any(k in s_defn for k in ("well cared for", "neat and clean", "maintained", "in good condition")):
-                                if mod_noun in ("garden", "gardens", "building", "buildings", "house", "grounds", "lawn", "schedule", "schedules", "record", "records", "room"):
-                                    score += 35
+                            # Universal Adjective Selectional Restriction & Collocational Binding Gate:
+                            score += cls._score_adjective_selectional_restriction(target_w_clean, s_defn, mod_noun)
 
                         # Check modifier siblings under noun (e.g. "driving" in "internal driving force")
                         if tok.head and tok.head.pos_ == "NOUN":
@@ -210,6 +309,15 @@ class WsdScoringDependenciesMixin:
                                 elif "child" in s_defn:
                                     score -= 25
 
+                        # Specific semantic differentiation for 'freedom':
+                        # Sense 4 is specifically the freedom/ability to choose (unit: 'freedom of choice')
+                        if target_w_clean == "freedom":
+                            if any(k in q_low_all for k in ("choice", "choices", "choose", "choosing")):
+                                if "choose" in s_defn or "choice" in s_defn or any("choice" in u.lower() for u in s.get("units", [])):
+                                    score += 45
+                                elif sp == "speech" or "not in prison" in s_defn:
+                                    score -= 30
+
                         # Governing verb (e.g. 'hold potlucks' -> meal/party, 'hear voices' -> sound/speech, 'have a fall' -> movement/event)
                         if tok.head and tok.head.pos_ == "VERB":
                             v_lem = tok.head.lemma_.lower()
@@ -235,16 +343,25 @@ class WsdScoringDependenciesMixin:
                                 if p_gov and p_gov.lemma_.lower() in ("part", "member"):
                                     if any(k in s_defn for k in ("work", "job", "organization", "company", "chosen")):
                                         score += 40
-                            elif p_txt == "in":
-                                # 'in sb's dreams' / 'in a dream'
-                                if any(pat in ("in a dream", "in your dreams") for pat in s.get("patterns", [])) or "while sleeping" in (s.get("signpost") or "").lower():
-                                    score += 35
+                        # Coordination & Discourse Domain Alignment (e.g. 'myths or people's dreams' contrasted with 'become reality')
+                        conjunct_lemmas = set()
+                        if tok.dep_ == "conj" and tok.head and tok.head.pos_ in ("NOUN", "PROPN"):
+                            conjunct_lemmas.add(tok.head.lemma_.lower())
+                        for c in tok.children:
+                            if c.dep_ == "conj" and c.pos_ in ("NOUN", "PROPN"):
+                                conjunct_lemmas.add(c.lemma_.lower())
 
-                        # Possessor alignment (e.g. "people's dreams")
-                        for ch in tok.children:
-                            if ch.dep_ == "poss" and ch.pos_ in ("NOUN", "PROPN", "PRON"):
-                                if any(k in s_defn for k in ("asleep", "sleep", "mind", "experience", "feeling", "thought")):
-                                    score += 20
+                        mythic_lemmas = {"myth", "legend", "folklore", "fairy tale", "tale", "fantasy", "fiction", "superstition", "fable"}
+                        if conjunct_lemmas & mythic_lemmas:
+                            # Noun coordinated with myth/legend/fantasy: unrealized aspirations, wishes, or imaginary concepts
+                            if sp == "wish" or any(k in s_defn for k in ("wish", "hope", "aspiration", "unlikely to happen")):
+                                score += 35
+                            elif "while sleeping" in sp or "asleep" in s_defn:
+                                score -= 15
+
+                        if any(k in q_low_all for k in ("become reality", "became reality", "into reality", "turn into reality", "come true", "came true", "make it reality")):
+                            if sp == "wish" or any(k in s_defn for k in ("wish", "hope", "aspiration", "want to achieve", "wanted it to happen")):
+                                score += 35
 
                         # Prepositional dependent of target noun (e.g. 'corner of the earth/world' -> distant place)
                         for ch in tok.children:
@@ -1301,7 +1418,7 @@ class WsdScoringDependenciesMixin:
                 pass
 
         # 6b. Adverbial Governing Verb Valency & Selectional Alignment
-        if quote and target_p in ("adv", "r"):
+        if quote and (target_p in ("adv", "r") or eff_p in ("adv", "r") or s_pos in ("adv", "r")):
             if s_defn.startswith("(of the elements)") and not any(
                 w in q_low_all for w in ("wind", "storm", "rain", "sea", "wave", "waves", "weather", "gale", "snow", "tempest", "thunder", "lightning")
             ):
@@ -1326,6 +1443,13 @@ class WsdScoringDependenciesMixin:
                                         score += 35
                                     elif any(k in s_defn for k in ("angry", "anger", "annoyed", "upset", "sad")):
                                         score -= 20
+                                # Semantic role alignment: Involuntary cognitive/perceptual predicates (e.g. forgot, remembered, felt)
+                                # select for reason/cause adverbials rather than intentional means/instrument adverbials
+                                elif bool(v_supers & {"verb.cognition", "verb.perception"}):
+                                    if any(k in s_defn for k in ("for some reason", "unclear reason", "cannot explain", "not clear why")):
+                                        score += 35
+                                    elif any(k in s_defn for k in ("by some means", "using a method", "by what means")):
+                                        score -= 55
             except Exception:
                 pass
 

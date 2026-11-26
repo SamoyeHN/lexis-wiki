@@ -297,12 +297,23 @@ class ExtractionVocabExtractorMixin:
                             discourse_ctx = " ".join(p for p in (prev_s, f">> {matching_sent} <<", next_s) if p)
 
                 cand_pool = cls.build_top_k_vocab_candidates(
-                    w, matching_sent, pos=pos, k=6, discourse_context=discourse_ctx
+                    w, matching_sent, pos=pos, k=12, discourse_context=discourse_ctx
                 ) if matching_sent else []
                 if cand_pool:
                     chosen = None
-                    if len(cand_pool) > 1 and enable_llm_disambiguation:
-                        chosen_idx = cls.disambiguate_via_llm(w, matching_sent, cand_pool, discourse_context=discourse_ctx)
+                    top_c = cand_pool[0]
+                    # If Stage 1 symbolic lock achieved high confidence with a decisive margin,
+                    # respect the symbolic engine directly (0ms, 0 tokens, zero hallucination).
+                    # Only invoke Stage 2 LLM arbitration when candidates compete closely (margin < 15.0 or low confidence).
+                    is_symbolically_locked = (
+                        top_c.get("confidence") == "high"
+                        and float(top_c.get("margin", 0.0)) >= 15.0
+                        and float(top_c.get("score", 0.0)) >= 25.0
+                    )
+                    if len(cand_pool) > 1 and enable_llm_disambiguation and not is_symbolically_locked:
+                        chosen_idx = cls.disambiguate_via_llm(
+                            w, matching_sent, cand_pool, discourse_context=discourse_ctx, target_pos=pos
+                        )
                         if 0 <= chosen_idx < len(cand_pool):
                             chosen = cand_pool[chosen_idx]
                         elif pos and re.search(rf"\b{re.escape(w)}\b", matching_sent.lower()):

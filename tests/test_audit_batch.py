@@ -10,6 +10,7 @@ from librarian.audit_batch import (
     resolve_source_text,
     run_batch,
     format_summary,
+    save_quiz_audit_log,
 )
 from librarian.expert_auditor import ExpertAuditor
 
@@ -285,6 +286,55 @@ class TestReadingIntegrityGate(unittest.TestCase):
             self.assertEqual(res["blind_solve_accuracy"], 1.0)
             self.assertEqual(res["blind_solve_confident_divergences"], 0)
             self.assertTrue(res["pass_audit"])
+
+    def test_save_quiz_audit_log(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            summary = {
+                "total": 1,
+                "audited": 1,
+                "passed": 0,
+                "failed": 1,
+                "errors": 0,
+                "changed": 0,
+                "avg_blind_solve_accuracy": 0.5,
+                "results": [
+                    {
+                        "unit": "Test_Unit",
+                        "template": "reading",
+                        "passed": False,
+                        "error": None,
+                        "blind_solve_accuracy": 0.5,
+                        "overall_quality_score": 50,
+                        "verdict": "Item #1 ambiguous key.",
+                        "report": {
+                            "pass_audit": False,
+                            "overall_quality_score": 50,
+                            "summary_verdict": "Item #1 ambiguous key.",
+                            "questions": [
+                                {
+                                    "item_index": 0,
+                                    "single_fit_valid": False,
+                                    "diagnostic_feedback": "Option B is also plausible given sentence context.",
+                                    "pedagogical_score": 50,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+            paths = save_quiz_audit_log(summary, project_root=tmp_dir)
+            self.assertTrue(paths["log_path"].is_file())
+            self.assertIn("Test_Unit_reaudit_quiz.log", paths["log_path"].name)
+            self.assertTrue(paths["json_path"].is_file())
+            self.assertIn("Test_Unit_reaudit_quiz.json", paths["json_path"].name)
+            self.assertNotIn("latest_path", paths)
+
+            content = paths["log_path"].read_text(encoding="utf-8")
+            self.assertIn("[QUIZ DEFECT TICKET] Test_Unit [reading]", content)
+            self.assertIn("Item #1 ambiguous key.", content)
+
+            data = json.loads(paths["json_path"].read_text(encoding="utf-8"))
+            self.assertEqual(data["failed"], 1)
 
 
 if __name__ == "__main__":

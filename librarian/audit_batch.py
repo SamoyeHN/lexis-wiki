@@ -217,6 +217,7 @@ def audit_one(ref: Dict[str, Any], judge_model: Optional[str] = None,
     row["overall_quality_score"] = report.get("overall_quality_score")
     row["confident_divergences"] = report.get("blind_solve_confident_divergences")
     row["verdict"] = report.get("summary_verdict", "")
+    row["report"] = report
 
     if row["prev_passed"] is not None and row["passed"] is not None:
         row["changed"] = (row["prev_passed"] != row["passed"])
@@ -326,3 +327,117 @@ def format_summary(summary: Dict[str, Any]) -> str:
 
     lines.append("=" * 64)
     return "\n".join(lines)
+
+
+def save_quiz_audit_log(
+    summary: Dict[str, Any],
+    project_root: Optional[str] = None,
+) -> Dict[str, Path]:
+    """Save quiz batch audit report and defect tickets into logs/ directory.
+
+    Generates:
+      - logs/<timestamp>_<unit>_reaudit_quiz.log (human-readable defect ticket log)
+      - logs/<timestamp>_<unit>_reaudit_quiz.json (machine-readable structured JSON)
+
+    Returns:
+      Dict mapping "log_path", "json_path" to Path objects.
+    """
+    import datetime
+
+    root = _project_root(project_root)
+    logs_dir = root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    readable_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    results = summary.get("results", [])
+    distinct_units = sorted({r.get("unit") for r in results if r.get("unit")})
+    if summary.get("unit"):
+        unit_tag = summary["unit"]
+    elif len(distinct_units) == 1:
+        unit_tag = distinct_units[0]
+    else:
+        unit_tag = "batch"
+
+    log_file = logs_dir / f"{timestamp_str}_{unit_tag}_reaudit_quiz.log"
+    json_file = logs_dir / f"{timestamp_str}_{unit_tag}_reaudit_quiz.json"
+
+    lines: List[str] = [
+        "=" * 80,
+        "          LEVEL-2 EXPERT AUDIT — QUIZ DEFECT REPORT & TICKETS",
+        "=" * 80,
+        f"Timestamp:          {readable_ts}",
+        f"Target:             quiz",
+        f"Quizzes Audited:    {summary.get('audited', 0)} / {summary.get('total', 0)}",
+        f"Passed:             {summary.get('passed', 0)}",
+        f"Failed:             {summary.get('failed', 0)}",
+    ]
+    if summary.get("errors"):
+        lines.append(f"Errors:             {summary.get('errors')}")
+    if summary.get("avg_blind_solve_accuracy") is not None:
+        lines.append(f"Avg Blind-Solve:    {summary['avg_blind_solve_accuracy'] * 100:.1f}%")
+    if summary.get("changed"):
+        lines.append(f"Verdicts Flipped:   {summary.get('changed')} (embedded -> fresh run)")
+    lines.append("=" * 80)
+    lines.append("")
+
+    has_defects = False
+    for r in summary.get("results", []):
+        unit = r.get("unit", "")
+        tpl = r.get("template", "")
+        passed = r.get("passed", False)
+        err = r.get("error")
+        report = r.get("report") or {}
+        score = r.get("overall_quality_score")
+        acc = r.get("blind_solve_accuracy")
+
+        if passed and not err:
+            continue
+
+        has_defects = True
+        mark = "ERROR" if err else "FAIL"
+        lines.append("-" * 80)
+        score_str = f"{score}%" if score is not None else "n/a"
+        acc_str = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+        lines.append(f"[QUIZ DEFECT TICKET] {unit} [{tpl}] (Status: {mark}, Score: {score_str}, Blind: {acc_str})")
+        lines.append("-" * 80)
+
+        if err:
+            lines.append(f"  ❌ Error: {err}")
+            lines.append("")
+            continue
+
+        verdict = report.get("summary_verdict") or r.get("verdict", "")
+        if verdict:
+            lines.append(f"  Verdict: {verdict}")
+
+        critique = ExpertAuditor.generate_critique_feedback(report) if report else ""
+        if critique:
+            lines.append("")
+            lines.append("  " + "\n  ".join(critique.splitlines()))
+        lines.append("")
+
+    if not has_defects:
+        lines.append("🎉 All audited quizzes passed with zero defects! No defect tickets generated.")
+        lines.append("")
+
+    lines.extend([
+        "=" * 80,
+        "📌 SUMMARY FOR REPORTING DEFECTS:",
+        "If you want the assistant to inspect or fix quiz generation logic, copy the",
+        "[QUIZ DEFECT TICKET] sections above and share them in your chat.",
+        "=" * 80,
+        "",
+    ])
+
+    log_content = "\n".join(lines)
+    log_file.write_text(log_content, encoding="utf-8")
+
+    # Serialize summary to JSON (handle non-serializable objects cleanly)
+    json_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+
+    return {
+        "log_path": log_file,
+        "json_path": json_file,
+    }

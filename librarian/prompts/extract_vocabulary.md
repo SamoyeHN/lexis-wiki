@@ -12,6 +12,8 @@ Extract academic vocabulary from the text.
 
 2. **Contextual POS & Lexicographical Sense Alignment**:
    - `definition` & `example_usage` MUST strictly match the exact sense, countability, and syntactic role of the target word as established in the `quoted_sentence`.
+   - **Concrete vs. Abstract / Figurative Alignment**:
+     * In academic passages, words are often used in extended, abstract, or metaphorical senses (e.g. aspirations, social roles, institutional climates). The `definition` MUST match this contextual abstract sense, never falling back to a naive literal or physical sense.
    - **Nouns Usually Plural / Plurale Tantum (`[C usually pl.]`)**: When a noun appears in the plural form in the quoted sentence with a sense primarily used in the plural (e.g. *valued possessions* -> belongings/personal property, *strict customs* -> border control, *goods*, *belongings*, *surroundings*):
      * The `definition` MUST describe the specific plural sense (`something that you own or have with you at a particular time`), NOT the uncountable abstract state (`in one's possession`).
      * `example_usage` MUST demonstrate the plural form in authentic communicative usage (e.g. *He packed his few personal possessions into a suitcase.*), NOT a divergent singular or uncountable sense.

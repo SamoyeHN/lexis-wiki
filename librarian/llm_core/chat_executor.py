@@ -969,23 +969,24 @@ class ChatExecutorMixin:
                         task_status = "REVIEW_NEEDED"
                         task_fail_cat = "QA_FATAL_FLAG" if has_audit_fatal else "QA_LOW_SCORE"
 
-                from ..logger import log_task
-                self.last_log_path = log_task(
-                    f"{t_name}_{mode_str}",
-                    system_prompt,
-                    user_prompt,
-                    final_json,
-                    schema=schema_dict,
-                    status=task_status,
-                    failure_category=task_fail_cat,
-                    mode=mode_str,
-                    api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
-                    duration=call_duration,
-                    start_time=start_time,
-                    end_time=end_time,
-                    model=self.model,
-                    context_prompt=eval_user_prompt,
-                )
+                if not skip_log:
+                    from ..logger import log_task
+                    self.last_log_path = log_task(
+                        f"{t_name}_{mode_str}",
+                        system_prompt,
+                        user_prompt,
+                        final_json,
+                        schema=schema_dict,
+                        status=task_status,
+                        failure_category=task_fail_cat,
+                        mode=mode_str,
+                        api_constraint=schema_for_api if mode_str == "STRICT_SCHEMA" else ("json" if force_json_mode else None),
+                        duration=call_duration,
+                        start_time=start_time,
+                        end_time=end_time,
+                        model=self.model,
+                        context_prompt=eval_user_prompt,
+                    )
 
                 return result_obj
 

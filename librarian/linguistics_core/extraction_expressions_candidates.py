@@ -101,6 +101,26 @@ class ExtractionExpressionsCandidatesMixin:
             for refl_uk in (f"{lem_0} yourself", f"{lem_0} oneself"):
                 if refl_uk not in unit_keys:
                     unit_keys.append(refl_uk)
+        # Realize possessive pronoun slots (e.g. 'do [one's] part', 'take one's time', 'make up one's mind')
+        m_poss_slot = re.search(r"\[?(?:one's|someone's|sb's)\]?", expr_word, re.I)
+        if m_poss_slot and tokens:
+            v_tok = tokens[0]
+            n_tok = tokens[-1]
+            m_q_poss = re.search(rf"\b({re.escape(v_tok)}\s+(?:my|your|his|her|its|our|their|one's)\s+{re.escape(n_tok)})\b", q_low)
+            if m_q_poss:
+                realized_poss = cls._unit_key(m_q_poss.group(1))
+                if realized_poss and len(realized_poss.split()) >= 2 and realized_poss not in unit_keys:
+                    unit_keys.append(realized_poss)
+            for gen_poss in (f"{v_tok} one's {n_tok}", f"{v_tok} your {n_tok}", f"{v_tok} our {n_tok}"):
+                pk = cls._unit_key(gen_poss)
+                if pk and len(pk.split()) >= 2 and pk not in unit_keys:
+                    unit_keys.append(pk)
+            # If head noun is 'part' with light verb 'do', include standard light-verb / duty alternations
+            if n_tok == "part" and v_tok in {"do", "play", "take", "have"}:
+                for alt_p in ("play a part", "play part", "take part", "have a part to play", "somebody's part in something"):
+                    apk = cls._unit_key(alt_p)
+                    if apk and len(apk.split()) >= 2 and apk not in unit_keys:
+                        unit_keys.append(apk)
         # If expr_word has an internal modifier slot between a determiner and noun (e.g. 'on a (sth) scale')
         # and the quote realizes that slot with an adjective (e.g. 'on a large scale'), include the realized phrase key
         m_det_mod_slot = re.match(
@@ -716,6 +736,7 @@ class ExtractionExpressionsCandidatesMixin:
             if not is_verb_slot_frame and locked_expr_type == "collocation" and len(non_light) >= 2:
                 non_light = list(reversed(non_light))
             expect_verb = is_verb_slot_frame and tokens and non_light and non_light[0] in (tokens[0], lem_0)
+            fallback_items = []
             for c_tok in non_light:
                 c_entry = cls.get_pedlex_entry(c_tok)
                 if c_entry:
@@ -727,7 +748,10 @@ class ExtractionExpressionsCandidatesMixin:
                         if s_units:
                             is_m, _ = _sense_matches_unit_strictly(s)
                             if not is_m:
-                                continue
+                                # Retain unit sense if its phrase shares content tokens with quote
+                                u_texts = [u.get("phrase") if isinstance(u, dict) else str(u) for u in s_units]
+                                if not any(any(cls.text_contains_form(q_low, ut) for ut in re.findall(r"[a-z]{3,}", u_txt.lower()) if ut not in stop_func) for u_txt in u_texts):
+                                    continue
                         raw_df = cls.format_ldoce_definition(s)
                         if not raw_df:
                             continue
@@ -741,9 +765,16 @@ class ExtractionExpressionsCandidatesMixin:
                             and df == raw_df
                         ):
                             df = f"{clean}: {raw_df}"
-                        _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, False)
-                        if len(candidates) >= k - 2:
-                            break
+                        fallback_items.append((c_tok, s_i, s, df))
+            if len(fallback_items) >= 2 and quote:
+                mock_s = [item[2] for item in fallback_items]
+                res_fb = cls._lock_sense({"word": fallback_items[0][0], "senses": mock_s}, quote=quote, return_scores=True)
+                sc_fb = dict(res_fb[4]) if (res_fb and len(res_fb) >= 5 and res_fb[4]) else {}
+                fallback_items.sort(key=lambda x: (-sc_fb.get(mock_s.index(x[2]), 0.0), x[1]))
+            for c_tok, s_i, s, df in fallback_items:
+                _add_cand(df, locked_expr_type, f"{c_tok} #{s_i}", s.get('examples', []), s, False)
+                if len(candidates) >= k - 2:
+                    break
                 # Also include WordNet verb synsets for verb-slot expressions ONLY when PedLex is disabled
                 if cls._is_pedlex_disabled() and expect_verb and c_tok in (tokens[0], lem_0) and len(candidates) < k:
                     try:
