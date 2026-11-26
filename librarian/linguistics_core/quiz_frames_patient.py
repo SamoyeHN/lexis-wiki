@@ -93,7 +93,7 @@ class QuizFramesPatientMixin:
     }
 
     _ABSTRACT_HYPERNYM_TABLE: Tuple[Tuple[Set[str], str, str], ...] = (
-        ({"conflict", "hostility", "warfare", "aggression", "danger", "threat", "rebellion", "riot"}, "situation/crisis", "situation_crisis"),
+        ({"conflict", "hostility", "warfare", "aggression", "danger", "threat", "rebellion", "riot", "crisis", "tension", "row", "emergency"}, "situation/crisis", "situation_crisis"),
         ({"difficulty", "difficultness", "trouble", "obstacle", "adversity", "dilemma", "hardship"}, "problem/issue", "problem_issue"),
         ({"process", "activity", "inquiry", "investigation", "discussion", "negotiation", "procedure"}, "process/activity", "process_activity"),
         ({"feeling", "emotion", "sentiment", "mood", "psychological state", "mental state", "cognitive state", "symptom"}, "feeling/state", "feeling_state"),
@@ -114,20 +114,25 @@ class QuizFramesPatientMixin:
         wn = cls.get_wordnet()
         if wn:
             for lem in abs_lemmas:
-                syns = wn.synsets(lem.lower(), pos="n")
-                if not syns:
-                    continue
-                s0 = syns[0]
-                try:
-                    hyps = {hl for h in s0.closure("hypernym") for hl in h.lemmas()} | set(s0.lemmas())
-                except Exception:
-                    hyps = set(s0.lemmas())
-                for anchors, label, ont_type in cls._ABSTRACT_HYPERNYM_TABLE:
-                    if hyps & anchors:
-                        return label, ont_type
-                lf_hit = cls._ABSTRACT_LEXFILE_FALLBACK.get(s0.lexfile())
-                if lf_hit:
-                    return lf_hit
+                cand_lemmas = [lem.lower()]
+                s_lem = cls._surface_lemma(lem)
+                if s_lem and s_lem != lem.lower():
+                    cand_lemmas.append(s_lem.lower())
+                for cl in cand_lemmas:
+                    syns = wn.synsets(cl, pos="n")
+                    if not syns:
+                        continue
+                    s0 = syns[0]
+                    try:
+                        hyps = {hl for h in s0.closure("hypernym") for hl in h.lemmas()} | set(s0.lemmas())
+                    except Exception:
+                        hyps = set(s0.lemmas())
+                    for anchors, label, ont_type in cls._ABSTRACT_HYPERNYM_TABLE:
+                        if (hyps & anchors) or (cl in anchors):
+                            return label, ont_type
+                    lf_hit = cls._ABSTRACT_LEXFILE_FALLBACK.get(s0.lexfile())
+                    if lf_hit:
+                        return lf_hit
         return "situation/event", "situation_event"
 
     @classmethod
@@ -154,6 +159,7 @@ class QuizFramesPatientMixin:
             "item", "items", "belonging", "belongings", "good", "goods",
             "clothes", "clothing", "equipment", "furniture", "luggage",
             "baggage", "fuel", "trash", "garbage", "waste",
+            "book", "books", "novel", "novels", "newspaper", "newspapers", "magazine", "magazines",
         ):
             return "physical"
         wn = cls.get_wordnet()
@@ -310,9 +316,10 @@ class QuizFramesPatientMixin:
             return cls._in_forbidden_word_set(w_str.lower(), forbidden_words)
 
         sample_texts: List[str] = []
-        for s_txt in [authentic_example, quote]:
-            if s_txt and str(s_txt).strip():
-                sample_texts.append(str(s_txt).strip())
+        if authentic_example and str(authentic_example).strip():
+            sample_texts.append(str(authentic_example).strip())
+        elif quote and str(quote).strip():
+            sample_texts.append(str(quote).strip())
         for ex_s in (locked_sense or {}).get("examples") or []:
             if ex_s and str(ex_s).strip() not in sample_texts:
                 sample_texts.append(str(ex_s).strip())
@@ -364,12 +371,14 @@ class QuizFramesPatientMixin:
                     )
                     if not is_match_verb:
                         continue
-                    # External direct objects / passive subjects (strictly excluding predicate-internal nouns)
+                    # External direct objects / passive subjects (strictly excluding predicate-internal nouns and proper nouns)
                     direct_cands = [
                         c for c in tok.children
                         if c.dep_ in ("dobj", "obj", "nsubjpass", "nsubj:pass")
-                        and c.pos_ in ("NOUN", "PROPN", "PRON")
+                        and c.pos_ in ("NOUN", "PRON")
                         and c.is_alpha
+                        and not c.text[0].isupper()
+                        and c.ent_type_ not in ("PERSON", "ORG", "GPE", "PRODUCT", "NORP")
                         and c.lemma_.lower() not in pred_words
                         and c.text.lower() not in pred_words
                     ]
@@ -435,7 +444,7 @@ class QuizFramesPatientMixin:
                                 seen_lem.add("person")
                                 cands.append(("someone", "person"))
                             continue
-                        if c_tok.pos_ not in ("NOUN", "PROPN"):
+                        if c_tok.pos_ != "NOUN" or c_tok.text[0].isupper() or c_tok.ent_type_ in ("PERSON", "ORG", "GPE", "PRODUCT", "NORP"):
                             continue
                         if c_lem in (
                             "thing", "something", "someone", "somebody", "one", "way",
@@ -448,14 +457,14 @@ class QuizFramesPatientMixin:
                         for pch in c_tok.children:
                             if pch.dep_ == "prep" and pch.text.lower() == "of":
                                 pobj = next(
-                                    (gc for gc in pch.children if gc.dep_ == "pobj" and gc.pos_ in ("NOUN", "PROPN") and gc.is_alpha),
+                                    (gc for gc in pch.children if gc.dep_ == "pobj" and gc.pos_ == "NOUN" and gc.is_alpha and not gc.text[0].isupper() and gc.ent_type_ not in ("PERSON", "ORG", "GPE", "PRODUCT", "NORP")),
                                     None,
                                 )
                                 if pobj and not _is_forb(pobj.lemma_.lower()) and pobj.lemma_.lower() not in ("thing", "something", "someone") and pobj.lemma_.lower() not in pred_words:
                                     real_c_tok = pobj
                                     real_lem = pobj.lemma_.lower()
                                     break
-                        if real_lem not in seen_lem and real_lem not in pred_words:
+                        if real_lem not in seen_lem and real_lem not in pred_words and not real_c_tok.text[0].isupper() and real_c_tok.pos_ == "NOUN":
                             seen_lem.add(real_lem)
                             has_explicit_the = any(ch.dep_ == "det" and ch.text.lower() == "the" for ch in real_c_tok.children)
                             has_det_or_poss = any(ch.dep_ in ("det", "poss") for ch in real_c_tok.children)
@@ -470,6 +479,8 @@ class QuizFramesPatientMixin:
                                     ch.text.lower()
                                     for ch in sorted(real_c_tok.children, key=lambda t: t.i)
                                     if ch.dep_ in ("compound", "amod")
+                                    and ch.pos_ != "PROPN"
+                                    and not ch.text[0].isupper()
                                     and ch.i < real_c_tok.i
                                     and real_c_tok.i - ch.i <= 2
                                     and ch.is_alpha

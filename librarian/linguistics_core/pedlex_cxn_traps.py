@@ -24,6 +24,78 @@ class PedlexCxnTrapsMixin:
     # Section 8: Two-Tier Construction Tagging (`pedlex_cxn_index`)
     # & Single-Point Minimal-Pair Error Traps (`pedlex_error_traps`)
     # ------------------------------------------------------------------
+    _PEDLEX_CXN_SENSE_WHITELIST: Optional[Dict[str, Dict[str, List[int]]]] = None
+
+    @classmethod
+    def _get_pedlex_cxn_sense_whitelist(cls) -> Dict[str, Dict[str, List[int]]]:
+        if cls._PEDLEX_CXN_SENSE_WHITELIST is None:
+            p = Path(__file__).resolve().parent.parent / "data" / "pedlex_cxn_sense_whitelist.json"
+            if p.is_file():
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    cls._PEDLEX_CXN_SENSE_WHITELIST = data.get("words", {})
+                except Exception as e:
+                    logger.warning("Failed to load pedlex_cxn_sense_whitelist.json: %s", e)
+                    cls._PEDLEX_CXN_SENSE_WHITELIST = {}
+            else:
+                cls._PEDLEX_CXN_SENSE_WHITELIST = {}
+        return cls._PEDLEX_CXN_SENSE_WHITELIST
+
+    @classmethod
+    def is_cxn_subcat_allowed_for_sense(
+        cls,
+        word: str,
+        subcat_group: str,
+        sense_idx: Optional[int],
+        locked_sense: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Declarative & Sense-Pattern Physical Gate:
+        Checks whether a construction subcategory (e.g. V_MANDATIVE_SUBJ, V_GERUND_ONLY)
+        is grammatically licensed for the target's locked sense, preventing cross-sense hijacking."""
+        w_clean = (word or "").strip().lower()
+        subcat = (subcat_group or "").strip()
+        if not w_clean or not subcat:
+            return False
+
+        whitelist = cls._get_pedlex_cxn_sense_whitelist()
+        if w_clean in whitelist:
+            w_rules = whitelist[w_clean]
+            if subcat in w_rules:
+                allowed_indices = w_rules[subcat]
+                if sense_idx is None:
+                    return True
+                return int(sense_idx) in allowed_indices
+            return False
+
+        # Fallback safety check for words not explicitly listed in the whitelist:
+        if locked_sense:
+            pats = [str(p).lower() for p in (locked_sense.get("patterns") or [])]
+            definition = (locked_sense.get("definition") or "").lower()
+            grammar = (locked_sense.get("grammar") or "").lower()
+
+            if subcat == "V_MANDATIVE_SUBJ":
+                if any(kw in definition for kw in ["tell someone your ideas", "demand", "order", "require", "urge", "stipulate", "recommend", "advise"]):
+                    return True
+                if any("should" in p for p in pats):
+                    return True
+                return False
+
+            if subcat == "V_GERUND_ONLY":
+                if any("doing" in p or "v-ing" in p for p in pats) or "doing" in grammar:
+                    return True
+                if pats and not any("doing" in p for p in pats):
+                    return False
+
+            if subcat in ("ADJ_TOUGH_BOTH", "ADJ_IT_EXTRAPOS"):
+                if "only before noun" in grammar:
+                    return False
+                if any("to do" in p or "it is" in p for p in pats):
+                    return True
+                if any(kw in definition for kw in ["difficult to do", "easy to do", "impossible to do"]):
+                    return True
+
+        return True
+
     @classmethod
     def get_word_cxn_specs(
         cls,
@@ -75,6 +147,8 @@ class PedlexCxnTrapsMixin:
                         r_subcat, r_fam, r_word, r_pos, r_sidx, r_cefr, r_zipf,
                         r_pat, r_blank, r_cloze, r_contrasts, r_bans
                     ) in rows:
+                        if sense_idx is not None and not cls.is_cxn_subcat_allowed_for_sense(qw, r_subcat, sense_idx):
+                            continue
                         norm_pat = re.sub(rf"\b{re.escape(qw)}\b", w_clean, str(r_pat or ""))
                         sig = (str(r_subcat or ""), int(r_sidx if r_sidx is not None else -1), norm_pat)
                         if sig in seen_cxn_sigs:
@@ -104,6 +178,9 @@ class PedlexCxnTrapsMixin:
             if entry:
                 for sp in (entry.get("cxn_specs") or []):
                     if isinstance(sp, dict):
+                        subcat = sp.get("subcat_group")
+                        if sense_idx is not None and not cls.is_cxn_subcat_allowed_for_sense(w_clean, subcat, sense_idx):
+                            continue
                         spec = dict(sp)
                         spec.setdefault("word", w_clean)
                         spec.setdefault("sense_idx", -1)
@@ -118,6 +195,9 @@ class PedlexCxnTrapsMixin:
                         continue
                     for sp in (s.get("cxn_specs") or []):
                         if isinstance(sp, dict):
+                            subcat = sp.get("subcat_group")
+                            if sense_idx is not None and not cls.is_cxn_subcat_allowed_for_sense(w_clean, subcat, sense_idx, locked_sense=s):
+                                continue
                             spec = dict(sp)
                             spec.setdefault("word", w_clean)
                             spec.setdefault("sense_idx", idx)

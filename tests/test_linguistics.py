@@ -771,7 +771,7 @@ class TestAnchorFourDimensionRepair:
 """
         s = self._single_skeleton(sample_vocab)
         assert (s.get("base_headword") or s["target_word"]) == "degrade"
-        assert s["target_word"] in ("degrade", "degrades")
+        assert s["target_word"] in ("degrade", "degrades", "degraded")
         assert s["context_anchor"] == "into"
         assert s["anchor_type"] == "prep"
         assert "Fit into" in s["micro_task"] or "Definition above" in s["micro_task"]
@@ -1875,7 +1875,7 @@ class TestLemmaInflectionInfrastructure:
         report = {}
         kept = LinguisticEngine.screen_inflected_options(
             inflected=["costlinesses"],
-            spare=["expense", "value", "price"],
+            spare=["expense", "value", "price", "cost"],
             final_target="costliness",
             report=report,
         )

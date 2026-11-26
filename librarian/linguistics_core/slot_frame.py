@@ -129,14 +129,69 @@ class SlotFrame:
                 surface = re.sub(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", "to", surface, flags=re.IGNORECASE)
                 notes.append("Follow 'to' with a specific action verb (never write the literal phrase 'to do something').")
 
-        # 3. Replace mandative subjunctive `that [sb] (should) [V-base]` with a natural model
+        # 2b. Replace `[doing sth]` / `doing something` with an authentic gerund or rule
+        if re.search(r"\[doing\s+sth\]|\bdoing\s+something\b", surface, flags=re.IGNORECASE):
+            gerund_v = ""
+            corpus_sources = []
+            if example_txt:
+                corpus_sources.append(example_txt.lower())
+            if skeleton:
+                for q_field in ("candidate_quote", "licensed_quote", "quote"):
+                    q_val = str(skeleton.get(q_field) or "").strip().lower()
+                    if q_val:
+                        corpus_sources.append(q_val)
+            tw_low = str((skeleton or {}).get("target_word") or "").strip().lower()
+            bw_low = str((skeleton or {}).get("base_headword") or tw_low).strip().lower()
+            prescribed = {str(opt).strip().lower() for opt in (skeleton or {}).get("prescribed_options") or []}
+            disallowed = {tw_low, bw_low, "doing", "being", "having", "going"} | prescribed
+            for c_src in corpus_sources:
+                for m_match in re.finditer(r"\b([a-z]{3,}ing)\b", c_src):
+                    cand = m_match.group(1)
+                    if (
+                        cand not in disallowed
+                        and not (bw_low and cand.startswith(bw_low))
+                        and cand not in prescribed
+                    ):
+                        gerund_v = cand
+                        break
+                if gerund_v:
+                    break
+            if gerund_v:
+                surface = re.sub(r"\[doing\s+sth\]|\bdoing\s+something\b", gerund_v, surface, flags=re.IGNORECASE)
+            else:
+                surface = re.sub(r"\[doing\s+sth\]|\bdoing\s+something\b", "[action in -ing form, e.g. making changes]", surface, flags=re.IGNORECASE)
+                notes.append("Follow '____' directly with an action verb in -ing form (e.g. 'making changes' or 'taking risks' — never write literal 'doing something').")
+
+        # 3. Replace mandative subjunctive `that [sb] (should) [V-base]` with an authentic model
         if re.search(r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]", surface, flags=re.IGNORECASE):
-            surface = re.sub(
-                r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]",
-                "that the committee review",
-                surface,
-                flags=re.IGNORECASE,
-            )
+            subj_model = ""
+            corpus_sources = []
+            if example_txt:
+                corpus_sources.append(example_txt)
+            if skeleton:
+                for q_field in ("candidate_quote", "licensed_quote", "quote"):
+                    q_val = str(skeleton.get(q_field) or "").strip()
+                    if q_val:
+                        corpus_sources.append(q_val)
+            for c_src in corpus_sources:
+                m_c = re.search(r"\bthat\s+((?:the\s+|a\s+|an\s+|[a-z]+\s+)[a-z]+\s+(?:be\b|should\s+[a-z]+|[a-z]+))\b", c_src, re.IGNORECASE)
+                if m_c:
+                    subj_model = f"that {m_c.group(1).strip()}"
+                    break
+            if subj_model:
+                surface = re.sub(
+                    r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]",
+                    subj_model,
+                    surface,
+                    flags=re.IGNORECASE,
+                )
+            else:
+                surface = re.sub(
+                    r"that\s+\[sb\]\s*\(should\)\s*\[V-base\]",
+                    "that the committee review",
+                    surface,
+                    flags=re.IGNORECASE,
+                )
             notes.append("Use a subjunctive base-form verb after 'that' (never write '(should)' or brackets).")
 
         # 4. Resolve remaining metasyntax brackets and number-neutral slash copulas
@@ -161,12 +216,16 @@ class SlotFrame:
                     "Object slot requires a concrete person or group noun phrase "
                     "(e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')."
                 )
-        surface = re.sub(r"\[sth\]", "the project", surface, flags=re.IGNORECASE)
+        sth_model = ""
+        if example_txt:
+            m_np = re.search(r"\b(?:the|a|an|his|her|their|our)\s+([a-z]{3,})\b", example_txt.lower())
+            if m_np and m_np.group(1) not in ("issue", "project", "way", "fact", "thing"):
+                sth_model = f"the {m_np.group(1)}"
+        surface = re.sub(r"\[sth\]", sth_model or "the situation", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[something\]", "something", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", "the issue", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[V-base\]", "act", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", sth_model or "the matter", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[V-base\]", "take action", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[noun\]", "system", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[doing\s+sth\]|\bdoing\s+something\b", "working", surface, flags=re.IGNORECASE)
         surface = re.sub(
             r"\b([a-zA-Z]+)\s+is/are\b",
             lambda m: f"{m.group(1)} {'are' if (m.group(1).lower().endswith('s') and not m.group(1).lower().endswith(('ss', 'us', 'is'))) else 'is'}",

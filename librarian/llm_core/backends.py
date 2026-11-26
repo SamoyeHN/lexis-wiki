@@ -68,8 +68,10 @@ class LLMBackendsMixin:
         # Can be overridden by kwargs or wiki_config.json['model_options'][model]['think']
         if "think" in kwargs:
             payload["think"] = kwargs.pop("think")
-        elif "think" in profile:
+        elif "think" in profile and profile["think"] is not None:
             payload["think"] = profile["think"]
+        else:
+            payload["think"] = False
         
         use_gbnf = profile.get("enforce_gbnf", False)
         enforce_json = profile.get("enforce_json_format", True)

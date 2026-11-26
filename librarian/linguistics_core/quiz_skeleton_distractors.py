@@ -328,9 +328,7 @@ class QuizSkeletonDistractorsMixin:
                 distractors = q_cands[:3]
                 dist_meta = {d: "quantifier_collocation_contrast" for d in distractors}
             else:
-                cand_sent = it.get("quote") or it.get("raw_quote") or ""
-                if not cand_sent and initial_atomic_bundle:
-                    cand_sent = initial_atomic_bundle.get("example") or ""
+                cand_sent = (initial_atomic_bundle or {}).get("example") or ""
                 if not cand_sent:
                     p_info = cls.lookup_ldoce_phrase(w_lower)
                     if p_info:
@@ -339,6 +337,8 @@ class QuizSkeletonDistractorsMixin:
                         if e and 0 <= s_idx < len(e.get("senses", [])):
                             s_obj = e["senses"][s_idx]
                             cand_sent = (s_obj.get("examples") or [""])[0]
+                if not cand_sent:
+                    cand_sent = (it.get("example_usage") or "").strip().strip('"').strip()
                 is_correl = (anchor_type == "correl_pair" or correlative_frame or w_lower in cls._CORREL_FIRST_ARMS)
                 hs = cls.collocation_half_slice(w_lower, cand_sent, pos=raw_pos) if (cand_sent and not is_correl) else None
                 if hs:

@@ -335,6 +335,8 @@ class PedlexCoreMixin:
         """Guard for checking existence of optional tables in the dictionary database."""
         if cls._ldoce_tables is None:
             if cls._ldoce_conn is None:
+                cls._init_ldoce_db()
+            if cls._ldoce_conn is None:
                 return False
             try:
                 rows = cls._ldoce_conn.execute(

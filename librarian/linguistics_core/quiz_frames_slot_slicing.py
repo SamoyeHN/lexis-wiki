@@ -768,9 +768,9 @@ class QuizFramesSlotSlicingMixin:
                             trail_prt_or_prep = " as to"
                         else:
                             trail_prt_or_prep = f" {nxt_low}"
-                if patient_ontology_slot and not partitive_of_tail:
-                    return f"... {left_aux}____ {patient_ontology_slot}{trail_prt_or_prep}"
                 if dobj_c.pos_ == "PRON" or dobj_c.ent_type_ == "PERSON" or _is_forbidden(dobj_c.lemma_.lower()):
+                    if patient_ontology_slot and not partitive_of_tail:
+                        return f"... {left_aux}____ {patient_ontology_slot}{trail_prt_or_prep}"
                     anim = cls._resolve_object_animacy_from_example(ex_clean, ft_low, default_tag="[sb/sth]")
                     if anim == "someone":
                         anim = "[person/group]"

@@ -231,6 +231,8 @@ class QuizSkeletonFramesMixin:
         # the single best, sense-isolated, complete authentic sentence before deriving cloze_slot_frame.
         # (Oxford Thesaurus and raw BNC fragments permanently excluded).
         winning_example_source = "none"
+        _raw_q = (it.get("quote") or it.get("raw_quote") or "").strip()
+        opt_ex = None
         _shell_noun_anchors = ("shell_to_do", "shell_of_doing", "shell_that")
         _verb_cxn_anchors = ("sb_to_do", "to_inf", "gerund")
         if not causative_extraposition_pat and (
@@ -254,23 +256,8 @@ class QuizSkeletonFramesMixin:
                 is_copula_adj=is_copula_adj,
                 is_attributive_only_adj=is_attributive_only_adj,
             )
-            _raw_q = (it.get("quote") or it.get("raw_quote") or "").strip()
             if opt_ex:
-                _anc_str = str(anchor or "").strip().lower()
-                # If anchor was grounded in the authentic lesson quote and opt_ex lacks this anchor,
-                # but the lesson quote contains both the target and the anchor, preserve the authentic lesson collocation!
-                if (
-                    _anc_str
-                    and _anc_str not in cls._ANCHOR_STOPWORDS
-                    and _raw_q
-                    and re.search(rf"\b{re.escape(_anc_str)}\w*\b", _raw_q, re.IGNORECASE)
-                    and not re.search(rf"\b{re.escape(_anc_str)}\w*\b", opt_ex, re.IGNORECASE)
-                ):
-                    ldoce_pattern_example = _raw_q
-                else:
-                    ldoce_pattern_example = opt_ex
-            elif _raw_q:
-                ldoce_pattern_example = _raw_q
+                ldoce_pattern_example = opt_ex
             if not cxn_override_pat and anchor_type not in _cxn_anchor_types:
                 best_pattern = opt_pat
             elif opt_pat and not best_pattern:
@@ -515,7 +502,7 @@ class QuizSkeletonFramesMixin:
             quote=it.get("quote") or it.get("raw_quote"),
         )
         eff_pos = "noun" if is_quantifier_frame else canonical_pos
-        if ldoce_cloze_frame and anchor_type == "prep":
+        if ldoce_cloze_frame and anchor_type == "prep" and not quote_shown_prep:
             _m_fp = re.search(
                 r"_{2,}\s+(to|with|from|on|for|in|into|of|against|at|upon|towards|toward|over|under|about|by|as)\b",
                 ldoce_cloze_frame,
@@ -639,7 +626,7 @@ class QuizSkeletonFramesMixin:
                 flags=re.IGNORECASE,
             )
             if "/" in best_pattern:
-                ex_low_for_slash = (ldoce_pattern_example or it.get("quote") or "").lower()
+                ex_low_for_slash = (ldoce_pattern_example or "").lower()
                 anc_low_for_slash = str(anchor or "").strip().lower()
                 # Resolve multi-word preposition slash alternatives (`into/out of`, `in/out of`) before single-word slash splitting
                 def _pick_multiword_prep_slash(m: re.Match) -> str:
@@ -727,7 +714,7 @@ class QuizSkeletonFramesMixin:
             target_entry=target_entry,
             locked_sense=locked_sense,
             definition=str(it.get("definition") or ""),
-            authentic_example=ldoce_pattern_example or it.get("quote") or it.get("raw_quote") or "",
+            authentic_example=ldoce_pattern_example or "",
             quote=str(it.get("quote") or it.get("raw_quote") or ""),
             forbidden_words=batch_target_words,
         )
@@ -840,26 +827,34 @@ class QuizSkeletonFramesMixin:
                 re.IGNORECASE,
             )
         )
+        _has_pedlex_source = bool(
+            opt_ex
+            or (ldoce_pattern_example and (not _raw_q or ldoce_pattern_example.strip().lower() != _raw_q.strip().lower()))
+        )
+        sliced_frame = None
         if not _is_cxn_family and not is_quantifier_frame and not half_slice_frame and anchor_type != "partitive":
-            sliced_frame = cls.derive_cloze_slot_frame_from_example(
-                example_text=ldoce_pattern_example or it.get("quote") or it.get("raw_quote"),
-                final_target=final_target,
-                base_word=str((target_entry or {}).get("word") or w_lower).strip().lower(),
-                canonical_pos=canonical_pos,
-                anchor=anchor,
-                anchor_type=anchor_type,
-                is_copula_adj=is_copula_adj,
-                is_attributive_only_adj=is_attributive_only_adj,
-                is_plural_noun=is_plural_noun,
-                is_pure_uncountable_target=is_pure_uncountable_target,
-                is_target_strictly_countable=is_target_strictly_countable,
-                is_singular_only_noun=("[singular]" in t_noun_gram_str),
-                has_mixed_vc_initials=has_mixed_vc_initials,
-                has_uncountable_contrast_foil=has_uncountable_contrast_foil,
-                verb_form_tag=verb_form_tag,
-                forbidden_words=batch_target_words,
-                patient_ontology_slot=patient_ontology_slot,
-            )
+            # If pedlex is not available or no authentic dictionary example was found,
+            # do not slice an unsafe frame from the lesson quote; provide pure prompt without frame.
+            if _has_pedlex_source and ldoce_pattern_example:
+                sliced_frame = cls.derive_cloze_slot_frame_from_example(
+                    example_text=ldoce_pattern_example,
+                    final_target=final_target,
+                    base_word=str((target_entry or {}).get("word") or w_lower).strip().lower(),
+                    canonical_pos=canonical_pos,
+                    anchor=anchor,
+                    anchor_type=anchor_type,
+                    is_copula_adj=is_copula_adj,
+                    is_attributive_only_adj=is_attributive_only_adj,
+                    is_plural_noun=is_plural_noun,
+                    is_pure_uncountable_target=is_pure_uncountable_target,
+                    is_target_strictly_countable=is_target_strictly_countable,
+                    is_singular_only_noun=("[singular]" in t_noun_gram_str),
+                    has_mixed_vc_initials=has_mixed_vc_initials,
+                    has_uncountable_contrast_foil=has_uncountable_contrast_foil,
+                    verb_form_tag=verb_form_tag,
+                    forbidden_words=batch_target_words,
+                    patient_ontology_slot=patient_ontology_slot,
+                )
             if sliced_frame:
                 _sliced_is_bare = bool(
                     re.match(
@@ -925,7 +920,7 @@ class QuizSkeletonFramesMixin:
                     cloze_slot_frame = "... act ____"
             elif canonical_pos == "function_word":
                 _fw_def = str(it.get("definition") or "").lower()
-                _fw_ex = str(ldoce_pattern_example or it.get("quote") or "").lower()
+                _fw_ex = str(ldoce_pattern_example or "").lower()
                 if re.search(r"\b(?:period of time|time|hours?|days?|weeks?|months?|years?|minutes?|seconds?|deadline|before|during|until)\b", f"{_fw_def} {_fw_ex}"):
                     cloze_slot_frame = "... ____ [time period, e.g. three days]"
                 elif re.search(r"\b(?:distance|place|area|city|town|country|building|road|street|side|river)\b", f"{_fw_def} {_fw_ex}"):

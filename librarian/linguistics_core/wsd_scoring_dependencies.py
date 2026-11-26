@@ -419,6 +419,30 @@ class WsdScoringDependenciesMixin:
                                             # If no other sense claims this collocation, grant general bonus
                                             score += 15
 
+                        # Selectional restrictions on physical media / print / cutting operations vs. human person senses:
+                        # e.g. 'comics clipped from newspapers and magazines', 'articles published in journals'
+                        is_person_sense = (
+                            bool(re.match(r"^(?:someone|a person|somebody)\s+(?:who|whose|that)\b", s_defn))
+                            or any(k in s_defn for k in ("someone whose job is", "a person whose job is", "someone who entertains", "someone who performs"))
+                        )
+                        if is_person_sense:
+                            has_print_clip_mod = False
+                            for c in tok.children:
+                                if c.dep_ in ("acl", "amod", "relcl") and c.lemma_.lower() in (
+                                    "clip", "cut", "tear", "print", "publish", "bind", "staple", "fold", "paste", "glue", "mimeograph", "photocopy"
+                                ):
+                                    has_print_clip_mod = True
+                                    break
+                                elif c.dep_ == "prep" and c.lemma_.lower() in ("from", "in", "on"):
+                                    if any(gc.lemma_.lower() in ("newspaper", "magazine", "journal", "periodical", "book", "comic strip", "page", "drawer", "binder", "scrapbook") for gc in c.children):
+                                        has_print_clip_mod = True
+                                        break
+                            if not has_print_clip_mod and tok.dep_ in ("dobj", "obj") and tok.head and tok.head.pos_ == "VERB":
+                                if tok.head.lemma_.lower() in ("clip", "cut", "tear", "fold", "paste", "staple", "photocopy", "bind"):
+                                    has_print_clip_mod = True
+                            if has_print_clip_mod:
+                                score -= 50
+
                     # If target is a verb, check transitivity, complex complements and arguments
                     elif tok.pos_ == "VERB" or (eff_p == "v" and (tok.dep_ in ("ROOT", "conj", "advcl", "relcl", "ccomp", "xcomp", "pobj", "dobj", "obj", "amod", "compound") or any(ch.dep_ in ("nsubj", "nsubjpass", "csubj") for ch in tok.children))):
                         # Section 7.3: Deep Passive Projection
@@ -430,7 +454,11 @@ class WsdScoringDependenciesMixin:
                         )
                         is_progressive = (
                             tok.tag_ == "VBG"
-                            and any(c.dep_ == "aux" and c.lemma_.lower() == "be" for c in tok.children)
+                            and (
+                                any(c.dep_ == "aux" and c.lemma_.lower() == "be" for c in tok.children)
+                                or tok.dep_ in ("advcl", "xcomp", "ccomp", "conj", "acl", "pcomp", "prep")
+                                or (tok.head and tok.head.pos_ in ("VERB", "AUX"))
+                            )
                         )
 
                         # Sense-linked Grammar Box constraints (e.g. 'admire' sense 1: no progressive; 'consist of': no passive)
@@ -443,6 +471,10 @@ class WsdScoringDependenciesMixin:
                                 score -= 50
                             if is_passive and syn_c.get("no_passive"):
                                 score -= 50
+
+                        s_gram_and_def = f"{s.get('grammar') or ''} {s.get('definition') or ''}".lower()
+                        if is_progressive and ("not in progressive" in s_gram_and_def or "not used in progressive" in s_gram_and_def):
+                            score -= 50
 
                         surface_dobjs = [ch for ch in tok.children if ch.dep_ in ("dobj", "obj")]
                         if not surface_dobjs and eff_p == "v":

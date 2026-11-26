@@ -86,6 +86,16 @@ MODEL_CAPABILITY_PROFILES = [
         "think": False,
     },
     {
+        # Inkling family (e.g. inkling-2-mini): Looped-layer model with default 'high' thinking
+        # Requires think=False to prevent context/token exhaustion, temperature=0.7 to avoid
+        # looped resonance limits, and enforce_gbnf=True to guarantee strict schema adherence.
+        "match": ["inkling"],
+        "enforce_gbnf": True,
+        "enforce_json_format": True,
+        "think": False,
+        "temperature": 0.7,
+    },
+    {
         # Native GBNF / strict grammar standard families (Llama 3+, Mistral, Mixtral, Codestral):
         # Perfectly compatible with context-free grammar parsers (llama.cpp, vLLM, SGLang).
         "match": ["llama", "mistral", "mixtral", "codestral"],
@@ -102,18 +112,24 @@ def get_model_profile(model_name: str) -> dict:
     - Tier 1 (Base): Declarative architectural heuristics (Decision/Classifier, Granite, Qwen, Gemma, Llama, Hermes, etc.)
     - Tier 2 (Global): Global settings in wiki_config.json (e.g. global enforce_gbnf)
     - Tier 3 (Override): Explicit per-model overrides in wiki_config.json['model_options'][model_name]
+
+    Default Safe Baseline for unknown / newly introduced models:
+    - Prompt-guided JSON mode (enforce_gbnf=False, enforce_json_format=True)
+    - Thinking OFF (think=False) to prevent token exhaustion and multi-minute reasoning stalls.
     """
     m_lower = (model_name or "").lower()
     
-    # Tier 1: Base architectural profile matching
+    # Tier 1: Base architectural profile matching (Safe default baseline)
     base_gbnf = False
-    base_think = None
+    base_think = False
     base_json_format = True
     base_role = "generator"
+    matched_rule = {}
     for profile_rule in MODEL_CAPABILITY_PROFILES:
         if any(keyword in m_lower for keyword in profile_rule["match"]):
-            base_gbnf = profile_rule["enforce_gbnf"]
-            base_think = profile_rule.get("think")
+            matched_rule = profile_rule
+            base_gbnf = profile_rule.get("enforce_gbnf", False)
+            base_think = profile_rule.get("think", False)
             base_json_format = profile_rule.get("enforce_json_format", True)
             base_role = profile_rule.get("role", "generator")
             if base_gbnf is True and ("thinking" in m_lower or "reasoning" in m_lower):
@@ -131,7 +147,8 @@ def get_model_profile(model_name: str) -> dict:
     resolved_json_format = model_opts.get("enforce_json_format", base_json_format)
     resolved_role = model_opts.get("role", base_role)
 
-    profile = dict(model_opts)
+    profile = {k: v for k, v in matched_rule.items() if k not in ("match",)}
+    profile.update(model_opts)
     profile["role"] = resolved_role
     profile["enforce_gbnf"] = resolved_gbnf
     profile["enforce_json_format"] = resolved_json_format

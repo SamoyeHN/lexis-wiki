@@ -1,0 +1,168 @@
+{
+  "_description": "Declarative Sense-Gated Subcategorization Whitelist for Construction Families. Maps polysemous headwords and construction subcat groups to allowable sense indices to prevent cross-sense syntactic hijacking.",
+  "words": {
+    "suggest": {
+      "V_MANDATIVE_SUBJ": [0],
+      "V_GERUND_ONLY": [0],
+      "V_OBJ_PREP_TO": [0],
+      "V_OBJ_PREP_FOR": [2]
+    },
+    "insist": {
+      "V_MANDATIVE_SUBJ": [1],
+      "V_OBJ_PREP_ON": [0, 1]
+    },
+    "resist": {
+      "V_GERUND_ONLY": [0, 1]
+    },
+    "miss": {
+      "V_GERUND_ONLY": [0, 3, 9]
+    },
+    "mind": {
+      "V_GERUND_ONLY": [49, 59, 60],
+      "N_SHELL_TO_DO": [3, 45]
+    },
+    "admit": {
+      "V_GERUND_ONLY": [0, 1],
+      "V_OBJ_PREP_TO": [2],
+      "V_OBJ_PREP_INTO": [2]
+    },
+    "agree": {
+      "V_INF_ONLY": [1]
+    },
+    "advise": {
+      "V_MANDATIVE_SUBJ": [0],
+      "V_OBJ_TO_DO": [0]
+    },
+    "command": {
+      "V_MANDATIVE_SUBJ": [9],
+      "V_OBJ_TO_DO": [9]
+    },
+    "demand": {
+      "V_MANDATIVE_SUBJ": [5],
+      "N_SHELL_THAT_ONLY": [1],
+      "N_SHELL_TO_DO": [5]
+    },
+    "order": {
+      "V_MANDATIVE_SUBJ": [36],
+      "V_OBJ_TO_DO": [36],
+      "N_SHELL_TO_DO": [3]
+    },
+    "propose": {
+      "V_MANDATIVE_SUBJ": [0],
+      "V_GERUND_ONLY": [0]
+    },
+    "recommend": {
+      "V_MANDATIVE_SUBJ": [0],
+      "V_GERUND_ONLY": [0],
+      "V_OBJ_TO_DO": [0]
+    },
+    "request": {
+      "V_MANDATIVE_SUBJ": [2],
+      "V_OBJ_TO_DO": [2],
+      "N_SHELL_THAT_ONLY": [0],
+      "N_SHELL_TO_DO": [0]
+    },
+    "require": {
+      "V_MANDATIVE_SUBJ": [1],
+      "V_OBJ_TO_DO": [1]
+    },
+    "stipulate": {
+      "V_MANDATIVE_SUBJ": [0]
+    },
+    "urge": {
+      "V_MANDATIVE_SUBJ": [0],
+      "V_OBJ_TO_DO": [0]
+    },
+    "vital": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "necessary": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "important": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "crucial": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "essential": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "imperative": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "urgent": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "advisable": {
+      "ADJ_MANDATIVE_SUBJ": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "hard": {
+      "ADJ_TOUGH_BOTH": [1],
+      "ADJ_IT_EXTRAPOS": [1]
+    },
+    "easy": {
+      "ADJ_TOUGH_BOTH": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "difficult": {
+      "ADJ_TOUGH_BOTH": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "tough": {
+      "ADJ_TOUGH_BOTH": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "simple": {
+      "ADJ_TOUGH_BOTH": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "impossible": {
+      "ADJ_TOUGH_BOTH": [0],
+      "ADJ_IT_EXTRAPOS": [0]
+    },
+    "make": {
+      "V_IT_ADJ_INF": [3]
+    },
+    "find": {
+      "V_IT_ADJ_INF": [5]
+    },
+    "stop": {
+      "V_GERUND_ONLY": [1],
+      "V_INF_ONLY": [3]
+    },
+    "remember": {
+      "V_GERUND_ONLY": [0],
+      "V_INF_ONLY": [2]
+    },
+    "forget": {
+      "V_INF_ONLY": [1]
+    },
+    "try": {
+      "V_INF_ONLY": [0],
+      "V_GERUND_ONLY": [1]
+    },
+    "way": {
+      "N_SHELL_TO_DO": [0],
+      "N_SHELL_OF_DOING": [0]
+    },
+    "attempt": {
+      "N_SHELL_TO_DO": [0],
+      "V_INF_ONLY": [3]
+    },
+    "doubt": {
+      "N_SHELL_THAT_ONLY": [0]
+    },
+    "little": {
+      "PHR_FRONTED_INV": [0]
+    }
+  }
+}

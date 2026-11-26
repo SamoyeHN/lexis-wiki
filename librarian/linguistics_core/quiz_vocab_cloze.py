@@ -362,12 +362,14 @@ class QuizVocabClozeMixin:
                     defn = str(item.get("definition") or "").strip()
                     quote = str(item.get("quote") or item.get("quoted_sentence") or "").strip()
                     ex_usage = str(item.get("example_usage") or "").strip()
+                    s_idx = item.get("sense_idx")
                 else:
                     raw_w = str(getattr(item, "word", "") or "").strip()
                     pos_str = str(getattr(item, "part_of_speech", "noun") or "noun").strip()
                     defn = str(getattr(item, "definition", "") or "").strip()
                     quote = str(getattr(item, "quoted_sentence", "") or getattr(item, "quote", "") or "").strip()
                     ex_usage = str(getattr(item, "example_usage", "") or "").strip()
+                    s_idx = getattr(item, "sense_idx", None)
                 if not raw_w:
                     continue
                 raw_w_poss = re.sub(
@@ -387,14 +389,17 @@ class QuizVocabClozeMixin:
                     and not (len(vocab_input) <= 5 and word.lower() in ("goody", "goodies", "toothpaste"))
                 ) or not cls.is_pedagogical_expression(word, defn):
                     continue
-                parsed_items.append({
+                p_dict = {
                     "raw_word": raw_w,
                     "word": word,
                     "part_of_speech": pos_str or "noun",
                     "definition": defn,
                     "quote": quote,
                     "example_usage": ex_usage,
-                })
+                }
+                if s_idx is not None:
+                    p_dict["sense_idx"] = s_idx
+                parsed_items.append(p_dict)
             return parsed_items
 
         if isinstance(vocab_input, str):

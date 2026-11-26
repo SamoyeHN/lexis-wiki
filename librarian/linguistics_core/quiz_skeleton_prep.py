@@ -565,12 +565,21 @@ class QuizSkeletonPrepMixin:
                         if locked_def_fmt:
                             it["definition"] = locked_def_fmt
             if locked_sense is None:
-                t_s_idx = cls._lock_sense(
-                    target_entry,
-                    definition=it.get("definition"),
-                    quote=it.get("quote") or it.get("raw_quote"),
-                    target_pos=canonical_pos
-                )
+                provided_s_idx = it.get("sense_idx")
+                if provided_s_idx is not None:
+                    try:
+                        p_idx = int(provided_s_idx)
+                        if 0 <= p_idx < len(target_entry["senses"]):
+                            t_s_idx = p_idx
+                    except Exception:
+                        pass
+                if t_s_idx is None:
+                    t_s_idx = cls._lock_sense(
+                        target_entry,
+                        definition=it.get("definition"),
+                        quote=it.get("quote") or it.get("raw_quote"),
+                        target_pos=canonical_pos
+                    )
                 if t_s_idx is None and target_entry is not entry_base:
                     t_s_idx = cls._lock_sense(
                         target_entry,
@@ -673,12 +682,15 @@ class QuizSkeletonPrepMixin:
             anchor = v_obj_pp_tail
             anchor_type = "v_obj_pp"
 
-        word_cxn_specs_raw = cls.get_word_cxn_specs(w_lower, pos=canonical_pos)
+        word_cxn_specs_raw = cls.get_word_cxn_specs(w_lower, pos=canonical_pos, sense_idx=t_s_idx)
         word_cxn_specs = [
             sp for sp in word_cxn_specs_raw
-            if int(sp.get("sense_idx", -1)) < 0
-            or t_s_idx is None
-            or int(sp.get("sense_idx", -1)) == int(t_s_idx)
+            if cls.is_cxn_subcat_allowed_for_sense(
+                w_lower,
+                str(sp.get("subcat_group") or ""),
+                t_s_idx,
+                locked_sense=locked_sense,
+            )
         ]
         word_subcats = {str(sp.get("subcat_group") or "") for sp in word_cxn_specs}
 

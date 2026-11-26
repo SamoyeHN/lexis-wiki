@@ -831,8 +831,8 @@ class CefrCalibrationMixin:
                 # 1. Distractor must belong to LDOCE core defining lexicon (1000/2000/3000) or high-frequency
                 if not (c_core >= 1 or c_freq):
                     return False
-                # 2. Academic Word List (AWL) abstract terms strictly barred in A1
-                if c_awl:
+                # 2. Academic Word List (AWL) abstract terms strictly barred in A1 (except core high-frequency terms like 'task'/'equipment')
+                if c_awl and not (c_freq and c_core >= 1):
                     return False
                 # 3. B1+ distractors barred unless bearing high spoken/written frequency tags
                 if c_rank >= 3 and not c_freq:

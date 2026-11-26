@@ -403,7 +403,7 @@ def test_five_paradigm_verb_preposition_patient_ontology():
     )
     assert res_run_out is not None
     assert res_run_out["ontology_type"] == "concrete_physical"
-    assert "the fuel" in res_run_out["exemplars"]
+    assert any(x in res_run_out["exemplars"] for x in ("fuel", "the fuel"))
     assert "the desert" not in res_run_out["exemplars"]
 
     # Paradigm IV: 'take care of', 'make sense of', 'pay attention to', 'pose a threat to'

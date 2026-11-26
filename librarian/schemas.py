@@ -508,7 +508,7 @@ class DiscourseClozeQuiz:
 @dataclasses.dataclass
 class VocabularyQuiz:
     title: str = dataclasses.field(default="", metadata={"minLength": 1})
-    questions: List[QuizQuestion] = dataclasses.field(default_factory=list, metadata={"maxItems": "{count}"})
+    questions: List[QuizQuestion] = dataclasses.field(default_factory=list, metadata={"minItems": "{count}", "maxItems": "{count}"})
 
 @dataclasses.dataclass
 class ReadingQuizQuestion:

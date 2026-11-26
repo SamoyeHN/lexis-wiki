@@ -663,6 +663,15 @@ class QuizSkeletonAnchorsMixin:
                                     or _head_n_lem in _adj_collocs_low
                                     or bool(re.search(rf"\b{re.escape(_head_n_lem)}\b", _sense_ex_blob))
                                 )
+                                if not _quote_noun_attested:
+                                    # Reverse collocation check: check if target adjective is in head noun's attested adjective collocations
+                                    _n_collocs = cls.get_pedlex_collocations(_head_n_lem)
+                                    _n_adj_collocs = {
+                                        str(ac).lower()
+                                        for ac in (_n_collocs.get("adj", []) + _n_collocs.get("adjectives", []))
+                                    }
+                                    if any(w_lower in ac for ac in _n_adj_collocs):
+                                        _quote_noun_attested = True
                                 if (
                                     _quote_noun_attested
                                     and head_n.pos_ != "PRON"
@@ -755,7 +764,7 @@ class QuizSkeletonAnchorsMixin:
                 if canonical_pos == "phrase" or (
                     q_low_adv
                     and re.search(
-                        rf"(?:^|[.;!?]\s*|\b(?:and|but)\s+){re.escape(w_lower)}\s+(?:do|does|did|have|has|had|am|is|are|was|were|can|could|will|would|shall|should|may|might|must)\b",
+                        rf"(?:^|[.;!?\"\s]|\b(?:and|but)\s+){re.escape(w_lower)}\s+(?:do|does|did|have|has|had|am|is|are|was|were|can|could|will|would|shall|should|may|might|must)\b",
                         q_low_adv,
                     )
                 ):

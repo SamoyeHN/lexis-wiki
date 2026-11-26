@@ -759,6 +759,40 @@ def audit_vocabulary_wsd_semantic(
                             })
                             continue
 
+        # Gate 6: Selectional Restriction & Animacy Invariant
+        # Screen out LLM hallucinations that confuse human persons with inanimate printed media, artifacts, or substances.
+        if any(np in eff_pos for np in ("noun", "n")):
+            chosen_is_person = bool(re.match(r"^(?:someone|a person|somebody)\s+(?:who|whose|that|with)\b", chosen_cand_def, re.I)) or any(
+                k in chosen_cand_def.lower() for k in ("someone whose job is", "a person whose job is", "someone who entertains", "someone who performs", "person who", "entertainer who")
+            )
+            curr_is_artifact_or_media = any(
+                k in curr_cand_def.lower() for k in (
+                    "magazine", "newspaper", "comic strip", "book", "publication", "paper", "periodical",
+                    "article", "picture", "drawing", "cartoon", "document", "sheet", "clipping", "text"
+                )
+            )
+            has_media_physical_operation = bool(re.search(
+                r"\b(?:clipped|cut|printed|published|bound|stapled|torn|photocopied|pasted|glued)\s+(?:from|in|on|into)\b"
+                r"|\b(?:from|in)\s+(?:newspapers?|magazines?|journals?|books?|periodicals?|drawers?|binders?|scrapbooks?)\b",
+                quote,
+                re.IGNORECASE
+            ))
+            if chosen_is_person and curr_is_artifact_or_media and has_media_physical_operation:
+                logger.debug("Rejecting LLM WSD defect for '%s': chosen sense is person but context denotes physical print/media artifact", lemma)
+                overruled.append({
+                    "lemma": lemma,
+                    "quote": quote,
+                    "current_idx": current_idx,
+                    "current_def": curr_cand_def,
+                    "current_score": curr_score,
+                    "chosen_idx": chosen_idx,
+                    "chosen_def": chosen_cand_def,
+                    "chosen_score": chosen_score,
+                    "gate": "Gate 6 (Animacy / Artifact Invariant)",
+                    "reason": "Context denotes physical print/media artifact modified by clipping/printing/publication; LLM suggested human person sense.",
+                })
+                continue
+
         chosen_ex = (chosen_cand.get("examples") or [""])[0]
 
         defects.append(

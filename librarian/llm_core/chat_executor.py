@@ -120,7 +120,7 @@ class ChatExecutorMixin:
 
         # 3.1 Gemma & Gemini compatibility: combine system instructions with the first user message
         # because Gemma and Gemini chat templates do not render a separate system turn.
-        is_no_system_role_family = any(k in (self.model or "").lower() for k in ("gemma", "gemini"))
+        is_no_system_role_family = any(k in (self.model or "").lower() for k in ("gemma", "gemini", "inkling"))
         if is_no_system_role_family:
             sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
             user_msg = next((m for m in messages if m["role"] == "user"), None)
@@ -928,6 +928,7 @@ class ChatExecutorMixin:
                         logging.getLogger("librarian").warning(f"Evaluator check skipped due to error: {eval_err}")
 
                 # 6.5. ATTACH FINAL QA AUDIT METADATA TO RESULT OBJECT
+                final_audit = None
                 try:
                     from ..evaluator import LogEvaluator
                     dict_for_final_eval = data if isinstance(data, dict) else (dataclasses.asdict(result_obj) if dataclasses.is_dataclass(result_obj) else None)
