@@ -506,7 +506,21 @@ Because `pedlex.db` records all attested syntactic patterns for every headword, 
 
 At runtime (<0.2ms), `LinguisticEngine.query_cxn_contrast_distractors(contrast_groups, ban_groups, pos)` executes a parameterized SQL set-difference query ordered by `zipf_score DESC`, filtered by `cefrpy` level and WordNet synset disjointness.
 
-### 8.3 Pre-Mined Minimal-Pair Error Traps (`pedlex_error_traps` & `get_word_error_traps`)
+### 8.3 Physical Sense Gating & Declarative Construction Whitelist (`pedlex_cxn_sense_whitelist.json`)
+
+To prevent **Cross-Sense Construction Hijacking** (where polysemous words indiscriminately project syntax from irrelevant senses):
+1. **The Polysemy Dilemma**:
+   - `suggest`: Sense 0 ("propose/advise") triggers mandative subjunctive (`that sb (should) do sth`) and gerund (`suggest doing sth`), whereas Sense 1 (epistemic "evidence suggests that...") strictly forbids mandative subjunctives.
+   - `insist`: Sense 0 ("say firmly that something is true", e.g. *insisted that he had not entered*) takes standard indicative tenses, whereas Sense 1 ("demand that something happen") triggers mandative subjunctive.
+   - `resist`: Sense 0 ("withstand urge/temptation") triggers `cannot resist doing sth`, Sense 1 ("oppose change") triggers `resist changing`, whereas Sense 2 ("use force against", e.g. *resist arrest*) forbids gerund complementation.
+   - `hard`: Sense 0 ("solid/firm", e.g. *hard floor*) is an attributive physical property, whereas Sense 1 ("difficult") triggers tough-movement (`it is hard to do`).
+2. **Declarative External Whitelist (`librarian/data/pedlex_cxn_sense_whitelist.json`)**:
+   - Externalizes exact allowed sense indices (`sense_idx`) for 37 core polysemous headwords across all 8 construction families.
+   - Enables **0-code expansion and calibration**: adding or adjusting construction test points requires editing pure JSON without writing brittle Python regexes or exception branches.
+3. **Physical Runtime Gate (`is_cxn_subcat_allowed_for_sense`)**:
+   - Gated during `get_word_cxn_specs()` and `_preprocess_skeleton_target()`: if a word is present in the whitelist, only senses explicitly registered in the JSON whitelist are permitted to activate that subcategorization spec. Unlisted words fall back to deterministic pattern/grammar inspection inside the locked sense's own payload.
+
+### 8.4 Pre-Mined Minimal-Pair Error Traps (`pedlex_error_traps` & `get_word_error_traps`)
 
 To eliminate random unfocused errors in `translation_quiz` and provide authentic grammatical pitfalls for `vocabulary_quiz`, `pedlex_error_traps` indexes 16,759 structured error records across 5 categories:
 1. **`GRAMBOX_BADEXA` (Authentic Dictionary Negative Examples)**:

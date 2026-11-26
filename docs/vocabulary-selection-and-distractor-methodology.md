@@ -334,6 +334,31 @@ Lexical items projecting structural catenae are classified into **Eight Construc
 | **Family 8: Mandative Subjunctives** | `<Trigger> + that S (should) V`| Matrix trigger (`suggest`, `vital`) | Subordinate bare infinitive / minimal-pair grammar traps |
 | **Family 9: Internal Possessive Idioms**| `<V> + <Prep> + one's + <N>` | Whole idiom (`came to her aid`) | Symmetric `one's` idioms + possessive & tense sync |
 
+### 8.1 Physical Sense Gating & Declarative Whitelist (`pedlex_cxn_sense_whitelist.json`)
+
+To prevent **Cross-Sense Construction Hijacking** (where polysemous words indiscriminately project syntax from irrelevant senses):
+1. **The Cross-Sense Hijacking Risk**:
+   - `suggest`: Sense 0 ("propose/advise") triggers mandative subjunctive (`that sb (should) do sth`) and gerund (`suggest doing sth`), whereas Sense 1 (epistemic "evidence suggests that...") strictly forbids mandative subjunctives.
+   - `insist`: Sense 0 ("say firmly that something is true", e.g. *insisted that he had not entered*) takes standard indicative tenses, whereas Sense 1 ("demand that something happen") triggers mandative subjunctive.
+   - `resist`: Sense 0 ("withstand urge/temptation") triggers `cannot resist doing sth`, Sense 1 ("oppose change") triggers `resist changing`, whereas Sense 2 ("use force against", e.g. *resist arrest*) forbids gerund complementation.
+   - `hard`: Sense 0 ("solid/firm", e.g. *hard floor*) is an attributive physical property, whereas Sense 1 ("difficult") triggers tough-movement (`it is hard to do`).
+2. **Declarative External Whitelist (`librarian/data/pedlex_cxn_sense_whitelist.json`)**:
+   - Externalizes exact allowed sense indices (`sense_idx`) for 37 core polysemous headwords across all 8 construction families.
+   - Enables **0-code expansion and calibration**: adding or adjusting construction test points requires editing pure JSON without writing brittle Python regexes or exception branches.
+3. **Physical Runtime Gate (`is_cxn_subcat_allowed_for_sense`)**:
+   - Gated during `get_word_cxn_specs()` and `_preprocess_skeleton_target()`: if a word is present in the whitelist, only senses explicitly registered in the JSON whitelist are permitted to activate that subcategorization spec. Unlisted words fall back to deterministic pattern/grammar inspection inside the locked sense's own payload.
+
+### 8.2 Dynamic `SlotFrame` Complement Slicing & SLA Invariant
+
+Static placeholder replacements (e.g. replacing `doing sth` with a hardcoded string `"working"` or `[sth]` with `"the project"`) create ungrammatical colligations and disjoint semantic frames (such as *decided to ____ working*, which expert judges reject).
+
+1. **Corpus-Driven Token Extraction**:
+   - `SlotFrame.to_llm_surface()` dynamically extracts real complement tokens from the winning authentic example or contextual quote (e.g. preserving `adding` from *resist adding*, or `innocence` from *insist on her innocence*).
+2. **Pedagogical Fallback Safety**:
+   - When no authentic token is available, the engine uses strictly SLA-compliant structural anchors (`"that the committee review"`, `"to"`, `"that"`) matching standard lexicographic canonical citations.
+3. **Pipeline Invariant Preservation**:
+   - The final surface text sent to prompt assembly strictly adheres to single-blank constraints (`re.findall(r'_{2,}', frame) == 1`) with zero target/lemma leakage.
+
 ---
 
 ## 9. Nine Multi-Word Unit (MWU) Slicing Families
