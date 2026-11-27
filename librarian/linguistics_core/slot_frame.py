@@ -280,10 +280,15 @@ class SlotFrame:
                         if "Follow 'to' with a specific action verb (never write the literal phrase 'to do something')." not in notes:
                             notes.append("Follow 'to' with a specific action verb (never write the literal phrase 'to do something').")
                     elif re.search(rf"\b{re.escape(tgt)}\b", surface, flags=re.IGNORECASE):
+                        if "____" not in surface:
+                            surface = re.sub(rf"\b{re.escape(tgt)}\b", "____", surface, count=1, flags=re.IGNORECASE)
                         surface = re.sub(rf"\b{re.escape(tgt)}\b", "", surface, flags=re.IGNORECASE).strip()
 
         surface = re.sub(r"(?:\.\.\.\s*){2,}", "... ", surface)
         surface = re.sub(r"\s+", " ", surface).strip()
+        if not re.search(r"_{2,}", surface):
+            surface = f"... {surface} ____ ..." if surface else "... ____ ..."
+            surface = re.sub(r"\s+", " ", surface).strip()
         return surface, notes
 
     @classmethod

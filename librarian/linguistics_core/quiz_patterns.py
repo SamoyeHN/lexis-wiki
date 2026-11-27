@@ -1051,10 +1051,29 @@ class QuizPatternsMixin:
             "collocations_corpus": -25,
         }
 
+        # Curated `Sense.pattern_bundles` and `Sense.examples` that are guaranteed native to `locked_sense`
+        _native_sense_ex_texts: Set[str] = set()
+        if locked_sense:
+            for _ne in (locked_sense.get("examples") or []):
+                _ne_s = _ne.get("text") if isinstance(_ne, dict) else str(_ne or "")
+                if _ne_s:
+                    _native_sense_ex_texts.add(re.sub(r"\s+", " ", _ne_s).strip().lower())
+            for _pb in cls.extract_sense_pattern_bundles(locked_sense, final_target, quote=quote or ""):
+                if _pb.get("example"):
+                    _native_sense_ex_texts.add(re.sub(r"\s+", " ", str(_pb["example"])).strip().lower())
+
         for raw_ex, pat_hint, tier in raw_candidates:
             ex_clean = re.sub(r"\s*\(=[^)]*\)", "", str(raw_ex or "")).strip().strip('"').strip()
             if not ex_clean:
                 continue
+            # Gate 2 Sense-Isolation Invariant: For polysemous words, candidates drawn from external compartments
+            # (collocations, cross-collocations, thesaurus, language activator, or unverified current_example)
+            # must not resolve to a conflicting sense in PedLex.
+            ex_norm = re.sub(r"\s+", " ", ex_clean).lower()
+            if is_poly and t_s_idx is not None and target_entry and ex_norm not in _native_sense_ex_texts:
+                cand_s_idx = cls._lock_sense(target_entry, quote=ex_clean, target_pos=canonical_pos)
+                if cand_s_idx is not None and cand_s_idx != t_s_idx:
+                    continue
             # Filter out unedited BNC spoken transcript headers ('Male speaker ...', 'Female speaker ...')
             # and comma-heavy list enumerations ('piles of newspapers, heaps of books, manuscripts, labels, ...')
             if re.match(r"^(?:male|female|unidentified)\s+speaker\b", ex_clean, re.IGNORECASE):

@@ -359,6 +359,56 @@ Static placeholder replacements (e.g. replacing `doing sth` with a hardcoded str
 3. **Pipeline Invariant Preservation**:
    - The final surface text sent to prompt assembly strictly adheres to single-blank constraints (`re.findall(r'_{2,}', frame) == 1`) with zero target/lemma leakage.
 
+### 8.3 Degree Adverb ↔ Gradability Collocational Mutual Exclusion Matrix
+
+In SLA psychometrics, degree adverbs modifying adjectives present acute L1 negative transfer risks and high-frequency double-key collision pitfalls. Standard grammar models (Quirk et al. *CGEL*, Biber et al. *LGSWE*) bifurcate degree modification across **Gradability Categories**:
+
+| Modifier Category | Canonical Adverbs | Compatible Adjective Class | Incompatible (Ungrammatical) Combinations |
+| :--- | :--- | :--- | :--- |
+| **Scalar Intensifiers** | `very`, `extremely`, `highly`, `fairly`, `rather`, `terribly` | **Gradable (Scalar)**: `difficult`, `important`, `hot`, `tired` | ❌ `*very impossible`, `*extremely essential`, `*highly dead` |
+| **Totality / Limit Modifiers** | `virtually`, `practically`, `almost`, `absolutely`, `completely`, `utterly` | **Non-gradable (Extreme / Limit / Absolute)**: `impossible`, `essential`, `dead`, `perfect` | ❌ `*completely difficult`, `*utterly warm`, `*practically big` |
+
+1. **Declarative Static Extension via `linguistic_rules.json`**:
+   - Rather than hardcoding ad-hoc Python branches in distractor engines, the system manages `scalar_degree_adverbs`, `totality_limit_adverbs`, `non_gradable_extreme_adjs`, and `gradable_base_adjs` declaratively in `librarian/data/linguistic_rules.json` (cached via `linguistic_rules_loader.py`).
+2. **High-Discrimination Distractor Generation Arena**:
+   - When the target is a limit adverb modifying an extreme adjective (e.g. `virtually impossible`), the generator prioritizes scalar degree adverb distractors (`very`, `extremely`, `fairly`). Chinese L1 learners strongly equate *"virtually impossible"* with *"很不可能"*, triggering strong cognitive attraction to `very`, while standard English grammar rules guarantee a **0% double-key collision rate**.
+3. **Bidirectional Level-1 Syntactic Slot Clash Gate**:
+   - `distractor_guards_valency.py:evaluate_syntactic_slot_clash` screens all candidate options against the adjective head. If the adjective is ungradable/extreme, any scalar intensifier is instantly rejected as a syntactic slot clash (<0.01ms, 0 tokens), guaranteeing strict psychometric validity.
+
+### 8.4 Noun Distractor Presetting & Triple Guardrail Architecture
+
+In computational assessment, nouns are psychometrically the most vulnerable word class: while verbs and adjectives possess rigid syntactic valency frames (subcategorization, bound prepositions, transitivity) that automatically filter distractors, nouns frequently appear in structurally open argument positions where naive thesaurus near-synonyms trigger catastrophic **multi-key collisions** (e.g. `policy` vs `strategy` vs `plan` vs `measure`), while distant fallbacks collapse into **trivial giveaways** (`apple`, `bicycle`). To break this razor-edge dilemma, noun distractor generation is governed by a **Triple Guardrail Architecture** combining dynamic SQL suffix inversion with declarative semantic presets:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Noun Triple Guardrail Architecture                   │
+├────────────────────────────────────────────────────────────────────────┤
+│ Pillar 1: Dynamic SQLite Suffix Inversion (0ms / 0 Token / 免建静态表) │
+│   - Suffix rhyming nouns (-tion, -sion, -ance, -ence, -ment, -ity):    │
+│     Directly queried from pedlex.db via reverse SQL LIKE:              │
+│     SELECT word FROM ldoce WHERE word LIKE '%tion' AND pos = 'n'...    │
+│   → Suffix rhyming peers dynamically mined without static table bloat  │
+├────────────────────────────────────────────────────────────────────────┤
+│ Pillar 2: Encyclopedic Taxonomy Category Exclusion Matrix              │
+│   - Household Machine: appliance ↮ Handheld Tool: utensil / tool       │
+│   - Bio Specimen: specimen ↮ Taxonomic Group: species / population     │
+│   - Travel Memento: souvenir ↮ Award/Cert: trophy / certificate        │
+│   - Latin Non-Suffix Roots: spec- → specimen, species, spectacle...    │
+│   → Preserves contextual topic plausibility while blocking co-hyponyms │
+├────────────────────────────────────────────────────────────────────────┤
+│ Pillar 3: Shell Noun & Prepositional Governance Mandate                │
+│   (insight INTO ↮ overview OF ↮ reflection ON)                         │
+│   (reluctance TO DO ↮ aversion TO DOING ↮ objection TO DOING)          │
+│   → Rigid syntactic clausal and prepositional gating                   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Clean Separation: Dynamic SQL vs. Declarative JSON**:
+   - **No Static Tables for Morphological Suffixes**: `-tion/-sion`, `-ance/-ence`, `-ment` suffix peers are dynamically harvested on the fly from `pedlex.db` with CEFR/frequency filtering, preventing static JSON database redundancy.
+   - **Declarative Presets for Deep Semantics Only**: Pure world-knowledge category exclusion maps (`noun_taxonomy_exclusions`), non-suffix root families (`noun_latin_root_clusters`), and prepositional complement constraints (`shell_noun_prep_governance`) are declaratively registered in `librarian/data/linguistic_rules.json`.
+2. **Contextual Anchor Requirement**:
+   - For 2nd-order (eventive) and 3rd-order (shell/relational) nouns, item stem generation must preserve authentic governing verbs (e.g. `reach a compromise`, `run a risk`) or post-nominal prepositions (`insight into`) to guarantee a deterministic single-key resolution.
+
 ---
 
 ## 9. Nine Multi-Word Unit (MWU) Slicing Families

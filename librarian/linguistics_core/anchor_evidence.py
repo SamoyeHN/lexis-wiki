@@ -20,6 +20,13 @@ logger = logging.getLogger("librarian.linguistics")
 
 
 class AnchorEvidenceMixin:
+    _COMMON_GRAMMAR_WORDS = {
+        "in", "on", "at", "to", "for", "with", "of", "by", "from", "about",
+        "into", "onto", "upon", "over", "under", "behind", "between", "among",
+        "through", "during", "before", "after", "as", "against", "without",
+        "the", "a", "an", "this", "that", "these", "those", "and", "or", "but"
+    }
+
     @classmethod
     def _in_forbidden_word_set(cls, token: str, forbidden: Optional[Set[str]]) -> bool:
         """
@@ -38,6 +45,8 @@ class AnchorEvidenceMixin:
                 continue
             if t == fw:
                 return True
+            if t in cls._COMMON_GRAMMAR_WORDS and fw not in cls._COMMON_GRAMMAR_WORDS:
+                continue
             if len(t) >= 4 and len(fw) >= 4 and (t.startswith(fw[:4]) or fw.startswith(t[:4])):
                 return True
             if cls.are_same_word_family(t, fw):

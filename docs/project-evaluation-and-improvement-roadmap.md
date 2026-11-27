@@ -73,7 +73,29 @@
   - `[x]` Extract shared `quiz-base.css` and `quiz-core.js` across HTML quiz templates, and auto-inline at render/export time to preserve standalone offline HTML handouts (`tests/test_template_assets.py`).
 
 ### Phase 3: Long-Term (Scalability & Quality Loop)
-- [ ] **Data-Driven Linguistic Rules**: Externalize static lexical tables and syntactic constraint maps from `distractor_engine.py`, `wsd_engine.py`, and `cefr_and_morphology.py` into declarative JSON/YAML or `pedlex.db` tables to curb code bloat.
+- [ ] **Data-Driven Linguistic Rules & Grammar Extensions**:
+  - **Static Linguistic Rule Externalization**: Externalize remaining static lexical tables and syntactic constraint maps from `distractor_engine.py`, `wsd_engine.py`, and `cefr_and_morphology.py` into declarative JSON/YAML (`librarian/data/linguistic_rules.json`) or `pedlex.db` tables to curb code bloat and avoid hardcoded Python branching.
+  - **Degree Adverb ↔ Gradability Mutual Exclusion Grammar Rules (程度副词与形容词级差性互斥规则表)**:
+    - *Theoretical Grounding*: Quirk et al. (*CGEL*) and Biber et al. (*LGSWE*) Adverbial-Adjective Gradability Theory (Gradable / Scalar vs. Non-gradable / Extreme / Limit / Absolute).
+    - *Declarative Static Extension*: Extend `linguistic_rules.json` (loaded via `linguistic_rules_loader.py`) with:
+      - `scalar_degree_adverbs` (`very`, `extremely`, `highly`, `fairly`, `rather`, `terribly`, `exceptionally`...)
+      - `totality_limit_adverbs` (`virtually`, `practically`, `almost`, `absolutely`, `utterly`, `completely`, `entirely`, `totally`...)
+      - `non_gradable_extreme_adjs` (`impossible`, `essential`, `vital`, `superb`, `terrible`, `infinite`, `flawless`, `unique`, `absolute`, `dead`, `empty`, `perfect`, `boiling`, `freezing`, `exhausted`...)
+      - `gradable_base_adjs` (`difficult`, `important`, `good`, `bad`, `hot`, `cold`, `tired`, `large`, `small`...)
+    - *Bidirectional Psychometric Engine*:
+      - **Distractor Synthesis Arena**: When the target is a totality/limit adverb modifying an extreme/limit adjective (e.g. `virtually impossible`), synthesize high-discrimination scalar adverb distractors (`very`, `extremely`, `highly`). This directly exploits L1 negative transfer (Chinese speakers naturally say *"很不可能"*, making `very` an irresistible distractor) while maintaining a strict 0% semantic double-key collision rate in authentic English.
+      - **Level-1 Code Gate Validation**: In `distractor_guards_valency.py:evaluate_syntactic_slot_clash`, enforce bidirectional slot clash checking (rejecting `*very impossible` or `*completely difficult`), preventing ungrammatical candidate leakage at 0 token cost.
+  - **Preset Noun Distractor Rule Engine & Taxonomy Category Exclusion (名词预设规则体系与实体范畴互斥矩阵)**:
+    - *Theoretical Grounding*: Solve the psychometric "Razor-Edge Dilemma" in noun assessment (near-synonyms lead to multi-key collisions; distant co-hyponyms lead to trivial giveaways). Nouns lack rigid verb/adjective syntactic slots and require deterministic declarative rules.
+    - *Dual-Track Architecture (SQL Dynamic Suffix Inversion + Declarative Semantics)*:
+      - **Dynamic SQLite Suffix Inversion (0ms, 0 Token Cost, 免建静态表)**: 对于 `-tion/-sion`, `-ance/-ence`, `-ment`, `-ity` 等规则名词后缀，直接利用 `pedlex.db` 执行 SQL 后缀倒查（`SELECT word FROM ldoce WHERE word LIKE '%tion' AND pos = 'n' AND core_level >= 1`），结合音步与 CEFR 阶梯动态生成押韵混淆项，无需人工建静态后缀表，坚决杜绝死数据膨胀。
+      - **Declarative Static Presets in `linguistic_rules.json` (专注纯语义百科与词根)**:
+        - `noun_taxonomy_exclusions`: 具体名词实体百科范畴互斥矩阵（如家用电器 `appliances` ↮ 手持器皿 `utensils` ↮ 手工工具 `tools`；生物样本 `specimen` ↮ 分类群 `species`；纪念品 `souvenir` ↮ 奖杯/证书 `trophy / certificate`）。
+        - `noun_latin_root_clusters`: 非单纯后缀的拉丁/希腊同根词族（如 `spec-` 词根族：`specimen, species, spectacle, spectator`）。
+        - `shell_noun_prep_governance`: 壳名词与介词强支配约束（`insight into`, `access to`, `alternative to`, `reluctance to do`）。
+    - *Bidirectional Psychometric Engine*:
+      - **Paronym-First & Category Arena**: When synthesizing noun distractors, prioritize Latin morphological peers and sibling taxonomic categories to exploit orthographic/cognitive confusion while strictly guaranteeing semantic incompatibility in the stem context.
+      - **Level-1 Code Gate Guard**: Enforce countability symmetry (`distractor_guards_countability.py`) and post-nominal prepositional clash validation before quiz delivery.
 - [x] **Golden Set End-to-End Regression Suite**: Curated 5 canonical units spanning CEFR levels (A1-C1) and diverse genres, integrated `re-audit --target extraction`, added `lexis golden-set` E2E benchmark command and parameterized test suite (`tests/test_golden_set_e2e.py`, `tests/test_audit_extraction.py`) verifying 25 handouts and all extractions with zero defects.
 - [ ] **Agent Skill & MCP Cloud Service Packaging (Pending / Cost Feasibility)**:
   - **Context**: Inbound interest (e.g., Agensi.io marketplace, Claude Code, Cursor/Windsurf tool calling) to package `lexis-wiki`'s neuro-symbolic quiz/wiki generator and psychometric gates as callable remote skills.

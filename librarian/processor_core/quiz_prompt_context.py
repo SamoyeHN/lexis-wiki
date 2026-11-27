@@ -63,7 +63,19 @@ def _build_vocabulary_context(
         if tw_key and s.get("definition"):
             ctx.vocab_sense_map[tw_key] = f"({s.get('part_of_speech', '')}) {s['definition']}".strip()
         prescribed_opts = s.get("prescribed_options", [])
-        raw_frame_str = s.get("cloze_slot_frame") or s.get("best_pattern") or "... ____ ..."
+        raw_frame_str = s.get("cloze_slot_frame")
+        if not raw_frame_str and s.get("best_pattern"):
+            pat = str(s["best_pattern"]).strip()
+            if tw_key and re.search(rf"\b{re.escape(tw_key)}\b", pat, flags=re.IGNORECASE):
+                raw_frame_str = re.sub(rf"\b{re.escape(tw_key)}\b", "____", pat, count=1, flags=re.IGNORECASE)
+            elif "____" in pat:
+                raw_frame_str = pat
+            else:
+                raw_frame_str = f"... {pat} ____ ..."
+            if not raw_frame_str.startswith("..."):
+                raw_frame_str = f"... {raw_frame_str}"
+        if not raw_frame_str:
+            raw_frame_str = "... ____ ..."
         frame_str, surface_notes = processor._render_llm_surface_frame(raw_frame_str, s)
 
         # Pipeline Exit Invariant: Ensure target word or base headword NEVER leaks into Required Stem Frame outside '____'
@@ -72,8 +84,15 @@ def _build_vocabulary_context(
         for t_leak in (tw_val, bw_val):
             if t_leak and len(t_leak) >= 3 and re.search(rf"\b{re.escape(t_leak)}\b", frame_str, re.IGNORECASE):
                 frame_str = re.sub(rf"\bto\s+{re.escape(t_leak)}\b", "to", frame_str, flags=re.IGNORECASE)
+                if "____" not in frame_str:
+                    frame_str = re.sub(rf"\b{re.escape(t_leak)}\b", "____", frame_str, count=1, flags=re.IGNORECASE)
                 frame_str = re.sub(rf"\b{re.escape(t_leak)}\b", "", frame_str, flags=re.IGNORECASE).strip()
                 frame_str = re.sub(r"\s+", " ", frame_str)
+
+        # Physical Invariant Gate: Strictly single blank
+        if not re.search(r"_{2,}", frame_str):
+            frame_str = f"... {frame_str} ____ ..." if frame_str else "... ____ ..."
+            frame_str = re.sub(r"\s+", " ", frame_str).strip()
 
         ctx.blueprint_specs.append({
             "target_word": s.get("target_word"),

@@ -65,6 +65,50 @@ class WsdScoringDependenciesMixin:
                 return 0.0
             bound_noun = bound_tokens[-1]
 
+            # Taxonomic Genus Mapping: Dictionary definition superordinates (e.g. "person", "system", "device")
+            # represent open semantic categories rather than fixed bound collocations.
+            _GENUS_SUPERCLASS_MAP = {
+                "person": {"noun.person"},
+                "someone": {"noun.person"},
+                "somebody": {"noun.person"},
+                "human": {"noun.person"},
+                "people": {"noun.person"},
+                "man": {"noun.person"},
+                "woman": {"noun.person"},
+                "child": {"noun.person"},
+                "animal": {"noun.animal"},
+                "creature": {"noun.animal", "noun.person"},
+                "plant": {"noun.plant"},
+                "place": {"noun.location"},
+                "location": {"noun.location"},
+                "area": {"noun.location"},
+                "building": {"noun.artifact"},
+                "device": {"noun.artifact"},
+                "machine": {"noun.artifact"},
+                "system": {"noun.artifact", "noun.group"},
+                "substance": {"noun.substance"},
+                "feeling": {"noun.feeling"},
+                "emotion": {"noun.feeling"},
+                "action": {"noun.act"},
+                "activity": {"noun.act"},
+                "event": {"noun.event"},
+                "time": {"noun.time"},
+                "period": {"noun.time"},
+                "amount": {"noun.quantity"},
+            }
+            if bound_noun in _GENUS_SUPERCLASS_MAP:
+                target_lexfiles = _GENUS_SUPERCLASS_MAP[bound_noun]
+                try:
+                    mod_synsets = cls.get_wordnet_synsets(mod_noun, pos="n")
+                    if any(
+                        (s.lexfile() if callable(getattr(s, "lexfile", None)) else getattr(s, "lexfile", "")) in target_lexfiles
+                        for s in mod_synsets
+                    ):
+                        return 45.0
+                except Exception:
+                    pass
+                return 0.0
+
             # 1. Direct lemma / substring match
             if mod_noun == bound_noun or bound_noun in mod_noun or mod_noun in bound_noun:
                 return 60.0
@@ -524,6 +568,8 @@ class WsdScoringDependenciesMixin:
                             if _r_head is not None and tok.i + 1 < len(q_doc) and q_doc[tok.i + 1].text != ",":
                                 surface_dobjs = [ch for ch in _r_head.children if ch.dep_ == "appos" and ch.i > tok.i]
                         passive_dobjs = [ch for ch in tok.children if ch.dep_ in ("nsubjpass", "nsubj:pass")] if is_passive else []
+                        if is_passive and not passive_dobjs and tok.dep_ == "xcomp" and tok.head:
+                            passive_dobjs = [ch for ch in tok.head.children if ch.dep_ in ("nsubjpass", "nsubj:pass", "nsubj")]
                         rel_dobjs = [tok.head] if (
                             tok.dep_ == "relcl"
                             and tok.head.pos_ in ("NOUN", "PROPN", "PRON")
@@ -725,13 +771,17 @@ class WsdScoringDependenciesMixin:
                                 _requires_direct_object(p, require_quote_lex_match=True) and _pat_preps_satisfied(p)
                                 for p in all_pat_units
                             )
+                            has_inf_pat = has_clausal_inf and any(
+                                re.search(r"\bto\s+do\b", p.lower()) or "to-inf" in p.lower()
+                                for p in all_pat_units
+                            )
                             has_strictly_intrans_prep_pat = any(
                                 not _requires_direct_object(p)
                                 and len(p.lower().split()) >= 2
                                 and p.lower().split()[1] in cls._PATTERN_PREPS
                                 for p in all_pat_units
                             )
-                            if has_trans_pat:
+                            if has_trans_pat or has_inf_pat:
                                 score += 35
                             elif has_strictly_intrans_prep_pat and not has_trans_pat:
                                 score -= 30

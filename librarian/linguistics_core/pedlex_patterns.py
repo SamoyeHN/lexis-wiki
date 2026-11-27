@@ -478,6 +478,20 @@ class PedlexPatternsMixin:
                 min_k = node.get("min_tokens", 1)
                 max_k = node.get("max_tokens", 4)
                 slot_kind = node.get("slot_kind", "np")
+                # When a transitive frame with an infix NP slot is realized in passive voice (e.g. 'be condensed into'),
+                # the direct object is promoted to subject, leaving 0 surface tokens between verb and preposition.
+                if slot_kind == "np" and t_idx > 0:
+                    prev_t = word_toks[t_idx - 1]
+                    is_prev_passive = getattr(prev_t, "tag_", "") in ("VBN", "JJ") and (
+                        any(getattr(c, "dep_", "") in ("auxpass", "nsubjpass", "nsubj:pass") for c in getattr(prev_t, "children", []))
+                        or (
+                            getattr(prev_t, "dep_", "") == "xcomp"
+                            and getattr(prev_t, "head", None)
+                            and any(getattr(c, "dep_", "") in ("auxpass", "nsubjpass", "nsubj:pass") for c in getattr(prev_t.head, "children", []))
+                        )
+                    )
+                    if is_prev_passive and _match_step(c_idx + 1, t_idx):
+                        return True
                 for span_len in range(min_k, max_k + 1):
                     if t_idx + span_len <= n_toks:
                         if _spans_punctuation_boundary(t_idx, t_idx + span_len):

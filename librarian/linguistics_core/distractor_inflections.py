@@ -84,13 +84,36 @@ class DistractorInflectionsMixin:
             doc = nlp(ex)
         except Exception:
             return None
+        tw_variants = {tw}
+        if "-" in tw:
+            tw_variants.add(tw.replace("-", ""))
+            tw_variants.add(tw.replace("-", " "))
+        for v in list(tw_variants):
+            tw_variants.update(cls.inflected_forms(v))
+        tw_lemmas = {tw, cls.lemma_of(tw)}
+        if "-" in tw:
+            tw_lemmas.add(tw.replace("-", ""))
+            tw_lemmas.add(cls.lemma_of(tw.replace("-", "")))
+
         for tok in doc:
-            if tok.text.lower() == tw or tok.lemma_.lower() == tw:
+            tok_text_low = tok.text.lower()
+            tok_lemma_low = tok.lemma_.lower()
+            if (
+                tok_text_low in tw_variants
+                or tok_lemma_low in tw_lemmas
+                or tok_text_low.replace("-", "") in tw_variants
+                or tok_lemma_low.replace("-", "") in tw_lemmas
+            ):
                 tag_up = tok.tag_.upper()
-                if tag_up == "VBD" and any(
+                is_passive = (
+                    any(ch.dep_ in ("auxpass", "aux:pass", "nsubjpass", "nsubj:pass") for ch in tok.children)
+                    or (tag_up in ("VBN", "VBD") and any(ch.dep_ in ("aux", "auxpass") and ch.lemma_.lower() in ("be", "get") for ch in tok.children))
+                    or (tok.dep_ == "xcomp" and any(ch.dep_ in ("auxpass", "aux:pass") for ch in tok.children))
+                )
+                if is_passive or (tag_up == "VBD" and any(
                     ch.dep_ in ("aux", "auxpass", "aux:pass") and ch.lemma_.lower() in ("be", "have", "get")
                     for ch in tok.children
-                ):
+                )):
                     return "VBN"
                 return tag_up
         return None
@@ -382,6 +405,8 @@ class DistractorInflectionsMixin:
         inflected: List[str] = []
         for opt in base_options:
             opt_base = opt if cls._is_base_verb_lemma(opt) else (cls.lemma_of(opt) or opt)
+            if "-" in opt_base and cls._is_base_verb_lemma(opt_base.replace("-", "")):
+                opt_base = opt_base.replace("-", "")
             form = cls._inflect_verb(opt_base, tag)
             if not form or not cls._morph_form_valid(opt_base, form, tag):
                 return inflection_desc, base_options, target_word, "VB"  # unsafe to rewrite
@@ -418,7 +443,11 @@ class DistractorInflectionsMixin:
         # A1: an inflected target that is not an attested English form must never ship,
         # even when spaCy was willing to lemmatize it back to the base verb.
         if not cls.is_attested_form(new_target):
-            return inflection_desc, base_options, target_word, "VB"
+            if "-" in new_target and cls.is_attested_form(new_target.replace("-", "")):
+                new_target = new_target.replace("-", "")
+                inflected[target_index] = new_target
+            else:
+                return inflection_desc, base_options, target_word, "VB"
 
         # Lexical POS Boundary Guard: reject inflection ONLY if the inflected form is an independent
         # dictionary headword entry (`word == new_target`) with a non-verb POS (e.g. annoy[verb] -> annoyed[adjective entry]),

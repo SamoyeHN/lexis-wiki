@@ -641,7 +641,11 @@ class QuizFramesSlotSlicingMixin:
                     left_aux = f"{doc[t_tok.i - 2].text.lower()} {prev_t.text.lower()} "
 
             # Intransitive / Ergative Inchoative / Passive verb flag
-            is_tok_passive = any(c.dep_ in ("auxpass", "nsubjpass") for c in t_tok.children)
+            is_tok_passive = (
+                any(c.dep_ in ("auxpass", "nsubjpass") for c in t_tok.children)
+                or (t_tok.tag_ == "VBN" and any(c.dep_ in ("aux", "auxpass") and c.lemma_.lower() in ("be", "get") for c in t_tok.children))
+                or (verb_form_tag == "VBN" and any(c.dep_ in ("auxpass", "nsubjpass") or (c.dep_ == "aux" and c.lemma_.lower() in ("be", "get")) for c in t_tok.children))
+            )
 
             # 3a. Infinitive complement (`to + V-base`)
             if (
@@ -699,7 +703,10 @@ class QuizFramesSlotSlicingMixin:
                         else prep_c.text.lower()
                     )
                     return f"... {left_aux}____ {_mid_slot} {_prep_surf}"
-                return f"... {left_aux}____ {prep_c.text.lower()}{_pobj_phrase(prep_c)}"
+                _p_aux = left_aux
+                if is_tok_passive and not _p_aux:
+                    _p_aux = "be " if verb_form_tag == "VBN" else "was/were "
+                return f"... {_p_aux}____ {prep_c.text.lower()}{_pobj_phrase(prep_c)}"
 
             # 3c. Direct object (`dobj` / `obj` / `oprd`)
             _temporal_np_nouns = {
@@ -1049,8 +1056,18 @@ class QuizFramesSlotSlicingMixin:
                     return f"... {np_mid} ____ {prep_after.text.lower()}"
                 return f"... {np_mid} ____"
 
-            # 4c. Noun + bound preposition (`the ____ of the copyright laws`, `a ____ of doctors`)
+            # 4c. Noun + bound preposition (`well in advance of the meeting`, `in advance of`, `the ____ of the copyright laws`, `a ____ of doctors`)
             if prep_after is not None:
+                p_left = t_tok.head if (t_tok.dep_ == "pobj" and t_tok.head and t_tok.head.pos_ in ("ADP", "SCONJ") and t_tok.head.i < t_tok.i) else None
+                if p_left is not None and not _is_forbidden(p_left.lemma_.lower()):
+                    adv_left = next((c.text.lower() for c in p_left.children if c.dep_ == "advmod" and c.i < p_left.i), "")
+                    if not adv_left and p_left.i > 0 and doc[p_left.i - 1].text.lower() in ("well", "far", "way", "right", "just", "long"):
+                        adv_left = doc[p_left.i - 1].text.lower()
+                    p_str = f"{adv_left} {p_left.text.lower()}".strip()
+                    if det_tok is not None:
+                        d_real = _normalize_det(det_tok.text, det_tok_obj=det_tok)
+                        p_str = f"{p_str} {d_real}"
+                    return f"... {p_str} ____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
                 d_pref = det_str or (default_noun_det if not is_pure_uncountable_target else "")
                 return f"... {d_pref + ' ' if d_pref else ''}____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
 

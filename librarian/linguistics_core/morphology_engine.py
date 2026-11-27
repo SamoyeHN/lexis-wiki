@@ -145,7 +145,13 @@ class MorphologyEngineMixin:
 
         l1 = cls.lemma_of(c1) or c1
         l2 = cls.lemma_of(c2) or c2
-        if l1 == l2 or cls._normalize_bre_ame(l1) == cls._normalize_bre_ame(l2):
+        if c1.replace("-", "") == c2.replace("-", ""):
+            return True
+        if (l1 == l2 or cls._normalize_bre_ame(l1) == cls._normalize_bre_ame(l2)) and (
+            c1.replace("-", "") == c2.replace("-", "")
+            or cls._edit_distance_le2(c1, c2)
+            or cls._normalize_bre_ame(c1) == cls._normalize_bre_ame(c2)
+        ):
             return True
 
         # Check PedLex entry variants / alias_of
@@ -696,6 +702,8 @@ class MorphologyEngineMixin:
         """Returns True if `w` is an attested base/infinitive verb lemma in WordNet or PedLex."""
         if not w:
             return False
+        if "-" in w and cls._is_base_verb_lemma(w.replace("-", "")):
+            return True
         if w in cls._IRREGULAR_VERB_FORMS:
             return True
         try:
@@ -738,6 +746,19 @@ class MorphologyEngineMixin:
     @lru_cache(maxsize=32768)
     def _analyse_word_form_cached(cls, w: str) -> Tuple[Optional[str], str]:
         if not w or " " in w:
+            return (None, w)
+        if "-" in w:
+            closed_w = w.replace("-", "")
+            if cls._is_base_verb_lemma(closed_w):
+                return ("VB", closed_w)
+            parts = w.split("-")
+            if len(parts) == 2:
+                nlp = cls.get_spacy()
+                if nlp:
+                    d_tail = nlp(parts[1])
+                    if d_tail and len(d_tail) > 0:
+                        tail_lem = d_tail[0].lemma_.lower().strip() or parts[1]
+                        return (d_tail[0].tag_, f"{parts[0]}-{tail_lem}")
             return (None, w)
         if w in cls._INVARIANT_PLURAL_NOUNS or (len(w) > 4 and w.endswith("ics")):
             return (None, w)
@@ -1332,6 +1353,9 @@ class MorphologyEngineMixin:
             return False
         if f in cls._attested_form_cache:
             return cls._attested_form_cache[f]
+        if "-" in f and cls.is_attested_form(f.replace("-", "")):
+            cls._attested_form_cache[f] = True
+            return True
         verdict = False
         try:
             wn = cls.get_wordnet()
