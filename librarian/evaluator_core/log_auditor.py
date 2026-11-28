@@ -51,6 +51,7 @@ class LogEvaluator:
     # Cache & thread-lock for repeated audits (dashboard polls /api/hero-board).
     _AUDIT_LOCK = threading.Lock()
     _AUDIT_CACHE: Dict[str, Any] = {"key": None, "value": None}
+    _FILE_AUDIT_CACHE: Dict[Tuple[str, float, int], Optional[Dict[str, Any]]] = {}
 
     @classmethod
     def parse_log_file(cls, log_path: Path) -> Optional[Dict[str, Any]]:
@@ -383,6 +384,8 @@ class LogEvaluator:
 
         entries = []
         for path in logs_dir.glob("*.log"):
+            if path.name == "dashboard.log" or path.name.startswith("dashboard.log."):
+                continue
             try:
                 st = path.stat()
             except OSError:
@@ -407,18 +410,28 @@ class LogEvaluator:
         model_stats: Dict[str, Dict[str, Any]] = {}
 
         # Worker for ThreadPoolExecutor
-        def _process_one(log_file: Path) -> Optional[Dict[str, Any]]:
+        def _process_one(entry: Tuple[Path, float, int]) -> Optional[Dict[str, Any]]:
+            log_file, mt, sz = entry
+            fkey = (log_file.as_posix(), mt, sz)
+            if use_cache:
+                with cls._AUDIT_LOCK:
+                    if fkey in cls._FILE_AUDIT_CACHE:
+                        return cls._FILE_AUDIT_CACHE[fkey]
             parsed = cls.parse_log_file(log_file)
             if not parsed:
-                return None
-            evaluation = cls.evaluate_log(parsed)
-            if evaluation.get("task_type") == "intermediate_prose":
-                return None
+                evaluation = None
+            else:
+                ev = cls.evaluate_log(parsed)
+                evaluation = None if ev.get("task_type") == "intermediate_prose" else ev
+            with cls._AUDIT_LOCK:
+                if len(cls._FILE_AUDIT_CACHE) > 2000:
+                    cls._FILE_AUDIT_CACHE.clear()
+                cls._FILE_AUDIT_CACHE[fkey] = evaluation
             return evaluation
 
         # Parallelize log parsing and evaluation (preserves recency order)
         with ThreadPoolExecutor() as executor:
-            raw_evaluations = list(executor.map(_process_one, [e[0] for e in entries]))
+            raw_evaluations = list(executor.map(_process_one, entries))
 
         for evaluation in raw_evaluations:
             if not evaluation:

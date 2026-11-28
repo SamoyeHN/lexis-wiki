@@ -116,6 +116,7 @@ class TTSService:
         self._kokoro_instance = None
         self._voice_catalog_cache: dict[str, dict] = {}
         self._silent_mp3_cache: dict[float, bytes] = {}
+        self._edge_refresh_started = False
         self._refresh()
 
     @property
@@ -153,20 +154,21 @@ class TTSService:
             self._kokoro_instance = Kokoro(str(model_path), str(voices_path))
             return self._kokoro_instance
 
-    def _extract_edge_voices(self) -> dict:
+    def _extract_edge_voices(self, allow_network: bool = True) -> dict:
         """Extracts English Female and Male voices directly from the Python `edge_tts` library."""
         raw_voices = None
-        try:
-            import edge_tts
-            all_voices = _run_coro_sync(edge_tts.list_voices(), timeout=8.0)
-            if all_voices:
-                raw_voices = [
-                    v for v in all_voices
-                    if str(v.get("Locale", "")).startswith(("en-US", "en-GB", "en-AU", "en-CA"))
-                ]
-        except (OSError, RuntimeError, TimeoutError, ImportError) as e:
-            logger.debug("Could not extract live edge-tts voices: %s", e)
-            raw_voices = None
+        if allow_network:
+            try:
+                import edge_tts
+                all_voices = _run_coro_sync(edge_tts.list_voices(), timeout=8.0)
+                if all_voices:
+                    raw_voices = [
+                        v for v in all_voices
+                        if str(v.get("Locale", "")).startswith(("en-US", "en-GB", "en-AU", "en-CA"))
+                    ]
+            except (OSError, RuntimeError, TimeoutError, ImportError) as e:
+                logger.debug("Could not extract live edge-tts voices: %s", e)
+                raw_voices = None
 
         if not raw_voices:
             raw_voices = list(_EDGE_FALLBACK_VOICES)
@@ -313,14 +315,34 @@ class TTSService:
             "default_male": "am_michael",
         }
 
+    def _warm_edge_voices_async(self) -> None:
+        """Populates the live Edge TTS voice catalog in the background without blocking startup."""
+        with self._lock:
+            if self._edge_refresh_started:
+                return
+            self._edge_refresh_started = True
+
+        def _bg():
+            try:
+                live = self._extract_edge_voices(allow_network=True)
+                with self._lock:
+                    self._voice_catalog_cache["edge"] = live
+            except Exception as e:
+                logger.debug("Background Edge TTS voice refresh failed: %s", e)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
     def get_available_voices(self, engine: str | None = None, force_refresh: bool = False) -> dict:
         """
         Returns the extracted Female & Male voice catalogs from the Python TTS controls.
         If `engine` is specified ('edge' or 'kokoro'), returns that engine's catalog dict;
         otherwise returns {"edge": ..., "kokoro": ...}.
         """
-        if force_refresh or "edge" not in self._voice_catalog_cache:
-            self._voice_catalog_cache["edge"] = self._extract_edge_voices()
+        if force_refresh:
+            self._voice_catalog_cache["edge"] = self._extract_edge_voices(allow_network=True)
+        elif "edge" not in self._voice_catalog_cache:
+            self._voice_catalog_cache["edge"] = self._extract_edge_voices(allow_network=False)
+            self._warm_edge_voices_async()
         if force_refresh or "kokoro" not in self._voice_catalog_cache:
             self._voice_catalog_cache["kokoro"] = self._extract_kokoro_voices()
 
