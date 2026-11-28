@@ -236,8 +236,8 @@ class DistractorFallbacksMixin:
                         else:
                             index["tier1"][p]["consonant"].append(w_low)
 
-                    # Tier 2: B2-C1 academic/general words (core_level >= 1 or is_awl == 1)
-                    if (lvl >= 1 or awl == 1) and (p, w_low) not in seen["tier2"]:
+                    # Tier 2: B2-C1 academic/mid-high core words (exclude top-1000 basic A1/A2 unless AWL)
+                    if (lvl in (1, 2) or awl == 1) and (p, w_low) not in seen["tier2"]:
                         seen["tier2"].add((p, w_low))
                         index["tier2"][p]["all"].append(w_low)
                         if is_v:
@@ -284,6 +284,7 @@ class DistractorFallbacksMixin:
         target_count: int = 3,
         exclude_words: Optional[Union[Set[str], List[str]]] = None,
         prefer_initial_vowel: Optional[bool] = None,
+        passage_level: Optional[str] = None,
     ) -> List[str]:
         """
         Deterministically selects CEFR-stratified, collision-free distractor candidates
@@ -314,9 +315,13 @@ class DistractorFallbacksMixin:
 
         index = cls._ensure_corpus_fallback_index()
 
+        eff_passage = passage_level or cls.get_current_passage_cefr()
         t_lvl = cls.get_word_cefr(clean_target) or "B2"
         t_rank = cls.CEFR_ORDER.get(t_lvl, 4)
-        tier = "tier1" if t_rank <= 3 else "tier2"
+        p_rank = cls.CEFR_ORDER.get(eff_passage, 0) if eff_passage else 0
+        eff_rank = max(t_rank, p_rank)
+        tier = "tier1" if eff_rank <= 3 else "tier2"
+        min_cand_rank = 3 if eff_rank >= 5 else (2 if eff_rank == 4 else 1)
 
         tier_pool = index.get(tier, {}).get(p_code, {"all": [], "vowel": [], "consonant": []})
 
@@ -353,7 +358,12 @@ class DistractorFallbacksMixin:
                     continue
                 if cls.double_key_collision(clean_target, cand, pos=pos_norm)[0]:
                     continue
-                if not cls.is_cefr_compliant_distractor(cand, clean_target):
+                if min_cand_rank > 1:
+                    c_lvl = cls.get_word_cefr(cand)
+                    c_rank = cls.CEFR_ORDER.get(c_lvl, 0) if c_lvl else 0
+                    if c_rank and c_rank < min_cand_rank:
+                        continue
+                if not cls.is_cefr_compliant_distractor(cand, clean_target, passage_level=eff_passage):
                     continue
                 candidates.append(cand)
                 if len(candidates) >= target_count:

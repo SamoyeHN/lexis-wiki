@@ -218,6 +218,7 @@ class QuizSkeletonDistractorsMixin:
                     target_count=needed,
                     exclude_words=excl_set | set(cleared_list) | {w_lower},
                     prefer_initial_vowel=pref_vowel,
+                    passage_level=ctx.passage_cefr,
                 )
                 for cand in fb_cands:
                     if len(cleared_list) >= 3:
@@ -232,6 +233,7 @@ class QuizSkeletonDistractorsMixin:
                     target_count=needed,
                     exclude_words=excl_set | set(cleared_list) | {w_lower},
                     prefer_initial_vowel=None,
+                    passage_level=ctx.passage_cefr,
                 )
                 for cand in fb_cands:
                     if len(cleared_list) >= 3:

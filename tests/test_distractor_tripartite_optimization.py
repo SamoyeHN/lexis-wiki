@@ -244,3 +244,25 @@ def test_wsd_local_window_prevents_distant_clause_drift_on_constrict():
     best_idx = LE._lock_sense(entry, quote=quote, target_pos="verb")
     assert best_idx == 0, f"Expected Sense 0 (narrower/tighter), got Sense {best_idx}"
 
+
+def test_corpus_fallback_enforces_cefr_floor_and_ceiling_on_c1_passage():
+    """Corpus fallback must enforce both CEFR floor (no A1/A2 giveaways like 'nice'/'dark' on C1)
+    and CEFR ceiling even when cefrpy rates the target word itself as A1/B1."""
+    for target in ("renewable", "extinct"):
+        cands = LE.get_corpus_fallback_candidates(
+            target, pos="a", target_count=5, passage_level="C1"
+        )
+        assert len(cands) == 5, f"Expected 5 C1 fallback candidates for {target}, got {cands}"
+        assert "nice" not in cands and "dark" not in cands, f"Basic A1 word leaked into C1 fallback: {cands}"
+        for c in cands:
+            lvl = LE.get_word_cefr(c)
+            if lvl:
+                assert LE.CEFR_ORDER[lvl] >= 3, f"Sub-B1 fallback '{c}' ({lvl}) leaked for {target} on C1"
+            assert LE.is_cefr_compliant_distractor(c, target, passage_level="C1"), (
+                f"Fallback '{c}' violated C1 ceiling for {target}"
+            )
+
+    a2_cands = LE.get_corpus_fallback_candidates("simple", pos="a", target_count=3, passage_level="A2")
+    assert len(a2_cands) == 3, f"Expected 3 A2 fallback candidates without starvation, got {a2_cands}"
+
+
