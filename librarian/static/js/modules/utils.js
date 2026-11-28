@@ -9,10 +9,13 @@ export function esc(str) {
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 
-export function formatRelativeTime(isoString) {
-    if (!isoString) return '';
+export function formatRelativeTime(val) {
+    if (!val) return '';
     try {
-        const date = new Date(isoString);
+        const date = typeof val === 'number'
+            ? new Date(val < 1e12 ? val * 1000 : val)
+            : new Date(val);
+        if (Number.isNaN(date.getTime())) return '';
         const now = new Date();
         const diffSeconds = Math.floor((now - date) / 1000);
         if (diffSeconds < 60) return 'Just now';

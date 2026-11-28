@@ -389,6 +389,38 @@ class TestListeningScenariosQuality(unittest.TestCase):
         self.assertIn("Ryan, Turn 2", q0["design_audit"])
         self.assertIn("Detail", q0["design_audit"])
 
+    def test_08_no_extreme_overstatement_operators_and_parallel_prompt(self) -> None:
+        """Verify listening archetypes and prompt ban cartoonish extreme-absolute distractors."""
+        archetypes_path = PROJECT_ROOT / "librarian" / "data" / "functional_dialogue_archetypes.json"
+        data = json.loads(archetypes_path.read_text(encoding="utf-8"))
+
+        operators: list[str] = []
+
+        def _walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k.startswith("distractor_") and k.endswith("_operator") and isinstance(v, str):
+                        operators.append(v)
+                    else:
+                        _walk(v)
+            elif isinstance(obj, list):
+                for x in obj:
+                    _walk(x)
+
+        _walk(data)
+        self.assertGreater(len(operators), 0)
+        for op in operators:
+            low = op.lower()
+            self.assertNotIn("overstatement", low, f"Extreme operator leaked: {op}")
+            self.assertNotIn("extreme absolute", low, f"Extreme operator leaked: {op}")
+            self.assertNotIn("extreme rule", low, f"Extreme operator leaked: {op}")
+
+        prompt_text = LISTENING_PROMPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("Grammatical Parallelism", prompt_text)
+        self.assertIn("Zero Extreme-Absolute Giveaways", prompt_text)
+        self.assertIn("completely impossible", prompt_text)
+        self.assertIn("strictly forbidden", prompt_text)
+
 
 
 def _build_listening_generation_prompt(sc: Dict[str, Any], bp: Dict[str, Any]) -> str:

@@ -440,6 +440,7 @@ if (typeof window !== 'undefined') {
     window.runGraphSimulation = runGraphSimulation;
     window.drawGraph = drawGraph;
     window.setupGraphHandlers = setupGraphHandlers;
+    window.previewNode = previewNode;
     window.zoomIn = zoomIn;
     window.zoomOut = zoomOut;
     window.zoomReset = zoomReset;
@@ -455,6 +456,7 @@ export {
     runGraphSimulation,
     drawGraph,
     setupGraphHandlers,
+    previewNode,
     zoomIn,
     zoomOut,
     zoomReset,

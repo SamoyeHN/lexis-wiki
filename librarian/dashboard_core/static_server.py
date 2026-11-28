@@ -3,11 +3,52 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 import shutil
 import urllib.parse
 from pathlib import Path
 
 from ..config import config
+
+
+def _compute_static_version(static_root: Path, rel_path: str) -> str:
+    """Return integer mtime version string for a static asset."""
+    clean = rel_path.lstrip("/")
+    if clean == "js/modules/index.js":
+        modules_dir = static_root / "js" / "modules"
+        mtimes = [int(p.stat().st_mtime) for p in modules_dir.glob("*.js") if p.is_file()]
+        if mtimes:
+            return str(max(mtimes))
+    target = static_root / clean
+    if target.exists() and target.is_file():
+        return str(int(target.stat().st_mtime))
+    return "0"
+
+
+def _inject_dashboard_asset_versions(html_content: str, static_root: Path) -> str:
+    """Rewrite core dashboard asset URLs to include ?v=<mtime> for automatic cache-busting."""
+    pattern = re.compile(
+        r'/static/(css/dashboard\.css|js/dashboard\.js|js/modules/index\.js)(?:\?v=[^"\'\s>]+)?'
+    )
+    return pattern.sub(
+        lambda m: f"/static/{m.group(1)}?v={_compute_static_version(static_root, m.group(1))}",
+        html_content,
+    )
+
+
+def _inject_es_module_versions(js_content: str, file_path: Path) -> str:
+    """Rewrite relative ES module imports in js/modules/ to include ?v=<target_mtime>."""
+    pattern = re.compile(r"""from\s+(['"])(\./[^'"]+?\.js)(?:\?v=[^'"]+)?\1""")
+
+    def _replace(match: re.Match[str]) -> str:
+        quote = match.group(1)
+        rel_import = match.group(2)
+        target = (file_path.parent / rel_import).resolve()
+        if target.exists() and target.is_file():
+            return f"from {quote}{rel_import}?v={int(target.stat().st_mtime)}{quote}"
+        return match.group(0)
+
+    return pattern.sub(_replace, js_content)
 
 
 class DashboardStaticMixin:
@@ -194,9 +235,12 @@ class DashboardStaticMixin:
         self.end_headers()
 
         template_path = Path(__file__).resolve().parent.parent / "templates" / "dashboard.html"
+        static_root = (Path(__file__).resolve().parent.parent / "static").resolve()
 
         if template_path.exists():
-            html_content = template_path.read_text(encoding="utf-8")
+            html_content = _inject_dashboard_asset_versions(
+                template_path.read_text(encoding="utf-8"), static_root
+            )
         else:
             html_content = "<h1>Error: templates/dashboard.html not found!</h1>"
 
@@ -238,6 +282,14 @@ class DashboardStaticMixin:
             self.send_header("Expires", "0")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
+
+            modules_dir = (static_root / "js" / "modules").resolve()
+            if file_path.suffix == ".js" and file_path.is_relative_to(modules_dir):
+                js_content = _inject_es_module_versions(
+                    file_path.read_text(encoding="utf-8"), file_path
+                )
+                self.wfile.write(js_content.encode("utf-8"))
+                return
 
             with open(file_path, "rb") as f:
                 self.wfile.write(f.read())

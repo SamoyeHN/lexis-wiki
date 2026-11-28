@@ -1127,7 +1127,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -1160,7 +1160,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -1514,7 +1514,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -1547,7 +1547,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -2028,7 +2028,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -2061,7 +2061,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -2410,7 +2410,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -2443,7 +2443,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -2822,7 +2822,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -2855,7 +2855,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -3204,7 +3204,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -3237,7 +3237,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -3602,7 +3602,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -3635,7 +3635,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -3984,7 +3984,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -4017,7 +4017,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -4410,7 +4410,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -4443,7 +4443,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -4785,7 +4785,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -4818,7 +4818,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -5185,7 +5185,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -5218,7 +5218,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -5560,7 +5560,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -5593,7 +5593,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -5972,7 +5972,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -6005,7 +6005,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -6354,7 +6354,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -6387,7 +6387,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -6764,7 +6764,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -6797,7 +6797,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -7139,7 +7139,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -7172,7 +7172,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -7533,7 +7533,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -7566,7 +7566,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -7901,7 +7901,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -7934,7 +7934,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -8294,7 +8294,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -8327,7 +8327,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -8657,7 +8657,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -8690,7 +8690,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -9039,7 +9039,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -9072,7 +9072,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -9397,7 +9397,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -9430,7 +9430,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -9781,7 +9781,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -9814,7 +9814,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -10139,7 +10139,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -10172,7 +10172,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -10523,7 +10523,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -10556,7 +10556,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -10881,7 +10881,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -10914,7 +10914,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -11263,7 +11263,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -11296,7 +11296,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
@@ -11626,7 +11626,7 @@
                 "correct_operator": "Paraphrase Operator (accurately restate the specific question, requirement, or point Speaker 1 raises around Turn 3)",
                 "distractor_1_operator": "Opposite Detail / Polarity Flip (invert the key detail, timeframe, or condition mentioned in the dialogue)",
                 "distractor_2_operator": "Cross-Turn Detail Mix-up (borrow a detail from Turns 5-8 that belongs to a different point)",
-                "distractor_3_operator": "Overstatement / Scope Distortion (exaggerate a reasonable question or requirement into an extreme rule)"
+                "distractor_3_operator": "Scope / Condition Shift (misstate a specific or partial requirement as applying more broadly or to a different aspect of the situation)"
               }
             },
             {
@@ -11659,7 +11659,7 @@
                 "correct_operator": "Paraphrase Operator (capture the schedule, method, or conditional arrangement actually discussed across Turns 5-6)",
                 "distractor_1_operator": "Condition / Availability Flip (invert which day, time, or condition works vs. doesn't work in the dialogue)",
                 "distractor_2_operator": "Unadopted / Confused Detail Trap (present a busy conflict or rejected option as the agreed plan)",
-                "distractor_3_operator": "Overstatement Trap (turn a specific or conditional statement into an extreme absolute)"
+                "distractor_3_operator": "Premature / Unconditional Assumption (present a tentative, conditional, or partial arrangement as already finalized or broader than stated)"
               }
             },
             {
