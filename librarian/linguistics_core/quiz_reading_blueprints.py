@@ -152,9 +152,16 @@ class QuizReadingBlueprintsMixin:
             if not raw_topic:
                 return ""
             t = raw_topic.strip()
-            if not t.lower().startswith(("the ", "a ", "an ", "this ", "these ")):
-                return f"the {t}" if not t.endswith("s") else t
-            return t
+            if t.lower().startswith(("the ", "a ", "an ", "this ", "these ")):
+                return t
+            if t[0].isupper():
+                needs_the = t.startswith(("United ", "People's ")) or t.endswith((
+                    "States", "Kingdom", "Union", "Republic", "Group", "Force",
+                    "Station", "Program", "Administration", "Organization",
+                    "Association", "Department", "Ministry",
+                ))
+                return f"the {t}" if needs_the else t
+            return f"the {t}" if not t.endswith("s") else t
 
         def score_sentence(s_text: str) -> int:
             score = 10
@@ -524,9 +531,9 @@ class QuizReadingBlueprintsMixin:
         else:
             if c_topic:
                 causal_stem = (
-                    f'In the "{c_title}" section, what causal mechanism directly affects {c_topic}?'
+                    f'In the "{c_title}" section, what key cause-and-effect relationship is described regarding {c_topic}?'
                     if has_custom_c
-                    else f"According to Paragraph {causal_anchor[0]}, what causal mechanism directly affects {c_topic}?"
+                    else f"According to Paragraph {causal_anchor[0]}, what key cause-and-effect relationship is described regarding {c_topic}?"
                 )
             else:
                 causal_stem = (
@@ -546,7 +553,7 @@ class QuizReadingBlueprintsMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.MODALITY_ESCALATION,
-                    blueprint_instruction="Assert that this causal mechanism inevitably triggers an absolute and irreversible collapse.",
+                    blueprint_instruction="Over-generalize this causal link into an absolute, universal rule or claim it is the sole factor governing all outcomes (e.g., 'solely determines', 'exclusively guarantees').",
                     target_misconception="Sensationalizing an empirical correlation into an unavoidable certainty.",
                 ),
                 ReadingDistractorSpec(
@@ -910,9 +917,9 @@ class QuizReadingBlueprintsMixin:
         else:
             if f_topic:
                 factual_stem = (
-                    f'According to the "{f_title}" section, what specific operational condition applies to {f_topic}?'
+                    f'According to the "{f_title}" section, what specific development or requirement is noted regarding {f_topic}?'
                     if has_custom_f
-                    else f"According to Paragraph {factual_anchor[0]}, what specific operational condition applies to {f_topic}?"
+                    else f"According to Paragraph {factual_anchor[0]}, what specific development or requirement is noted regarding {f_topic}?"
                 )
             else:
                 factual_stem = (
@@ -932,7 +939,7 @@ class QuizReadingBlueprintsMixin:
                 ),
                 ReadingDistractorSpec(
                     operator=DistractorFallacyOperator.MODALITY_ESCALATION,
-                    blueprint_instruction="Assert that this operational condition is an unavoidable, catastrophic failure mode.",
+                    blueprint_instruction="Escalate this specific detail into an unconditional, all-encompassing mandate or claim it applies universally without exception (e.g., 'exclusively requires', 'guarantees in every case').",
                     target_misconception="Sensationalizing a routine operational constraint.",
                 ),
                 ReadingDistractorSpec(

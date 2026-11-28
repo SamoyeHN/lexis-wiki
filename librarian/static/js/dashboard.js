@@ -106,8 +106,7 @@
         seriesList.forEach(s => {
             const meta = seriesCatalog[s] || {};
             const dispName = meta.display || getSeriesDisplayName(s);
-            const edBadge = meta.edition ? `<span class="badge bg-info-subtle text-info border border-info-subtle px-1.5 py-0 rounded ms-auto" style="font-size: 0.65rem; font-weight: 600;">${esc(meta.edition)}</span>` : '';
-            html += `<li><a class="dropdown-item py-1.5 d-flex align-items-center justify-content-between text-truncate ${selectedSeries === s ? 'active' : ''}" href="#" onclick="setSeriesFilter('${esc(s).replace(/'/g, "\\'")}'); return false;" title="${esc(s)}"><span class="text-truncate d-flex align-items-center me-2"><i class="bi bi-journal-bookmark-fill me-2 text-info" style="width: 16px; text-align: center;"></i>${esc(dispName)}</span>${edBadge}</a></li>`;
+            html += `<li><a class="dropdown-item py-1.5 d-flex align-items-center text-truncate ${selectedSeries === s ? 'active' : ''}" href="#" onclick="setSeriesFilter('${esc(s).replace(/'/g, "\\'")}'); return false;" title="${esc(s)}"><span class="text-truncate d-flex align-items-center"><i class="bi bi-journal-bookmark-fill me-2 text-info" style="width: 16px; text-align: center;"></i>${esc(dispName)}</span></a></li>`;
         });
 
         if (standaloneCount > 0) {
@@ -1934,8 +1933,119 @@
     function openReAuditModal() {
         const modal = document.getElementById('re-audit-modal');
         const inst = bootstrap.Modal.getOrCreateInstance(modal);
+        const unitSel = document.getElementById('re-audit-unit');
+        const _fillUnitSelect = (filesList) => {
+            if (!unitSel) return 0;
+            const prevVal = unitSel.value || '';
+            const unitSet = new Set();
+            if (Array.isArray(filesList)) {
+                filesList.forEach(f => {
+                    const u = f.stem || (f.name ? String(f.name).replace(/\.md$/i, '') : '');
+                    if (u) unitSet.add(u);
+                });
+            }
+            if (unitSet.size === 0 && compiledUnits && typeof compiledUnits === 'object') {
+                Object.values(compiledUnits).forEach(v => {
+                    if (Array.isArray(v)) {
+                        v.forEach(p => {
+                            const m = String(p || '').match(/wiki\/([^/]+)\//);
+                            if (m && m[1]) unitSet.add(m[1]);
+                        });
+                    }
+                });
+            }
+            const sortedUnits = Array.from(unitSet).sort((a, b) => a.localeCompare(b));
+            const escU = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            const opts = ['<option value="">All Units</option>'];
+            sortedUnits.forEach(u => {
+                opts.push(`<option value="${escU(u)}">${escU(u)}</option>`);
+            });
+            unitSel.innerHTML = opts.join('');
+            unitSel.value = sortedUnits.includes(prevVal) ? prevVal : '';
+            return sortedUnits.length;
+        };
+        if (_fillUnitSelect(rawFiles) === 0) {
+            fetch('/api/raw-files')
+                .then(r => r.json())
+                .then(d => {
+                    if (Array.isArray(d.files)) {
+                        rawFiles = d.files;
+                        _fillUnitSelect(rawFiles);
+                    }
+                })
+                .catch(() => {});
+        }
+        onReAuditTargetChange();
         if (lastReAuditResult) showReAuditSummary(lastReAuditResult);
         inst.show();
+    }
+
+    function updateReAuditProgress(job) {
+        const panel = document.getElementById('re-audit-live-panel');
+        const txt = document.getElementById('re-audit-progress-text');
+        const pct = document.getElementById('re-audit-progress-pct');
+        const bar = document.getElementById('re-audit-progress-bar');
+        const logsEl = document.getElementById('re-audit-live-logs');
+        if (!panel || !job) return;
+
+        panel.classList.remove('d-none');
+        const p = Math.max(0, Math.min(100, Number(job.progress || 0)));
+        if (pct) pct.textContent = `${p}%`;
+        if (bar) {
+            bar.style.width = `${p}%`;
+            bar.classList.toggle('progress-bar-animated', job.status === 'running');
+            bar.classList.toggle('bg-danger', job.status === 'failed');
+            bar.classList.toggle('bg-success', job.status !== 'failed');
+        }
+        const logs = Array.isArray(job.logs) ? job.logs : [];
+        const latest = logs.length > 0 ? logs[logs.length - 1] : (job.status === 'running' ? 'Running…' : job.status);
+        if (txt) txt.textContent = latest;
+        if (logsEl) {
+            logsEl.textContent = logs.join('\n');
+            logsEl.scrollTop = logsEl.scrollHeight;
+        }
+    }
+
+    function onReAuditTargetChange() {
+        const targetEl = document.getElementById('re-audit-target');
+        const tplEl = document.getElementById('re-audit-template');
+        const flaggedEl = document.getElementById('re-audit-only-flagged');
+        const targetVal = targetEl ? targetEl.value : 'quiz';
+
+        if (tplEl) {
+            const prevTpl = tplEl.value || '';
+            const quizOpts = [
+                ['', 'All Types'],
+                ['vocabulary', 'Vocabulary'],
+                ['reading', 'Reading'],
+                ['translation', 'Translation'],
+                ['listening', 'Listening'],
+                ['video', 'Video'],
+                ['cloze', 'Cloze'],
+            ];
+            const extOpts = [
+                ['', 'All Types'],
+                ['vocabulary', 'Vocabulary'],
+                ['grammar', 'Grammar'],
+                ['summary', 'Summary'],
+                ['mindmap', 'Mindmap'],
+            ];
+            if (targetVal === 'all') {
+                tplEl.innerHTML = '<option value="">All Types</option>';
+                tplEl.value = '';
+                tplEl.disabled = true;
+            } else {
+                const list = targetVal === 'extraction' ? extOpts : quizOpts;
+                tplEl.innerHTML = list.map(([v, lbl]) => `<option value="${v}">${lbl}</option>`).join('');
+                tplEl.disabled = false;
+                tplEl.value = list.some(([v]) => v === prevTpl) ? prevTpl : '';
+            }
+        }
+        if (flaggedEl) {
+            const isExtOnly = targetVal === 'extraction';
+            flaggedEl.disabled = isExtOnly;
+            if (isExtOnly) flaggedEl.checked = false;
+        }
     }
 
     function setReAuditRunning(running) {
@@ -1946,17 +2056,35 @@
         if (btn) btn.disabled = running;
         if (spinner) spinner.classList.toggle('d-none', !running);
         if (icon) icon.classList.toggle('d-none', running);
-        if (label) label.textContent = running ? 'RE-AUDITING…' : 'RE-AUDIT ALL';
+        if (label) label.textContent = running ? 'RE-AUDITING…' : 'RUN RE-AUDIT';
     }
 
     function startReAuditAll() {
-        if (!confirm('Re-audit ALL quiz handouts with the Level-2 expert judge?\n\nThis is read-only and only calls the judge model (the generator is not re-run).')) return;
+        const target = (document.getElementById('re-audit-target')?.value || 'quiz').trim();
+        const template = (document.getElementById('re-audit-template')?.value || '').trim();
+        const unit = (document.getElementById('re-audit-unit')?.value || '').trim();
+        const onlyFlagged = !!document.getElementById('re-audit-only-flagged')?.checked;
+
+        const scopeDesc = [
+            `Target: ${target}`,
+            template ? `Type: ${template}` : 'Type: All',
+            unit ? `Unit: ${unit}` : 'Unit: ALL',
+            onlyFlagged ? 'Filter: Only Failed/Unaudited' : null,
+        ].filter(Boolean).join(' | ');
+
+        if (!confirm(`Run Level-2 expert re-audit?\n\n${scopeDesc}\n\nThis is read-only and only calls the judge model (the generator is not re-run).`)) return;
         setReAuditRunning(true);
         showReAuditSummary(null, true);
+        updateReAuditProgress({ status: 'running', progress: 0, logs: [`Starting re-audit (${scopeDesc})…`] });
         fetch('/api/re-audit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workers: 2 })
+            body: JSON.stringify({
+                target,
+                template: template || null,
+                units: unit ? [unit] : null,
+                only_flagged: onlyFlagged,
+            })
         })
         .then(r => r.json())
         .then(data => {
@@ -1974,14 +2102,57 @@
         });
     }
 
+    function regenerateFromReAudit(unit, template) {
+        if (!unit || !template) return;
+        const count = (template === 'reading' || template === 'listening') ? 5 : 10;
+        fetch('/api/generate-quiz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: unit, template, count })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                if (typeof showToast === 'function') showToast(`Regenerating ${unit} [${template}]…`, 'info');
+                pollJobStatus(data.job_id, 'quiz');
+                fetchRecentJobs();
+            } else {
+                showInfoModal('Regenerate Failed', data.error || 'Failed to start quiz generation.');
+            }
+        })
+        .catch(err => showInfoModal('Regenerate Error', err.message || String(err)));
+    }
+
+    function recompileFromReAudit(unit, category) {
+        if (!unit) return;
+        const payload = category ? { filename: unit, categories: [category] } : { filename: unit };
+        fetch('/api/compile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                const catTag = category ? ` [${category}]` : ' extractions';
+                if (typeof showToast === 'function') showToast(`Re-compiling ${unit}${catTag}…`, 'info');
+                pollJobStatus(data.job_id, 'compile');
+                fetchRecentJobs();
+            } else {
+                showInfoModal('Re-compile Failed', data.error || 'Failed to start compilation.');
+            }
+        })
+        .catch(err => showInfoModal('Re-compile Error', err.message || String(err)));
+    }
+
     function showReAuditSummary(summary, running) {
         const stats = document.getElementById('re-audit-stats');
         const body = document.getElementById('re-audit-body');
         if (!summary) {
             stats.innerHTML = '';
             body.innerHTML = running
-                ? '<tr><td colspan="7" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2"></span>Re-auditing in the background… (watch the Recent Jobs panel).</td></tr>'
-                : '<tr><td colspan="7" class="text-center text-muted py-4">No re-audit run yet. Click <strong>RE-AUDIT ALL</strong> to run the Level-2 expert judge over every quiz handout.</td></tr>';
+                ? '<tr><td colspan="8" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2"></span>Re-auditing in the background… (watch the Recent Jobs panel).</td></tr>'
+                : '<tr><td colspan="8" class="text-center text-muted py-4">No re-audit run yet. Select a scope above and click <strong>RUN RE-AUDIT</strong>.</td></tr>';
             return;
         }
         lastReAuditResult = summary;
@@ -2005,10 +2176,22 @@
             const now = r.error ? '<span class="badge bg-warning-subtle text-warning">ERROR</span>'
                 : (r.passed ? '<span class="badge bg-success-subtle text-success">PASS</span>' : '<span class="badge bg-danger-subtle text-danger">FAIL</span>');
             let change;
-            if (r.prev_passed == null) change = '<span class="text-muted">first audit</span>';
+            if (r.notes) change = `<span class="text-muted">${esc(r.notes)}</span>`;
+            else if (r.prev_passed == null) change = '<span class="text-muted">first audit</span>';
             else if (r.prev_passed && !r.passed) change = 'PASS → FAIL';
             else if (!r.prev_passed && r.passed) change = 'FAIL → PASS';
             else change = '<span class="text-muted">unchanged</span>';
+
+            const safeU = esc(r.unit).replace(/'/g, "\\'");
+            const safeT = esc(r.template).replace(/'/g, "\\'");
+            const isExtRow = r.template === 'extraction' || String(r.template || '').startsWith('extraction:');
+            const extCat = (String(r.template || '').startsWith('extraction:') ? String(r.template).split(':')[1] : '');
+            const safeExtCat = esc(extCat).replace(/'/g, "\\'");
+            const actionBtns = isExtRow
+                ? `<button class="btn btn-sm btn-outline-warning py-0 px-1.5" onclick="recompileFromReAudit('${safeU}', '${safeExtCat}')" title="Re-compile unit extractions"><i class="bi bi-arrow-clockwise"></i></button>`
+                : `<a class="btn btn-sm btn-outline-secondary py-0 px-1.5" href="/wiki/${encodeURIComponent(r.unit)}/handouts/${encodeURIComponent(r.unit)}_${encodeURIComponent(r.template)}_quiz.html" target="_blank" title="Open handout"><i class="bi bi-box-arrow-up-right"></i></a>` +
+                  `<button class="btn btn-sm btn-outline-warning py-0 px-1.5 ms-1" onclick="regenerateFromReAudit('${safeU}', '${safeT}')" title="Regenerate this quiz"><i class="bi bi-arrow-clockwise"></i></button>`;
+
             return `<tr>
                 <td class="font-monospace small">${esc(r.unit)} <span class="badge bg-secondary-subtle text-secondary">${esc(r.template)}</span></td>
                 <td class="text-center">${r.item_count == null ? '—' : r.item_count}</td>
@@ -2017,9 +2200,10 @@
                 <td class="text-center">${prev}</td>
                 <td class="text-center">${now}</td>
                 <td class="small">${change}${r.error ? `<div class="text-warning mt-1">${esc(r.error)}</div>` : ''}</td>
+                <td class="text-end text-nowrap">${actionBtns}</td>
             </tr>`;
         }).join('');
-        body.innerHTML = rows || '<tr><td colspan="7" class="text-center text-muted py-3">No results.</td></tr>';
+        body.innerHTML = rows || '<tr><td colspan="8" class="text-center text-muted py-3">No results.</td></tr>';
     }
 
     // ------------------ LLM HERO BOARD & QA AUDIT MODAL ------------------
@@ -2042,7 +2226,7 @@
         if (btn) btn.disabled = loading;
         if (spinner) spinner.classList.toggle('d-none', !loading);
         if (icon) icon.classList.toggle('d-none', loading);
-        if (label) label.textContent = loading ? 'EVALUATING…' : 'RE-EVALUATE LOGS';
+        if (label) label.textContent = loading ? 'EVALUATING…' : 'L1 LOG RE-EVALUATE';
         if (topStat) { topStat.classList.add('d-none'); topStat.innerHTML = ''; }
 
         if (loading) {
@@ -2879,6 +3063,7 @@
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
+                                                ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${(!f.compiled && !f.has_quizzes) ? 'disabled text-muted' : ''}" href="#" onclick="${(!f.compiled && !f.has_quizzes) ? 'return false;' : `closeAllDropdowns(); triggerUnitReAudit('${esc(baseName)}'); return false;`}" title="Re-audit generated extractions and quizzes"><i class="bi bi-patch-check-fill me-2 text-success"></i>Re-Audit Unit</a></li>`}
                                                 ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
                                                 ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `closeAllDropdowns(); exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                             </ul>
@@ -2961,6 +3146,7 @@
                                         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitCompileAll('${esc(f.name)}'); return false;"><i class="bi bi-cpu me-2 text-warning"></i>Compile Extractions</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface" href="#" onclick="closeAllDropdowns(); triggerUnitGenerateAllQuizzes('${esc(f.name)}'); return false;"><i class="bi bi-patch-question-fill me-2 text-danger"></i>Generate Quizzes</a></li>`}
+                                            ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${(!f.compiled && !f.has_quizzes) ? 'disabled text-muted' : ''}" href="#" onclick="${(!f.compiled && !f.has_quizzes) ? 'return false;' : `closeAllDropdowns(); triggerUnitReAudit('${esc(baseName)}'); return false;`}" title="Re-audit generated extractions and quizzes"><i class="bi bi-patch-check-fill me-2 text-success"></i>Re-Audit Unit</a></li>`}
                                             ${f.is_transcribing ? '' : `<li><hr class="dropdown-divider my-1"></li>`}
                                             ${f.is_transcribing ? '' : `<li><a class="dropdown-item py-1.5 small text-on-surface ${exportDisabled ? 'disabled text-muted' : ''}" href="#" onclick="${exportDisabled ? 'return false;' : `closeAllDropdowns(); exportUnit('${esc(baseName)}'); return false;`}" title="${esc(exportTooltip)}"><i class="bi bi-download me-2 text-info"></i>Export Unit Handouts (.zip)</a></li>`}
                                         </ul>
@@ -3415,10 +3601,11 @@
         .then(data => {
             if (data.success) {
                 const job = data.job;
-                if (service === 'compiler') {
+                if (service === 'compiler' || service === 'quiz' || job.type === 'audit-batch') {
                     fetchRecentJobs();
-                } else if (service === 'quiz') {
-                    fetchRecentJobs();
+                }
+                if (job.type === 'audit-batch') {
+                    updateReAuditProgress(job);
                 }
 
                 if (job.status === 'completed' || job.status === 'failed') {
@@ -5549,6 +5736,10 @@
     window.showToast = showToast;
     window.sortHeroBoard = sortHeroBoard;
     window.startReAuditAll = startReAuditAll;
+    window.onReAuditTargetChange = onReAuditTargetChange;
+    window.regenerateFromReAudit = regenerateFromReAudit;
+    window.recompileFromReAudit = recompileFromReAudit;
+    window.updateReAuditProgress = updateReAuditProgress;
     window.stopTTSVoicePreview = stopTTSVoicePreview;
     window.submitLexisAsk = submitLexisAsk;
     window.switchMediaTab = switchMediaTab;

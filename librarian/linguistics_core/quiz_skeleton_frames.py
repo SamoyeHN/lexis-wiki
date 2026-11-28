@@ -309,6 +309,8 @@ class QuizSkeletonFramesMixin:
                     ):
                         anchor = _ex_partner
                         anchor_type = _ex_ptype
+                        ctx.anchor = anchor
+                        ctx.anchor_type = anchor_type
                         if _ex_ptype == "prep" and not best_pattern:
                             best_pattern = f"{final_target.lower()} {_ex_partner}"
                         if any(
@@ -1308,6 +1310,40 @@ class QuizSkeletonFramesMixin:
                         task_parts.append(
                             f"(Sense Guard: lock to '{_lk_short}' — do NOT use primary sense '{_s0_short}')."
                         )
+
+        # Universal Post-Frame Double-Key Exit Gate: re-screen options against the final synchronized
+        # anchor & anchor_type before building discriminator notes and final blueprint output.
+        if (
+            canonical_pos in ("noun", "verb", "adj", "adv")
+            and not half_slice_target
+            and not is_quantifier_frame
+            and not is_plural_noun
+            and not verb_form_tag
+        ):
+            ctx.anchor = anchor
+            ctx.anchor_type = anchor_type
+            _colliding_dk = [
+                d for d in dist_list
+                if (dist_meta or {}).get(d) not in ("antonym", "countability_contrast_uncountable")
+                and cls.double_key_collision(
+                    w_lower, d.lower(), anchor=anchor, anchor_type=anchor_type, pos=canonical_pos, quote=it.get("quote")
+                )[0]
+                and not cls.evaluate_syntactic_slot_clash(
+                    w_lower, d.lower(), anchor=anchor, anchor_type=anchor_type, pos=canonical_pos, quote=it.get("quote")
+                )[0]
+            ]
+            if _colliding_dk:
+                distractors, dist_meta = _clear_and_refill_distractors(
+                    distractors, dist_meta, extra_exclude={d.lower() for d in _colliding_dk}
+                )
+                distractors3 = distractors[:3]
+                slot = min(slot, len(distractors3))
+                correct_answer_index = slot
+                final_options = distractors3[:slot] + [final_target] + distractors3[slot:]
+                _base_options = list(final_options)
+                dist_list = [opt for opt in final_options if opt.lower() != final_target.lower()]
+                dist_str = ", ".join(dist_list)
+                used_distractors.update(dist_list)
 
         # Data-Driven Grammatical & Usage Discriminator: only emit in Micro-Task when it carries
         # a concrete grammatical slot constraint (`[...]`) or a sense-locked `Grammar Box:` rule

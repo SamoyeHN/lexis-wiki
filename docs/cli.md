@@ -120,13 +120,19 @@ Lexis features an automated **Two-Level Quality Audit Framework** (Deterministic
 # Analyzes all generation execution logs under logs/ and prints pedagogical benchmarks
 lexis audit
 
-# 2. Batch Re-Audit Handouts
+# 2. Batch Re-Audit Handouts / Extractions (Read-Only Level-2 Judge)
 # Run the Level-2 Expert Judge across existing generated HTML quizzes
 lexis re-audit
 
-# 3. Targeted Re-Audit with Multi-Threaded Workers
-# Re-audit reading comprehension quizzes for Book 4 Unit 1 using 4 concurrent threads
-lexis re-audit Book_4_Unit_1 --template reading --workers 4
+# Re-audit both extractions (vocabulary, grammar, summary, mindmap) and quizzes for a unit
+lexis re-audit Book_4_Unit_1 --target all
+
+# 3. Targeted Re-Audit (CLI supports --workers override; Dashboard defaults to max_parallel in wiki_config.json)
+lexis re-audit Book_4_Unit_1 --template reading --workers 1
+
+# 4. Zero-Token Offline Blueprint & Double-Key Pre-Flight Audit
+# Scans all wiki/ vocabulary blueprints for slot-frame and back-substitution double-key collisions
+python3 tests/audit_blueprints.py --only-double-key
 ```
 
 ---

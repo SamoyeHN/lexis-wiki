@@ -229,7 +229,8 @@ def run_batch(unit_filter: Optional[List[str]] = None,
               max_workers: int = 2,
               judge_model: Optional[str] = None,
               project_root: Optional[str] = None,
-              progress_cb: Optional[Callable[[int, int, Dict[str, Any]], None]] = None
+              progress_cb: Optional[Callable[[int, int, Dict[str, Any]], None]] = None,
+              exclude_templates: Optional[set] = None,
               ) -> Dict[str, Any]:
     """Re-audit a set of quiz handouts concurrently and return an aggregate summary.
 
@@ -247,6 +248,8 @@ def run_batch(unit_filter: Optional[List[str]] = None,
         refs = [r for r in refs if normalize_name(r["unit"]) in wanted]
     if template_filter:
         refs = [r for r in refs if r["template"] == template_filter]
+    if exclude_templates:
+        refs = [r for r in refs if r["template"] not in exclude_templates]
 
     total = len(refs)
     summary: Dict[str, Any] = {

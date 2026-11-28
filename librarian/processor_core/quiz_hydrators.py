@@ -410,8 +410,16 @@ class QuizHydratorMixin:
                         spec = blueprint_specs[q_i] if q_i < len(blueprint_specs) else {}
                         alt_ref = ""
                         for d_spec in spec.get("prescribed_distractor_operators", []):
-                            if d_spec.get("source_text"):
-                                alt_ref = d_spec["source_text"].strip().rstrip(".")
+                            raw_st = str(d_spec.get("source_text") or "").strip().rstrip(".")
+                            if (
+                                raw_st
+                                and raw_st.lower() not in ("n/a", "none", "null")
+                                and len(raw_st) >= 10
+                                and raw_st.lower() != opt_norm
+                                and f"{raw_st.lower()}." not in seen_distractors
+                                and raw_st.lower() not in seen_distractors
+                            ):
+                                alt_ref = raw_st
                                 break
                         if alt_ref and alt_ref.lower() != opt_norm:
                             opts_copy[opt_i] = f"{alt_ref}."

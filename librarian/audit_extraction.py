@@ -936,13 +936,141 @@ def audit_grammar_semantic(
     return defects, defect_details
 
 
+def _load_extraction_audit_prompt(filename: str, fallback: str) -> str:
+    p = Path(__file__).resolve().parent / "prompts" / filename
+    try:
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return fallback
+
+
+def audit_summary_semantic(
+    summary_text: str,
+    source_text: str,
+    model: Optional[str] = None,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Execute Level-2 LLM semantic audit over an extracted unit summary."""
+    if not (summary_text or "").strip():
+        return [], []
+
+    from .config import config
+    from .llm import LLMClient
+
+    judge_m = model or config.get("judge_model") or config.get("model") or "qwen3.8:27b"
+    client = LLMClient(model=judge_m)
+    system_prompt = _load_extraction_audit_prompt(
+        "expert_audit_summary.md",
+        "Evaluate summary factual faithfulness, thesis completeness, and clarity against source passage. Output JSON: {\"passed\": bool, \"score\": int, \"defects\": [{\"category\": str, \"issue\": str, \"action\": str}]}",
+    )
+    user_prompt = (
+        f"Source Passage:\n\"\"\"{source_text[:6000].strip()}\"\"\"\n\n"
+        f"Extracted Summary:\n\"\"\"{summary_text[:4000].strip()}\"\"\""
+    )
+
+    defects: List[str] = []
+    defect_details: List[Dict[str, Any]] = []
+    try:
+        resp = client.chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            json_format=True,
+            temperature=0.0,
+            skip_log=True,
+        )
+    except Exception as e:
+        logger.warning("Summary semantic audit LLM error: %s", e)
+        return defects, defect_details
+
+    if not isinstance(resp, dict) or resp.get("passed", True):
+        return defects, defect_details
+
+    for d in resp.get("defects") or []:
+        if not isinstance(d, dict):
+            continue
+        cat = str(d.get("category") or "semantic").strip()
+        issue = str(d.get("issue") or "Summary failed semantic faithfulness check.").strip()
+        action = str(d.get("action") or "Revise summary to align strictly with source passage.").strip()
+        defects.append(f"[summary-semantic] ({cat}) {issue}")
+        defect_details.append({"category": f"summary-{cat}", "issue": issue, "action": action})
+
+    if not defects:
+        defects.append("[summary-semantic] Summary failed Level-2 semantic evaluation.")
+    return defects, defect_details
+
+
+def audit_mindmap_semantic(
+    mindmap_data: Any,
+    source_text: str,
+    model: Optional[str] = None,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Execute Level-2 LLM semantic audit over an extracted mind map JSON tree."""
+    if not mindmap_data:
+        return [], []
+
+    from .config import config
+    from .llm import LLMClient
+
+    judge_m = model or config.get("judge_model") or config.get("model") or "qwen3.8:27b"
+    client = LLMClient(model=judge_m)
+    system_prompt = _load_extraction_audit_prompt(
+        "expert_audit_mindmap.md",
+        "Evaluate mindmap MECE orthogonality, hierarchical coherence, and factual grounding against source passage. Output JSON: {\"passed\": bool, \"score\": int, \"defects\": [{\"category\": str, \"node\": str, \"issue\": str, \"action\": str}]}",
+    )
+    mm_str = json.dumps(mindmap_data, indent=2, ensure_ascii=False)[:5000]
+    user_prompt = (
+        f"Source Passage:\n\"\"\"{source_text[:6000].strip()}\"\"\"\n\n"
+        f"Extracted Mind Map JSON:\n{mm_str}"
+    )
+
+    defects: List[str] = []
+    defect_details: List[Dict[str, Any]] = []
+    try:
+        resp = client.chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            json_format=True,
+            temperature=0.0,
+            skip_log=True,
+        )
+    except Exception as e:
+        logger.warning("Mindmap semantic audit LLM error: %s", e)
+        return defects, defect_details
+
+    if not isinstance(resp, dict) or resp.get("passed", True):
+        return defects, defect_details
+
+    for d in resp.get("defects") or []:
+        if not isinstance(d, dict):
+            continue
+        cat = str(d.get("category") or "semantic").strip()
+        node = str(d.get("node") or "root").strip()
+        issue = str(d.get("issue") or "Mind map failed semantic/MECE check.").strip()
+        action = str(d.get("action") or "Reorganize mind map nodes to match MECE structure.").strip()
+        defects.append(f"[mindmap-semantic] ({cat}) [{node}] {issue}")
+        defect_details.append({"category": f"mindmap-{cat}", "node": node, "issue": issue, "action": action})
+
+    if not defects:
+        defects.append("[mindmap-semantic] Mind map failed Level-2 semantic evaluation.")
+    return defects, defect_details
+
+
 def audit_unit_extractions(
     unit: str,
     project_root: Optional[str] = None,
     enable_llm: bool = False,
     fix: bool = False,
+    artifact_filter: Optional[str] = None,
 ) -> ExtractionAuditReport:
-    """Execute Level 1 (and optional Level 2) audit over all extraction artifacts of a unit."""
+    """Execute Level 1 (and optional Level 2) audit over extraction artifacts of a unit."""
+    art_f = str(artifact_filter).strip().lower() if artifact_filter else None
+    if art_f not in ("vocabulary", "grammar", "summary", "mindmap"):
+        art_f = None
     root = _project_root(project_root)
     unit_dir = root / "wiki" / unit
 
@@ -974,61 +1102,69 @@ def audit_unit_extractions(
     # 1. Vocabulary audit
     vocab_file = extractions_dir / f"{unit}_vocabulary.md"
     v_text = ""
-    if vocab_file.is_file():
-        try:
-            v_text = vocab_file.read_text(encoding="utf-8")
-            v_defects, v_stats = audit_vocabulary_markdown(v_text, norm_source)
-            all_defects.extend(v_defects)
-            stats["vocabulary"] = v_stats
-        except Exception as e:
-            all_defects.append(f"[vocabulary] Read error: {e}")
-    else:
-        all_defects.append(f"[vocabulary] Missing file: {vocab_file.name}")
+    if not art_f or art_f == "vocabulary":
+        if vocab_file.is_file():
+            try:
+                v_text = vocab_file.read_text(encoding="utf-8")
+                v_defects, v_stats = audit_vocabulary_markdown(v_text, norm_source)
+                all_defects.extend(v_defects)
+                stats["vocabulary"] = v_stats
+            except Exception as e:
+                all_defects.append(f"[vocabulary] Read error: {e}")
+        else:
+            all_defects.append(f"[vocabulary] Missing file: {vocab_file.name}")
 
     # 2. Grammar audit
     grammar_file = extractions_dir / f"{unit}_grammar.md"
-    if grammar_file.is_file():
-        try:
-            g_text = grammar_file.read_text(encoding="utf-8")
-            g_defects, g_stats = audit_grammar_markdown(g_text, norm_source)
-            all_defects.extend(g_defects)
-            stats["grammar"] = g_stats
-        except Exception as e:
-            all_defects.append(f"[grammar] Read error: {e}")
-    else:
-        all_defects.append(f"[grammar] Missing file: {grammar_file.name}")
+    if not art_f or art_f == "grammar":
+        if grammar_file.is_file():
+            try:
+                g_text = grammar_file.read_text(encoding="utf-8")
+                g_defects, g_stats = audit_grammar_markdown(g_text, norm_source)
+                all_defects.extend(g_defects)
+                stats["grammar"] = g_stats
+            except Exception as e:
+                all_defects.append(f"[grammar] Read error: {e}")
+        else:
+            all_defects.append(f"[grammar] Missing file: {grammar_file.name}")
 
     # 3. Summary audit
     summary_file = extractions_dir / f"{unit}_summary.md"
-    if summary_file.is_file():
-        try:
-            s_text = summary_file.read_text(encoding="utf-8")
-            s_defects, s_stats = audit_summary_markdown(s_text, norm_source)
-            all_defects.extend(s_defects)
-            stats["summary"] = s_stats
-        except Exception as e:
-            all_defects.append(f"[summary] Read error: {e}")
-    else:
-        all_defects.append(f"[summary] Missing file: {summary_file.name}")
+    s_text = ""
+    if not art_f or art_f == "summary":
+        if summary_file.is_file():
+            try:
+                s_text = summary_file.read_text(encoding="utf-8")
+                s_defects, s_stats = audit_summary_markdown(s_text, norm_source)
+                all_defects.extend(s_defects)
+                stats["summary"] = s_stats
+            except Exception as e:
+                all_defects.append(f"[summary] Read error: {e}")
+        else:
+            all_defects.append(f"[summary] Missing file: {summary_file.name}")
 
     # 4. Mindmap audit
     mindmap_file = extractions_dir / f"{unit}_mindmap.json"
-    if mindmap_file.is_file():
-        try:
-            m_defects, m_stats = audit_mindmap_json(mindmap_file)
-            all_defects.extend(m_defects)
-            stats["mindmap"] = m_stats
-        except Exception as e:
-            all_defects.append(f"[mindmap] Read error: {e}")
-    else:
-        all_defects.append(f"[mindmap] Missing file: {mindmap_file.name}")
+    m_data = None
+    if not art_f or art_f == "mindmap":
+        if mindmap_file.is_file():
+            try:
+                m_defects, m_stats = audit_mindmap_json(mindmap_file)
+                all_defects.extend(m_defects)
+                stats["mindmap"] = m_stats
+                if not m_defects:
+                    m_data = json.loads(mindmap_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                all_defects.append(f"[mindmap] Read error: {e}")
+        else:
+            all_defects.append(f"[mindmap] Missing file: {mindmap_file.name}")
 
     # Optional Level 2 LLM semantic check (WSD context alignment & Grammar verification)
     cured_items: List[str] = []
     all_overruled: List[Dict[str, Any]] = []
     if enable_llm and not all_defects:
         v_items = stats.get("vocabulary", {}).get("items", [])
-        if v_items and vocab_file.is_file():
+        if (not art_f or art_f == "vocabulary") and v_items and vocab_file.is_file():
             wsd_res = audit_vocabulary_wsd_semantic(
                 v_items, source_raw, discourse_context=source_raw[:1000]
             )
@@ -1065,7 +1201,7 @@ def audit_unit_extractions(
                 all_defects.extend(wsd_defects)
 
         g_items = stats.get("grammar", {}).get("items", [])
-        if g_items and grammar_file.is_file():
+        if (not art_f or art_f == "grammar") and g_items and grammar_file.is_file():
             logger.info("Running Level-2 semantic audit on %d grammar pattern(s) for %s...", len(g_items), unit)
             g_defects, g_details = audit_grammar_semantic(
                 g_items, source_raw, discourse_context=source_raw[:1500]
@@ -1073,7 +1209,21 @@ def audit_unit_extractions(
             if "grammar" in stats:
                 existing_details = stats["grammar"].setdefault("grammar_defect_details", [])
                 existing_details.extend(g_details)
-            all_defects.extend(g_defects)
+            all_defects.extend(g_details and g_defects or g_defects)
+
+        if (not art_f or art_f == "summary") and s_text and summary_file.is_file():
+            logger.info("Running Level-2 semantic audit on summary for %s...", unit)
+            sum_defects, sum_details = audit_summary_semantic(s_text, source_raw)
+            if "summary" in stats:
+                stats["summary"].setdefault("summary_defect_details", []).extend(sum_details)
+            all_defects.extend(sum_defects)
+
+        if (not art_f or art_f == "mindmap") and m_data and mindmap_file.is_file():
+            logger.info("Running Level-2 semantic audit on mindmap for %s...", unit)
+            mm_defects, mm_details = audit_mindmap_semantic(m_data, source_raw)
+            if "mindmap" in stats:
+                stats["mindmap"].setdefault("mindmap_defect_details", []).extend(mm_details)
+            all_defects.extend(mm_defects)
 
     # Score calculation (100 base, -10 per defect, floor 0)
     score = max(0.0, 100.0 - (len(all_defects) * 10.0))
@@ -1111,6 +1261,7 @@ def batch_audit_extractions(
     progress_cb: Optional[Callable[[int, int, Dict[str, Any]], None]] = None,
     enable_llm: bool = False,
     fix: bool = False,
+    artifact_filter: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Audit extractions across multiple units in parallel."""
     available = discover_extraction_units(project_root)
@@ -1136,7 +1287,7 @@ def batch_audit_extractions(
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(
-                audit_unit_extractions, u, project_root, enable_llm, fix
+                audit_unit_extractions, u, project_root, enable_llm, fix, artifact_filter
             ): u
             for u in target_units
         }

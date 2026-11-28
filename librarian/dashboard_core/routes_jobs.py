@@ -58,17 +58,33 @@ class RoutesJobsMixin:
         data = json.loads(body) if body else {}
         units = data.get("units") or None
         template = data.get("template") or None
+        target = str(data.get("target") or "quiz").strip().lower()
+        if target not in ("quiz", "extraction", "all"):
+            target = "quiz"
+        only_flagged = bool(data.get("only_flagged", False))
         try:
-            workers = int(data.get("workers") or 2)
+            default_workers = max(1, int(config.get("max_parallel") or 1))
         except (TypeError, ValueError):
-            workers = 2
-        job_name = f"Re-audit {len(units)} unit(s)" if units else "Re-audit ALL units"
+            default_workers = 1
+        try:
+            workers = max(1, int(data.get("workers") or default_workers))
+        except (TypeError, ValueError):
+            workers = default_workers
+        scope_parts = [target]
+        if template:
+            scope_parts.append(str(template))
+        if only_flagged:
+            scope_parts.append("flagged")
+        unit_desc = f"{len(units)} unit(s)" if units else "ALL units"
+        job_name = f"Re-audit [{', '.join(scope_parts)}] {unit_desc}"
         job_id = self._dashboard_state().create_job("audit-batch", job_name)
-        t = threading.Thread(target=self._background_audit_batch_worker(), args=(job_id, units, template, workers))
+        t = threading.Thread(
+            target=self._background_audit_batch_worker(),
+            args=(job_id, units, template, workers, target, only_flagged),
+        )
         t.daemon = True
         t.start()
         response_data = {"success": True, "job_id": job_id, "message": "Re-audit task spawned successfully."}
-
 
         return response_data
 

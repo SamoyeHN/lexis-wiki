@@ -13,7 +13,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -28,6 +28,81 @@ _STOP_FRAME_TOKENS = {
     "by", "from", "as", "is", "was", "are", "were", "be", "been", "being",
     "something", "someone", "somebody", "that", "this", "it", "they",
 }
+_ANCHOR_SKIP_RE_TOKENS = _STOP_FRAME_TOKENS | {
+    "our", "his", "her", "their", "your", "my", "its", "these", "those",
+    "very", "quite", "really", "more", "most", "some", "any", "many", "much",
+    "can", "could", "may", "might", "will", "would", "should", "must",
+    "become", "became", "becomes", "get", "got", "make", "made", "take", "took",
+    "has", "had", "have", "all", "about", "against",
+}
+
+
+def _extract_frame_anchor_neighbors(frame: str) -> List[Tuple[str, str]]:
+    """Extracts nearest non-stopword content tokens on the left/right of '____' in frame."""
+    if not frame or "____" not in frame:
+        return []
+    cleaned = re.sub(r"\[[^\]]*\]", " ", frame)
+    left_part, right_part = cleaned.split("____", 1)
+    neighbors: List[Tuple[str, str]] = []
+    left_toks = re.findall(r"[a-zA-Z]+", left_part)
+    for tok in reversed(left_toks[-3:]):
+        if tok.lower() not in _ANCHOR_SKIP_RE_TOKENS and len(tok) >= 3:
+            neighbors.append(("left", tok.lower()))
+            break
+    right_toks = re.findall(r"[a-zA-Z]+", right_part)
+    for tok in right_toks[:3]:
+        if tok.lower() not in _ANCHOR_SKIP_RE_TOKENS and len(tok) >= 3:
+            neighbors.append(("right", tok.lower()))
+            break
+    return neighbors
+
+
+def _distractor_attested_with_anchor(distractor: str, side: str, anchor_tok: str) -> Optional[str]:
+    """Zero-token PedLex probe checking if distractor + anchor_tok co-occur as an attested collocation."""
+    d_low = (distractor or "").strip().lower()
+    a_low = (anchor_tok or "").strip().lower()
+    if not d_low or not a_low or " " in d_low:
+        return None
+    d_lem = (LE._surface_lemma(d_low) or d_low).lower()
+    a_lem = (LE._surface_lemma(a_low) or a_low).lower()
+
+    phrase_q = f"{a_low} {d_low}" if side == "left" else f"{d_low} {a_low}"
+    if LE.lookup_ldoce_phrase(phrase_q):
+        return "phrase_index"
+    if d_lem != d_low or a_lem != a_low:
+        phrase_q2 = f"{a_lem} {d_lem}" if side == "left" else f"{d_lem} {a_lem}"
+        if LE.lookup_ldoce_phrase(phrase_q2):
+            return "phrase_index"
+
+    entry = LE.get_ldoce_entry(d_low) or (LE.get_ldoce_entry(d_lem) if d_lem != d_low else None)
+    if not entry:
+        return None
+
+    d_forms = "|".join(re.escape(x) for x in {d_low, d_lem})
+    a_forms = "|".join(re.escape(x) for x in {a_low, a_lem})
+    near_pat = (
+        re.compile(rf"\b(?:{a_forms})\b\W+(?:\w+\W+){{0,2}}\b(?:{d_forms})\b", re.IGNORECASE)
+        if side == "left"
+        else re.compile(rf"\b(?:{d_forms})\b\W+(?:\w+\W+){{0,2}}\b(?:{a_forms})\b", re.IGNORECASE)
+    )
+
+    for col in entry.get("collocations") or []:
+        c_text = str(col.get("collocation") or col.get("text") or "") if isinstance(col, dict) else str(col or "")
+        if c_text and near_pat.search(c_text):
+            return "ldoce_collocation"
+
+    for s in entry.get("senses") or []:
+        for ex in s.get("examples") or []:
+            if ex and near_pat.search(str(ex)):
+                return "ldoce_example"
+        for pb in s.get("pattern_bundles") or []:
+            if not isinstance(pb, dict):
+                continue
+            for ex in pb.get("examples") or []:
+                if ex and near_pat.search(str(ex)):
+                    return "ldoce_example"
+
+    return None
 
 
 def audit_single_blueprint(skel: Dict[str, Any]) -> List[Tuple[str, str]]:
@@ -113,11 +188,54 @@ def audit_single_blueprint(skel: Dict[str, Any]) -> List[Tuple[str, str]]:
         if re.search(r"\b(?:the|a|an)\s+____\b", frame, re.IGNORECASE) and not re.search(r"\b(?:several|many|two|three|few|fewer|these|those|multiple)\s+____", frame, re.IGNORECASE):
             findings.append(("WARN", f"COUNTABILITY_FRAME_NEEDS_PLURAL_CUE: frame={frame!r}"))
 
+    # 10. Back-Substitution Double-Key Probes (0-token)
+    if pos != "phrase" and isinstance(c_idx, int) and 0 <= c_idx < len(opts):
+        anchor_val = skel.get("context_anchor")
+        anchor_type = skel.get("anchor_type") or "collocation"
+        quote_val = skel.get("quote")
+        neighbors = _extract_frame_anchor_neighbors(frame or "")
+        for idx, opt in enumerate(opts):
+            if idx == c_idx:
+                continue
+            d_str = str(opt or "").strip()
+            d_low = d_str.lower()
+            if not d_low:
+                continue
+            mech = str(mechs.get(d_str) or mechs.get(d_low) or "")
+            has_clash, _ = LE.evaluate_syntactic_slot_clash(
+                base_hw, d_low, anchor=anchor_val, anchor_type=anchor_type, pos=pos, quote=quote_val
+            )
+            if has_clash:
+                continue
+            is_dk, dk_reason = LE.double_key_collision(
+                base_hw, d_low, anchor=anchor_val, anchor_type=anchor_type, pos=pos, quote=quote_val
+            )
+            if is_dk and mech != "countability_contrast_uncountable":
+                findings.append(("ERROR", f"DOUBLE_KEY_COLLISION: '{d_str}' collides with '{base_hw}' ({dk_reason}) in frame={frame!r}"))
+                continue
+            if mech == "antonym" or not neighbors:
+                continue
+            for side, anchor_tok in neighbors:
+                ev_src = _distractor_attested_with_anchor(d_low, side, anchor_tok)
+                if ev_src:
+                    findings.append((
+                        "WARN",
+                        f"FRAME_DOUBLE_KEY_RISK: '{d_str}' + '{anchor_tok}' ({side}, {ev_src}) in frame={frame!r} [mech={mech}]",
+                    ))
+                    break
+
     return findings
 
 
-def run_corpus_blueprint_audit(limit: int = 0) -> None:
+def run_corpus_blueprint_audit(
+    limit: int = 0,
+    unit_filter: str = "",
+    only_double_key: bool = False,
+    max_samples: int = 15,
+) -> None:
     vocab_files = sorted((ROOT / "wiki").glob("*/extractions/*_vocabulary.md"))
+    if unit_filter:
+        vocab_files = [vf for vf in vocab_files if unit_filter.lower() in vf.parent.parent.name.lower()]
     if limit > 0:
         vocab_files = vocab_files[:limit]
 
@@ -141,9 +259,11 @@ def run_corpus_blueprint_audit(limit: int = 0) -> None:
             findings = audit_single_blueprint(skel)
             for sev, msg in findings:
                 code = msg.split(":", 1)[0].split(" ", 1)[0]
+                if only_double_key and code not in ("DOUBLE_KEY_COLLISION", "FRAME_DOUBLE_KEY_RISK"):
+                    continue
                 severity_counts[sev] += 1
                 code_counts[f"[{sev}] {code}"] += 1
-                if len(examples_by_code[code]) < 8:
+                if max_samples == 0 or len(examples_by_code[code]) < max_samples:
                     examples_by_code[code].append(f"{unit_name} :: '{tw}' -> {msg}")
 
     print("=" * 72)
@@ -154,7 +274,8 @@ def run_corpus_blueprint_audit(limit: int = 0) -> None:
     for k, cnt in code_counts.most_common():
         print(f"  {cnt:3d}x  {k}")
 
-    print("\nRepresentative Samples (up to 8 per category):")
+    sample_lbl = "all" if max_samples == 0 else f"up to {max_samples} per category"
+    print(f"\nRepresentative Samples ({sample_lbl}):")
     for k, _ in code_counts.most_common():
         code = k.split("] ", 1)[1]
         print(f"\n--- {k} ---")
@@ -165,5 +286,14 @@ def run_corpus_blueprint_audit(limit: int = 0) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="Limit number of units to scan")
+    parser.add_argument("--unit", type=str, default="", help="Substring filter for unit name")
+    parser.add_argument("--only-double-key", action="store_true", help="Only report DOUBLE_KEY_COLLISION and FRAME_DOUBLE_KEY_RISK")
+    parser.add_argument("--max-samples", type=int, default=15, help="Max samples per category (0 = unlimited)")
     args = parser.parse_args()
-    run_corpus_blueprint_audit(limit=args.limit)
+    max_s = 0 if (args.only_double_key and args.max_samples == 15) else args.max_samples
+    run_corpus_blueprint_audit(
+        limit=args.limit,
+        unit_filter=args.unit,
+        only_double_key=args.only_double_key,
+        max_samples=max_s,
+    )

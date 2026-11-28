@@ -7,7 +7,7 @@ import logging
 import os
 import traceback
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import config, normalize_name
 from ..processor import WikiProcessor
@@ -322,38 +322,187 @@ def background_audit_batch_worker(
     job_id: str,
     units: Optional[List[str]] = None,
     template: Optional[str] = None,
-    workers: int = 2,
+    workers: int = 1,
+    target: str = "quiz",
+    only_flagged: bool = False,
 ) -> None:
-    """Re-run the Level-2 expert audit over existing handouts, streaming progress to the job."""
+    """Re-run the Level-2 expert audit over existing handouts and/or extractions, streaming progress to the job."""
     try:
-        from ..audit_batch import run_batch
+        from ..audit_batch import discover_quiz_units, load_quiz_data, run_batch
+
+        target_norm = str(target or "quiz").strip().lower()
+        if target_norm not in ("quiz", "extraction", "all"):
+            target_norm = "quiz"
 
         scope = f"{len(units)} unit(s)" if units else "ALL units"
-        DashboardState.update_job(job_id, log=f"🔎 Starting Level-2 re-audit over {scope}…")
+        DashboardState.update_job(job_id, log=f"🔎 Starting Level-2 re-audit ({target_norm}) over {scope}…")
 
-        def _progress(done: int, total: int, row: dict) -> None:
-            mark = "⚠" if row.get("error") else ("✅" if row.get("passed") else "❌")
-            acc = row.get("blind_solve_accuracy")
-            acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+        all_results: List[Dict[str, Any]] = []
+        quiz_audited = 0
+        quiz_passed = 0
+        quiz_failed = 0
+        quiz_errors = 0
+        blind_scores: List[float] = []
+
+        if target_norm in ("quiz", "all"):
+            effective_units = units
+            skip_quiz = False
+            if only_flagged:
+                refs = discover_quiz_units()
+                if units:
+                    wanted = {normalize_name(u) for u in units}
+                    refs = [r for r in refs if normalize_name(r["unit"]) in wanted]
+                if template:
+                    refs = [r for r in refs if r["template"] == template]
+                flagged_units = []
+                for r in refs:
+                    qdata = load_quiz_data(r["path"])
+                    prev = (qdata or {}).get("_expert_audit") if isinstance(qdata, dict) else None
+                    if not isinstance(prev, dict) or prev.get("passed") is not True:
+                        if r["unit"] not in flagged_units:
+                            flagged_units.append(r["unit"])
+                if not flagged_units:
+                    skip_quiz = True
+                    DashboardState.update_job(job_id, log="ℹ️ No failed or unaudited quiz handouts matched filter.")
+                else:
+                    effective_units = flagged_units
+
+            if not skip_quiz:
+                preview_refs = discover_quiz_units()
+                if effective_units:
+                    _w_set = {normalize_name(u) for u in effective_units}
+                    preview_refs = [r for r in preview_refs if normalize_name(r["unit"]) in _w_set]
+                if template:
+                    preview_refs = [r for r in preview_refs if r["template"] == template]
+                else:
+                    preview_refs = [r for r in preview_refs if r["template"] != "cloze"]
+                DashboardState.update_job(
+                    job_id,
+                    log=f"📋 Queued {len(preview_refs)} quiz handout(s) for Level-2 audit (workers={workers})…",
+                )
+
+                def _progress(done: int, total: int, row: dict) -> None:
+                    if not template and row.get("template") == "cloze":
+                        return
+                    mark = "⚠" if row.get("error") else ("✅" if row.get("passed") else "❌")
+                    acc = row.get("blind_solve_accuracy")
+                    acc_s = f"{acc * 100:.0f}%" if isinstance(acc, (int, float)) else "n/a"
+                    DashboardState.update_job(
+                        job_id,
+                        progress=min(99, int(done / total * 100)) if total else 50,
+                        log=f"[{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}",
+                    )
+
+                q_summary = run_batch(
+                    unit_filter=effective_units,
+                    template_filter=template,
+                    max_workers=workers,
+                    progress_cb=_progress,
+                    exclude_templates=({"cloze"} if not template else None),
+                )
+                for row in q_summary.get("results") or []:
+                    if not template and row.get("template") == "cloze":
+                        continue
+                    row_copy = dict(row)
+                    row_copy["artifact_group"] = "quiz"
+                    all_results.append(row_copy)
+                    quiz_audited += 1
+                    if row_copy.get("error"):
+                        quiz_errors += 1
+                    elif row_copy.get("passed"):
+                        quiz_passed += 1
+                    else:
+                        quiz_failed += 1
+                    acc = row_copy.get("blind_solve_accuracy")
+                    if isinstance(acc, (int, float)):
+                        blind_scores.append(float(acc))
+
+        if target_norm in ("extraction", "all"):
+            from ..audit_extraction import batch_audit_extractions, discover_extraction_units
+
+            ext_filter = (
+                template
+                if (target_norm == "extraction" and template in ("vocabulary", "grammar", "summary", "mindmap"))
+                else None
+            )
+            ext_tag = f"extraction:{ext_filter}" if ext_filter else "extraction"
+            ext_avail = discover_extraction_units()
+            ext_count = len([u for u in ext_avail if u in set(units)]) if units else len(ext_avail)
             DashboardState.update_job(
                 job_id,
-                progress=min(99, int(done / total * 100)) if total else 50,
-                log=f"[{done}/{total}] {mark} {row['unit']} [{row['template']}] blind {acc_s}",
+                log=f"📋 Queued {ext_count} unit(s) for extraction audit [{ext_tag}]…",
             )
 
-        summary = run_batch(
-            unit_filter=units,
-            template_filter=template,
-            max_workers=workers,
-            progress_cb=_progress,
-        )
+            def _ext_progress(done: int, total: int, rep: dict) -> None:
+                mark = "✅" if rep.get("passed") else "❌"
+                sc = rep.get("score")
+                sc_s = f"{sc:.0f}%" if isinstance(sc, (int, float)) else "n/a"
+                DashboardState.update_job(
+                    job_id,
+                    progress=min(99, int(done / total * 100)) if total else 50,
+                    log=f"[{done}/{total}] {mark} {rep.get('unit')} [{ext_tag}] score {sc_s}",
+                )
+
+            ext_summary = batch_audit_extractions(
+                unit_filter=units,
+                max_workers=workers,
+                enable_llm=True,
+                progress_cb=_ext_progress,
+                artifact_filter=ext_filter,
+            )
+            for rep in ext_summary.get("reports") or []:
+                defects = rep.get("defects") or []
+                rep_stats = rep.get("stats") or {}
+                art_list = [ext_filter] if ext_filter else ["vocabulary", "grammar", "summary", "mindmap"]
+                for art in art_list:
+                    art_defects = [
+                        d for d in defects
+                        if str(d).lower().startswith((f"[{art}]", f"[{art}-"))
+                    ]
+                    art_score = max(0.0, 100.0 - len(art_defects) * 10.0)
+                    art_passed = (len(art_defects) == 0 and not rep.get("error"))
+                    art_stats = rep_stats.get(art) or {}
+                    item_cnt = art_stats.get("count")
+                    if item_cnt is None and isinstance(art_stats.get("items"), list):
+                        item_cnt = len(art_stats["items"])
+                    if item_cnt is None:
+                        item_cnt = art_stats.get("node_count")
+                    all_results.append({
+                        "unit": rep.get("unit"),
+                        "template": f"extraction:{art}",
+                        "artifact_group": "extraction",
+                        "item_count": item_cnt,
+                        "blind_solve_accuracy": None,
+                        "overall_quality_score": art_score,
+                        "prev_passed": None,
+                        "passed": art_passed,
+                        "error": rep.get("error"),
+                        "notes": f"{len(art_defects)} issue(s)" if art_defects else "clean",
+                        "defects": art_defects,
+                    })
+                    quiz_audited += 1
+                    if art_passed:
+                        quiz_passed += 1
+                    else:
+                        quiz_failed += 1
+
+        summary: Dict[str, Any] = {
+            "total": len(all_results),
+            "audited": quiz_audited,
+            "passed": quiz_passed,
+            "failed": quiz_failed,
+            "errors": quiz_errors,
+            "avg_blind_solve_accuracy": (sum(blind_scores) / len(blind_scores)) if blind_scores else None,
+            "results": all_results,
+        }
 
         if summary["total"] == 0:
             DashboardState.update_job(
                 job_id,
                 progress=100,
-                status="failed",
-                log="❌ No quiz handouts found to re-audit.",
+                status="completed" if only_flagged else "failed",
+                log="ℹ️ No matching items to re-audit." if only_flagged else "❌ No quiz handouts or extractions found to re-audit.",
+                result=summary if only_flagged else None,
             )
             return
 
@@ -370,6 +519,9 @@ def background_audit_batch_worker(
                 json.dump(summary, f, indent=2, ensure_ascii=False)
         except (OSError, IOError):
             report_name = None
+
+        if report_name:
+            summary["report_file"] = report_name
 
         if summary["failed"] == 0 and summary["errors"] == 0:
             done_log = f"✅ Re-audit complete: {summary['passed']}/{summary['total']} passed, {summary['audited']} audited."

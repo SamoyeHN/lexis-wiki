@@ -52,6 +52,44 @@ class LogEvaluator:
     _AUDIT_LOCK = threading.Lock()
     _AUDIT_CACHE: Dict[str, Any] = {"key": None, "value": None}
     _FILE_AUDIT_CACHE: Dict[Tuple[str, float, int], Optional[Dict[str, Any]]] = {}
+    _DISK_CACHE_LOADED: set = set()
+
+    @classmethod
+    def _load_disk_audit_cache(cls, logs_dir: Path) -> None:
+        dir_key = logs_dir.as_posix()
+        with cls._AUDIT_LOCK:
+            if dir_key in cls._DISK_CACHE_LOADED:
+                return
+            cls._DISK_CACHE_LOADED.add(dir_key)
+        cache_file = logs_dir / ".audit_cache.json"
+        if not cache_file.is_file():
+            return
+        try:
+            raw = json.loads(cache_file.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                with cls._AUDIT_LOCK:
+                    for k_str, val in raw.items():
+                        parts = k_str.rsplit("|", 2)
+                        if len(parts) == 3:
+                            cls._FILE_AUDIT_CACHE[(parts[0], float(parts[1]), int(parts[2]))] = val
+        except Exception:
+            pass
+
+    @classmethod
+    def _save_disk_audit_cache(cls, logs_dir: Path, entries: List[Tuple[Path, float, int]]) -> None:
+        cache_file = logs_dir / ".audit_cache.json"
+        tmp_file = logs_dir / ".audit_cache.json.tmp"
+        try:
+            payload: Dict[str, Any] = {}
+            with cls._AUDIT_LOCK:
+                for p, mt, sz in entries:
+                    fkey = (p.as_posix(), mt, sz)
+                    if fkey in cls._FILE_AUDIT_CACHE:
+                        payload[f"{p.as_posix()}|{mt}|{sz}"] = cls._FILE_AUDIT_CACHE[fkey]
+            tmp_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp_file.replace(cache_file)
+        except Exception:
+            pass
 
     @classmethod
     def parse_log_file(cls, log_path: Path) -> Optional[Dict[str, Any]]:
@@ -403,14 +441,19 @@ class LogEvaluator:
             if use_cache and cls._AUDIT_CACHE["key"] == cache_key and cls._AUDIT_CACHE["value"] is not None:
                 return cls._AUDIT_CACHE["value"]
 
+        if use_cache:
+            cls._load_disk_audit_cache(logs_dir)
+
         # Newest first
         entries.sort(key=lambda e: e[1], reverse=True)
 
         audits: List[Dict[str, Any]] = []
         model_stats: Dict[str, Dict[str, Any]] = {}
+        cache_dirty = False
 
         # Worker for ThreadPoolExecutor
         def _process_one(entry: Tuple[Path, float, int]) -> Optional[Dict[str, Any]]:
+            nonlocal cache_dirty
             log_file, mt, sz = entry
             fkey = (log_file.as_posix(), mt, sz)
             if use_cache:
@@ -427,11 +470,15 @@ class LogEvaluator:
                 if len(cls._FILE_AUDIT_CACHE) > 2000:
                     cls._FILE_AUDIT_CACHE.clear()
                 cls._FILE_AUDIT_CACHE[fkey] = evaluation
+                cache_dirty = True
             return evaluation
 
         # Parallelize log parsing and evaluation (preserves recency order)
         with ThreadPoolExecutor() as executor:
             raw_evaluations = list(executor.map(_process_one, entries))
+
+        if cache_dirty and use_cache:
+            cls._save_disk_audit_cache(logs_dir, entries)
 
         for evaluation in raw_evaluations:
             if not evaluation:

@@ -60,6 +60,11 @@ Lexis Wiki solves this with a **Neuro-Symbolic Architecture** that pairs authori
 - Share quizzes directly via chat or email—learners open them in any browser without signing up or setting up a server.
 - Optional one-click bundling into a single standalone `.exe` application.
 
+### 4. 🛡️ One-Click Unit Quality Re-Audit (Level-2 Judge)
+- Available directly inside every unit card's `⋮` menu (**Re-Audit Unit**): runs a read-only Level-2 expert judge across the unit's generated **Extractions** (`vocabulary` WSD, `grammar`, `summary`, `mindmap`) and **Quizzes** (`vocabulary`, `reading`, `translation`, `listening`, `video`; Pure Open `cloze` relies strictly on L1 deterministic gates).
+- Displays a live progress bar, streaming logs, and cleanly separated **Quizzes** / **Extractions** result tabs with clickable `[JSON]` full audit reports and one-click per-item **Regenerate / Re-compile** actions.
+- Respects `max_parallel` in `wiki_config.json` (defaults to `1` worker) so local GPUs are never overloaded.
+
 ---
 
 ## ⚡ 3-Minute Quick Start
@@ -73,7 +78,7 @@ Lexis Wiki solves this with a **Neuro-Symbolic Architecture** that pairs authori
    - Click the **Settings** gear icon in the top-right corner;
    - Connect to local **Ollama** (`http://localhost:11434`) or any **OpenAI-compatible API** (DeepSeek, Qwen, Moonshot, OpenAI, etc.);
 5. **Start Creating**:
-   - Add your text or media into a unit folder, click **"Compile Extractions"** to generate notes, then click **"Generate Quizzes"**!
+   - Add your text or media into a unit folder, click **"Compile Extractions"** to generate notes, **"Generate Quizzes"** to build assessments, and **"Re-Audit Unit"** (from the card `⋮` menu) to verify quality before exporting!
 
 ---
 
@@ -134,6 +139,9 @@ lexis video-import "lecture.mp4" --name Unit_Video_1
 
 # Bundle an HTML quiz into a standalone single-file EXE
 lexis export-exe wiki/Unit_Video_1/handouts/Unit_Video_1_video_quiz.html
+
+# Run Level-2 quality re-audit on a unit's extractions and quizzes
+lexis re-audit Book_2_Unit_1_Section_A --target all
 
 # Check [[wikilinks]] consistency and clean up orphans
 lexis lint

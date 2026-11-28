@@ -94,6 +94,14 @@ Open any generated quiz in your browser (e.g., `Book_1_Unit_1_vocabulary_quiz.ht
   2. Inspect the diagnostic badge summary to see which items failed blind-solve or grounding checks.
   3. Expand the source text if it is too short, or re-run the quiz compilation from the CLI/dashboard.
 
+### Unit-Level Re-Audit in the Web Dashboard & Extraction L2 Coverage
+- **In-Place Unit Re-Audit (`⋮` → `Re-Audit Unit`)**: Each unit card in the Web Dashboard provides a dedicated **Re-Audit Unit** action that runs a read-only Level-2 expert audit over that unit's generated extractions and quizzes without scanning global `logs/` on startup.
+- **Tabbed Results & Actionable Remediation**:
+  - **Quizzes Tab**: Audits LLM-generated quizzes (`vocabulary`, `reading`, `translation`, `listening`, `video`). Pure Open **Cloze** relies strictly on deterministic L1 offset, Alderson boundary, and tripartite slot gates and is intentionally omitted from L2 MCQ re-auditing.
+  - **Extractions Tab**: Audits all 4 extraction artifacts independently (`vocabulary` WSD context alignment, `grammar` Quirk/Biber semantic alignment, `summary` via `expert_audit_summary.md`, and `mindmap` MECE/grounding via `expert_audit_mindmap.md`).
+  - Failed rows keep concise table summaries alongside a direct **`[JSON]`** link to the full `logs/re_audit_report_*.json` diagnostics and a one-click **Regenerate / Re-compile** button.
+- **GPU-Safe Concurrency**: Dashboard Re-Audit respects `max_parallel` in `wiki_config.json` (defaulting to `1` worker on ≤12GB VRAM GPUs).
+
 ---
 
 ## 3. Teacher Autonomy: You Remain in Control

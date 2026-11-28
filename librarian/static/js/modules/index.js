@@ -7,7 +7,7 @@ import * as api from './api.js';
 import * as state from './state.js';
 import * as utils from './utils.js';
 import * as glossary from './glossary.js';
-import * as hero_board from './hero_board.js';
+import * as hero_board from './hero_board.js?v=20261128e';
 import * as graph from './graph.js';
 
 export { api, state, utils, glossary, hero_board, graph };

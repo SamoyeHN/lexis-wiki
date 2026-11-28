@@ -77,6 +77,18 @@ class _Tee:
         return bool(self._stream is not None and self._stream.isatty())
 
 
+def _is_lexis_dashboard_process(pid: int) -> bool:
+    """Return True iff `pid` is a Python Lexis dashboard process (never kill VS Code / node)."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        cmd = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+    if not cmd or "vscode" in cmd or "node" in cmd or "pytest" in cmd or " -c " in cmd:
+        return False
+    return "python" in cmd and "dashboard" in cmd and ("librarian.cli" in cmd or "lexis" in cmd)
+
+
 def _free_port(target_port: int) -> None:
     current_pid = os.getpid()
     if sys.platform == "win32":
@@ -107,9 +119,8 @@ def _free_port(target_port: int) -> None:
     else:
         pids_to_kill = set()
         for cmd, pat in (
-            (f"lsof -ti tcp:{target_port}", r"\b(\d+)\b"),
+            (f"lsof -ti tcp:{target_port} -sTCP:LISTEN", r"\b(\d+)\b"),
             (f"ss -lptn 'sport = :{target_port}'", r"pid=(\d+)"),
-            (f"fuser {target_port}/tcp", r"\b(\d+)\b"),
         ):
             try:
                 out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
@@ -120,11 +131,17 @@ def _free_port(target_port: int) -> None:
             except Exception:
                 continue
         for pid in pids_to_kill:
-            if pid and pid != current_pid:
+            if pid and pid != current_pid and _is_lexis_dashboard_process(pid):
                 try:
-                    print(f"⚠️ Port {target_port} is occupied by an older process (PID {pid}). Terminating old instance...")
-                    os.kill(pid, signal.SIGKILL)
-                    time.sleep(0.5)
+                    print(f"⚠️ Port {target_port} is occupied by an older Lexis dashboard (PID {pid}). Terminating...")
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(0.3)
+                    try:
+                        os.kill(pid, 0)
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.2)
+                    except ProcessLookupError:
+                        pass
                 except (ProcessLookupError, PermissionError):
                     pass
 

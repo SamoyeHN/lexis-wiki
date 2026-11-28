@@ -547,5 +547,69 @@ def test_audit_vocabulary_wsd_semantic_overruled_by_pos_gate(monkeypatch):
     assert "verb" in overruled[0]["reason"].lower()
 
 
+def test_audit_summary_semantic_mocked(monkeypatch):
+    """Verify Level-2 summary semantic audit pass and defect paths."""
+    from librarian.audit_extraction import audit_summary_semantic
+    from librarian.llm import LLMClient
+
+    monkeypatch.setattr(LLMClient, "chat", lambda self, *args, **kwargs: {"passed": True, "score": 94, "defects": []})
+    d_ok, det_ok = audit_summary_semantic("Accurate summary.", "Source passage text.")
+    assert d_ok == [] and det_ok == []
+
+    monkeypatch.setattr(
+        LLMClient,
+        "chat",
+        lambda self, *args, **kwargs: {
+            "passed": False,
+            "score": 55,
+            "defects": [
+                {
+                    "category": "factual_faithfulness",
+                    "issue": "Claims 1995 instead of 1992.",
+                    "action": "Fix year to 1992.",
+                }
+            ],
+        },
+    )
+    d_bad, det_bad = audit_summary_semantic("In 1995...", "In 1992...")
+    assert len(d_bad) == 1
+    assert "[summary-semantic] (factual_faithfulness)" in d_bad[0]
+    assert det_bad[0]["category"] == "summary-factual_faithfulness"
+
+
+def test_audit_mindmap_semantic_mocked(monkeypatch):
+    """Verify Level-2 mindmap semantic audit pass and defect paths."""
+    from librarian.audit_extraction import audit_mindmap_semantic
+    from librarian.llm import LLMClient
+
+    tree = {"root": "Topic", "children": [{"name": "Branch A"}, {"name": "Branch B"}]}
+
+    monkeypatch.setattr(LLMClient, "chat", lambda self, *args, **kwargs: {"passed": True, "score": 92, "defects": []})
+    d_ok, det_ok = audit_mindmap_semantic(tree, "Source passage text.")
+    assert d_ok == [] and det_ok == []
+
+    monkeypatch.setattr(
+        LLMClient,
+        "chat",
+        lambda self, *args, **kwargs: {
+            "passed": False,
+            "score": 60,
+            "defects": [
+                {
+                    "category": "mece_orthogonality",
+                    "node": "Branch B",
+                    "issue": "Duplicates Branch A.",
+                    "action": "Merge or differentiate.",
+                }
+            ],
+        },
+    )
+    d_bad, det_bad = audit_mindmap_semantic(tree, "Source passage text.")
+    assert len(d_bad) == 1
+    assert "[mindmap-semantic] (mece_orthogonality) [Branch B]" in d_bad[0]
+    assert det_bad[0]["category"] == "mindmap-mece_orthogonality"
+
+
+
 
 

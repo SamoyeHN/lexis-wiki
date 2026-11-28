@@ -163,6 +163,60 @@ class TestReadingGateCEFRAdaptation(unittest.TestCase):
         self.assertIn("Advanced Academic English (CEFR B2)", formatted_b2)
         self.assertIn("B2", formatted_b2)
 
+    def test_reading_blueprint_proper_noun_stems_and_no_cartoonish_extremes(self):
+        from pathlib import Path
+        from librarian.linguistics import LinguisticEngine as LE
+
+        src_path = (
+            Path(__file__).resolve().parent.parent
+            / "wiki"
+            / "Book_3_Unit_5_Section_A"
+            / "sources"
+            / "Book_3_Unit_5_Section_A.md"
+        )
+        raw_text = src_path.read_text(encoding="utf-8")
+        if raw_text.startswith("---"):
+            parts = raw_text.split("---", 2)
+            raw_text = parts[2].strip() if len(parts) >= 3 else raw_text
+
+        bps = LE.build_discourse_blueprints(raw_text, count=5, cefr_level="C1")
+        self.assertEqual(len(bps), 5)
+        for bp in bps:
+            stem = bp.question_stem_prompt or ""
+            self.assertNotIn("the China", stem)
+            self.assertNotIn("the Yang", stem)
+            for d in bp.distractors:
+                instr = (d.blueprint_instruction or "").lower()
+                self.assertNotIn("catastrophic failure", instr)
+                self.assertNotIn("irreversible collapse", instr)
+
+    def test_reading_hydrator_never_replaces_duplicate_distractor_with_na(self):
+        from librarian.processor_core.quiz_hydrators import QuizHydratorMixin
+
+        quiz_obj = {
+            "questions": [
+                {
+                    "question": "Q1",
+                    "options": ["Key 1", "Duplicate distractor text", "D1b", "D1c"],
+                    "correct_answer_index": 0,
+                },
+                {
+                    "question": "Q2",
+                    "options": ["Key 2", "D2a", "D2b", "Duplicate distractor text"],
+                    "correct_answer_index": 0,
+                },
+            ]
+        }
+        blueprints = [
+            {"prescribed_distractor_operators": [{"source_text": "n/a"}]},
+            {"prescribed_distractor_operators": [{"source_text": "n/a"}]},
+        ]
+        res = QuizHydratorMixin.hydrate_reading_blueprint_items(quiz_obj, blueprints)
+        q2_opts = res["questions"][1]["options"]
+        for opt in q2_opts:
+            self.assertNotEqual(opt.strip().lower(), "n/a.")
+            self.assertNotEqual(opt.strip().lower(), "n/a")
+
 
 if __name__ == "__main__":
     unittest.main()

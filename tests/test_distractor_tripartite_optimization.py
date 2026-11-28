@@ -266,3 +266,34 @@ def test_corpus_fallback_enforces_cefr_floor_and_ceiling_on_c1_passage():
     assert len(a2_cands) == 3, f"Expected 3 A2 fallback candidates without starvation, got {a2_cands}"
 
 
+def test_post_frame_double_key_gate_blocks_compulsion_exert_malicious():
+    """Post-frame double-key exit gate and modified_noun phrase co-attestation must block
+    'compulsion'/'desire', 'exert'/'yield', and 'malicious'/'salacious'."""
+    from pathlib import Path
+
+    assert LE.double_key_collision(
+        "malicious", "salacious", anchor="gossip", anchor_type="modified_noun", pos="adj"
+    )[0] is True
+
+    mal_dists = LE.generate_vocab_distractors(
+        "malicious", pos="adj", context_anchor="gossip", anchor_type="modified_noun", target_count=3
+    )
+    assert len(mal_dists) == 3 and "salacious" not in [d.lower() for d in mal_dists], (
+        f"Double-key distractor 'salacious' leaked for malicious/gossip: {mal_dists}"
+    )
+
+    checks = [
+        ("Book_3_Unit_4_Section_A", "compulsion", "desire"),
+        ("Book_4_Unit_5_Section_A", "exert", "yield"),
+    ]
+    for unit_name, target_w, bad_opt in checks:
+        vf = Path(__file__).resolve().parent.parent / "wiki" / unit_name / "extractions" / f"{unit_name}_vocabulary.md"
+        skels = LE.build_precomputed_target_skeletons(vf.read_text(encoding="utf-8"), target_count=10)
+        matched = [s for s in skels if s.get("target_word") == target_w]
+        assert matched, f"Target '{target_w}' not found in {unit_name} skeletons"
+        opts = [str(o).lower() for o in (matched[0].get("prescribed_options") or [])]
+        assert len(opts) == 4, f"Expected 4 options for {unit_name}::{target_w}, got {opts}"
+        assert bad_opt not in opts, f"Double-key distractor '{bad_opt}' leaked into {unit_name}::{target_w}: {opts}"
+
+
+

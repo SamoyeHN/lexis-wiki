@@ -59,6 +59,11 @@ Lexis Wiki 采用独创的**「神经-符号双引擎」**架构，将学术级�
 - 导出的所有试卷均为**独立单个 HTML 文件**，内置样式、逻辑与离线题库。
 - 学生在手机、平板或电脑上**直接用浏览器双击打开即可使用**；也可以通过内置命令一键打包成单文件 `.exe`。
 
+### 4. 🛡️ 单元级 L2 智能复审 (Unit Re-Audit)
+- 直接集成在主页每个单元卡片的 **`⋮` 菜单 →「Re-Audit Unit」**：只读调用裁判模型（不重跑生成模型），一次性复审该单元已生成的 **Extractions**（`vocabulary` 词义对齐、`grammar`、`summary`、`mindmap`）与 **Quizzes**（`vocabulary`、`reading`、`translation`、`listening`、`video`；纯开放 `cloze` 保持 0-Token L1 门控不参与 L2 审题）。
+- 弹窗内提供实时进度条与滚动日志，结果按 **Quizzes** / **Extractions** 双标签页展示，附带完整 **`[JSON]`** 报告链接以及单项 **一键重生成 / 重编译** 按钮。
+- 默认遵循 `wiki_config.json` 中的 `max_parallel`（默认 `1` 并发），避免普通显卡显存争抢。
+
 ---
 
 ## ⚡ 3 分钟快速上手
@@ -72,7 +77,7 @@ Lexis Wiki 采用独创的**「神经-符号双引擎」**架构，将学术级�
    - 点击网页右上角 **设置 (Settings)** 图标；
    - 支持本地免费 **Ollama**（默认 `http://localhost:11434`）或任意 **OpenAI 兼容接口**（如 DeepSeek、通义千问、Kimi 等），填入地址与模型名称即可；
 5. **开始使用**：
-   - 将文本/音视频文件放入单元，点击 **「Compile Extractions」** 生成笔记，再点击 **「Generate Quizzes」** 生成试卷！
+   - 将文本/音视频文件放入单元，点击 **「Compile Extractions」** 生成笔记，点击 **「Generate Quizzes」** 生成试卷，也可随时从卡片 **`⋮` 菜单 →「Re-Audit Unit」** 复审质量并一键修复异常项！
 
 ---
 
@@ -133,6 +138,9 @@ lexis video-import "lecture.mp4" --name Unit_Video_1
 
 # 将 HTML 试卷打包为独立的单文件 EXE 程序
 lexis export-exe wiki/Unit_Video_1/handouts/Unit_Video_1_video_quiz.html
+
+# 对指定单元的提取笔记与试卷执行 Level-2 质量复审
+lexis re-audit Book_2_Unit_1_Section_A --target all
 
 # 检查知识库内部双链 [[wikilinks]] 完整性
 lexis lint

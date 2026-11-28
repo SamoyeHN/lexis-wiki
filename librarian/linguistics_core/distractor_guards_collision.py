@@ -217,7 +217,7 @@ class DistractorGuardsCollisionMixin:
                 cxn_banned = cls.get_cxn_banned_words(active_cxn.get("ban_groups"))
                 if d in cxn_banned or d_lem in cxn_banned:
                     return True, "double_key_pattern"
-                if d in cxn_cands or d_lem in cxn_cands:
+                if not is_lv_verb_cxn and (d in cxn_cands or d_lem in cxn_cands):
                     return False, "none"
 
         # Syntactic Disjointness Exemption Gate (<GRAM> / THESAURUS / grammar_boxes):
@@ -631,6 +631,8 @@ class DistractorGuardsCollisionMixin:
                             continue
                         if d in a_item.get("collocation", "").lower() and d not in antonyms:
                             return True, "double_key_collocation"
+                if d not in antonyms and cls.lookup_ldoce_phrase(f"{d} {a_clean}"):
+                    return True, "double_key_collocation"
             elif pos_low_anc.startswith("n") and anchor_type in ("verb", "verb_subject"):
                 d_entry = cls.get_pedlex_collocations(d, pos="noun")
                 if a_clean in [v.split()[0].lower() for v in d_entry.get("verb_before", [])] and d not in antonyms:
