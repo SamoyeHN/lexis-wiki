@@ -502,7 +502,9 @@ class QuizSkeletonFramesMixin:
             quote=it.get("quote") or it.get("raw_quote"),
         )
         eff_pos = "noun" if is_quantifier_frame else canonical_pos
-        if ldoce_cloze_frame and anchor_type == "prep" and not quote_shown_prep:
+        if ldoce_cloze_frame and anchor_type == "prep" and (
+            not quote_shown_prep or canonical_pos == "adj"
+        ):
             _m_fp = re.search(
                 r"_{2,}\s+(to|with|from|on|for|in|into|of|against|at|upon|towards|toward|over|under|about|by|as)\b",
                 ldoce_cloze_frame,

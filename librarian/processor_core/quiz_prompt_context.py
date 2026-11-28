@@ -127,6 +127,17 @@ def _build_vocabulary_context(
                 extra_note = extra_note[1:-2].strip() + "."
         if surface_notes:
             extra_note = " ".join(surface_notes + ([extra_note] if extra_note else [])).strip()
+        mechs_map = s.get("distractor_mechanisms") or {}
+        ant_opts = [
+            opt for opt, m in mechs_map.items()
+            if m == "antonym" and opt.lower() != str(s.get("target_word") or "").lower()
+        ]
+        if ant_opts and "Contrast: vs" not in (extra_note or "") and s.get("anchor_type") != "prep":
+            pol_note = (
+                f"Polarity Lock: options include antonym '{ant_opts[0]}' — "
+                f"include an explicit causal or result clue that strictly rules out '{ant_opts[0]}'."
+            )
+            extra_note = f"{extra_note} {pol_note}".strip() if extra_note else pol_note
         note_line = f"\n- 🎯 Slot / Grammar Note: {extra_note}" if extra_note else ""
         skeleton_bullets.append(
             f"### Item {idx} ###\n"

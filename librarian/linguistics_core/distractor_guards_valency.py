@@ -10,6 +10,9 @@ from .linguistic_rules_loader import (
     get_adj_prep_valency_map,
     get_adjunct_prep_pairs,
     get_anchor_stopwords,
+    get_collective_noun_ontology,
+    get_gradability_rules,
+    get_noun_taxonomy_exclusion,
     get_register_banned_words,
     get_typical_complement_preps,
 )
@@ -19,7 +22,7 @@ class DistractorGuardsValencyMixin:
     """Guards for preposition government, valency complementation, and syntactic slot clashes."""
 
     _STANDARD_PREPOSITIONS = {
-        "into", "to", "of", "for", "with", "in", "on", "from", "at",
+        "into", "to", "of", "for", "with", "in", "on", "from", "at", "by",
         "about", "towards", "against", "over", "between", "through", "under", "upon"
     }
 
@@ -267,6 +270,95 @@ class DistractorGuardsValencyMixin:
     _ADJUNCT_PREP_PAIRS: Set[Tuple[str, str]] = get_adjunct_prep_pairs()
     _TYPICAL_COMPLEMENT_PREPS: Set[str] = get_typical_complement_preps()
 
+    @classmethod
+    def classify_noun_ontology(cls, word: str, synsets: Optional[List[Any]] = None) -> Set[str]:
+        """Classify a noun into canonical ontology categories via collective ontology + WordNet lexfiles."""
+        w = (word or "").strip().lower()
+        if not w:
+            return set()
+        w_lem = cls.lemma_of(w)
+        cats: Set[str] = set()
+
+        coll = get_collective_noun_ontology()
+        for group in coll.get("human_role", []):
+            if w in group or w_lem in group:
+                cats.add("collective_agent")
+        for group in coll.get("vessel_batch", []):
+            if w in group or w_lem in group:
+                cats.add("metonymic_container")
+
+        rules = get_noun_taxonomy_exclusion()
+        lf_map = rules.get("lexfile_to_category", {})
+        syns = synsets
+        if syns is None:
+            wn = cls.get_wordnet()
+            if wn:
+                syns = (wn.synsets(w_lem, "n") or wn.synsets(w, "n"))[:2]
+        for s in (syns or []):
+            lf = s.lexfile() if hasattr(s, "lexfile") else ""
+            if lf in lf_map:
+                cats.add(lf_map[lf])
+        return cats
+
+    @classmethod
+    def is_noun_ontology_compatible(
+        cls,
+        target: str,
+        candidate: str,
+        target_synsets: Optional[List[Any]] = None,
+    ) -> bool:
+        """Negative filter blocking category cross-over and metonymic drift for noun distractors."""
+        t_raw = (target or "").strip().lower()
+        c_raw = (candidate or "").strip().lower()
+        if not t_raw or not c_raw or t_raw == c_raw:
+            return True
+
+        t = cls.lemma_of(t_raw)
+        c = cls.lemma_of(c_raw)
+        rules = get_noun_taxonomy_exclusion()
+        metonymy_pairs = rules.get("metonymy_clash_pairs", {})
+        if c_raw in metonymy_pairs.get(t, []) or c in metonymy_pairs.get(t, []):
+            return False
+        if c_raw in metonymy_pairs.get(t_raw, []) or c in metonymy_pairs.get(t_raw, []):
+            return False
+        if t_raw in metonymy_pairs.get(c, []) or t in metonymy_pairs.get(c, []):
+            return False
+
+        t_cats = cls.classify_noun_ontology(t_raw, synsets=target_synsets)
+        c_cats = cls.classify_noun_ontology(c_raw)
+        if not t_cats or not c_cats:
+            return True
+        if t_cats & c_cats:
+            return True
+
+        forbidden_map = rules.get("forbidden_categories", {})
+        forbidden_for_t: Set[str] = set()
+        for tc in t_cats:
+            forbidden_for_t.update(forbidden_map.get(tc, []))
+        if forbidden_for_t and all(cc in forbidden_for_t for cc in c_cats):
+            return False
+        return True
+
+    @classmethod
+    def classify_adj_gradability(cls, adj: str) -> Optional[str]:
+        """Classify an adjective as 'extreme' or 'scalar' via static rules and PedLex adverb collocations."""
+        a = (adj or "").strip().lower()
+        if not a:
+            return None
+        rules = get_gradability_rules()
+        if a in set(rules.get("extreme_limit_adjectives", [])):
+            return "extreme"
+        if a in set(rules.get("gradable_scalar_adjectives", [])):
+            return "scalar"
+
+        ped_coll = cls.get_pedlex_collocations(a) or {}
+        advs = {str(x).strip().lower() for x in ped_coll.get("adv", []) if isinstance(x, str)}
+        totality_advs = set(rules.get("totality_degree_adverbs", []))
+        scalar_markers = {"very", "fairly", "slightly"}
+        if advs & totality_advs and not (advs & scalar_markers):
+            return "extreme"
+        return None
+
 
     @classmethod
     def evaluate_syntactic_slot_clash(
@@ -312,9 +404,11 @@ class DistractorGuardsValencyMixin:
                         if t_self_countable:
                             t_prof["pure_countable"] = True
         pos_norm = (pos or "").strip().lower()
-        wn_pos = "a" if pos_norm.startswith("a") or pos_norm == "j" else (
-            "n" if pos_norm.startswith("n") else (
-                "v" if pos_norm.startswith("v") else ""
+        wn_pos = "r" if pos_norm in ("r", "adv", "adverb") else (
+            "a" if pos_norm.startswith("a") or pos_norm == "j" else (
+                "n" if pos_norm.startswith("n") else (
+                    "v" if pos_norm.startswith("v") else ""
+                )
             )
         )
 
@@ -540,6 +634,38 @@ class DistractorGuardsValencyMixin:
             if t_bound and not c_bound:
                 return True, "unattested_bound_degree_collocation_clash"
 
+        # 5b. Gradability Degree Adverb <-> Adjective Clash (Quirk & Paradis)
+        grad_rules = get_gradability_rules()
+        scalar_advs = set(grad_rules.get("scalar_degree_adverbs", []))
+        totality_advs = set(grad_rules.get("totality_degree_adverbs", []))
+        all_polar_advs = scalar_advs | totality_advs
+
+        if wn_pos == "r" or pos_norm.startswith("adv") or t in all_polar_advs:
+            mod_adj = (anchor or "").strip().lower()
+            if not mod_adj and quote:
+                m_adj = re.search(rf"(?:\b{re.escape(t)}\b|_{{2,}})\s+([a-z]{{3,}})\b", quote.lower())
+                if m_adj:
+                    mod_adj = m_adj.group(1)
+            if mod_adj:
+                mod_grad = cls.classify_adj_gradability(mod_adj)
+                if mod_grad == "extreme" and t in totality_advs and c in scalar_advs:
+                    return True, "scalar_adverb_in_extreme_adj_slot"
+                if mod_grad == "scalar" and t in scalar_advs and c in totality_advs:
+                    return True, "totality_adverb_in_scalar_adj_slot"
+        elif wn_pos == "a":
+            deg_adv = (anchor or "").strip().lower() if (anchor or "").strip().lower() in all_polar_advs else ""
+            if not deg_adv and quote:
+                m_adv = re.search(rf"\b([a-z]{{3,}})\s+(?:{re.escape(t)}|_{{2,}})\b", quote.lower())
+                if m_adv and m_adv.group(1) in all_polar_advs:
+                    deg_adv = m_adv.group(1)
+            if deg_adv:
+                c_grad = cls.classify_adj_gradability(c)
+                t_grad = cls.classify_adj_gradability(t)
+                if deg_adv in totality_advs and t_grad == "extreme" and c_grad == "scalar":
+                    return True, "scalar_adj_in_totality_adverb_slot"
+                if deg_adv in scalar_advs and t_grad == "scalar" and c_grad == "extreme":
+                    return True, "extreme_adj_in_scalar_adverb_slot"
+
         # 6. Bound Prepositional Government Clash (e.g. insight into vs overview of / description of; allergic to vs aware of)
         gov_prep = None
         if anchor_type == "prep" and anchor:
@@ -553,7 +679,10 @@ class DistractorGuardsValencyMixin:
             # Quirk/Biber Invariant: 'of' postmodification is universally permissible for English nouns
             # (genitive/partitive/appositive; e.g. 'increase of 10%', 'destruction of the city');
             # lack of an explicit LDOCE [+of] code on a noun never constitutes a prepositional government clash.
+            # Similarly, agentive 'by' is universally permissible for participial -ed adjectives ('fascinated by', 'interested by').
             if gov_prep == "of" and (wn_pos == "n" or pos_norm in ("n", "noun")):
+                pass
+            elif gov_prep == "by" and (wn_pos == "a" or pos_norm in ("a", "adj", "adjective")) and c.endswith("ed"):
                 pass
             else:
                 c_preps = cls.get_governed_prepositions(c, pos=pos)

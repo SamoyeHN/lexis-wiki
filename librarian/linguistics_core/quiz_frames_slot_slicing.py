@@ -93,7 +93,15 @@ class QuizFramesSlotSlicingMixin:
                     return "the" if is_non_gradable else "a very"
             return d_l
 
-        def _pobj_phrase(prep_tok, max_words: int = 3) -> str:
+        def _tok_surface(t) -> str:
+            """Preserve original casing for proper nouns and acronyms; lowercase common words."""
+            if t is None:
+                return ""
+            if t.pos_ == "PROPN" or (t.i > 0 and t.text and t.text[0].isupper()):
+                return t.text
+            return t.text.lower()
+
+        def _pobj_phrase(prep_tok, max_words: int = 5) -> str:
             """Extract a concise, non-forbidden prepositional object NP to anchor bare prep frames."""
             if prep_tok is None:
                 return ""
@@ -104,7 +112,7 @@ class QuizFramesSlotSlicingMixin:
             if pobj is None:
                 pcomp = next((c for c in prep_tok.children if c.dep_ == "pcomp" and c.pos_ == "VERB"), None)
                 if pcomp is not None and not _is_forbidden(pcomp.lemma_.lower()) and pcomp.lemma_.lower() not in cls._DELEXICAL_VERBS:
-                    return f" {pcomp.text.lower()}"
+                    return f" {_tok_surface(pcomp)}"
                 return ""
             if pobj.pos_ == "PRON" or pobj.ent_type_ == "PERSON" or _is_forbidden(pobj.lemma_.lower()):
                 is_human = (
@@ -120,19 +128,17 @@ class QuizFramesSlotSlicingMixin:
                     parts.append("their")
                 elif d_txt in ("a", "an", "the", "this", "that", "these", "those", "some", "any", "my", "your", "his", "her", "its", "our", "their"):
                     parts.append(d_txt)
-            mod_c = next(
-                (
-                    c for c in pobj.children
-                    if c.dep_ in ("amod", "compound")
-                    and prep_tok.i < c.i < pobj.i
-                    and c.is_alpha
-                    and not _is_forbidden(c.lemma_.lower())
-                ),
-                None,
-            )
-            if mod_c is not None:
-                parts.append(mod_c.text.lower())
-            parts.append(pobj.text.lower())
+            mod_cs = [
+                c for c in pobj.children
+                if c.dep_ in ("amod", "compound")
+                and prep_tok.i < c.i < pobj.i
+                and c.is_alpha
+                and not _is_forbidden(c.lemma_.lower())
+            ]
+            mod_cs.sort(key=lambda c: c.i)
+            for c in mod_cs:
+                parts.append(_tok_surface(c))
+            parts.append(_tok_surface(pobj))
             return " " + " ".join(parts[-max_words:])
 
         try:
@@ -255,6 +261,8 @@ class QuizFramesSlotSlicingMixin:
                             )
                         )
                     )
+                    if verb_form_tag is None and is_verbal_phrase and doc[start_i].tag_ in ("VBG", "VBN", "VBD", "VBZ", "VBP", "VB"):
+                        verb_form_tag = doc[start_i].tag_
                     left_aux = ""
                     if is_verbal_phrase and start_i > 0 and verb_form_tag not in ("VBD", "VBZ", "VBG", "VBN"):
                         prev_raw = doc[start_i - 1].text.lower()
@@ -263,7 +271,18 @@ class QuizFramesSlotSlicingMixin:
                         elif prev_raw == "'d":
                             left_aux = "would "
                         elif prev_raw in ("to", "will", "would", "could", "can", "might", "may", "should", "must", "did", "do", "does"):
-                            left_aux = f"{prev_raw} "
+                            if prev_raw == "to" and start_i > 1:
+                                prev_verb = doc[start_i - 2]
+                                if (
+                                    prev_verb.pos_ in ("VERB", "ADJ", "NOUN")
+                                    and prev_verb.is_alpha
+                                    and not _is_forbidden(prev_verb.lemma_.lower())
+                                ):
+                                    left_aux = f"{prev_verb.text.lower()} to "
+                                else:
+                                    left_aux = "to "
+                            else:
+                                left_aux = f"{prev_raw} "
                     # Copular Adjective Phrase: when phrase head is an adjective followed by a preposition
                     # (e.g. 'full of', 'short of', 'proud of', 'fond of'), recover the finite copula from the example
                     _head_is_adj = not is_verbal_phrase and not (ft_toks[0].endswith("ed") or ft_toks[0].endswith("en")) and (
@@ -298,19 +317,36 @@ class QuizFramesSlotSlicingMixin:
                     if last_w in ("with", "to", "for", "of", "into", "from", "on", "at", "about", "against", "upon", "over", "after") or (last_w == "in" and len(ft_toks) >= 3):
                         anim = patient_ontology_slot or cls._resolve_object_animacy_from_example(ex_clean, ft_low, default_tag="[sb/sth]")
                         return f"... {left_aux}____ {anim}"
-                    # Check if the phrase starts with a verb and takes a direct object right after `end_i`
+                    # Check if the phrase starts with a verb and takes a direct object or prepositional complement right after `end_i`
                     if is_verbal_phrase and end_i < len(doc):
                         nxt_t = doc[end_i]
                         _is_2w_adv_pv = (
                             len(ft_toks) == 2
                             and last_w in ("up", "down", "out", "in", "off", "on", "away", "back", "over", "through", "around", "along", "aside", "apart")
                         )
+                        # Prepositional complement / locative adjunct:
+                        # Find adjacent or closely-following prepositional child (e.g. 'lie down on the bed', 'look back on those days')
+                        nxt_prep = None
                         if (
                             nxt_t.pos_ == "ADP"
                             and nxt_t.text.lower() not in ("between", "during", "since", "until", "before", "after", "throughout")
-                            and (not _is_2w_adv_pv or nxt_t.text.lower() == str(anchor or "").strip().lower())
                         ):
-                            return f"... {left_aux}____ {nxt_t.text.lower()}"
+                            nxt_prep = nxt_t
+                        elif _is_2w_adv_pv:
+                            nxt_prep = next(
+                                (
+                                    c for c in doc[start_i].children
+                                    if c.dep_ == "prep"
+                                    and c.i >= end_i
+                                    and c.pos_ == "ADP"
+                                    and c.text.lower() not in ("between", "during", "since", "until", "before", "after", "throughout")
+                                ),
+                                None,
+                            )
+                        if nxt_prep is not None:
+                            pobj_tail = _pobj_phrase(nxt_prep)
+                            if not _is_2w_adv_pv or nxt_prep.text.lower() == str(anchor or "").strip().lower() or pobj_tail:
+                                return f"... {left_aux}____ {nxt_prep.text.lower()}{pobj_tail}".strip()
                         has_dobj_after = (
                             nxt_t.dep_ in ("dobj", "obj")
                             or (
@@ -379,7 +415,7 @@ class QuizFramesSlotSlicingMixin:
                                 return f"... {left_aux or 'to '}____ {obj_np}"
                         if left_aux:
                             return f"... {left_aux}____"
-                        if verb_form_tag in ("VBD", "VBZ", "VBG", "VBN"):
+                        if verb_form_tag in ("VBD", "VBZ", "VBP", "VBG", "VBN"):
                             if end_i < len(doc) and doc[end_i].is_alpha and not _is_forbidden(doc[end_i].lemma_.lower()):
                                 return f"... ____ {doc[end_i].text.lower()}"
                             subj_cands = [
@@ -453,10 +489,58 @@ class QuizFramesSlotSlicingMixin:
                         prev_w = prev_tok.text.lower()
                         if prev_w in ("and", "or", "got"):
                             return "... have ____"
+
+                        # Mechanism C: Copular PP set phrase subject/complement anchoring
+                        if is_self_contained_pp and prev_tok.lemma_.lower() in ("be", "seem", "remain", "stay", "look", "feel", "become"):
+                            # Check trailing PP/adjunct after end_i (e.g. 'on the shelf behind them')
+                            if end_i < len(doc) and doc[end_i].pos_ == "ADP" and not _is_forbidden(doc[end_i].lemma_.lower()):
+                                trail_tail = _pobj_phrase(doc[end_i])
+                                if trail_tail:
+                                    return f"... {prev_w} ____ {doc[end_i].text.lower()}{trail_tail}".strip()
+                            # Backtrack to subject of copula (e.g. 'the documents were on the shelf')
+                            cop_subj = next(
+                                (
+                                    c for c in prev_tok.children
+                                    if c.dep_ in ("nsubj", "nsubjpass") and c.i < prev_tok.i and c.pos_ in ("NOUN", "PROPN") and not _is_forbidden(c.lemma_.lower())
+                                ),
+                                None,
+                            )
+                            if cop_subj is None and prev_tok.dep_ == "cop" and prev_tok.head:
+                                cop_subj = next(
+                                    (
+                                        c for c in prev_tok.head.children
+                                        if c.dep_ in ("nsubj", "nsubjpass") and c.i < prev_tok.i and c.pos_ in ("NOUN", "PROPN") and not _is_forbidden(c.lemma_.lower())
+                                    ),
+                                    None,
+                                )
+                            if cop_subj is not None:
+                                subj_det = next(
+                                    (c.text.lower() for c in cop_subj.children if c.dep_ in ("det", "poss") and c.i < cop_subj.i and not _is_forbidden(c.lemma_.lower())),
+                                    "",
+                                )
+                                subj_phrase = f"{subj_det} {cop_subj.text.lower()}".strip()
+                                return f"... {subj_phrase} {prev_w} ____".strip()
+
+                        # Mechanism D: Governing head backtracking for noun idioms / binomials preceded by article
+                        if prev_w in ("the", "a", "an"):
+                            if start_i > 1:
+                                tok_before_det = doc[start_i - 2]
+                                if tok_before_det.pos_ == "ADP" and start_i > 2:
+                                    gov_tok = doc[start_i - 3]
+                                    if gov_tok.pos_ in ("VERB", "NOUN", "ADJ") and not _is_forbidden(gov_tok.lemma_.lower()):
+                                        gov_phrase = f"{gov_tok.text.lower()} {tok_before_det.text.lower()}"
+                                        return f"... {gov_phrase} {prev_w} ____"
+                                if tok_before_det.pos_ in ("VERB", "ADP") and not _is_forbidden(tok_before_det.lemma_.lower()):
+                                    return f"... {tok_before_det.text.lower()} {prev_w} ____"
+
                         if not (is_self_contained_pp and prev_tok.pos_ in ("ADP", "ADJ", "ADV", "DET", "CCONJ", "SCONJ")):
                             return f"... {prev_w} ____"
+
+                    # Trailing context after end_i with prepositional object closure
                     if end_i < len(doc) and doc[end_i].is_alpha and not _is_forbidden(doc[end_i].lemma_.lower()):
-                        return f"... ____ {doc[end_i].text.lower()}"
+                        nxt_after = doc[end_i]
+                        pobj_tail = _pobj_phrase(nxt_after) if nxt_after.pos_ == "ADP" else ""
+                        return f"... ____ {nxt_after.text.lower()}{pobj_tail}".strip()
                     if is_self_contained_pp:
                         for v_tok in doc[ : start_i]:
                             if v_tok.pos_ in ("VERB", "AUX") and v_tok.is_alpha and not _is_forbidden(v_tok.lemma_.lower()):
@@ -472,6 +556,9 @@ class QuizFramesSlotSlicingMixin:
         )
         if t_tok is None or t_start_i is None or t_end_i is None:
             return None
+
+        if verb_form_tag is None and canonical_pos == "verb" and t_tok.tag_ in ("VBG", "VBN", "VBD", "VBZ", "VBP", "VB"):
+            verb_form_tag = t_tok.tag_
 
         # 2. Adjective (`canonical_pos == "adj"`)
         if canonical_pos == "adj":
@@ -547,19 +634,36 @@ class QuizFramesSlotSlicingMixin:
                         )
                         obj_slot = "[someone] " if is_human_obj else "[something] "
 
+                # Subject anchor for copula adjectives ('The rocks are slippery' -> '... the rocks are ____')
+                subj_prefix = ""
+                if gov_v is not None and not obj_slot:
+                    subj_cand = next((c for c in gov_v.children if c.dep_ in ("nsubj", "nsubjpass") and c.i < t_start_i), None)
+                    if subj_cand is None and eff_head.head:
+                        subj_cand = next((c for c in eff_head.children if c.dep_ in ("nsubj", "nsubjpass") and c.i < t_start_i), None)
+                    if subj_cand is not None:
+                        if subj_cand.pos_ in ("NOUN", "PROPN") and not _is_forbidden(subj_cand.lemma_.lower()):
+                            s_det = next((c.text.lower() for c in subj_cand.children if c.dep_ in ("det", "poss") and c.i < subj_cand.i), "")
+                            if not s_det and subj_cand.tag_ == "NN":
+                                s_det = "the"
+                            subj_prefix = f"{s_det} {subj_cand.text.lower()} ".strip() + " "
+
+                adv_mod = next((c for c in eff_head.children if c.dep_ == "advmod" and c.i < t_start_i and c.text.lower() in ("so", "very", "quite", "extremely", "similarly", "increasingly", "highly", "fairly", "rather")), None)
+                if adv_mod and not obj_slot:
+                    cop_word = f"{cop_word} {adv_mod.text.lower()}"
+
                 has_prev_as = (t_start_i > 0 and doc[t_start_i - 1].text.lower() == "as")
                 has_next_as = (t_end_i < len(doc) and doc[t_end_i].text.lower() == "as")
                 if has_prev_as and has_next_as:
                     correl_tail = "as"
                     if t_end_i + 1 < len(doc) and doc[t_end_i + 1].is_alpha:
                         correl_tail = f"as {doc[t_end_i + 1].text.lower()}"
-                    return f"... {cop_word} {obj_slot}as ____ {correl_tail}"
+                    return f"... {subj_prefix}{cop_word} {obj_slot}as ____ {correl_tail}"
 
                 if prep_child is not None and (anchor_type != "verb_copula" or cop_word in ("be", "is", "are", "was", "were", "been")):
-                    return f"... {cop_word} {obj_slot}____ {prep_child.text.lower()}{_pobj_phrase(prep_child)}"
+                    return f"... {subj_prefix}{cop_word} {obj_slot}____ {prep_child.text.lower()}{_pobj_phrase(prep_child)}"
                 if anchor_type == "prep" and anchor and anchor.lower() != "as":
-                    return f"... {cop_word} {obj_slot}____ {anchor.lower()}"
-                return f"... {cop_word} {obj_slot}____"
+                    return f"... {subj_prefix}{cop_word} {obj_slot}____ {anchor.lower()}"
+                return f"... {subj_prefix}{cop_word} {obj_slot}____".strip()
 
             # Attributive pre-nominal `Adj + Noun` (`eff_head.dep_ == "amod"`)
             if eff_head.dep_ in ("amod", "compound") and eff_head.head and eff_head.head.pos_ in ("NOUN", "PROPN") and t_end_i <= eff_head.head.i:
@@ -567,16 +671,29 @@ class QuizFramesSlotSlicingMixin:
                 head_txt = head_n.text.lower()
                 if _is_forbidden(head_n.lemma_.lower()):
                     head_txt = "[noun]"
+                # Secondary dependency 1: Trailing preposition after head noun (e.g. 'the overall cost of', 'a leading expert in')
+                head_prep = next((c for c in head_n.children if c.dep_ == "prep" and c.i == head_n.i + 1 and c.text.lower() in ("of", "for", "in", "to", "on", "with", "against", "about", "towards", "from", "into")), None)
+                if head_prep is not None:
+                    head_txt = f"{head_txt} {head_prep.text.lower()}"
+
                 det_tok = next(
                     (c for c in head_n.children if c.dep_ in ("det", "poss") and c.i < t_start_i),
                     None,
                 )
                 det_str = _normalize_det(det_tok.text if det_tok else "", det_tok_obj=det_tok)
+
+                # Secondary dependency 2: Governing verb if head noun is direct object and frame lacks prep (e.g. 'reduce the overall cost')
+                v_pref = ""
+                if head_prep is None and head_n.dep_ in ("dobj", "obj") and head_n.head and head_n.head.pos_ == "VERB" and head_n.head.i < t_start_i:
+                    v_gov = head_n.head
+                    if v_gov.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_gov.lemma_.lower()):
+                        v_pref = f"{v_gov.text.lower()} "
+
                 if det_str:
-                    return f"... {det_str} ____ {head_txt}"
+                    return f"... {v_pref}{det_str} ____ {head_txt}".strip()
                 if t_start_i > 0 and doc[t_start_i - 1].pos_ == "ADP" and doc[t_start_i - 1].is_alpha:
                     return f"... {doc[t_start_i - 1].text.lower()} ____ {head_txt}"
-                return f"... ____ {head_txt}"
+                return f"... {v_pref}____ {head_txt}".strip()
 
             # Fallback if immediately followed by a noun in surface order
             if t_end_i < len(doc) and doc[t_end_i].pos_ in ("NOUN", "PROPN"):
@@ -601,8 +718,18 @@ class QuizFramesSlotSlicingMixin:
 
         # 3. Verb (`canonical_pos == "verb"`)
         if canonical_pos == "verb":
-            if t_tok.pos_ in ("NOUN", "PROPN") and t_tok.dep_ in ("compound", "pobj", "dobj", "attr"):
-                return f"... ____ {patient_ontology_slot or '[object]'}"
+            _has_verb_dobj_child = any(c.dep_ in ("dobj", "obj") and c.i > t_tok.i for c in t_tok.children)
+            if t_tok.pos_ in ("NOUN", "PROPN") and t_tok.dep_ in ("compound", "pobj", "dobj", "attr") and not _has_verb_dobj_child:
+                if t_tok.dep_ == "pobj" and t_tok.head and t_tok.head.pos_ == "ADP" and (verb_form_tag == "VBG" or ft_low.endswith("ing")):
+                    _p_gov = t_tok.head.head.text.lower() if (t_tok.head.head and t_tok.head.head.is_alpha) else ""
+                    return f"... {_p_gov + ' ' if _p_gov else ''}{t_tok.head.text.lower()} ____"
+                if t_tok.dep_ == "compound" and t_tok.head and t_tok.head.pos_ in ("NOUN", "PROPN"):
+                    return f"... ____ {t_tok.head.text.lower()}"
+                if t_tok.dep_ in ("dobj", "obj") and t_tok.head and t_tok.head.pos_ in ("VERB", "AUX"):
+                    return f"... {t_tok.head.text.lower()} ____"
+                if patient_ontology_slot:
+                    return f"... ____ {patient_ontology_slot}"
+                return "... ____"
             left_aux = ""
             _aux_link_verbs = (
                 "has", "have", "had", "is", "are", "was", "were", "been", "being", "be",
@@ -758,7 +885,7 @@ class QuizFramesSlotSlicingMixin:
                             None,
                         )
                         if pobj_of_c is not None:
-                            partitive_of_tail = f" of {pobj_of_c.text.lower()}"
+                            partitive_of_tail = f" of {_tok_surface(pobj_of_c)}"
                 # Check for a trailing particle (`tip his chair back`) or governed trivalent preposition (`attach importance to`)
                 trail_prt_or_prep = ""
                 if not partitive_of_tail and dobj_c.i + 1 < len(doc):
@@ -768,7 +895,7 @@ class QuizFramesSlotSlicingMixin:
                     elif (
                         nxt_after_obj.dep_ == "prep"
                         and (nxt_after_obj.head == t_tok or nxt_after_obj.head == dobj_c)
-                        and nxt_after_obj.text.lower() in ("to", "into", "onto", "on", "from", "with", "for", "against", "in", "at", "upon", "towards", "as")
+                        and nxt_after_obj.text.lower() in ("to", "into", "onto", "on", "from", "with", "for", "against", "in", "at", "upon", "towards", "as", "about", "between", "over", "under", "through", "behind")
                     ):
                         nxt_low = nxt_after_obj.text.lower()
                         if nxt_low == "as" and dobj_c.i + 2 < len(doc) and doc[dobj_c.i + 2].text.lower() == "to":
@@ -787,7 +914,7 @@ class QuizFramesSlotSlicingMixin:
                     raw_span = list(doc[t_tok.i + 1 : dobj_c.i + 1])
                     poss_idx = next((idx for idx, t in enumerate(raw_span[:-1]) if t.dep_ == "poss" and t.pos_ in ("NOUN", "PROPN")), None)
                     if poss_idx is not None:
-                        after_poss = [t.text.lower() for t in raw_span[poss_idx + 1 :] if (t.is_alpha or t.like_num) and not _is_forbidden(t.lemma_.lower())]
+                        after_poss = [_tok_surface(t) for t in raw_span[poss_idx + 1 :] if (t.is_alpha or t.like_num) and not _is_forbidden(t.lemma_.lower())]
                         if after_poss and (
                             cls._is_body_part_noun(dobj_c.lemma_.lower())
                             or dobj_c.tag_ in ("NNS", "NNPS")
@@ -795,16 +922,46 @@ class QuizFramesSlotSlicingMixin:
                         ):
                             span_toks = after_poss
                         else:
-                            span_toks = ["the"] + after_poss if after_poss else [dobj_c.text.lower()]
+                            span_toks = ["the"] + after_poss if after_poss else [_tok_surface(dobj_c)]
                     else:
                         span_toks = [
-                            t.text.lower()
+                            _tok_surface(t)
                             for t in raw_span
                             if (t.is_alpha or t.like_num) and not _is_forbidden(t.lemma_.lower())
                         ]
+
+                    # Enrich short verb frames or inanimate causal subjects with authentic subject noun/pronoun
+                    subj_prefix = ""
+                    if not left_aux:
+                        subj_tok = next((c for c in t_tok.children if c.dep_ in ("nsubj", "nsubjpass") and c.i < t_tok.i), None)
+                        if subj_tok is not None and not _is_forbidden(subj_tok.lemma_.lower()):
+                            is_short_obj_subj = not trail_prt_or_prep and len(span_toks) <= 2
+                            is_causal_inanimate = False
+                            if (
+                                not is_short_obj_subj
+                                and subj_tok.pos_ in ("NOUN", "PROPN", "ADJ")
+                                and len(span_toks) <= 3
+                                and subj_tok.lemma_.lower() not in {"thing", "things", "way", "time", "fact", "case", "part", "point"}
+                            ):
+                                wn_s = cls.get_wordnet()
+                                s_syns = wn_s.synsets(subj_tok.lemma_.lower(), "n") if wn_s else []
+                                if s_syns and s_syns[0].lexfile() in {
+                                    "noun.substance", "noun.phenomenon", "noun.process",
+                                    "noun.event", "noun.state", "noun.attribute", "noun.cognition",
+                                }:
+                                    is_causal_inanimate = True
+                            if is_short_obj_subj or is_causal_inanimate:
+                                if subj_tok.pos_ in ("NOUN", "PROPN") or is_causal_inanimate:
+                                    s_det = next((c.text.lower() for c in subj_tok.children if c.dep_ in ("det", "poss") and c.i < subj_tok.i and not _is_forbidden(c.lemma_.lower())), "")
+                                    s_surf = subj_tok.text.lower() if (subj_tok.pos_ in ("NOUN", "ADJ")) else _tok_surface(subj_tok)
+                                    s_str = f"{s_det} {s_surf}".strip()
+                                    subj_prefix = f"{s_str} "
+                                elif is_short_obj_subj and subj_tok.text.lower() in ("they", "we", "he", "she"):
+                                    subj_prefix = f"{subj_tok.text.lower()} "
+
                     if 1 <= len(span_toks) <= 4:
-                        return f"... {left_aux}____ {' '.join(span_toks)}{partitive_of_tail}{trail_prt_or_prep}"
-                    return f"... {left_aux}____ {dobj_c.text.lower()}{partitive_of_tail}{trail_prt_or_prep}"
+                        return f"... {subj_prefix}{left_aux}____ {' '.join(span_toks)}{partitive_of_tail}{trail_prt_or_prep}".strip()
+                    return f"... {subj_prefix}{left_aux}____ {_tok_surface(dobj_c)}{partitive_of_tail}{trail_prt_or_prep}".strip()
 
             # 3d. Intransitive / Ergative Inchoative / Passive verb with subject (`the custom ____`, `the lake had ____ overnight`)
             is_tok_passive = any(c.dep_ in ("auxpass", "nsubjpass") for c in t_tok.children)
@@ -897,7 +1054,7 @@ class QuizFramesSlotSlicingMixin:
                             return f"... {patient_ontology_slot} {_aux_norm}____{post_adv}".replace("  ", " ")
                         return f"... {subj_c.text.lower()} {xcomp_bridge or mid_aux}____"
                     s_det = next((c.text.lower() for c in subj_c.children if c.dep_ in ("det", "poss") and c.i < subj_c.i), "")
-                    s_prefix = f"{s_det} {subj_c.text.lower()}".strip()
+                    s_prefix = f"{s_det} {_tok_surface(subj_c)}".strip()
                     return f"... {s_prefix} {xcomp_bridge or mid_aux}____{post_adv}"
 
             if left_aux:
@@ -930,7 +1087,11 @@ class QuizFramesSlotSlicingMixin:
                 and not _is_forbidden(t_tok.head.lemma_.lower())
             ):
                 return f"... the {t_tok.head.text.lower()} was ____"
-            return f"... {left_aux}____ {patient_ontology_slot or '[object]'}"
+            if left_aux:
+                if patient_ontology_slot:
+                    return f"... {left_aux}____ {patient_ontology_slot}"
+                return f"... {left_aux}____".strip()
+            return f"... ____ {patient_ontology_slot or '[object]'}"
 
         # 4. Noun (`canonical_pos == "noun"`)
         if canonical_pos == "noun":
@@ -986,10 +1147,10 @@ class QuizFramesSlotSlicingMixin:
                 elif not is_pure_uncountable_target and not is_plural_noun:
                     det_for_amod = ("an" if amod_txt[0] in "aeiou" else "a") if (is_target_strictly_countable or has_uncountable_contrast_foil) else "the"
             prep_after = next(
-                (c for c in t_tok.children if c.dep_ == "prep" and c.i == t_tok.i + 1 and c.text.lower() in ("of", "for", "in", "to", "on", "with", "over", "between", "from", "into", "against", "towards")),
+                (c for c in t_tok.children if c.dep_ == "prep" and c.i == t_tok.i + 1 and c.text.lower() in ("of", "for", "in", "to", "on", "with", "over", "between", "from", "into", "against", "towards", "about", "behind", "throughout", "under")),
                 None,
             )
-            if prep_after is None and t_tok.i + 1 < len(doc) and doc[t_tok.i + 1].pos_ == "ADP" and doc[t_tok.i + 1].text.lower() in ("of", "for", "in", "to", "on", "with", "over", "between", "from"):
+            if prep_after is None and t_tok.i + 1 < len(doc) and doc[t_tok.i + 1].pos_ == "ADP" and doc[t_tok.i + 1].text.lower() in ("of", "for", "in", "to", "on", "with", "over", "between", "from", "into", "against", "towards", "about", "behind", "throughout", "under"):
                 prep_after = doc[t_tok.i + 1]
 
             # 4.0 Noun + infinitive complement (`a ____ to [verb]`, `several ____ to detect`, or support verb + noun + infinitive `made a ____ to visit`)
@@ -1049,12 +1210,55 @@ class QuizFramesSlotSlicingMixin:
                         return f"... {v_phrase} {np_mid}____ {prep_after.text.lower()}"
                     return f"... {v_phrase} {np_mid}____"
 
+            # 4a2. Predicate nominal / copular complement (`is a ____`, `was a ____`, `became a ____`)
+            if t_tok.dep_ in ("attr", "oprd") and t_tok.head and t_tok.head.pos_ in ("VERB", "AUX"):
+                v_head = t_tok.head
+                cop_txt = v_head.text.lower() if v_head.tag_ in ("VBD", "VBZ", "VBP", "VBN", "VB") else v_head.lemma_.lower()
+                subj_tok = next((c for c in v_head.children if c.dep_ in ("nsubj", "nsubjpass", "expl") and c.i < t_tok.i), None)
+                s_str = ""
+                if subj_tok is not None:
+                    if subj_tok.dep_ == "expl":
+                        s_str = "there "
+                    elif subj_tok.pos_ in ("NOUN", "PROPN") and not _is_forbidden(subj_tok.lemma_.lower()):
+                        s_det = next((c.text.lower() for c in subj_tok.children if c.dep_ in ("det", "poss") and c.i < subj_tok.i), "")
+                        s_str = f"{s_det} {_tok_surface(subj_tok)} ".strip() + " "
+                d_str = f"{det_str} " if det_str else ""
+                if prep_after is not None:
+                    return f"... {s_str}{cop_txt} {d_str}____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
+                return f"... {s_str}{cop_txt} {d_str}____".strip()
+
             # 4b. Pre-nominal adjective modifier + noun (+ optional prep) (`a personal ____ for`, `an economic ____`)
             if amod_tok is not None and amod_txt:
                 np_mid = f"{det_for_amod} {amod_txt}".strip()
                 if prep_after is not None:
                     return f"... {np_mid} ____ {prep_after.text.lower()}"
+                # If target noun is direct object of a verb, preserve governing verb (e.g. 'replaces plastic ____', 'boost retail ____')
+                if t_tok.dep_ in ("dobj", "obj") and t_tok.head and t_tok.head.pos_ == "VERB" and t_tok.head.i < t_tok.i:
+                    v_head = t_tok.head
+                    if v_head.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_head.lemma_.lower()):
+                        v_str = v_head.text.lower()
+                        return f"... {v_str} {np_mid} ____".strip()
                 return f"... {np_mid} ____"
+
+            # 4b2. Compound noun pre-modifier / adjunct (`____ sales`, `the ____ industry`, `____ demand for`)
+            if t_tok.dep_ in ("compound", "amod") and t_tok.head and t_tok.head.pos_ in ("NOUN", "PROPN") and t_tok.head.i > t_tok.i:
+                head_n = t_tok.head
+                # Inherit determiner from head noun if it occurs before target token
+                head_det = next((c for c in head_n.children if c.dep_ in ("det", "poss") and c.i < t_tok.i), None)
+                if head_det is None and det_tok is not None and det_tok.i < t_tok.i:
+                    head_det = det_tok
+                
+                det_prefix = ""
+                if head_det is not None:
+                    d_norm = _normalize_det(head_det.text, det_tok_obj=head_det)
+                    if d_norm:
+                        det_prefix = f"{d_norm} "
+
+                head_prep = next((c for c in head_n.children if c.dep_ == "prep" and c.i == head_n.i + 1 and c.text.lower() in ("for", "of", "in", "to", "on", "with", "against")), None)
+                mid_comp = [_tok_surface(c) for c in head_n.children if c.dep_ in ("compound", "amod") and t_tok.i < c.i < head_n.i]
+                mid_str = f"{' '.join(mid_comp)} " if mid_comp else ""
+                head_tail = f"{mid_str}{_tok_surface(head_n)} {head_prep.text.lower()}" if head_prep is not None else f"{mid_str}{_tok_surface(head_n)}"
+                return f"... {det_prefix}____ {head_tail}".strip()
 
             # 4c. Noun + bound preposition (`well in advance of the meeting`, `in advance of`, `the ____ of the copyright laws`, `a ____ of doctors`)
             if prep_after is not None:
@@ -1067,11 +1271,15 @@ class QuizFramesSlotSlicingMixin:
                     if det_tok is not None:
                         d_real = _normalize_det(det_tok.text, det_tok_obj=det_tok)
                         p_str = f"{p_str} {d_real}"
+                    p_gov = p_left.head if (p_left.head and p_left.head.pos_ in ("VERB", "AUX") and p_left.head.i < p_left.i and not _is_forbidden(p_left.head.lemma_.lower())) else None
+                    if p_gov is not None and p_left.i - p_gov.i <= 3:
+                        gov_txt = p_gov.text.lower()
+                        p_str = f"{gov_txt} {p_str}"
                     return f"... {p_str} ____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
                 d_pref = det_str or (default_noun_det if not is_pure_uncountable_target else "")
                 return f"... {d_pref + ' ' if d_pref else ''}____ {prep_after.text.lower()}{_pobj_phrase(prep_after)}"
 
-            # 4d. Subject of a lexical verb (`the ____ unfolds`)
+            # 4d. Subject of a lexical verb (`the ____ unfolds`, `____ will soon be paying higher airfares`)
             if t_tok.dep_ in ("nsubj", "nsubjpass") and t_tok.head and t_tok.head.pos_ in ("VERB", "AUX") and t_tok.head.i > t_tok.i:
                 v_head = t_tok.head
                 if v_head.pos_ == "AUX" or v_head.lemma_.lower() in ("be", "have", "do"):
@@ -1086,18 +1294,41 @@ class QuizFramesSlotSlicingMixin:
                         d_cap = (det_str or "the").capitalize()
                         return f"{d_cap} ____ {v_head.text.lower()} that ..."
                 elif v_head.lemma_.lower() not in cls._DELEXICAL_VERBS and not _is_forbidden(v_head.lemma_.lower()):
-                    d_pref = det_str if is_pure_uncountable_target else (det_str or "the")
+                    is_plural = is_plural_noun or t_tok.tag_ in ("NNS", "NNPS")
+                    if det_tok is not None:
+                        d_pref = _normalize_det(det_tok.text, det_tok_obj=det_tok)
+                    elif is_plural or is_pure_uncountable_target:
+                        d_pref = ""
+                    else:
+                        d_pref = det_str or "the"
+
+                    # Collect auxiliary / modal / adverb chain between subject and verb
                     aux_mid = ""
-                    if t_tok.i + 1 < v_head.i and v_head.i - t_tok.i <= 4:
-                        aux_toks = [
-                            t.text.lower()
-                            for t in doc[t_tok.i + 1 : v_head.i]
-                            if t.pos_ in ("AUX", "PART") or t.dep_ in ("aux", "auxpass", "neg")
+                    if t_tok.i + 1 < v_head.i and v_head.i - t_tok.i <= 5:
+                        mid_span = doc[t_tok.i + 1 : v_head.i]
+                        if all(
+                            t.pos_ in ("AUX", "PART", "ADV")
+                            or t.dep_ in ("aux", "auxpass", "neg", "advmod")
+                            for t in mid_span
+                        ):
+                            aux_mid = " ".join(t.text.lower() for t in mid_span) + " "
+
+                    # Check for direct object / complement of v_head to avoid bleached frames like "... ____ paying"
+                    tail_comp = ""
+                    dobj = next((c for c in v_head.children if c.dep_ in ("dobj", "obj") and c.i > v_head.i), None)
+                    if dobj is not None and dobj.is_alpha and not _is_forbidden(dobj.lemma_.lower()):
+                        obj_mods = [
+                            _tok_surface(c)
+                            for c in dobj.children
+                            if c.dep_ in ("det", "amod", "compound") and v_head.i < c.i < dobj.i
                         ]
-                        if aux_toks and len(aux_toks) == (v_head.i - t_tok.i - 1):
-                            aux_mid = " ".join(aux_toks) + " "
+                        obj_phrase = f"{' '.join(obj_mods)} {_tok_surface(dobj)}".strip()
+                        tail_comp = f" {obj_phrase}"
+                    elif prep_after_v := next((c for c in v_head.children if c.dep_ == "prep" and c.i == v_head.i + 1 and c.text.lower() in ("for", "to", "on", "in", "with", "from", "about", "against")), None):
+                        tail_comp = f" {prep_after_v.text.lower()}"
+
                     prefix_d = f"{d_pref} " if d_pref else ""
-                    return f"... {prefix_d}____ {aux_mid}{v_head.text.lower()}"
+                    return f"... {prefix_d}____ {aux_mid}{v_head.text.lower()}{tail_comp}"
 
             # 4e. Object of a preposition (`in ____`, `on the ____`, `under ____`)
             if t_tok.dep_ == "pobj" and t_tok.head and t_tok.head.dep_ == "prep":
@@ -1116,15 +1347,30 @@ class QuizFramesSlotSlicingMixin:
                     _gov is not None
                     and _gov.pos_ in ("VERB", "ADJ", "NOUN")
                     and _gov.is_alpha
-                    and 0 < (t_tok.head.i - _gov.i) <= 2
                     and _gov.lemma_.lower() not in cls._DELEXICAL_VERBS
                     and _gov.lemma_.lower() not in cls._ANCHOR_STOPWORDS
                     and not _is_forbidden(_gov.lemma_.lower())
                 ):
-                    return f"... {_gov.text.lower()} {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
+                    d_gov = t_tok.head.i - _gov.i
+                    if 0 < d_gov <= 2:
+                        return f"... {_gov.text.lower()} {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
+                    if 2 < d_gov <= 5 and _gov.pos_ == "VERB":
+                        # Check for intervening direct object: verb + dobj + prep + ____ (e.g. raised £200 for charity)
+                        dobj = next((c for c in _gov.children if c.dep_ in ("dobj", "obj") and _gov.i < c.i < t_tok.head.i), None)
+                        if dobj is not None and not _is_forbidden(dobj.lemma_.lower()):
+                            obj_det = next((c.text.lower() for c in dobj.children if c.dep_ in ("det", "poss") and c.i < dobj.i), "")
+                            obj_str = f"{obj_det} {_tok_surface(dobj)}".strip()
+                            return f"... {_gov.text.lower()} {obj_str} {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
                 return f"... {p_left} {det_in_ex + ' ' if det_in_ex else ''}____"
 
-            d_pref = det_str or "the"
+            is_plural = is_plural_noun or t_tok.tag_ in ("NNS", "NNPS")
+            if det_tok is not None:
+                d_pref = _normalize_det(det_tok.text, det_tok_obj=det_tok)
+            elif is_plural or is_pure_uncountable_target:
+                d_pref = ""
+            else:
+                d_pref = det_str or "the"
+
             _acl_v = next(
                 (
                     c for c in t_tok.children
@@ -1135,8 +1381,14 @@ class QuizFramesSlotSlicingMixin:
                 None,
             )
             if _acl_v is not None:
-                return f"... {d_pref} ____ {_acl_v.text.lower()}"
-            return f"... {d_pref} ____"
+                rel_prp = next((c.text.lower() for c in _acl_v.children if c.dep_ in ("nsubj", "nsubjpass") and t_tok.i < c.i < _acl_v.i and c.text.lower() in ("who", "which", "that")), "")
+                rel_pref = f"{rel_prp} " if rel_prp else ""
+                acl_dobj = next((c for c in _acl_v.children if c.dep_ in ("dobj", "obj") and c.i > _acl_v.i), None)
+                acl_tail = f" {_tok_surface(acl_dobj)}" if (acl_dobj and acl_dobj.is_alpha and not _is_forbidden(acl_dobj.lemma_.lower())) else ""
+                pref_str = f"{d_pref} " if d_pref else ""
+                return f"... {pref_str}____ {rel_pref}{_acl_v.text.lower()}{acl_tail}"
+            pref_str = f"{d_pref} " if d_pref else ""
+            return f"... {pref_str}____".strip()
 
         # 5. Adverb (`canonical_pos == "adv"`)
         if canonical_pos == "adv":

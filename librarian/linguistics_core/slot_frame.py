@@ -87,11 +87,33 @@ class SlotFrame:
                         for ex in re.split(r"\s*/\s*", examples_raw)
                         if ex.strip() and ex.strip().lower() not in ("someone", "somebody", "person", "people")
                     ]
-                    ex_hint = (
-                        f" (e.g. '{concrete_ex[0]}', 'employees', 'the audience' — avoid generic 'someone')"
-                        if concrete_ex
-                        else " (e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')"
-                    )
+                    if concrete_ex:
+                        ex_hint = f" (e.g. '{concrete_ex[0]}', 'employees', 'the audience' — avoid generic 'someone')"
+                        notes.append(f"Object slot requires a concrete person or group noun phrase{ex_hint}.")
+                        return concrete_ex[0]
+                    # If only generic 'someone' was in the hint, try extracting from example_txt or skeleton quotes
+                    person_from_ex = ""
+                    corpus_texts = []
+                    if example_txt:
+                        corpus_texts.append(example_txt.lower())
+                    if skeleton:
+                        for q_field in ("candidate_quote", "licensed_quote", "quote"):
+                            q_val = str(skeleton.get(q_field) or "").strip().lower()
+                            if q_val:
+                                corpus_texts.append(q_val)
+                    for c_txt in corpus_texts:
+                        m_p = re.search(
+                            r"\b(?:the|a|an|his|her|their|our)\s+([a-z]+(?:ers|ors|ants|ents|ians|ists|eens|men|women|children|people|students|workers|staff|team|crew|colleagues|clients|guests|audience|passengers))\b",
+                            c_txt,
+                        )
+                        if m_p:
+                            person_from_ex = f"the {m_p.group(1)}"
+                            break
+                    if person_from_ex:
+                        notes.append(f"Object slot requires a concrete person or group noun phrase (e.g. '{person_from_ex}').")
+                        return person_from_ex
+
+                    ex_hint = " (e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')"
                     notes.append(f"Object slot requires a concrete person or group noun phrase{ex_hint}.")
                     return "..."
                 prefix = "" if cat.lower().startswith("concrete") else "concrete "
@@ -109,20 +131,35 @@ class SlotFrame:
         # 2. Replace `to do [sth]` / `to do something` / `to [verb]` with a concrete infinitive or rule
         if re.search(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", surface, flags=re.IGNORECASE):
             inf_v = ""
+            corpus_sources = []
             if example_txt:
-                tw_low = str((skeleton or {}).get("target_word") or "").strip().lower()
-                bw_low = str((skeleton or {}).get("base_headword") or tw_low).strip().lower()
-                prescribed = {str(opt).strip().lower() for opt in (skeleton or {}).get("prescribed_options") or []}
-                disallowed = {tw_low, bw_low, "do", "be", "have", "get", "the", "a"} | prescribed
-                for m_match in re.finditer(r"\bto\s+([a-z]{3,})\b", example_txt.lower()):
+                corpus_sources.append(example_txt.lower())
+            if skeleton:
+                for q_field in ("candidate_quote", "licensed_quote", "quote"):
+                    q_val = str(skeleton.get(q_field) or "").strip().lower()
+                    if q_val:
+                        corpus_sources.append(q_val)
+            tw_low = str((skeleton or {}).get("target_word") or "").strip().lower()
+            bw_low = str((skeleton or {}).get("base_headword") or tw_low).strip().lower()
+            prescribed = {str(opt).strip().lower() for opt in (skeleton or {}).get("prescribed_options") or []}
+            disallowed = {tw_low, bw_low, "do", "be", "the", "a"} | prescribed
+            for c_src in corpus_sources:
+                for m_match in re.finditer(r"\bto\s+([a-z]{3,})(?:\s+([a-z]{3,}))?\b", c_src):
                     cand = m_match.group(1)
+                    cand_obj = m_match.group(2)
                     if (
                         cand not in disallowed
                         and not (bw_low and cand.startswith(bw_low))
                         and cand not in prescribed
                     ):
-                        inf_v = cand
-                        break
+                        if cand in ("have", "get") and cand_obj and cand_obj not in ("a", "the", "to", "in", "on", "at"):
+                            inf_v = f"{cand} {cand_obj}"
+                        elif cand not in ("have", "get"):
+                            inf_v = cand
+                        if inf_v:
+                            break
+                if inf_v:
+                    break
             if inf_v:
                 surface = re.sub(r"\bto\s+(?:do\s+(?:\[sth\]|something)|\[verb\])", f"to {inf_v}", surface, flags=re.IGNORECASE)
             else:
@@ -210,21 +247,48 @@ class SlotFrame:
             flags=re.IGNORECASE,
         )
         if re.search(r"\[(?:sb|someone|person/group)\]", surface, flags=re.IGNORECASE):
-            surface = re.sub(r"\[(?:sb|someone|person/group)\]", "...", surface, flags=re.IGNORECASE)
-            if not any("concrete person or group" in n for n in notes):
-                notes.append(
-                    "Object slot requires a concrete person or group noun phrase "
-                    "(e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')."
+            person_model = ""
+            corpus_texts = []
+            if example_txt:
+                corpus_texts.append(example_txt.lower())
+            if skeleton:
+                for q_field in ("candidate_quote", "licensed_quote", "quote"):
+                    q_val = str(skeleton.get(q_field) or "").strip().lower()
+                    if q_val:
+                        corpus_texts.append(q_val)
+            for c_txt in corpus_texts:
+                m_person = re.search(
+                    r"\b(?:the|a|an|his|her|their|our)\s+([a-z]+(?:ers|ors|ants|ents|ians|ists|eens|men|women|children|people|students|workers|staff|team|crew|colleagues|clients|guests|audience|passengers))\b",
+                    c_txt,
                 )
+                if m_person:
+                    person_model = f"the {m_person.group(1)}"
+                    break
+            if person_model:
+                surface = re.sub(r"\[(?:sb|someone|person/group)\]", person_model, surface, flags=re.IGNORECASE)
+                if not any("concrete person or group" in n for n in notes):
+                    notes.append(
+                        "Object slot requires a concrete person or group noun phrase "
+                        f"(e.g. '{person_model}', 'employees', 'the audience' — avoid generic 'someone')."
+                    )
+            else:
+                surface = re.sub(r"\[(?:sb|someone|person/group)\]", "...", surface, flags=re.IGNORECASE)
+                if not any("concrete person or group" in n for n in notes):
+                    notes.append(
+                        "Object slot requires a concrete person or group noun phrase "
+                        "(e.g. 'the audience', 'employees', 'a colleague' — avoid generic 'someone')."
+                    )
         sth_model = ""
         if example_txt:
             m_np = re.search(r"\b(?:the|a|an|his|her|their|our)\s+([a-z]{3,})\b", example_txt.lower())
             if m_np and m_np.group(1) not in ("issue", "project", "way", "fact", "thing"):
                 sth_model = f"the {m_np.group(1)}"
         surface = re.sub(r"\[sth\]", sth_model or "the situation", surface, flags=re.IGNORECASE)
-        surface = re.sub(r"\[something\]", "something", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[something\]", sth_model or "the situation", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[(?:sb/sth|sth/sb)\]", sth_model or "the matter", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[object\]", sth_model or "the situation", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[V-base\]", "take action", surface, flags=re.IGNORECASE)
+        surface = re.sub(r"\[verb\]", "take action", surface, flags=re.IGNORECASE)
         surface = re.sub(r"\[noun\]", "system", surface, flags=re.IGNORECASE)
         surface = re.sub(
             r"\b([a-zA-Z]+)\s+is/are\b",

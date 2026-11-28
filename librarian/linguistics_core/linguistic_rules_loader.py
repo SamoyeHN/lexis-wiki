@@ -228,3 +228,75 @@ def get_delexical_quantifier_nouns() -> Set[str]:
         "couple", "number", "majority", "minority", "plenty", "rest", "bunch", "load",
         "loads", "few", "many", "mass", "stuff", "thing", "things", "amount", "quantity",
     }
+
+
+def get_noun_taxonomy_exclusion() -> Dict[str, Any]:
+    rules = load_linguistic_rules()
+    raw = rules.get("noun_taxonomy_exclusion")
+    if raw and isinstance(raw, dict):
+        return raw
+    return {
+        "lexfile_to_category": {
+            "noun.person": "role_agent",
+            "noun.group": "collective_agent",
+            "noun.act": "event_action",
+            "noun.event": "event_action",
+            "noun.process": "event_action",
+            "noun.location": "facility_place",
+            "noun.artifact": "concrete_object",
+            "noun.object": "concrete_object",
+            "noun.substance": "concrete_object",
+            "noun.food": "concrete_object",
+            "noun.plant": "concrete_object",
+            "noun.animal": "concrete_object",
+            "noun.body": "concrete_object",
+            "noun.quantity": "metonymic_container",
+            "noun.attribute": "abstract_attribute",
+            "noun.state": "abstract_attribute",
+            "noun.cognition": "abstract_attribute",
+            "noun.feeling": "abstract_attribute",
+            "noun.relation": "abstract_attribute",
+            "noun.phenomenon": "abstract_attribute",
+        },
+        "forbidden_categories": {
+            "role_agent": ["event_action", "facility_place", "concrete_object"],
+            "collective_agent": ["facility_place", "metonymic_container", "concrete_object"],
+            "event_action": ["role_agent", "facility_place", "concrete_object"],
+            "facility_place": ["role_agent", "collective_agent"],
+            "concrete_object": ["abstract_attribute", "event_action"],
+            "metonymic_container": ["collective_agent", "abstract_attribute"],
+            "abstract_attribute": ["concrete_object", "role_agent"],
+        },
+        "metonymy_clash_pairs": {
+            "staff": ["suite", "room", "bread", "stave"],
+            "crew": ["deck", "cabin", "vessel"],
+            "faculty": ["facility", "hall", "building"],
+            "applicant": ["application", "appliance"],
+        },
+    }
+
+
+def get_gradability_rules() -> Dict[str, List[str]]:
+    rules = load_linguistic_rules()
+    raw = rules.get("gradability_rules")
+    if raw and isinstance(raw, dict):
+        return raw
+    return {
+        "gradable_scalar_adjectives": [
+            "tired", "cold", "hot", "happy", "sad", "difficult", "hard", "challenging",
+            "easy", "expensive", "cheap", "heavy", "light", "important", "popular",
+            "hungry", "angry", "big", "small", "good", "bad", "interesting", "surprised", "frightened",
+        ],
+        "extreme_limit_adjectives": [
+            "exhausted", "freezing", "boiling", "ecstatic", "miserable", "impossible",
+            "dead", "vital", "essential", "unique", "starving", "furious", "enormous",
+            "tiny", "wonderful", "terrible", "fascinating", "astonished", "terrified",
+            "perfect", "empty", "full",
+        ],
+        "scalar_degree_adverbs": [
+            "very", "extremely", "fairly", "rather", "slightly", "somewhat", "moderately",
+        ],
+        "totality_degree_adverbs": [
+            "completely", "utterly", "absolutely", "totally", "entirely",
+        ],
+    }

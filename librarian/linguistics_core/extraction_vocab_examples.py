@@ -141,6 +141,32 @@ class ExtractionVocabExamplesMixin:
             cand_pool.extend(exact_pb_exs)
             cand_pool.extend(matching_pb_exs)
             cand_pool.extend(other_pb_exs)
+            if (
+                not is_multi
+                and len(sense.get("examples") or []) >= 2
+                and not exact_pb_exs
+                and not matching_pb_exs
+                and hasattr(cls, "select_optimal_five_source_example")
+            ):
+                _ent_opt = cls.get_ldoce_entry(clean_target)
+                if _ent_opt:
+                    _cpos_opt = "adj" if pos_low.startswith("adj") else ("adv" if pos_low.startswith("adv") else pos_low)
+                    _s_idx_opt = next(
+                        (i for i, _es in enumerate(_ent_opt.get("senses") or []) if _es is sense or _es.get("definition") == sense.get("definition")),
+                        None,
+                    )
+                    _opt_ex, _, _ = cls.select_optimal_five_source_example(
+                        final_target=clean_target,
+                        base_word=clean_low,
+                        canonical_pos=_cpos_opt,
+                        target_entry=_ent_opt,
+                        locked_sense=sense,
+                        t_s_idx=_s_idx_opt,
+                        definition=sense.get("definition"),
+                        quote=quoted_sentence,
+                    )
+                    if _opt_ex and _opt_ex not in cand_pool:
+                        cand_pool.append(_opt_ex)
             for u_obj in (sense.get("units") or []):
                 if isinstance(u_obj, dict):
                     for ex in (u_obj.get("examples") or []):

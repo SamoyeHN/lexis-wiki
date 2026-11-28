@@ -238,9 +238,23 @@ Every cloze question derives its discriminative power from an immutable **Contex
 | **Intransitive Verb** | Bound Preposition (`prep`) | Manner Adverb (`adv_mod`) | Prepositional subcategorization |
 | **Prepositional Adj** | Bound Preposition (`prep`) | Head Copula (`cop`) | Lexical preposition selection |
 | **Attributive Adj** | Modified Head Noun (`modified_noun`) | Degree Modifier (`adv_mod`) | Collocational semantic fit |
+| **Noun Adjunct / Classifier** | Modified Head Noun (`head_noun`) | Preceding Determiner / Bound Prep | Compound noun attributive slot & collocational slicing |
+| **Subject Noun (Lexical Verb)** | Authentic Predicate & Aux Chain (`aux_chain` + `verb`) | Direct Object Patient (`dobj`) | Authentic clausal context (zero tense stripping) |
 | **Eventive Noun** | Support / Light Verb (`verb`) | Prepositional Complement (`prep`)| Light-verb collocation frame |
 | **Shell Noun** | Clausal Complement (`to_inf` / `that`) | Post-nominal prep (`of`) | Subcategorization complement clash |
 | **Function Word** | Clausal vs. Prepositional NP | Discourse polarity | Structural complement contrast |
+
+### 6.3 Proper Noun Casing & Multi-Word Entity Preservation Invariant
+In symbolic frame slicing (`derive_cloze_slot_frame_from_example`), authentic examples frequently contain institutional names, cultural events, geographic titles, and multi-word named entities (e.g., `the British Film Institute`, `Thanksgiving Day`, `Oxford University`).
+
+1. **PROPN Surface Fidelity Gate (`_tok_surface`)**:
+   - Nominal tokens with `t.pos_ == "PROPN"` or title casing (`t.i > 0 and t.text[0].isupper()`) retain their verbatim orthographic casing. Common tokens are lowercased.
+   - Prevents downstream degradation where blind `.text.lower()` stripping corrupts proper names (e.g. `British Film Institute` $\rightarrow$ `british institute`) and causes LLM hallucination of physical entrance desks or geographical misinterpretations.
+2. **Multi-Word Entity Modifier Preservation**:
+   - Prepositional objects (`_pobj_phrase`) and direct objects harvest all intervening `amod` and `compound` modifiers sorted by token index, expanding the maximum word window up to 5 tokens to guarantee multi-word named entities are never truncated (e.g. preserving `Film` in `the British Film Institute`).
+3. **Noun + Bound Preposition Governing Predicate Backtracking**:
+   - Bare prepositional noun frames (e.g. `... on the ____ of ...`) carry semantic ambiguity between physical location and personnel membership.
+   - The slicing engine backtracks to capture the governing verb/copula within 3 tokens (`were on the ____ of ...`, `served on the ____ of ...`), anchoring the SLA micro-task unambiguously to organizational membership.
 
 ---
 
@@ -291,7 +305,8 @@ Distractor candidates are filtered against their `pedlex.db` metadata (`core_lev
   - AWL candidates require high everyday frequency (`c_awl and c_freq`).
   - **+1 Band Frequency Lock**: Any candidate exceeding A2 (`c_rank > 2`, i.e., B1 ceiling) MUST carry verified everyday spoken/written frequency tags (`S1..S3`, `W1..W3`), blocking low-frequency cultural/domain words (e.g., `choir`, `orchestra`) while permitting high-frequency peers (e.g., `army` with `S1/W1`).
 - **B1 Contexts (Threshold)**:
-  - Distractors at or below B1 (`c_rank <= 3`, e.g. collective nouns like `swarm`, `dull`, `noisy`) are accepted as natural peer options.
+  - **Elementary Imposter Filter**: Any candidate claiming to be A1 or A2 (`c_rank <= 2`) that lacks LDOCE defining core vocabulary (`core_level >= 1`), everyday spoken/written frequency tags (`c_freq`), or AWL (`c_awl`) is identified as a false-positive artifact of `cefrpy` stem/prefix stripping (e.g. `transfix`/`transfixed` $\rightarrow$ `fix` [A2], `pretext` $\rightarrow$ `text` [A2], `impasse` $\rightarrow$ `pass` [A2]) and is barred from B1 assessments.
+  - Distractors at B1 (`c_rank == 3`, e.g. collective nouns like `swarm`, `dull`, `noisy`) are accepted as natural peer options.
   - **+1 Band Frequency Lock**: Distractors exceeding B1 (`c_rank > 3`, i.e. B2 ceiling words) must be grounded in everyday frequency (`c_freq`), recognized AWL (`c_awl`), or LDOCE 1000/2000 core vocabulary (`core_level >= 2`), systematically eliminating obscure non-core intruders.
 - **B2 / C1 Contexts (Upper-Intermediate & Advanced)**:
   - When the passage is B2, the macro ceiling caps distractors at B2, preventing C2 academic words from overloading the test.
@@ -426,4 +441,22 @@ For comprehensive technical specifications on cloze slot extraction, inflection 
 7. **Complex Prepositions (`in terms of`, `on behalf of`)**: Sliced at Medial Noun (`in ____ of` $\rightarrow$ `terms, light, view, spite`; `on ____ of` $\rightarrow$ `behalf, account, basis, charge`).
 8. **Preposition-Stranding Bare Verbal Idioms (`give rise to`, `shed light on`)**: Sliced at Bare Nominal collocator (`give ____ to` $\rightarrow$ `rise, birth, way, place`) or governing verb (`shed, cast, throw, beam`).
 9. **Prepositional Zero-Article Adverbials (`by accident`, `at stake`)**: Sliced at Adverbial Noun (`by ____` $\rightarrow$ `accident, incident, event, happening`). Zero collocation filter blocks pseudo-synonyms that form double keys (`by mistake`).
+
+---
+
+## 10. Tripartite Distractor Optimization (Consolidated Rules, Soft "2+1", Noun Ontology Filter & Gradability Arena)
+
+1. **Consolidated Declarative Rules (`librarian/data/linguistic_rules.json`)**:
+   - All noun taxonomy exclusion rules (`noun_taxonomy_exclusion`) and degree adverb gradability rules (`gradability_rules`) are consolidated into `librarian/data/linguistic_rules.json` and loaded with mtime-cached fallbacks via `get_noun_taxonomy_exclusion()` and `get_gradability_rules()` in `librarian/linguistics_core/linguistic_rules_loader.py`.
+2. **Morpho-Phonetic Paronyms & Soft "2 + 1" Quota (`distractor_paronyms.py`, `distractor_vocab_assembly.py`)**:
+   - `_ensure_orthographic_pos_index()` indexes adjective derivational suffixes (`-ic`, `-al`, `-ive`, `-ous`, `-ent`, `-ant`, `-able`, `-ible`, `-ary`, `-ory`) alongside noun suffixes.
+   - `get_orthographic_paronym_distractors()` unwraps inflected verb inputs (`condensed` $\rightarrow$ `condense`) before lookup and projects selected paronyms back via `inflect_verb_like_target()` only when an inflected surface form was queried.
+   - For preposition-governing targets (`anchor_type == "prep"` without an active construction family), `preposition_valency` distractors are capped at 2 (`max_prep_valency = 2`) with overflow candidates buffered in `deferred_valency_cands` for graceful backfill if no qualifying paronym fills Slot 3.
+3. **Noun Ontology Exclusion Negative Filter (`distractor_guards_valency.py`)**:
+   - `is_noun_ontology_compatible()` maps nouns via `collective_noun_ontology` and WordNet `lexfile()` into 7 canonical categories (`role_agent`, `collective_agent`, `event_action`, `facility_place`, `concrete_object`, `metonymic_container`, `abstract_attribute`) and blocks cross-category / metonymic drift (`applicant` $\nrightarrow$ `application`, `staff` $\nrightarrow$ `suite`/`room`).
+   - Wired strictly as a negative filter in candidate assembly/fallback loops (never inside `evaluate_syntactic_slot_clash()`, which rewards positive syntactic clashes).
+4. **Degree Adverb $\leftrightarrow$ Gradability Mutual Exclusion Arena (`distractor_guards_valency.py`, `distractor_vocab_assembly.py`)**:
+   - `classify_adj_gradability()` combines static seed lists with dynamic PedLex `collocations['adv']` inspection to distinguish `scalar` adjectives (`tired`, `difficult`) from `extreme` adjectives (`exhausted`, `impossible`).
+   - Dual-compatible adverbs (`really`, `quite`, `pretty`, `so`) are excluded from polar arenas to prevent false clashes; `evaluate_syntactic_slot_clash()` enforces bidirectional scalar/totality degree-adverb clash detection (`# 5b`).
+
 

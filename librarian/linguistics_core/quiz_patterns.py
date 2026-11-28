@@ -1062,6 +1062,31 @@ class QuizPatternsMixin:
                 if _pb.get("example"):
                     _native_sense_ex_texts.add(re.sub(r"\s+", " ", str(_pb["example"])).strip().lower())
 
+        # Cross-Attested Everyday Collocation Voting Pool (from entry["collocations"] & cross_collocations)
+        # Used strictly as a sense-safe preference signal on already sense-locked examples.
+        _entry_colloc_votes: Set[str] = set()
+        if target_entry:
+            _colloc_items_pool: List[Dict[str, Any]] = []
+            for _clist in (target_entry.get("collocations") or {}).values():
+                for _cit in (_clist or []):
+                    if isinstance(_cit, dict):
+                        _colloc_items_pool.append(_cit)
+            for _ccit in (target_entry.get("cross_collocations") or []):
+                if isinstance(_ccit, dict):
+                    _colloc_items_pool.append(_ccit)
+            for _cit in _colloc_items_pool:
+                if (
+                    _cit.get("pos")
+                    and canonical_pos in ("noun", "verb", "adj", "adv")
+                    and cls._pos_code(_cit["pos"]) != cls._pos_code(canonical_pos)
+                ):
+                    continue
+                _c_str = str(_cit.get("collocation") or "").strip().lower()
+                for _cw in re.findall(r"[a-z]{4,}", _c_str):
+                    if _cw not in (ft_low, bw_low) and _cw not in cls._ANCHOR_STOPWORDS:
+                        _entry_colloc_votes.add(_cw)
+                        _entry_colloc_votes.add(cls.lemma_of(_cw))
+
         for raw_ex, pat_hint, tier in raw_candidates:
             ex_clean = re.sub(r"\s*\(=[^)]*\)", "", str(raw_ex or "")).strip().strip('"').strip()
             if not ex_clean:
@@ -1157,6 +1182,24 @@ class QuizPatternsMixin:
                 anc_check = str(anchor).strip().lower()
                 if re.search(rf"\b{re.escape(anc_check)}\w*\b", ex_norm):
                     sc += 60
+
+            # Cross-Attested Everyday Collocation Bonus on sense-verified examples
+            if _entry_colloc_votes and tier in (
+                "sense_example", "pattern_bundle_gramexa", "grammar_boxes",
+                "collocations_entry", "pattern_bundle_sense_verb_colloc", "cross_collocations",
+            ):
+                _ex_toks_4 = {
+                    w for w in re.findall(r"[a-z]{4,}", ex_norm)
+                    if w not in (ft_low, bw_low) and w not in cls._ANCHOR_STOPWORDS
+                }
+                _colloc_hits = (_ex_toks_4 | {cls.lemma_of(w) for w in _ex_toks_4}) & _entry_colloc_votes
+                if _colloc_hits:
+                    sc += 36
+                    if any(
+                        int((cls.get_ldoce_entry(cw) or {}).get("core_level") or 0) >= 2
+                        for cw in _colloc_hits
+                    ):
+                        sc += 16
 
             # Exact inflected form preference (especially for plural nouns or participial adjectives/verbs)
             if re.search(rf"\b{re.escape(ft_low)}\b", ex_norm):

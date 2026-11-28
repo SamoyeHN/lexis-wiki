@@ -1414,7 +1414,9 @@ class DistractorVocabHarvestMixin:
             ]
             candidates = tier2_satellites + tier0_ldoce_thesaurus + antonym_candidates + tier3_attributes + tier1_synonyms
             # Preposition valency cloze (): prioritize academic adjectives governing DIFFERENT prepositions
-            if anchor_type == "prep" and context_anchor:
+            if anchor_type == "prep" and context_anchor and not (
+                clean_target.endswith("ed") and context_anchor.strip().lower() in ("by", "with")
+            ):
                 clean_anchor = context_anchor.strip().lower()
                 valency_candidates = []
                 for p, adjs in cls._ADJ_PREP_VALENCY_MAP.items():

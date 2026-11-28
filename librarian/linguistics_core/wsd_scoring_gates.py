@@ -239,7 +239,8 @@ class WsdScoringGatesMixin:
         # meta_stopwords is computed once above, before the cue-index query, so
         # that the cue layer and the overlap families delexicalise identically.
 
-        ex_overlap = len((q_tokens - meta_stopwords) & (ex_tokens - meta_stopwords))
+        local_q = getattr(ctx, "local_q_tokens", None) or q_tokens
+        ex_overlap = len((local_q - meta_stopwords) & (ex_tokens - meta_stopwords))
         score += ex_overlap * 8
 
         # 2. Quote token overlap against sense definition itself

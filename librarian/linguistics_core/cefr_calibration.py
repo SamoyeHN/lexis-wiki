@@ -14,6 +14,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Un
 
 logger = logging.getLogger("librarian.linguistics")
 
+try:
+    from wordfreq import zipf_frequency as _WORDFREQ_ZIPF
+except Exception:
+    _WORDFREQ_ZIPF = None
+
 # Thread-safe and async-safe context variable for the currently active passage CEFR level.
 _CURRENT_PASSAGE_CEFR: ContextVar[Optional[str]] = ContextVar("_CURRENT_PASSAGE_CEFR", default=None)
 
@@ -23,15 +28,41 @@ class CefrCalibrationMixin:
     CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
 
     @classmethod
-    @lru_cache(maxsize=32768)
+    @lru_cache(maxsize=65536)
     def _zipf_freq(cls, word: str) -> float:
-        if not word:
+        w = (word or "").strip().lower()
+        if not w:
             return 0.0
-        try:
-            from wordfreq import zipf_frequency
-            return float(zipf_frequency(word.strip().lower(), "en"))
-        except Exception:
-            return 0.0
+        if _WORDFREQ_ZIPF is not None:
+            try:
+                return float(_WORDFREQ_ZIPF(w, "en"))
+            except Exception:
+                return 0.0
+        if hasattr(cls, "get_ldoce_entry"):
+            try:
+                ent = cls.get_ldoce_entry(w)
+                if ent:
+                    core = int(ent.get("core_level") or 0)
+                    if core >= 3:
+                        return 5.2
+                    if core == 2:
+                        return 4.6
+                    if core == 1:
+                        return 4.1
+                    freq_tags = set(ent.get("freq_tags") or [])
+                    if freq_tags & {"S1", "W1"}:
+                        return 5.0
+                    if freq_tags & {"S2", "W2"}:
+                        return 4.5
+                    if freq_tags & {"S3", "W3"}:
+                        return 4.0
+                    if ent.get("is_awl"):
+                        return 3.8
+                    if ent.get("senses"):
+                        return 3.2
+            except Exception:
+                pass
+        return 0.0
 
     @classmethod
     def word_zipf(cls, word: str) -> float:
@@ -190,7 +221,22 @@ class CefrCalibrationMixin:
             clean = re.sub(r"\[.*?\]|\(.*?\)", "", word.lower()).strip()
             res = analyzer.get_average_word_level_CEFR(clean)
             if res and " " not in clean:
-                return str(res).upper()
+                lvl_str = str(res).upper()
+                if (
+                    lvl_str in ("A1", "A2")
+                    and not cls._is_ldoce_disabled()
+                    and clean not in cls._CEFR_FUNCTION_WORDS
+                ):
+                    ent = cls.get_ldoce_entry(clean)
+                    if ent:
+                        c_core, c_freq, c_awl, c_exs = cls._pedlex_accessibility_profile(clean)
+                        if c_core == 0 and not c_freq and not c_awl:
+                            senses = ent.get("senses") or []
+                            regs = " ".join(str(s.get("register") or "").lower() for s in senses)
+                            is_high_reg = any(r in regs for r in ("formal", "literary", "rare", "old-fashioned"))
+                            if is_high_reg or c_exs <= 1 or len(clean) >= 7:
+                                return "C1" if c_exs >= 1 else "C2"
+                return lvl_str
             tokens = [
                 t for t in re.findall(r"[a-z]+", clean)
                 if t not in ("be", "a", "an", "the", "of", "to", "in", "on", "at", "by", "for", "with", "from", "about", "as", "into", "up", "down", "out", "off", "over", "one", "ones", "sth", "sb")
@@ -666,6 +712,44 @@ class CefrCalibrationMixin:
             _CURRENT_PASSAGE_CEFR.reset(token)
 
     @classmethod
+    def _pedlex_accessibility_profile(
+        cls, word: str, resolved: Optional[str] = None
+    ) -> Tuple[int, bool, bool, int]:
+        """Return (core_level, has_freq_tags, is_awl, example_count) from PedLex."""
+        if cls._is_ldoce_disabled():
+            return (0, False, False, 0)
+        w = (word or "").strip().lower()
+        c_entry = cls.get_ldoce_entry(w)
+        c_core = int(c_entry.get("core_level") or 0) if c_entry else 0
+        c_freq = bool(c_entry.get("freq_tags")) if c_entry else False
+        c_awl = bool(c_entry.get("is_awl")) if c_entry else False
+        c_exs = sum(len(s.get("examples") or []) for s in (c_entry.get("senses") or [])) if c_entry else 0
+
+        if not (c_core >= 1 or c_freq):
+            lem_cands = set(cls._headword_candidates(w))
+            s_lem = cls._surface_lemma(w)
+            if s_lem:
+                lem_cands.add(s_lem)
+            if resolved and resolved != w:
+                lem_cands.add(resolved)
+            for lem in lem_cands:
+                if not lem or lem == w:
+                    continue
+                lem_entry = cls.get_ldoce_entry(lem)
+                if lem_entry:
+                    lem_core = int(lem_entry.get("core_level") or 0)
+                    lem_freq = bool(lem_entry.get("freq_tags"))
+                    lem_awl = bool(lem_entry.get("is_awl"))
+                    lem_exs = sum(len(s.get("examples") or []) for s in (lem_entry.get("senses") or []))
+                    c_exs = max(c_exs, lem_exs)
+                    if lem_core or lem_freq or lem_awl:
+                        c_core = max(c_core, lem_core)
+                        c_freq = c_freq or lem_freq
+                        c_awl = c_awl or lem_awl
+                        break
+        return (c_core, c_freq, c_awl, c_exs)
+
+    @classmethod
     def is_cefr_compliant_distractor(
         cls,
         candidate: str,
@@ -739,13 +823,28 @@ class CefrCalibrationMixin:
             ceiling_rank = t_ceiling_rank
             effective_base_rank = t_rank
 
+        is_paronym_peer = (
+            len(t_clean) >= 5
+            and not cls.are_same_word_family(t_clean, c_clean)
+            and (
+                cls._common_prefix_len(t_clean, c_clean) >= 4
+                or cls._common_suffix_len(t_clean, c_clean) >= 4
+            )
+        )
+
         if not c_lvl_str:
             # Candidate is unlisted in CEFR database!
             # If target or passage is A1, A2, or B1, completely reject unlisted candidates (e.g. 'conceivableness')
             if effective_base_rank <= 3:
                 return False
-            # For B2/C1 targets, only allow if verified in PedLex
-            return in_pedlex
+            if not in_pedlex:
+                return False
+            if not cls._is_ldoce_disabled():
+                c_core, c_freq, c_awl, c_exs = cls._pedlex_accessibility_profile(c_clean, resolved=resolved)
+                if effective_base_rank == 4:
+                    return bool(c_core >= 1 or c_freq or c_awl)
+                return bool(c_core >= 1 or c_freq or c_awl or (is_paronym_peer and c_exs >= 1))
+            return True
 
         c_rank = cls.CEFR_ORDER.get(c_lvl_str, 4)
 
@@ -783,44 +882,8 @@ class CefrCalibrationMixin:
         #    Any C2 distractor candidate must be grounded in everyday frequency (freq_tags), AWL, or LDOCE core vocabulary.
         #    Rejects obscure, literary, or domain-bound C2 words (e.g. 'ascendant', 'supererogation') while
         #    preserving attested, high-utility C2 terms.
-        if (effective_base_rank <= 3 or c_rank >= 6) and not is_direct_negation and not cls._is_ldoce_disabled():
-            c_entry = cls.get_ldoce_entry(c_clean)
-            c_core = (c_entry.get("core_level") or 0) if c_entry else 0
-            c_freq = bool(c_entry.get("freq_tags")) if c_entry else False
-            c_awl = bool(c_entry.get("is_awl")) if c_entry else False
-
-            # If surface form does not have core/frequency tags (e.g. inflected forms like 'children', 'boxes', 'attaches'),
-            # inspect candidate lemmas/headwords to inherit defining core properties.
-            if not (c_core >= 1 or c_freq):
-                lem_cands = set(cls._headword_candidates(c_clean))
-                s_lem = cls._surface_lemma(c_clean)
-                if s_lem:
-                    lem_cands.add(s_lem)
-                if resolved and resolved != c_clean:
-                    lem_cands.add(resolved)
-                for lem in lem_cands:
-                    if not lem or lem == c_clean:
-                        continue
-                    lem_entry = cls.get_ldoce_entry(lem)
-                    if lem_entry:
-                        lem_core = lem_entry.get("core_level") or 0
-                        lem_freq = bool(lem_entry.get("freq_tags"))
-                        lem_awl = bool(lem_entry.get("is_awl"))
-                        if lem_core or lem_freq:
-                            c_core = max(c_core, lem_core)
-                            c_freq = c_freq or lem_freq
-                            c_awl = lem_awl
-                            break
-
-            # Paronym exception: High-discrimination orthographic paronyms sharing prefix/suffix (e.g. monotony/monotone from monopoly)
-            # test morphological precision and are transparently related, exempting them from obscure C2 gating.
-            is_paronym_peer = (
-                len(t_clean) >= 5
-                and (
-                    cls._common_prefix_len(t_clean, c_clean) >= 4
-                    or cls._common_suffix_len(t_clean, c_clean) >= 4
-                )
-            )
+        if not is_direct_negation and not cls._is_ldoce_disabled():
+            c_core, c_freq, c_awl, c_exs = cls._pedlex_accessibility_profile(c_clean, resolved=resolved)
 
             # Reject ungrounded obscure C2 distractors across all target levels (unless paronym peer)
             if c_rank >= 6 and not (c_core >= 1 or c_freq or c_awl or is_paronym_peer):
@@ -849,9 +912,26 @@ class CefrCalibrationMixin:
                     return False
             elif effective_base_rank == 3:
                 # B1 intermediate gate:
-                # If distractor sits above B1 (i.e. c_rank > 3, B2 ceiling), it must be grounded in
-                # everyday frequency, AWL, or LDOCE 1000/2000 core vocabulary (core_level >= 2).
+                # 1. Any candidate claiming to be A1 or A2 (c_rank <= 2) that lacks LDOCE defining core vocabulary (core_level >= 1),
+                #    everyday spoken/written frequency tags, or AWL is a false-positive artifact of cefrpy stem-heuristics
+                #    (e.g., 'transfix'/'transfixed' -> 'fix' [A2], 'pretext' -> 'text' [A2], 'impasse' -> 'pass' [A2])
+                #    and must be barred from foundational B1 assessments.
+                if c_rank <= 2 and not (c_core >= 1 or c_freq or c_awl):
+                    return False
+                # 2. If distractor sits above B1 (i.e. c_rank > 3, B2 ceiling), it must be grounded in
+                #    everyday frequency, AWL, or LDOCE 1000/2000 core vocabulary (core_level >= 2).
                 if c_rank > 3 and not (c_freq or c_awl or c_core >= 2):
+                    return False
+            elif effective_base_rank == 4:
+                # B2 intermediate-upper gate:
+                # Untagged PedLex entries (core=0, no freq_tags, not AWL) must have >= 2 authentic LDOCE examples
+                # to block obscure/literary intruders (e.g. 'clamorous' exs=0, 'circuitous' exs=1).
+                if not (c_core >= 1 or c_freq or c_awl or is_paronym_peer) and c_exs < 2:
+                    return False
+            elif effective_base_rank >= 5:
+                # C1/C2 advanced gate:
+                # Zero-example dead entries (exs=0 without core/freq/awl) are barred even at C1/C2.
+                if not (c_core >= 1 or c_freq or c_awl or is_paronym_peer) and c_exs < 1:
                     return False
 
         return in_pedlex or is_acad or analyzer.is_word_in_database(resolved) or is_direct_negation

@@ -187,6 +187,7 @@ class DistractorVocabAssemblyMixin:
 
         safe_distractors: List[str] = []
         distractor_metadata: Dict[str, str] = {}
+        deferred_valency_cands: List[str] = []
 
         # Slot 1: Sense-Locked Antonym (if available and not superseded by a Construction Family contrast)
         # Antonyms are whitelisted from context_anchor collision clearance because their
@@ -224,6 +225,13 @@ class DistractorVocabAssemblyMixin:
         near_only_for_pile = (
             (near_set_for_pile | tier0_set) & (strict_target_syns | wn_same_synset_words)
         ) - ants_for_pile - set(sense_antonyms)
+        _def_adj_syns: Set[str] = set()
+        if wn_pos == "a" and definition:
+            _def_stop = {"very", "more", "most", "much", "many", "such", "some", "other", "good", "well", "especially", "often", "usually", "something", "someone", "somebody", "thing", "things", "way", "ways"}
+            for _dw in re.findall(r"\b[a-z]{4,}\b", definition.lower()):
+                if _dw not in _def_stop and wn and wn.synsets(_dw, "a"):
+                    _def_adj_syns.update(cls.semantic_fields(_dw, pos="a")[0])
+                    _def_adj_syns.add(_dw)
         for cand in candidates:
             if cand in safe_distractors:
                 continue
@@ -231,9 +239,15 @@ class DistractorVocabAssemblyMixin:
                 continue
             if _is_informal_or_slang_distractor(cand):
                 continue
+            if wn_pos == "n" and not cls.is_noun_ontology_compatible(
+                clean_target, cand, target_synsets=target_synsets
+            ):
+                continue
             has_cand_clash, cand_clash_r = cls.evaluate_syntactic_slot_clash(
                 clean_target, cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
             )
+            if _def_adj_syns and cand in _def_adj_syns and cand not in sense_antonyms and not has_cand_clash:
+                continue
             # Fronted Negative Inversion Arena Gate:
             # In an inverted clause (Aux + Subj), ban all non-inverting adverbs (*often, *steadily, *completely)
             # so multiple-choice distractors test SLA correlative/aspectual nuances rather than syntax giveaways.
@@ -291,6 +305,24 @@ class DistractorVocabAssemblyMixin:
                     continue
 
             if (cand in cxn_cand_set or cand not in forbidden_words) and cand not in exclude_words and len(cand) >= 2:
+                is_valency_slot_cand = bool(
+                    cand not in cxn_cand_set
+                    and cand not in sense_antonyms
+                    and anchor_type == "prep"
+                    and (
+                        (has_cand_clash and cand_clash_r == "unattested_prepositional_government_clash")
+                        or (wn_pos == "a" and any(cand in adjs for p, adjs in cls._ADJ_PREP_VALENCY_MAP.items() if p != context_anchor))
+                    )
+                )
+                if (
+                    is_valency_slot_cand
+                    and target_count >= 3
+                    and not cxn_cand_set
+                    and sum(1 for s in safe_distractors if distractor_metadata.get(s) == "preposition_valency") >= 2
+                ):
+                    if cand not in deferred_valency_cands:
+                        deferred_valency_cands.append(cand)
+                    continue
                 safe_distractors.append(cand)
                 if cand in cxn_cand_set:
                     distractor_metadata[cand] = "cxn_subcat_contrast"
@@ -406,6 +438,7 @@ class DistractorVocabAssemblyMixin:
                             and not _is_primarily_adj_or_verb(fb)
                             and not _is_informal_or_slang_distractor(fb)
                             and _is_aligned_noun_coord(fb, _ref_syn, _ref_hyp)
+                            and cls.is_noun_ontology_compatible(clean_target, fb, target_synsets=target_synsets)
                             and cls.is_cefr_compliant_distractor(fb, clean_target)
                         )
                     ]
@@ -547,6 +580,39 @@ class DistractorVocabAssemblyMixin:
                     ):
                         safe_distractors.append(_aw)
                         distractor_metadata[_aw] = "collocation"
+
+        # Gradability Degree Adverb Arena: prioritize scalar vs totality degree adverb foils
+        # when modifying an extreme/scalar adjective before generic adverb contrast fallbacks.
+        if len(safe_distractors) < target_count and wn_pos == "r" and not is_fronted_inv_slot:
+            from .linguistic_rules_loader import get_gradability_rules
+
+            _g_rules = get_gradability_rules()
+            _s_advs = _g_rules.get("scalar_degree_adverbs", [])
+            _t_advs = _g_rules.get("totality_degree_adverbs", [])
+            _mod_adj = (context_anchor or "").strip().lower()
+            if not _mod_adj and quote:
+                _m_ga = re.search(rf"(?:\b{re.escape(clean_target)}\b|_{{2,}})\s+([a-z]{{3,}})\b", quote.lower())
+                if _m_ga:
+                    _mod_adj = _m_ga.group(1)
+            _mod_grad = cls.classify_adj_gradability(_mod_adj) if _mod_adj else None
+            _arena_pool: List[str] = []
+            if clean_target in _t_advs and _mod_grad == "extreme":
+                _arena_pool = _s_advs
+            elif clean_target in _s_advs and _mod_grad == "scalar":
+                _arena_pool = _t_advs
+            for _ga in _arena_pool:
+                if (
+                    _ga != clean_target
+                    and _ga not in exclude_words
+                    and _ga not in safe_distractors
+                    and not cls.are_same_word_family(_ga, clean_target)
+                    and not any(cls.are_same_word_family(_ga, s) for s in safe_distractors)
+                    and cls.is_cefr_compliant_distractor(_ga, clean_target)
+                ):
+                    safe_distractors.append(_ga)
+                    distractor_metadata[_ga] = "gradability_contrast"
+                    if len(safe_distractors) >= target_count:
+                        break
 
         # Fallback for Focus / Degree / Approximation / Discourse / Temporal Adverbs before Orthographic Paronym Tier
         # (so focus/degree/discourse/temporal adverbs like 'merely', 'virtually', 'barely', 'similarly', 'nowadays'
@@ -727,6 +793,7 @@ class DistractorVocabAssemblyMixin:
                                 cls._common_prefix_len(clean_target, p_word) >= 3
                                 or cls._common_suffix_len(clean_target, p_word) >= (3 if wn_pos == "n" else 4)
                                 or _p_score >= 45
+                                or (wn_pos == "a" and cls._common_prefix_len(clean_target, p_word) >= 2 and _p_score >= 35)
                             )
                         ):
                             continue
@@ -807,6 +874,14 @@ class DistractorVocabAssemblyMixin:
                             safe_distractors.append(best_p_word)
                             distractor_metadata[best_p_word] = "orthographic_paronym"
                             break
+
+        if len(safe_distractors) < target_count and deferred_valency_cands:
+            for dv_cand in deferred_valency_cands:
+                if dv_cand not in safe_distractors:
+                    safe_distractors.append(dv_cand)
+                    distractor_metadata[dv_cand] = "preposition_valency"
+                    if len(safe_distractors) >= target_count:
+                        break
 
         # Tier 3.9: Noun Countability-Contrast Safe Distractor Slot ("countability_contrast_uncountable")
         # For countable singular/plural or [plural] nouns in `_NOUN_COUNTABILITY_CONTRAST_MAP`, inject at most 1
@@ -1048,6 +1123,32 @@ class DistractorVocabAssemblyMixin:
         # When candidates pool is still sparse, extract homogeneous fallback words from the target's
         # sense-locked WordNet lexfile (e.g. noun.cognition, noun.group) to prevent Domain/Category Mismatch.
         if len(safe_distractors) < target_count and wn_pos == "n":
+            if len(safe_distractors) < target_count and target_strictly_uncountable:
+                core_unc_pool = [
+                    "guidance", "counsel", "feedback", "information", "equipment", "hardware",
+                    "machinery", "progress", "research", "evidence", "assistance", "funding",
+                    "legislation", "pollution", "luggage", "baggage", "furniture", "property",
+                ]
+                for unc_cand in (list(near_set_for_pile) + core_unc_pool):
+                    if (
+                        unc_cand != clean_target
+                        and unc_cand not in safe_distractors
+                        and unc_cand not in forbidden_words
+                        and unc_cand not in exclude_words
+                        and cls._is_primarily_uncountable_noun(unc_cand)
+                        and cls.is_noun_ontology_compatible(clean_target, unc_cand, target_synsets=target_synsets)
+                        and not cls.are_same_word_family(unc_cand, clean_target)
+                        and not any(cls.are_same_word_family(unc_cand, s) for s in safe_distractors)
+                        and cls.is_cefr_compliant_distractor(unc_cand, clean_target)
+                        and not cls.double_key_collision(
+                            clean_target, unc_cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
+                        )[0]
+                    ):
+                        safe_distractors.append(unc_cand)
+                        distractor_metadata[unc_cand] = "uncountable_domain_peer"
+                        if len(safe_distractors) >= target_count:
+                            break
+
             target_syns = [s for s in target_synsets if s.lexfile()] or [s for s in wn.synsets(clean_target, "n") if s.lexfile()]
             target_lfs = [s.lexfile() for s in target_syns if s.lexfile()]
             if target_lfs:
@@ -1078,6 +1179,7 @@ class DistractorVocabAssemblyMixin:
                             and fb not in safe_distractors
                             and not _is_primarily_adj_or_verb(fb)
                             and not _is_informal_or_slang_distractor(fb)
+                            and cls.is_noun_ontology_compatible(clean_target, fb, target_synsets=target_synsets)
                             and cls.is_cefr_compliant_distractor(fb, clean_target)
                         )
                     ]
@@ -1087,6 +1189,10 @@ class DistractorVocabAssemblyMixin:
                         raw_fb_pool.sort(key=lambda x: -cls._zipf_freq(x))
                     for fb in raw_fb_pool:
                         if target_strictly_uncountable:
+                            if cls._is_primarily_countable_noun(fb) and sum(
+                                1 for s in safe_distractors if cls._is_primarily_countable_noun(s)
+                            ) >= 1:
+                                continue
                             if not cls._is_primarily_uncountable_noun(fb):
                                 _fb_ent = cls.get_ldoce_entry(fb) or {}
                                 _fb_sns = [
@@ -1108,31 +1214,6 @@ class DistractorVocabAssemblyMixin:
                                 break
                     if len(safe_distractors) >= target_count:
                         break
-
-            if len(safe_distractors) < target_count and target_strictly_uncountable:
-                core_unc_pool = [
-                    "guidance", "counsel", "feedback", "information", "equipment", "hardware",
-                    "machinery", "progress", "research", "evidence", "assistance", "funding",
-                    "legislation", "pollution", "luggage", "baggage", "furniture", "property",
-                ]
-                for unc_cand in (list(near_set_for_pile) + core_unc_pool):
-                    if (
-                        unc_cand != clean_target
-                        and unc_cand not in safe_distractors
-                        and unc_cand not in forbidden_words
-                        and unc_cand not in exclude_words
-                        and cls._is_primarily_uncountable_noun(unc_cand)
-                        and not cls.are_same_word_family(unc_cand, clean_target)
-                        and not any(cls.are_same_word_family(unc_cand, s) for s in safe_distractors)
-                        and cls.is_cefr_compliant_distractor(unc_cand, clean_target)
-                        and not cls.double_key_collision(
-                            clean_target, unc_cand, anchor=context_anchor, anchor_type=anchor_type, pos=pos, quote=quote
-                        )[0]
-                    ):
-                        safe_distractors.append(unc_cand)
-                        distractor_metadata[unc_cand] = "uncountable_domain_peer"
-                        if len(safe_distractors) >= target_count:
-                            break
 
         # Second Defense for Adjectives (`wn_pos == "a"`): Morphological & Syntactic-Slot Aligned Peers
         # Prevents participial `-ing` adjectives (e.g. `rewarding`) or relational `adj.pert` adjectives (e.g. `doctoral`)
@@ -1164,10 +1245,10 @@ class DistractorVocabAssemblyMixin:
                     _adj_morph_pool = _al_ic_pool + [w for w in _ory_ive_pool if w not in _al_ic_pool]
             elif clean_target.endswith("ed"):
                 _adj_morph_pool = [
-                    "Exhausted", "confused", "frustrated", "convinced", "ashamed",
-                    "relieved", "pleased", "disappointed", "crowded", "isolated",
+                    "bored", "annoyed", "offended", "disappointed", "discouraged",
+                    "confused", "frustrated", "convinced", "ashamed", "relieved",
+                    "pleased", "exhausted", "crowded", "isolated",
                 ]
-                _adj_morph_pool = [w.lower() for w in _adj_morph_pool]
             else:
                 _adj_morph_pool = []
             for _m_adj in _adj_morph_pool:

@@ -20,6 +20,9 @@ logger = logging.getLogger("librarian.linguistics")
 
 
 class PedlexThesaurusMixin:
+    _exact_headword_set: Optional[FrozenSet[str]] = None
+    _exact_headword_conn_id: Optional[int] = None
+
     @classmethod
     def _adverb_frame_from_quote(cls, word: str, quote: Optional[str]) -> Optional[str]:
         """
@@ -375,6 +378,29 @@ class PedlexThesaurusMixin:
         w_clean = word.strip().lower()
         if not w_clean:
             return False
+
+        if cls._ldoce_conn is None:
+            cls.get_ldoce_entry("the")
+        conn = cls._ldoce_conn
+        if conn is not None:
+            conn_id = id(conn)
+            if cls._exact_headword_set is None or cls._exact_headword_conn_id != conn_id:
+                try:
+                    rows = conn.execute("SELECT word FROM ldoce").fetchall()
+                    hw_set: Set[str] = set()
+                    for (raw_w,) in rows:
+                        if raw_w:
+                            wl = str(raw_w).strip().lower()
+                            if wl:
+                                hw_set.add(wl)
+                                hw_set.add(re.sub(r"_\d+$", "", wl))
+                    cls._exact_headword_set = frozenset(hw_set)
+                    cls._exact_headword_conn_id = conn_id
+                except Exception:
+                    cls._exact_headword_set = None
+            if cls._exact_headword_set is not None:
+                return w_clean in cls._exact_headword_set
+
         if cls._ldoce_raw_row(w_clean) is not None:
             return True
         if cls._ldoce_raw_row(f"{w_clean}_1") is not None:

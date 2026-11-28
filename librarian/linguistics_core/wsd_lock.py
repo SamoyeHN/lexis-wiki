@@ -90,6 +90,7 @@ class WsdLockMixin:
         target_v_has_dobj = False
         target_v_is_bare_active_intrans = False
         doc_q = None
+        local_q_tokens: Set[str] = set(q_tokens)
         if quote and len(senses) > 1:
             try:
                 nlp = cls.get_spacy()
@@ -104,6 +105,25 @@ class WsdLockMixin:
                 ]
                 if matching_toks:
                     mt0 = matching_toks[0]
+                    if len(doc) > 12:
+                        local_idxs = {t.i for t in doc if abs(t.i - mt0.i) <= 5}
+                        local_idxs.add(mt0.head.i)
+                        local_idxs.update(ch.i for ch in mt0.children)
+                        local_idxs.update(ch.i for ch in mt0.head.children)
+                        local_idxs.add(mt0.head.head.i)
+                        _local = {
+                            w
+                            for t in doc
+                            if t.i in local_idxs
+                            for w in (
+                                t.text.lower(),
+                                t.lemma_.lower(),
+                                cls._surface_lemma(t.text.lower()) or "",
+                            )
+                            if w and w in q_tokens
+                        }
+                        if _local:
+                            local_q_tokens = _local
                     has_pron_obj = any(ch.dep_ in ('dobj', 'obj') and ch.pos_ == 'PRON' for ch in mt0.children)
                     if mt0.pos_ in ('VERB', 'AUX'):
                         _measure_nouns = {'time', 'times', 'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 'hour', 'hours', 'minute', 'minutes', 'moment', 'way', 'ways', 'mile', 'miles', 'step', 'steps', 'lot', 'bit'}
@@ -155,7 +175,7 @@ class WsdLockMixin:
         # that sense's own definition and already paid for by q_def_overlap).
         cue_scores: Dict[int, float] = {}
         if quote and target_w_clean and not entry.get("_is_synthetic_pool"):
-            cue_query_tokens = (q_tokens - meta_stopwords) - target_inflections
+            cue_query_tokens = (local_q_tokens - meta_stopwords) - target_inflections
             if cue_query_tokens:
                 cue_scores = cls.get_sense_cue_scores(target_w_clean, cue_query_tokens)
 
@@ -298,6 +318,7 @@ class WsdLockMixin:
             pv_sense_map=pv_sense_map,
             senses=senses,
             discourse_context=discourse_context,
+            local_q_tokens=local_q_tokens,
         )
 
     @classmethod

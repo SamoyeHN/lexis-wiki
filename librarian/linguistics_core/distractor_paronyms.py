@@ -99,6 +99,7 @@ class DistractorParonymsMixin:
         by_rhyme: Dict[str, Dict[str, List[str]]] = {k: {} for k in pos_vocab}
         by_suffix: Dict[str, Dict[str, List[str]]] = {k: {} for k in pos_vocab}
         _noun_sfx_keys = ("ics", "ist", "ism", "ment", "ance", "ence", "ity", "ship", "ware", "type", "ology", "archy", "cracy")
+        _adj_sfx_keys = ("ic", "al", "ive", "ous", "ent", "ant", "able", "ible", "ary", "ory")
         for k, words in pos_vocab.items():
             for w in sorted(words):
                 by_first[k].setdefault(w[0], []).append(w)
@@ -112,6 +113,12 @@ class DistractorParonymsMixin:
                     by_rhyme[k].setdefault(rhyme, []).append(w)
                 if k == "n":
                     for sfx in _noun_sfx_keys:
+                        if w.endswith(sfx) and len(w) >= len(sfx) + 2:
+                            by_suffix[k].setdefault(sfx, []).append(w)
+                    if len(w) >= 6:
+                        by_suffix[k].setdefault(w[-4:], []).append(w)
+                elif k == "a":
+                    for sfx in _adj_sfx_keys:
                         if w.endswith(sfx) and len(w) >= len(sfx) + 2:
                             by_suffix[k].setdefault(sfx, []).append(w)
                     if len(w) >= 6:
@@ -320,6 +327,24 @@ class DistractorParonymsMixin:
                 "r" if pos_clean in ("r", "adv", "adverb") else "n"
             )
         )
+
+        if wn_pos == "n":
+            from .linguistic_rules_loader import get_noun_taxonomy_exclusion
+
+            metonymy_pairs = get_noun_taxonomy_exclusion().get("metonymy_clash_pairs", {})
+            t_lem = cls.lemma_of(target)
+            c_lem = cls.lemma_of(cand)
+            if (
+                cand in metonymy_pairs.get(target, [])
+                or c_lem in metonymy_pairs.get(target, [])
+                or cand in metonymy_pairs.get(t_lem, [])
+                or c_lem in metonymy_pairs.get(t_lem, [])
+                or target in metonymy_pairs.get(cand, [])
+                or t_lem in metonymy_pairs.get(cand, [])
+                or target in metonymy_pairs.get(c_lem, [])
+                or t_lem in metonymy_pairs.get(c_lem, [])
+            ):
+                return False
 
         # 1. Reject inflectional / participial / negation prefix derivatives & unaligned productive-prefix compounds
         if cand in (target + "s", target + "es") or target in (cand + "s", cand + "es"):
@@ -530,7 +555,9 @@ class DistractorParonymsMixin:
                 "r" if pos_clean in ("r", "adv", "adverb") else "n"
             )
         )
-        excl = {w.lower() for w in (exclude_words or set())} | {tw}
+
+        orig_tw = tw
+        excl = {w.lower() for w in (exclude_words or set())} | {orig_tw}
 
         idx = cls._ensure_orthographic_pos_index()
         by_first = idx["by_first"].get(wn_pos, {})
@@ -538,6 +565,20 @@ class DistractorParonymsMixin:
         by_skel = idx.get("by_skel", {}).get(wn_pos, {})
         by_rhyme = idx.get("by_rhyme", {}).get(wn_pos, {})
         by_suffix = idx.get("by_suffix", {}).get(wn_pos, {})
+
+        inflected_from: Optional[str] = None
+        if wn_pos == "v" or orig_tw not in by_first.get(orig_tw[0], []):
+            base_tw = cls.lemma_of(orig_tw)
+            if (
+                base_tw
+                and base_tw != orig_tw
+                and len(base_tw) >= 4
+                and base_tw.isalpha()
+                and base_tw in by_first.get(base_tw[0], [])
+            ):
+                inflected_from = orig_tw
+                tw = base_tw
+                excl.add(base_tw)
 
         tw_skel = cls._phonetic_consonant_skeleton(tw)
         tw_rhyme = cls._phonetic_rhyme_tail(tw)
@@ -549,8 +590,15 @@ class DistractorParonymsMixin:
         if len(tw_rhyme) >= 3:
             raw_pool |= set(by_rhyme.get(tw_rhyme, []))
         _acad_sfx = ("ics", "ist", "ism", "ship", "ware", "type", "ology", "archy", "cracy")
+        _adj_sfx_keys = ("ic", "al", "ive", "ous", "ent", "ant", "able", "ible", "ary", "ory")
         if wn_pos == "n":
             for sfx in _acad_sfx:
+                if tw.endswith(sfx) and len(tw) >= len(sfx) + 2:
+                    raw_pool |= set(by_suffix.get(sfx, []))
+            if len(tw) >= 6:
+                raw_pool |= set(by_suffix.get(tw[-4:], []))
+        elif wn_pos == "a":
+            for sfx in _adj_sfx_keys:
                 if tw.endswith(sfx) and len(tw) >= len(sfx) + 2:
                     raw_pool |= set(by_suffix.get(sfx, []))
             if len(tw) >= 6:
@@ -602,11 +650,18 @@ class DistractorParonymsMixin:
                 or rhyme_containment
                 or deriv_rhyme_match
             )
+            adj_sfx_match = bool(
+                wn_pos == "a"
+                and any(tw.endswith(sf) and w.endswith(sf) for sf in _adj_sfx_keys)
+                and abs(w_syl - tw_syl) <= 1
+                and (pref >= 2 or (w_rhyme == tw_rhyme and ed <= 2))
+            )
             if (
                 ed <= 2
                 or skel_match
                 or rhyme_match
                 or acad_sfx_match
+                or adj_sfx_match
                 or (pref >= 4 and len(tw) >= 6 and abs(len(w) - len(tw)) <= 3)
                 or (pref >= 3 and suff >= 2)
             ):
@@ -623,6 +678,10 @@ class DistractorParonymsMixin:
                         score += 14
                 if rhyme_match and w_syl == tw_syl:
                     score += 12
+                if adj_sfx_match:
+                    score += 10
+                    if w_rhyme == tw_rhyme:
+                        score += 6
                 if deriv_rhyme_match:
                     score += 36 if suff >= 6 else (32 if suff >= 5 else 26)
                     if suff >= 6:
@@ -637,8 +696,11 @@ class DistractorParonymsMixin:
                         score += 16
                 if wn_pos == "v" and pref >= 3 and tw.endswith("ate") and w.endswith("ate"):
                     score += 30
-                if wn_pos == "a" and pref >= 6:
-                    score += 18
+                if wn_pos == "a":
+                    if pref >= 6:
+                        score += 30
+                    elif pref >= 5:
+                        score += 18
                 if wn_pos == "n" and pref >= 4:
                     if not w.endswith(("ist", "or", "er", "ian", "ty", "ity", "ism")) or (
                         tw.endswith(("ist", "ian", "ty", "ity", "ism", "ics")) or pref >= 5
@@ -651,6 +713,7 @@ class DistractorParonymsMixin:
         scored.sort(key=lambda x: (-x[0], x[1]))
         # Lazily verify CEFR, orthographic paronym safety, and deduplicate mutual word-family members
         selected: List[Tuple[str, int]] = []
+        seen_proj: Set[str] = set(excl)
         for sc, w in scored:
             if not cls.is_cefr_compliant_distractor(w, tw):
                 continue
@@ -660,7 +723,14 @@ class DistractorParonymsMixin:
                 continue
             if any(cls.are_same_word_family(w, prev_w) for prev_w, _ in selected):
                 continue
-            selected.append((w, sc))
+            out_w = w
+            if inflected_from and wn_pos == "v":
+                proj_w = cls.inflect_verb_like_target(w, inflected_from, tw)
+                if not proj_w or proj_w == orig_tw or proj_w in seen_proj or not cls.is_attested_form(proj_w):
+                    continue
+                out_w = proj_w
+                seen_proj.add(out_w)
+            selected.append((out_w, sc))
             if len(selected) >= target_count:
                 break
 

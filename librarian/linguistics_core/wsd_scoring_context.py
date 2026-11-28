@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 
@@ -41,6 +41,7 @@ class WsdContext:
     pv_sense_map: Dict[int, List[str]]
     senses: List[Dict[str, Any]]
     discourse_context: Optional[str] = None
+    local_q_tokens: Set[str] = field(default_factory=set)
 
 
 @dataclass
